@@ -1,4 +1,5 @@
-
+import numpy as np
+import matplotlib.pyplot as pl
 import KratosMultiphysics as KM
 import KratosMultiphysics.StructuralMechanicsApplication as SMA
 import KratosMultiphysics.ConstitutiveLawsApplication    as CLA
@@ -55,17 +56,17 @@ def _set_cl_parameters(cl_options, F, detF, strain_vector, stress_vector,
 #====================================================================================
 #====================================================================================
 
-def CalculateStressFromDeformationGradient(DeformationGradient):
+def CalculateStressFromDeformationGradient(ConstitutiveLaw, DeformationGradient):
     # The selected CL
-    cl = CLA.HyperElasticPlaneStrain2DLaw() # Neo-Hookean
+    cl = ConstitutiveLaw
 
     current_model = KM.Model()
     mdpa = current_model.CreateModelPart("NeoHookean")
 
     # properties = mdpa.CreateProperties(1)
     properties = KM.Properties(1)
-    properties.SetValue(KM.YOUNG_MODULUS, 210e9)
-    properties.SetValue(KM.POISSON_RATIO, 0.3)
+    properties.SetValue(KM.YOUNG_MODULUS, 10e6)
+    properties.SetValue(KM.POISSON_RATIO, 0.4)
     properties.SetValue(KM.CONSTITUTIVE_LAW, cl)
 
     dimension  = cl.WorkingSpaceDimension()
@@ -117,17 +118,55 @@ Definition of the problem to solve
 inputs:
     dimension of the problem
     Deformation gradient matrix as input
+
+    x = Phi(X, t) --> x: Updated coordinates
+                      Phi: Mapping operator
+                      X: Initial coordinates
+                      t: Time
+
+    F = Grad(Phi) --> F = dx_i / dX_j
+
+    Notation: x: Spatial  coords
+              X: Material coords
+
+             x_2, v
+            ^
+            |
+      O-----------o
+      |     |     |
+      |     |     |
+      |     +---- | --> x_1, u
+      |           |
+      |           |
+      O-----------O
+
+
 '''
-dimension = 2
+# case 1: Stretching in x direction only: x = (alpha*X_1, X_2)
+# F = [alpha  0
+#      0    1]
+cl = CLA.HyperElasticPlaneStrain2DLaw()
+# cl = CLA.KirchhoffSaintVenantPlaneStrain2DLaw()
+n_steps   = 100
+max_stretch_factor = 10
+
+dimension = cl.WorkingSpaceDimension()
+voigt_size = cl.GetStrainSize()
 F = KM.Matrix(dimension, dimension)
-
-F[0, 0] = 1.0
-F[1, 1] = 1.0
-
 F[0, 1] = 0.0
 F[1, 0] = 0.0
+F[1, 1] = 1.0
 
-strain, stress = CalculateStressFromDeformationGradient(F)
+strain_history = np.zeros((n_steps, voigt_size))
+stress_history = strain_history.copy()
 
-print(strain)
-print(stress)
+for step in range(n_steps):
+    F[0, 0] = max_stretch_factor * step / n_steps
+
+    strain, stress = CalculateStressFromDeformationGradient(cl, F)
+    strain_history[step, :] = strain
+    stress_history[step, :] = stress
+
+pl.plot(strain_history[:, 0], stress_history[:, 0])
+pl.grid()
+pl.show()
