@@ -307,7 +307,7 @@ while theta <= 360.0 and phi <= 360.0:
         file.write("\tTheta = " + str(theta) + ", Phi = " + str(phi) + "\n")
         file.write("\tNorm of E = " + str(np.linalg.norm(strain_history[n_steps-1, :])) + "\n\n")
 
-    name = "neo_hookean_hyperelastic_law/strain_stress_data_case_" + str(case_number) + ".npz"
+    name = "neo_hookean_hyperelastic_law/E_S_data_case_" + str(case_number) + ".npz"
     np.savez(name, strain_history = strain_history, stress_history = stress_history)
     print("\t --> Case: ", case_number, "Data saved to ", name)
 
