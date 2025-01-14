@@ -150,7 +150,7 @@ inputs:
 # Stretching in x direction only: x = (alpha*X_1, X_2)
 # F = [alpha  0
 #      0    1]
-
+case = 1
 current_model = KM.Model()
 model_part = current_model.CreateModelPart("NeoHookean")
 
@@ -187,7 +187,7 @@ for step in range(n_steps):
     strain_history[step, :] = strain
     stress_history[step, :] = stress
 
-output_type = "plot" # print plot
+output_type = "print" # print plot
 
 if output_type == "plot":
     pl.plot(strain_history[:, 0], stress_history[:, 0], label="Ground truth XX", color="k")
@@ -199,26 +199,18 @@ if output_type == "plot":
     pl.grid()
     pl.show()
 else:
-    # Convert NumPy arrays to lists
-    strain_list = strain_history.tolist()
-    stress_list = stress_history.tolist()
+    name = "neo_hookean_hyperelastic_law/strain_stress_data_case_" + str(case) + ".npz"
+    np.savez(name, strain_history = strain_history, stress_history = stress_history)
+    print("\t --> Case: ", case, "Data saved to ", name)
 
-    # Create a dictionary structure for the JSON file
-    data_dict = {
-        "strain_history": {
-            "columns": ["strain_xx", "strain_yy", "strain_xy"],
-            "data": strain_list
-        },
-        "stress_history": {
-            "columns": ["stress_xx", "stress_yy", "stress_xy"],
-            "data": stress_list
-        }
-    }
+    '''
+    Then we can load them by
 
-    # Save to JSON file
-    with open("neo_hookean_hyperelastic_law/case_1_strain_stress_history.json", "w") as json_file:
-        json.dump(data_dict, json_file, indent=4)
-    print("Data saved to strain_stress_history.json")
+    loaded_data = np.load(name)
+
+    loaded_strain_history = loaded_data["strain_history"]
+    loaded_stress_history = loaded_data["stress_history"]
+    '''
 
 
 #====================================================================================
