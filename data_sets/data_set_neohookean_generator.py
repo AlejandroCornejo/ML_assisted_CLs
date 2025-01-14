@@ -4,6 +4,7 @@ import KratosMultiphysics as KM
 import KratosMultiphysics.StructuralMechanicsApplication as SMA
 import KratosMultiphysics.ConstitutiveLawsApplication    as CLA
 import json
+import math
 
 #====================================================================================
 #====================================================================================
@@ -113,6 +114,12 @@ def CalculateStressFromDeformationGradient(ConstitutiveLaw, Properties, Geometry
 #====================================================================================
 #====================================================================================
 
+def ResetF(F):
+    F[0, 0] = 1.0
+    F[0, 1] = 0.0
+    F[1, 0] = 0.0
+    F[1, 1] = 1.0
+
 '''
 Definition of the problem to solve
 
@@ -145,11 +152,7 @@ inputs:
 #====================================================================================
 #====================================================================================
 
-# CASE 1
-# Stretching in x direction only: x = (alpha*X_1, X_2)
-# F = [alpha  0
-#      0    1]
-case = 1
+case_number = 1
 current_model = KM.Model()
 model_part = current_model.CreateModelPart("NeoHookean")
 
@@ -164,52 +167,70 @@ properties.SetValue(KM.CONSTITUTIVE_LAW, cl)
 
 [geometry, nnodes] = CreateGeometry(model_part, dimension)
 
-n_steps = 100
-max_stretch_factor = 3.0
-
+# Initialize the F
 F = KM.Matrix(dimension, dimension)
 F[0, 0] = 1.0
 F[0, 1] = 0.0
 F[1, 0] = 0.0
 F[1, 1] = 1.0
 
-strain_history = np.zeros((n_steps, voigt_size))
-stress_history = strain_history.copy()
-
 # Initialize the material
 cl.InitializeMaterial(properties, geometry, KM.Vector(nnodes))
 
-for step in range(n_steps):
-    F[0, 0] += max_stretch_factor / n_steps
+# ----- Start the case loop
+angle_increment_deg = 10.0
+n_steps             = 100 # step in the loading history
+max_stretch_factor  = 0.01 # lambda
+theta               = 0.0
+phi                 = 0.0
+# -----
+strain_history = np.zeros((n_steps, voigt_size))
+stress_history = strain_history.copy()
+factor = max_stretch_factor / n_steps
 
-    strain, stress = CalculateStressFromDeformationGradient(cl, properties, geometry, model_part, F)
-    strain_history[step, :] = strain
-    stress_history[step, :] = stress
+while theta <= 360.0 and phi <= 360.0:
+    for step in range(n_steps):
+        F[0, 0] += math.cos(math.radians(theta)) * factor
+        F[0, 1] += math.sin(math.radians(theta)) * math.sin(math.radians(phi)) * factor
+        F[1, 0] += F[0, 1]
+        F[1, 1] += math.sin(math.radians(theta)) * math.cos(math.radians(phi)) * factor
 
-output_type = "plot" # print plot
+        strain, stress = CalculateStressFromDeformationGradient(cl, properties, geometry, model_part, F)
+        strain_history[step, :] = strain
+        stress_history[step, :] = stress
 
-if output_type == "plot":
-    pl.plot(strain_history[:, 0], stress_history[:, 0], label="Ground truth XX", color="k")
-    pl.plot(strain_history[:, 1], stress_history[:, 1], label="Ground truth YY", color="r")
-    pl.plot(strain_history[:, 2], stress_history[:, 2], label="Ground truth XY", color="b")
-    pl.xlabel("Strain [-]")
-    pl.ylabel("Stress [Pa]")
-    pl.legend(loc='best')
-    pl.grid()
-    pl.show()
+    output_type = "plot" # print plot
 
-    fig = pl.figure()
-    ax = fig.add_subplot(111, projection='3d')
-    ax.scatter(strain_history[:, 0], strain_history[:, 1], strain_history[:, 2], c='r', marker='o', label="Data points")
-    ax.set_xlabel('Strain XX')
-    ax.set_ylabel('Strain YY')
-    ax.set_zlabel('Strain XY')
-    pl.show()
+    if output_type == "plot":
+        name = "neo_hookean_hyperelastic_law/strain_stress_data_case_" + str(case_number) + ".png"
+        title = "Theta = " + str(theta) + " ; Phi = " + str(phi)
+        pl.plot(strain_history[:, 0], stress_history[:, 0], label="Ground truth XX", color="k")
+        pl.plot(strain_history[:, 1], stress_history[:, 1], label="Ground truth YY", color="r")
+        pl.plot(strain_history[:, 2], stress_history[:, 2], label="Ground truth XY", color="b")
+        pl.xlabel("Strain [-]")
+        pl.ylabel("Stress [Pa]")
+        pl.title(title)
+        pl.legend(loc='best')
+        pl.grid()
+        # pl.show()
+        pl.savefig(name, dpi=300, bbox_inches='tight')
+        pl.close()
 
-else:
-    name = "neo_hookean_hyperelastic_law/strain_stress_data_case_" + str(case) + ".npz"
+        name = "neo_hookean_hyperelastic_law/strain_history_case_" + str(case_number) + ".png"
+        fig = pl.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        ax.scatter(strain_history[:, 0], strain_history[:, 1], strain_history[:, 2], c='r', marker='o', label="Strain history")
+        ax.set_xlabel('Strain XX')
+        ax.set_ylabel('Strain YY')
+        ax.set_zlabel('Strain XY')
+        pl.title(title)
+        pl.savefig(name, dpi=300, bbox_inches='tight')
+        pl.close()
+        # pl.show()
+
+    name = "neo_hookean_hyperelastic_law/strain_stress_data_case_" + str(case_number) + ".npz"
     np.savez(name, strain_history = strain_history, stress_history = stress_history)
-    print("\t --> Case: ", case, "Data saved to ", name)
+    print("\t --> Case: ", case_number, "Data saved to ", name)
 
     '''
     NOTE:
@@ -220,6 +241,10 @@ else:
     loaded_strain_history = loaded_data["strain_history"]
     loaded_stress_history = loaded_data["stress_history"]
     '''
+    theta += angle_increment_deg
+    phi   += angle_increment_deg
+    case_number += 1
+    ResetF(F)
 
 
 #====================================================================================
