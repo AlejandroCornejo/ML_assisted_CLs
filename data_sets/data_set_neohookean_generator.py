@@ -32,8 +32,7 @@ def CreateGeometry(model_part, dim):
 #====================================================================================
 #====================================================================================
 
-def _set_cl_parameters(cl_options, F, detF, strain_vector, stress_vector,
-                       constitutive_matrix, N, DN_DX, model_part, properties, geom):
+def _set_cl_parameters(cl_options, F, detF, strain_vector, stress_vector, constitutive_matrix, N, DN_DX, model_part, properties, geom):
     # Setting the parameters - note that a constitutive law may not need them all!
     cl_params = KM.ConstitutiveLawParameters()
     cl_params.SetOptions(cl_options)
@@ -187,7 +186,7 @@ for step in range(n_steps):
     strain_history[step, :] = strain
     stress_history[step, :] = stress
 
-output_type = "print" # print plot
+output_type = "plot" # print plot
 
 if output_type == "plot":
     pl.plot(strain_history[:, 0], stress_history[:, 0], label="Ground truth XX", color="k")
@@ -198,6 +197,15 @@ if output_type == "plot":
     pl.legend(loc='best')
     pl.grid()
     pl.show()
+
+    fig = pl.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(strain_history[:, 0], strain_history[:, 1], strain_history[:, 2], c='r', marker='o', label="Data points")
+    ax.set_xlabel('Strain XX')
+    ax.set_ylabel('Strain YY')
+    ax.set_zlabel('Strain XY')
+    pl.show()
+
 else:
     name = "neo_hookean_hyperelastic_law/strain_stress_data_case_" + str(case) + ".npz"
     np.savez(name, strain_history = strain_history, stress_history = stress_history)
