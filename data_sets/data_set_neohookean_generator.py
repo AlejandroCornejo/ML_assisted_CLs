@@ -3,6 +3,7 @@ import matplotlib.pyplot as pl
 import KratosMultiphysics as KM
 import KratosMultiphysics.StructuralMechanicsApplication as SMA
 import KratosMultiphysics.ConstitutiveLawsApplication    as CLA
+import json
 
 #====================================================================================
 #====================================================================================
@@ -102,7 +103,7 @@ def CalculateStressFromDeformationGradient(ConstitutiveLaw, Properties, Geometry
     strain_calculate_value = KM.Vector()
     stress_calculate_value = KM.Vector()
     strain_measure_variable = KM.GREEN_LAGRANGE_STRAIN_VECTOR # ALMANSI_STRAIN_VECTOR HENCKY_STRAIN_VECTOR GREEN_LAGRANGE_STRAIN_VECTOR
-    stress_measure_variable = KM.PK2_STRESS_VECTOR # CAUCHY_STRESS_VECTOR  KIRCHHOFF_STRESS_VECTOR PK2_STRESS_VECTOR
+    stress_measure_variable = KM.PK2_STRESS_VECTOR            # CAUCHY_STRESS_VECTOR  KIRCHHOFF_STRESS_VECTOR PK2_STRESS_VECTOR
 
     cl.CalculateValue(cl_params, strain_measure_variable, strain_calculate_value)
     cl.CalculateValue(cl_params, stress_measure_variable, stress_calculate_value)
@@ -165,7 +166,7 @@ properties.SetValue(KM.CONSTITUTIVE_LAW, cl)
 [geometry, nnodes] = CreateGeometry(model_part, dimension)
 
 n_steps = 100
-max_stretch_factor = 1.0
+max_stretch_factor = 3.0
 
 F = KM.Matrix(dimension, dimension)
 F[0, 0] = 1.0
@@ -186,14 +187,39 @@ for step in range(n_steps):
     strain_history[step, :] = strain
     stress_history[step, :] = stress
 
-pl.plot(strain_history[:, 0], stress_history[:, 0], label="Ground truth XX", color="k")
-pl.plot(strain_history[:, 1], stress_history[:, 1], label="Ground truth YY", color="r")
-pl.plot(strain_history[:, 2], stress_history[:, 2], label="Ground truth XY", color="b")
-pl.xlabel("Strain [-]")
-pl.ylabel("Stress [Pa]")
-pl.legend(loc='best')
-pl.grid()
-pl.show()
+output_type = "plot" # print plot
+
+if output_type == "plot":
+    pl.plot(strain_history[:, 0], stress_history[:, 0], label="Ground truth XX", color="k")
+    pl.plot(strain_history[:, 1], stress_history[:, 1], label="Ground truth YY", color="r")
+    pl.plot(strain_history[:, 2], stress_history[:, 2], label="Ground truth XY", color="b")
+    pl.xlabel("Strain [-]")
+    pl.ylabel("Stress [Pa]")
+    pl.legend(loc='best')
+    pl.grid()
+    pl.show()
+else:
+    # Convert NumPy arrays to lists
+    strain_list = strain_history.tolist()
+    stress_list = stress_history.tolist()
+
+    # Create a dictionary structure for the JSON file
+    data_dict = {
+        "strain_history": {
+            "columns": ["strain_xx", "strain_yy", "strain_xy"],
+            "data": strain_list
+        },
+        "stress_history": {
+            "columns": ["stress_xx", "stress_yy", "stress_xy"],
+            "data": stress_list
+        }
+    }
+
+    # Save to JSON file
+    with open("neo_hookean_hyperelastic_law/case_1_strain_stress_history.json", "w") as json_file:
+        json.dump(data_dict, json_file, indent=4)
+    print("Data saved to strain_stress_history.json")
+
 
 #====================================================================================
 #====================================================================================
