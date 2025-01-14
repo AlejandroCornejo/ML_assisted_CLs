@@ -60,14 +60,6 @@ def CalculateStressFromDeformationGradient(ConstitutiveLaw, Properties, Geometry
     # The selected CL
     cl = ConstitutiveLaw
 
-    # current_model = KM.Model()
-    # mdpa = current_model.CreateModelPart("NeoHookean")
-
-    # properties = KM.Properties(1)
-    # properties.SetValue(KM.YOUNG_MODULUS, 10e6)
-    # properties.SetValue(KM.POISSON_RATIO, 0.4)
-    # properties.SetValue(KM.CONSTITUTIVE_LAW, cl)
-
     dimension  = cl.WorkingSpaceDimension()
     voigt_size = cl.GetStrainSize()
 
@@ -100,11 +92,23 @@ def CalculateStressFromDeformationGradient(ConstitutiveLaw, Properties, Geometry
 
     # Setting the parameters - note that a constitutive law may not need them all!
     cl_params = _set_cl_parameters(cl_options, F, detF, strain_vector, stress_vector, constitutive_matrix, N, DN_DX, ModelPart, Properties, Geometry)
-    cl.InitializeMaterialResponseCauchy(cl_params)
-    cl.CalculateMaterialResponseCauchy(cl_params)
-    cl.FinalizeMaterialResponseCauchy(cl_params)
 
-    return strain_vector, stress_vector
+    # We run them in case we need to account for history
+    cl.InitializeMaterialResponsePK2(cl_params)
+    cl.CalculateMaterialResponsePK2(cl_params)
+    cl.FinalizeMaterialResponsePK2(cl_params)
+
+    # Let's compute the strain and stress output
+    strain_calculate_value = KM.Vector()
+    stress_calculate_value = KM.Vector()
+    strain_measure_variable = KM.GREEN_LAGRANGE_STRAIN_VECTOR # ALMANSI_STRAIN_VECTOR HENCKY_STRAIN_VECTOR GREEN_LAGRANGE_STRAIN_VECTOR
+    stress_measure_variable = KM.PK2_STRESS_VECTOR # CAUCHY_STRESS_VECTOR  KIRCHHOFF_STRESS_VECTOR PK2_STRESS_VECTOR
+
+    cl.CalculateValue(cl_params, strain_measure_variable, strain_calculate_value)
+    cl.CalculateValue(cl_params, stress_measure_variable, stress_calculate_value)
+
+    # return strain_vector, stress_vector
+    return strain_calculate_value, stress_calculate_value
 
 #====================================================================================
 #====================================================================================
@@ -182,7 +186,9 @@ for step in range(n_steps):
     strain_history[step, :] = strain
     stress_history[step, :] = stress
 
-pl.plot(strain_history[:, 0], stress_history[:, 0], label="Ground truth", color="k")
+pl.plot(strain_history[:, 0], stress_history[:, 0], label="Ground truth XX", color="k")
+pl.plot(strain_history[:, 1], stress_history[:, 1], label="Ground truth YY", color="r")
+pl.plot(strain_history[:, 2], stress_history[:, 2], label="Ground truth XY", color="b")
 pl.xlabel("Strain [-]")
 pl.ylabel("Stress [Pa]")
 pl.legend(loc='best')
