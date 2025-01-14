@@ -204,6 +204,7 @@ else:
     print("\t --> Case: ", case, "Data saved to ", name)
 
     '''
+    NOTE:
     Then we can load them by
 
     loaded_data = np.load(name)
