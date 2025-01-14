@@ -247,12 +247,13 @@ strain_history = np.zeros((n_steps, voigt_size))
 stress_history = strain_history.copy()
 
 while theta <= 360.0 and phi <= 360.0:
+    # This is the dF such that F = Id + dF
     dF11 = math.cos(math.radians(theta)) * max_stretch_factor
     dF12 = 2.0 * math.sin(math.radians(theta)) * math.sin(math.radians(phi)) * max_stretch_factor
     dF21 = dF12
     dF22 = 2.0 * math.sin(math.radians(theta)) * math.cos(math.radians(phi)) * max_stretch_factor
 
-    # We check how much is the strain, hence we correct to maintain the norm
+    # We check how much is the strain, hence we correct to maintain the norm of E
     F_trial = KM.Matrix(dimension, dimension)
     F_trial[0, 0] = 1.0 + dF11
     F_trial[0, 1] = dF12
@@ -261,6 +262,7 @@ while theta <= 360.0 and phi <= 360.0:
     predicted_strain_norm = PredictStrainNormFromF(cl, properties, geometry, model_part, F_trial)
 
     for step in range(n_steps):
+        # We increment the dF as: Fn = Id + alpha*dF
         alpha = (step + 1) / n_steps * max_stretch_factor / predicted_strain_norm
         F[0, 0] = 1.0 + dF11 * alpha
         F[0, 1] = dF12 * alpha
