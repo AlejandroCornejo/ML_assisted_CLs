@@ -184,7 +184,7 @@ while theta <= 360.0 and phi <= 360.0:
         pl.legend(loc='best')
         pl.grid()
         # pl.show()
-        pl.savefig(name, dpi=100, bbox_inches='tight')
+        pl.savefig(name, dpi=300, bbox_inches='tight')
         pl.close()
 
         name = "neo_hookean_hyperelastic_law/strain_history_case_" + str(case_number) + ".png"
@@ -195,7 +195,7 @@ while theta <= 360.0 and phi <= 360.0:
         ax.set_ylabel(r"$\varepsilon_{yy}$")
         ax.set_zlabel(r"$\gamma_{xy}$")
         pl.title(title)
-        pl.savefig(name, dpi=100, bbox_inches=None)
+        pl.savefig(name, dpi=300, bbox_inches=None)
         pl.close()
         # pl.show()
 
