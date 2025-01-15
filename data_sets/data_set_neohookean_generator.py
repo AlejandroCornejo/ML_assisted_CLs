@@ -126,7 +126,7 @@ def PredictStrainNormFromF(ConstitutiveLaw, Properties, Geometry, ModelPart, Def
     cl_options = KM.Flags()
     cl_options.Set(KM.ConstitutiveLaw.USE_ELEMENT_PROVIDED_STRAIN, False)
     cl_options.Set(KM.ConstitutiveLaw.COMPUTE_CONSTITUTIVE_TENSOR, False)
-    cl_options.Set(KM.ConstitutiveLaw.COMPUTE_STRESS, True)
+    cl_options.Set(KM.ConstitutiveLaw.COMPUTE_STRESS, False)
 
     # Define deformation gradient
     F = KM.Matrix(dimension, dimension)
@@ -151,6 +151,8 @@ def PredictStrainNormFromF(ConstitutiveLaw, Properties, Geometry, ModelPart, Def
     strain_measure_variable = KM.GREEN_LAGRANGE_STRAIN_VECTOR # ALMANSI_STRAIN_VECTOR HENCKY_STRAIN_VECTOR GREEN_LAGRANGE_STRAIN_VECTOR
 
     cl.CalculateValue(cl_params, strain_measure_variable, strain_calculate_value)
+
+    strain_calculate_value[2] *= 0.5 # Gamma_xy = 2 * Eps_xy
 
     # return strain_vector, stress_vector
     return np.linalg.norm(strain_calculate_value)
@@ -230,7 +232,7 @@ cl.InitializeMaterial(properties, geometry, KM.Vector(nnodes))
 # ----- Start the case loop
 angle_increment_deg = 10.0
 n_steps             = 25 # step in the loading history
-max_stretch_factor  = 0.25 # lambda
+max_stretch_factor  = 0.3 # lambda
 theta               = 0.0
 phi                 = 0.0
 # -----
@@ -261,9 +263,9 @@ while theta <= 360.0 and phi <= 360.0:
     F_trial[1, 1] = 1.0 + dF22
     predicted_strain_norm = PredictStrainNormFromF(cl, properties, geometry, model_part, F_trial)
 
-    for step in range(n_steps):
+    for step in range(0, n_steps):
         # We increment the dF as: Fn = Id + alpha*dF
-        alpha = (step + 1) / n_steps * max_stretch_factor / predicted_strain_norm
+        alpha = step / n_steps * max_stretch_factor / predicted_strain_norm
         F[0, 0] = 1.0 + dF11 * alpha
         F[0, 1] = dF12 * alpha
         F[1, 0] = F[0, 1]
@@ -273,14 +275,14 @@ while theta <= 360.0 and phi <= 360.0:
         strain_history[step, :] = strain
         stress_history[step, :] = stress
 
-    output_type = "plot" # print plot
+    output_type = "plot"
 
     if output_type == "plot":
         name = "neo_hookean_hyperelastic_law/strain_stress_data_case_" + str(case_number) + ".png"
-        title = "Theta = " + str(theta) + " ; Phi = " + str(phi)
-        pl.plot(strain_history[:, 0], stress_history[:, 0], label="Ground truth XX", marker='X', color="k",  markersize=5, markerfacecolor='none')
-        pl.plot(strain_history[:, 1], stress_history[:, 1], label="Ground truth YY", marker='X', color="r",  markersize=5, markerfacecolor='none')
-        pl.plot(strain_history[:, 2], stress_history[:, 2], label="Ground truth XY", marker='X', color="b",  markersize=5, markerfacecolor='none')
+        title = r"$\theta$ = " + str(theta) + r" ; $\phi$ = " + str(phi)
+        pl.plot(strain_history[:, 0], stress_history[:, 0], label=r"Ground truth $\varepsilon_{xx}$", marker='X', color="k",  markersize=2, markerfacecolor='none')
+        pl.plot(strain_history[:, 1], stress_history[:, 1], label=r"Ground truth $\varepsilon_{yy}$", marker='X', color="r",  markersize=2, markerfacecolor='none')
+        pl.plot(strain_history[:, 2], stress_history[:, 2], label=r"Ground truth $\gamma_{xy}$",      marker='X', color="b",  markersize=2, markerfacecolor='none')
         pl.xlabel("Strain [-]")
         pl.ylabel("Stress [Pa]")
         pl.title(title)
@@ -294,11 +296,11 @@ while theta <= 360.0 and phi <= 360.0:
         fig = pl.figure()
         ax = fig.add_subplot(111, projection='3d')
         ax.scatter(strain_history[:, 0], strain_history[:, 1], strain_history[:, 2], c='r', marker='o', label="Strain history")
-        ax.set_xlabel('Strain XX')
-        ax.set_ylabel('Strain YY')
-        ax.set_zlabel('Strain XY')
+        ax.set_xlabel(r"$\varepsilon_{xx}$")
+        ax.set_ylabel(r"$\varepsilon_{yy}$")
+        ax.set_zlabel(r"$\gamma_{xy}$")
         pl.title(title)
-        pl.savefig(name, dpi=600, bbox_inches='tight')
+        pl.savefig(name, dpi=600, bbox_inches=None)
         pl.close()
         # pl.show()
 
