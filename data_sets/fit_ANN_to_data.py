@@ -9,37 +9,27 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 # Build the model
-activation_function = "relu"
-ANN_model = Sequential([
-    Dense(8, activation=activation_function, input_shape=(3,)),
-    Dense(8,  activation=activation_function),
-    Dense(8,  activation=activation_function),
-    Dense(8,  activation=activation_function),
-    Dense(3)
-])
+ANN_model = Sequential()
+ANN_model.add(Dense(100, activation='sigmoid', input_dim=3))
+ANN_model.add(Dense(50, activation='sigmoid'))
+ANN_model.add(Dense(3, activation='sigmoid'))
 
-custom_Adam = keras.optimizers.Adam(
-    learning_rate=0.0001,
-    beta_1=0.9,
-    beta_2=0.95,
-    epsilon=1e-9,
-    amsgrad=False,
-    weight_decay=None,
-    clipnorm=None,
-    clipvalue=None,
-    global_clipnorm=None,
-    use_ema=False,
-    ema_momentum=0.99,
-    ema_overwrite_frequency=None,
-    loss_scale_factor=None,
-    gradient_accumulation_steps=None
-)
+# custom_Adam = keras.optimizers.Adam(
+#     learning_rate=0.005,
+#     beta_1=0.9,
+#     beta_2=0.999,
+#     epsilon=1e-7,
+#     amsgrad=False
+# )
+# custom_Adam = tf.keras.optimizers.Nadam(learning_rate=0.002)
 
 # Compile the model
-ANN_model.compile(optimizer=custom_Adam, loss='mse', metrics=['mae'])
+ANN_model.compile(optimizer='adamax', loss='mae', metrics=['mae']) # mse
 
-# Let's load the data stored in neo_hookean_hyperelastic_law/
-number_cases = 37 #37
+# Let's load the data stored in the dir neo_hookean_hyperelastic_law/
+number_cases = 37
+max_iterations = 1500
+
 name = "neo_hookean_hyperelastic_law/E_S_data_case_"
 strain = np.load("neo_hookean_hyperelastic_law/E_S_data_case_1.npz")["strain_history"]
 stress = np.load("neo_hookean_hyperelastic_law/E_S_data_case_1.npz")["stress_history"]
@@ -57,7 +47,6 @@ stress_scaled = stress_scaler.fit_transform(stress)
 # Train the ANN model
 print("Data read...")
 print("Training the ANN model now...")
-max_iterations = 5000
 ANN_model.fit(strain_scaled, stress_scaled, epochs=max_iterations, verbose=1) # batch_size=20
 
 # Evaluate the model
