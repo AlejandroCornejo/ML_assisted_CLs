@@ -174,7 +174,7 @@ while theta <= 360.0 and phi <= 360.0:
     if output_type == "plot":
         name = "neo_hookean_hyperelastic_law/strain_stress_data_case_" + str(case_number) + ".png"
         title = r"$\theta$ = " + str(theta) + r" ; $\phi$ = " + str(phi)
-        pl.style.use('seaborn-v0_8-whitegrid')
+        pl.style.use('science')
         pl.plot(strain_history[:, 0], stress_history[:, 0], label=r"Ground truth $\varepsilon_{xx}$", marker='X', color="k",  markersize=2, markerfacecolor='none')
         pl.plot(strain_history[:, 1], stress_history[:, 1], label=r"Ground truth $\varepsilon_{yy}$", marker='X', color="r",  markersize=2, markerfacecolor='none')
         pl.plot(strain_history[:, 2], stress_history[:, 2], label=r"Ground truth $\gamma_{xy}$",      marker='X', color="b",  markersize=2, markerfacecolor='none')
@@ -189,6 +189,7 @@ while theta <= 360.0 and phi <= 360.0:
 
         name = "neo_hookean_hyperelastic_law/strain_history_case_" + str(case_number) + ".png"
         fig = pl.figure()
+        pl.style.use('default')
         ax = fig.add_subplot(111, projection='3d')
         ax.scatter(strain_history[:, 0], strain_history[:, 1], strain_history[:, 2], c='r', marker='o', label="Strain history")
         ax.set_xlabel(r"$\varepsilon_{xx}$")
