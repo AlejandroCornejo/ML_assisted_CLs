@@ -120,9 +120,9 @@ dimension = cl.WorkingSpaceDimension()
 voigt_size = cl.GetStrainSize()
 
 properties = KM.Properties(1)
-E = 1e7
+Young = 1e7
 nu = 0.4
-properties.SetValue(KM.YOUNG_MODULUS, 1e7)
+properties.SetValue(KM.YOUNG_MODULUS, Young)
 properties.SetValue(KM.POISSON_RATIO, nu)
 properties.SetValue(KM.CONSTITUTIVE_LAW, cl)
 
@@ -145,10 +145,10 @@ phi                 = 0.0
 with open("neo_hookean_hyperelastic_law/data_set.log", "w") as file:
     file.write("Dataset generated for a HyperElasticPlaneStrain2DLaw constitutive law \n\n")
     file.write("Data used for the generation: \n")
-    file.write("\tYoung's Modulus = " + str(E) + "\n")
+    file.write("\tYoung's Modulus = " + str(Young) + "\n")
     file.write("\tPoisson's ratio = " + str(nu) + "\n")
     file.write("\tAngle increment = " + str(angle_increment_deg) + " deg \n")
-    file.write("\tNumber of steps per load history = " + str(n_steps) + "\n")
+    file.write("\tNumber of steps per load history = " + str(n_steps) + "\n\n")
 
 strain_history = np.zeros((n_steps, voigt_size))
 stress_history = strain_history.copy()
