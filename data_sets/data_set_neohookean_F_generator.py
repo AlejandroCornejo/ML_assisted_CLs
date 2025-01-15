@@ -238,7 +238,7 @@ phi                 = 0.0
 # -----
 
 with open("neo_hookean_hyperelastic_law/data_set.log", "w") as file:
-    file.write("Dataset generated for a HyperElasticPlaneStrain2DLaw constitutive law \n \n")
+    file.write("Dataset generated for a HyperElasticPlaneStrain2DLaw constitutive law \n\n")
     file.write("Data used for the generation: \n")
     file.write("\tYoung's Modulus = " + str(E) + "\n")
     file.write("\tPoisson's ratio = " + str(nu) + "\n")
