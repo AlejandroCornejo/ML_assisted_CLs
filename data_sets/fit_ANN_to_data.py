@@ -1,4 +1,5 @@
 import tensorflow as tf
+import tensorflow.keras as keras
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense
 import numpy as np
@@ -8,18 +9,37 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 # Build the model
+activation_function = "relu"
 ANN_model = Sequential([
-    Dense(12, activation='relu', input_shape=(3,)),
-    Dense(8, activation='relu'),
-    Dense(6, activation='relu'),
+    Dense(8, activation=activation_function, input_shape=(3,)),
+    Dense(8,  activation=activation_function),
+    Dense(8,  activation=activation_function),
+    Dense(8,  activation=activation_function),
     Dense(3)
 ])
 
+custom_Adam = keras.optimizers.Adam(
+    learning_rate=0.0001,
+    beta_1=0.9,
+    beta_2=0.95,
+    epsilon=1e-9,
+    amsgrad=False,
+    weight_decay=None,
+    clipnorm=None,
+    clipvalue=None,
+    global_clipnorm=None,
+    use_ema=False,
+    ema_momentum=0.99,
+    ema_overwrite_frequency=None,
+    loss_scale_factor=None,
+    gradient_accumulation_steps=None
+)
+
 # Compile the model
-ANN_model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+ANN_model.compile(optimizer=custom_Adam, loss='mse', metrics=['mae'])
 
 # Let's load the data stored in neo_hookean_hyperelastic_law/
-number_cases = 37
+number_cases = 37 #37
 name = "neo_hookean_hyperelastic_law/E_S_data_case_"
 strain = np.load("neo_hookean_hyperelastic_law/E_S_data_case_1.npz")["strain_history"]
 stress = np.load("neo_hookean_hyperelastic_law/E_S_data_case_1.npz")["stress_history"]
@@ -37,13 +57,13 @@ stress_scaled = stress_scaler.fit_transform(stress)
 # Train the ANN model
 print("Data read...")
 print("Training the ANN model now...")
-max_iterations = 2000
+max_iterations = 5000
 ANN_model.fit(strain_scaled, stress_scaled, epochs=max_iterations, verbose=1) # batch_size=20
 
 # Evaluate the model
 loss, mae = ANN_model.evaluate(strain_scaled, stress_scaled, verbose=1)
 print("******************************************************")
-print(f"Training Loss: {loss:.4f}, Training MAE: {mae:.4f}")
+print(f"Training Loss: {loss:.8f}, Training MAE: {mae:.4f}")
 print("******************************************************")
 
 # Let's print the predictions v.s. the truth
