@@ -135,7 +135,7 @@ E = KM.Vector(voigt_size)
 cl.InitializeMaterial(properties, geometry, KM.Vector(nnodes))
 
 # ----- Start the case loop
-angle_increment_deg = 10.0
+angle_increment_deg = 20.0
 n_steps             = 25 # step in the loading history
 max_stretch_factor  = 0.25 # lambda
 theta               = 0.0
@@ -153,77 +153,88 @@ with open("neo_hookean_hyperelastic_law/data_set.log", "w") as file:
 strain_history = np.zeros((n_steps, voigt_size))
 stress_history = strain_history.copy()
 
-while theta <= 360.0 and phi <= 360.0:
-    dExx = math.cos(math.radians(theta)) * max_stretch_factor
-    dEyy = math.sin(math.radians(theta)) * math.cos(math.radians(phi)) * max_stretch_factor
-    dExy = 2.0 * math.sin(math.radians(theta)) * math.sin(math.radians(phi)) * max_stretch_factor
+while theta <= 360.0:
+    while phi <= 360.0:
+        dExx = math.cos(math.radians(theta)) * max_stretch_factor
+        dEyy = math.sin(math.radians(theta)) * math.cos(math.radians(phi)) * max_stretch_factor
+        dExy = 2.0 * math.sin(math.radians(theta)) * math.sin(math.radians(phi)) * max_stretch_factor
 
-    for step in range(0, n_steps):
-        # We increment the dF as: Fn = Id + alpha*dF
-        alpha = step / n_steps
-        E[0] = dExx * alpha
-        E[1] = dEyy * alpha
-        E[2] = dExy * alpha
+        for step in range(0, n_steps):
+            alpha = step / n_steps
+            E[0] = dExx * alpha
+            E[1] = dEyy * alpha
+            E[2] = dExy * alpha
 
-        stress = CalculateStressFromE(cl, properties, geometry, model_part, E)
-        strain_history[step, :] = E
-        stress_history[step, :] = stress
+            stress = CalculateStressFromE(cl, properties, geometry, model_part, E)
+            strain_history[step, :] = E
+            stress_history[step, :] = stress
 
-    output_type = "plot"
+        output_type = "plot"
+        if output_type == "plot":
+            # pl.style.use('science')
+            name = "neo_hookean_hyperelastic_law/strain_stress_plots/strain_stress_data_case_" + str(case_number) + ".png"
+            title = "theta = " + str(theta) + " ; phi = " + str(phi)
+            # title = r"$\theta$ = " + str(theta) + r" ; $\phi$ = " + str(phi)
+            # pl.plot(strain_history[:, 0], stress_history[:, 0], label=r"Ground truth $\varepsilon_{xx}$", marker='X', color="k",  markersize=2, markerfacecolor='none')
+            # pl.plot(strain_history[:, 1], stress_history[:, 1], label=r"Ground truth $\varepsilon_{yy}$", marker='X', color="r",  markersize=2, markerfacecolor='none')
+            # pl.plot(strain_history[:, 2], stress_history[:, 2], label=r"Ground truth $\gamma_{xy}$",      marker='X', color="b",  markersize=2, markerfacecolor='none')
 
-    if output_type == "plot":
-        name = "neo_hookean_hyperelastic_law/strain_stress_data_case_" + str(case_number) + ".png"
-        title = r"$\theta$ = " + str(theta) + r" ; $\phi$ = " + str(phi)
-        pl.style.use('science')
-        pl.plot(strain_history[:, 0], stress_history[:, 0], label=r"Ground truth $\varepsilon_{xx}$", marker='X', color="k",  markersize=2, markerfacecolor='none')
-        pl.plot(strain_history[:, 1], stress_history[:, 1], label=r"Ground truth $\varepsilon_{yy}$", marker='X', color="r",  markersize=2, markerfacecolor='none')
-        pl.plot(strain_history[:, 2], stress_history[:, 2], label=r"Ground truth $\gamma_{xy}$",      marker='X', color="b",  markersize=2, markerfacecolor='none')
-        pl.xlabel("Green-Lagrange Strain [-]")
-        pl.ylabel("PK2 Stress [Pa]")
-        pl.title(title)
-        pl.legend(loc='best')
-        pl.grid()
-        # pl.show()
-        pl.savefig(name, dpi=300, bbox_inches='tight')
-        pl.close()
+            pl.plot(strain_history[:, 0], stress_history[:, 0], label="Ground truth varepsilonXX", marker='X', color="k",  markersize=2, markerfacecolor='none')
+            pl.plot(strain_history[:, 1], stress_history[:, 1], label="Ground truth varepsilonYY", marker='X', color="r",  markersize=2, markerfacecolor='none')
+            pl.plot(strain_history[:, 2], stress_history[:, 2], label="Ground truth gammaXY",      marker='X', color="b",  markersize=2, markerfacecolor='none')
 
-        name = "neo_hookean_hyperelastic_law/strain_history_case_" + str(case_number) + ".png"
-        fig = pl.figure()
-        pl.style.use('default')
-        ax = fig.add_subplot(111, projection='3d')
-        ax.scatter(strain_history[:, 0], strain_history[:, 1], strain_history[:, 2], c='r', marker='o', label="Strain history")
-        ax.set_xlabel(r"$\varepsilon_{xx}$")
-        ax.set_ylabel(r"$\varepsilon_{yy}$")
-        ax.set_zlabel(r"$\gamma_{xy}$")
-        pl.title(title)
-        pl.savefig(name, dpi=300, bbox_inches=None)
-        pl.close()
-        # pl.show()
+            pl.xlabel("Green-Lagrange Strain [-]")
+            pl.ylabel("PK2 Stress [Pa]")
+            pl.title(title)
+            pl.legend(loc='best')
+            pl.grid()
+            pl.savefig(name, dpi=300, bbox_inches=None)
+            pl.close()
 
-    with open("neo_hookean_hyperelastic_law/data_set.log", "a") as file:
-        strain = strain_history[n_steps-1, :]
-        file.write("CASE " + str(case_number) + "\n")
-        file.write("\tImposed E = " + str(strain) + "\n")
-        file.write("\tTheta = " + str(theta) + ", Phi = " + str(phi) + "\n")
-        file.write("\tNorm of E = " + str(math.sqrt(strain[0]**2 + strain[1]**2 + (0.5 * strain[2])**2)) + "\n\n")
+            name = "neo_hookean_hyperelastic_law/strain_histories_plots/strain_history_case_" + str(case_number) + ".png"
+            fig = pl.figure()
+            pl.style.use('default')
+            ax = fig.add_subplot(111, projection='3d')
+            ax.scatter(strain_history[:, 0], strain_history[:, 1], strain_history[:, 2], c='r', marker='o', label="Strain history")
+            # ax.set_xlabel(r"$\varepsilon_{xx}$")
+            # ax.set_ylabel(r"$\varepsilon_{yy}$")
+            # ax.set_zlabel(r"$\gamma_{xy}$")
 
-    name = "neo_hookean_hyperelastic_law/E_S_data_case_" + str(case_number) + ".npz"
-    np.savez(name, strain_history = strain_history, stress_history = stress_history)
-    print("\t --> Case: ", case_number, "Data saved to ", name)
+            ax.set_xlabel("\varepsilon_{xx}$")
+            ax.set_ylabel("\varepsilon_{yy}$")
+            ax.set_zlabel("\gamma_{xy}$")
 
-    '''
-    NOTE:
-    Then we can load them by
+            pl.title(title)
+            pl.savefig(name, dpi=300, bbox_inches=None)
+            pl.close()
 
-    loaded_data = np.load(name)
+        with open("neo_hookean_hyperelastic_law/data_set.log", "a") as file:
+            strain = strain_history[n_steps-1, :]
+            file.write("CASE " + str(case_number) + "\n")
+            file.write("\tImposed E = " + str(strain) + "\n")
+            file.write("\tTheta = " + str(theta) + ", Phi = " + str(phi) + "\n")
+            file.write("\tNorm of E = " + str(math.sqrt(strain[0]**2 + strain[1]**2 + (0.5 * strain[2])**2)) + "\n\n")
 
-    loaded_strain_history = loaded_data["strain_history"]
-    loaded_stress_history = loaded_data["stress_history"]
-    '''
+        name = "neo_hookean_hyperelastic_law/raw_data/E_S_data_case_" + str(case_number) + ".npz"
+        np.savez(name, strain_history = strain_history, stress_history = stress_history)
+        print("\t --> Case: ", case_number, "Data saved to ", name)
+
+        '''
+        NOTE:
+        Then we can load them by
+
+        loaded_data = np.load(name)
+
+        loaded_strain_history = loaded_data["strain_history"]
+        loaded_stress_history = loaded_data["stress_history"]
+        '''
+
+        case_number += 1
+        phi += angle_increment_deg
+        if theta == 0.0 or theta == 360.0:
+            break
     theta += angle_increment_deg
-    phi   += angle_increment_deg
-    case_number += 1
-    ResetE(E)
+    phi = 0.0
 
 
 #====================================================================================
