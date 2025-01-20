@@ -141,6 +141,7 @@ max_stretch_factor  = 0.25 # lambda
 theta               = 0.0
 phi                 = 0.0
 # -----
+strains_matrix = np.array((0.0, 0.0, 0.0))
 
 with open("neo_hookean_hyperelastic_law/data_set.log", "w") as file:
     file.write("Dataset generated for a HyperElasticPlaneStrain2DLaw constitutive law \n\n")
@@ -158,6 +159,8 @@ while theta <= 360.0:
         dExx = math.cos(math.radians(theta)) * max_stretch_factor
         dEyy = math.sin(math.radians(theta)) * math.cos(math.radians(phi)) * max_stretch_factor
         dExy = 2.0 * math.sin(math.radians(theta)) * math.sin(math.radians(phi)) * max_stretch_factor
+
+        strains_matrix = np.vstack((strains_matrix, np.array((dExx, dEyy, dExy))))
 
         for step in range(0, n_steps):
             alpha = step / n_steps
@@ -227,6 +230,17 @@ while theta <= 360.0:
     theta += angle_increment_deg
     phi = 0.0
 
+# Print the sphere os strains
+name = "neo_hookean_hyperelastic_law/strain_sphere.png"
+fig = pl.figure()
+pl.style.use('default')
+ax = fig.add_subplot(111, projection='3d')
+ax.scatter(strains_matrix[:, 0], strains_matrix[:, 1], strains_matrix[:, 2], c='green', marker='o', label="Strain Cases")
+ax.set_xlabel(r"$\varepsilon_{xx}$")
+ax.set_ylabel(r"$\varepsilon_{yy}$")
+ax.set_zlabel(r"$\gamma_{xy}$")
+pl.savefig(name, dpi=300, bbox_inches=None)
+pl.close()
 
 #====================================================================================
 #====================================================================================
