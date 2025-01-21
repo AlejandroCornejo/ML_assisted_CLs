@@ -18,6 +18,8 @@ for case in range(1, number_cases + 1):
 C_aniso = stress.T @ np.linalg.pinv(strain.T)
 C_aniso = 0.5*(C_aniso + C_aniso.T)
 
+print(C_aniso)
+
 # Let's print the predictions v.s. the truth
 # pl.style.use('science')
 for case in range(1, number_cases + 1):
@@ -46,5 +48,8 @@ for case in range(1, number_cases + 1):
 '''
 Result in terms of C_aniso:
 
+    C_aniso =  [[ 7.16042643e+06  4.27997603e+02 -2.18278728e-11] 
+                [ 4.27997603e+02  7.14548324e+06  7.09405867e-11] 
+                [-2.18278728e-11  7.09405867e-11  3.57285779e+06]]
 
 '''
