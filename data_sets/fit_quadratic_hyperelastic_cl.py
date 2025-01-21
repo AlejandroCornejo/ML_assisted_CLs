@@ -3,18 +3,19 @@ import matplotlib.pyplot as pl
 
 # Let's load the data stored in the dir neo_hookean_hyperelastic_law/
 number_cases    = 325
+initial_step    = 0
 number_of_steps = 25
 
 # This is the flatted vector outer_prod(E, E)
 
 name = "neo_hookean_hyperelastic_law/raw_data/E_S_data_case_"
-strain = np.load(name + "1.npz")["strain_history"][:number_of_steps, :]
-stress = np.load(name + "1.npz")["stress_history"][:number_of_steps, :]
+strain = np.load(name + "1.npz")["strain_history"][initial_step:number_of_steps, :]
+stress = np.load(name + "1.npz")["stress_history"][initial_step:number_of_steps, :]
 
 for case in range(1, number_cases + 1):
     loaded_data = np.load(name + str(case) + ".npz")
-    strain = np.vstack((strain, loaded_data["strain_history"][:number_of_steps, :]))
-    stress = np.vstack((stress, loaded_data["stress_history"][:number_of_steps, :]))
+    strain = np.vstack((strain, loaded_data["strain_history"][initial_step:number_of_steps, :]))
+    stress = np.vstack((stress, loaded_data["stress_history"][initial_step:number_of_steps, :]))
 
 # Let's fill the flatted gamma (gamma = flat(outer_prod(E,E)))
 gamma_list = []
