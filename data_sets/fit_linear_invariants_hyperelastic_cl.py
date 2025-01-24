@@ -1,5 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as pl
+import utilities as utils
+import math
 
 # Let's load the data stored in the dir neo_hookean_hyperelastic_law/
 number_cases    = 325
@@ -17,10 +19,16 @@ for case in range(1, number_cases + 1):
     strain = np.vstack((strain, loaded_data["strain_history"][initial_step:number_of_steps, :]))
     stress = np.vstack((stress, loaded_data["stress_history"][initial_step:number_of_steps, :]))
 
-# Let's fill the flatted gamma (gamma = flat(outer_prod(E,E)))
+# Let's fill the gamma including the invariants
 gamma_list = []
 for row in strain:
-    gamma_list.append([row[0]**2, row[1]**2, row[2]**2, row[0]*row[1], row[1]*row[2], row[0]*row[2]])
+    I1 = utils.CalculateI1(row)
+    I2 = utils.CalculateI2(row, I1)
+    I3 = utils.CalculateI3(row)
+    J2 = utils.CalculateJ2(I1, I2)
+    J3 = utils.CalculateJ3(I1, I2, I3)
+    gamma_list.append([I2, I3, J2, I2*I3, I2*J2, I3*J2, I2**2, I3**2, J2**2])
+
 
 # Convert the list to a NumPy array
 gamma = np.array(gamma_list)
@@ -40,7 +48,13 @@ for case in range(1, number_cases + 1):
 
     gamma_case_list = []
     for row in case_strain:
-        gamma_case_list.append([row[0]**2, row[1]**2, row[2]**2, row[0]*row[1], row[1]*row[2], row[0]*row[2]])
+        I1 = utils.CalculateI1(row)
+        I2 = utils.CalculateI2(row, I1)
+        I3 = utils.CalculateI3(row)
+        J2 = utils.CalculateJ2(I1, I2)
+        J3 = utils.CalculateJ3(I1, I2, I3)
+        gamma_case_list.append([I2, I3, J2, I2*I3, I2*J2, I3*J2, I2**2, I3**2, J2**2])
+
     gamma_case = np.array(gamma_case_list)
 
     print("\t printing case: " + str(case))
@@ -56,5 +70,5 @@ for case in range(1, number_cases + 1):
     pl.plot(case_strain[:, 2], predicted_stress[:, 2], label=r"Quadratic elastic prediction $\gamma_{xy}$"      , color = "b", linestyle="--", linewidth = 1)
 
     pl.legend(loc='best', fontsize='small')
-    pl.savefig("quadratic_fit_predictions/" + "E_S_case_" + str(case) + ".png", dpi=300, bbox_inches='tight')
+    pl.savefig("invariants_fit_predictions/" + "E_S_case_" + str(case) + ".png", dpi=300, bbox_inches='tight')
     pl.close()

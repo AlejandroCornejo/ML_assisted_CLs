@@ -31,7 +31,7 @@ def RotateStrainVector(angle, StrainVector):
 
 # print("Original E = ", strain_vector)
 # I1 = CalculateI1(strain_vector)
-# I2 = CalculateI2(strain_vector, CalculateI1(strain_vector))
+# I2 = CalculateI2(strain_vector, I1)
 # I3 = CalculateI3(strain_vector)
 # J2 = CalculateJ2(I1, I2)
 # J3 = CalculateJ3(I1, I2, I3)
