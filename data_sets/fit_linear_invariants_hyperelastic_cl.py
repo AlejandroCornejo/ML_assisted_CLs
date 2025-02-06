@@ -3,21 +3,39 @@ import matplotlib.pyplot as pl
 import utilities as utils
 import math
 
+def AppendSelectedInvariants(list, I1, I2, I3, J2, J3, detF):
+    list.append([
+        I1,
+        I1**2,
+        I2,
+        I2**2,
+        I3,
+        I3**2,
+        J2,
+        J2**2,
+        J3,
+        J3**2,
+        detF - 1.0,
+        math.log(detF),
+        1.0 / detF,
+        (detF - 1.0)**2
+    ])
+
 # Let's load the data stored in the dir neo_hookean_hyperelastic_law/
 number_cases    = 325
-initial_step    = 0
+initial_step    = 1
 number_of_steps = 25
 
 # This is the flatted vector outer_prod(E, E)
 
 name = "neo_hookean_hyperelastic_law/raw_data/E_S_data_case_"
-strain = np.load(name + "1.npz")["strain_history"][initial_step:number_of_steps, :]
-stress = np.load(name + "1.npz")["stress_history"][initial_step:number_of_steps, :]
+strain = np.load(name + "1.npz")["strain_history"][initial_step:number_of_steps:1, :]
+stress = np.load(name + "1.npz")["stress_history"][initial_step:number_of_steps:1, :]
 
 for case in range(1, number_cases + 1):
     loaded_data = np.load(name + str(case) + ".npz")
-    strain = np.vstack((strain, loaded_data["strain_history"][initial_step:number_of_steps, :]))
-    stress = np.vstack((stress, loaded_data["stress_history"][initial_step:number_of_steps, :]))
+    strain = np.vstack((strain, loaded_data["strain_history"][initial_step:number_of_steps:1, :]))
+    stress = np.vstack((stress, loaded_data["stress_history"][initial_step:number_of_steps:1, :]))
 
 # Let's fill the gamma including the invariants
 gamma_list = []
@@ -27,8 +45,8 @@ for row in strain:
     I3 = utils.CalculateI3(row)
     J2 = utils.CalculateJ2(I1, I2)
     J3 = utils.CalculateJ3(I1, I2, I3)
-    gamma_list.append([I2, I3, J2, I2*I3, I2*J2, I3*J2, I2**2, I3**2, J2**2])
-
+    detF = utils.CalculateJacobian(row)
+    AppendSelectedInvariants(gamma_list, I1, I2, I3, J2, J3, detF)
 
 # Convert the list to a NumPy array
 gamma = np.array(gamma_list)
@@ -43,8 +61,8 @@ H_matrix = delta_stress @ np.linalg.pinv(gamma).T
 
 for case in range(1, number_cases + 1):
     loaded_data = np.load(name + str(case) + ".npz")
-    case_strain = loaded_data["strain_history"][:number_of_steps, :]
-    case_stress = loaded_data["stress_history"][:number_of_steps, :]
+    case_strain = loaded_data["strain_history"][initial_step:number_of_steps:1, :]
+    case_stress = loaded_data["stress_history"][initial_step:number_of_steps:1, :]
 
     gamma_case_list = []
     for row in case_strain:
@@ -53,7 +71,8 @@ for case in range(1, number_cases + 1):
         I3 = utils.CalculateI3(row)
         J2 = utils.CalculateJ2(I1, I2)
         J3 = utils.CalculateJ3(I1, I2, I3)
-        gamma_case_list.append([I2, I3, J2, I2*I3, I2*J2, I3*J2, I2**2, I3**2, J2**2])
+        detF = utils.CalculateJacobian(row)
+        AppendSelectedInvariants(gamma_case_list, I1, I2, I3, J2, J3, detF)
 
     gamma_case = np.array(gamma_case_list)
 

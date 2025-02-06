@@ -1,5 +1,6 @@
 import math
 import numpy as np
+import scipy
 
 # Ref: pg 102 Oliver Saracibar
 def CalculateI1(StrainVector):
@@ -25,6 +26,16 @@ def RotateStrainVector(angle, StrainVector):
                    [s**2, c**2, -s*c],
                    [-2.0*s*c, 2*s*c, c**2-s**2]])
     return T @ StrainVector
+
+def CalculateJacobian(StrainVector):
+    E = np.zeros((2,2))
+    E[0,0] = StrainVector[0]
+    E[1,1] = StrainVector[1]
+    E[0,1] = 0.5 * StrainVector[2]
+    E[1,0] = 0.5 * StrainVector[2]
+    I = np.eye(2)
+    F = scipy.linalg.sqrtm(2.0 * E + I) # We suppose that F is symm
+    return np.linalg.det(F)
 
 # test...
 # strain_vector = np.array([0.001, 0.0002, -0.0002]).T
