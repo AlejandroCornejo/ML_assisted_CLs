@@ -3,23 +3,27 @@ import matplotlib.pyplot as pl
 import utilities as utils
 import math
 
-def AppendSelectedInvariants(list, I1, I2, I3, J2, J3, detF):
-    list.append([
+def AppendSelectedInvariants(my_list, I1, I2, I3, J2, J3, detF):
+    my_list.append([
         I1,
-        I1**2,
-        I2,
-        I2**2,
+        # I1**2,
+        # I2,
+        # I2**2,
         I3,
-        I3**2,
-        J2,
-        J2**2,
-        J3,
-        J3**2,
-        detF - 1.0,
-        math.log(detF),
-        1.0 / detF,
-        (detF - 1.0)**2
+        # I3**2,
+        # J2,
+        # J2**2,
+        # J3, # gives a kink
+        # J3**2,
+        # (detF - 1.0), # linear beh
+        # (detF - 1.0)**2, # linear beh
+        # math.log(detF)**2, # bad out
+        # 1.0 / (detF - 1.0),
+        # (detF - 1.0)**2
+        # math.log(detF) # bad out
+        (detF) # linear beh
     ])
+    # my_list = np.log(my_list)
 
 # Let's load the data stored in the dir neo_hookean_hyperelastic_law/
 number_cases    = 325
@@ -40,12 +44,17 @@ for case in range(1, number_cases + 1):
 # Let's fill the gamma including the invariants
 gamma_list = []
 for row in strain:
+    detF = utils.CalculateJacobian(row)
+    # detF = 1.0
+    # row = 2.0 * row + np.array([1.0, 1.0, 0.0])
     I1 = utils.CalculateI1(row)
     I2 = utils.CalculateI2(row, I1)
     I3 = utils.CalculateI3(row)
     J2 = utils.CalculateJ2(I1, I2)
     J3 = utils.CalculateJ3(I1, I2, I3)
-    detF = utils.CalculateJacobian(row)
+    # print("I1 = ", I1)
+    # print("I2 = ", I2)
+    # print("I3 = ", I3)
     AppendSelectedInvariants(gamma_list, I1, I2, I3, J2, J3, detF)
 
 # Convert the list to a NumPy array
@@ -56,8 +65,12 @@ C_aniso =  np.array([[7.16042643e+06, 4.27997603e+02, -2.18278728e-11],
             [4.27997603e+02,  7.14548324e+06,  7.09405867e-11],
             [-2.18278728e-11,  7.09405867e-11,  3.57285779e+06]])
 
+# TODO REMOVE
+# C_aniso.fill(0.0)
+
 delta_stress = stress.T - C_aniso @ strain.T
-H_matrix = delta_stress @ np.linalg.pinv(gamma).T
+H_matrix = (delta_stress) @ np.linalg.pinv(gamma).T
+# H_matrix = np.log(delta_stress) @ np.linalg.pinv(gamma).T
 
 for case in range(1, number_cases + 1):
     loaded_data = np.load(name + str(case) + ".npz")
@@ -66,12 +79,14 @@ for case in range(1, number_cases + 1):
 
     gamma_case_list = []
     for row in case_strain:
+        detF = utils.CalculateJacobian(row)
+        # detF = 1.0
+        # row = 2.0 * row + np.array([1.0, 1.0, 0.0])
         I1 = utils.CalculateI1(row)
         I2 = utils.CalculateI2(row, I1)
         I3 = utils.CalculateI3(row)
         J2 = utils.CalculateJ2(I1, I2)
         J3 = utils.CalculateJ3(I1, I2, I3)
-        detF = utils.CalculateJacobian(row)
         AppendSelectedInvariants(gamma_case_list, I1, I2, I3, J2, J3, detF)
 
     gamma_case = np.array(gamma_case_list)
@@ -84,6 +99,7 @@ for case in range(1, number_cases + 1):
     pl.ylabel("PK2 Stress [Pa]")
 
     predicted_stress = (C_aniso @ case_strain.T).T + (H_matrix @ gamma_case.T).T
+    # predicted_stress = np.exp((C_aniso @ case_strain.T).T + (H_matrix @ gamma_case.T).T)
     pl.plot(case_strain[:, 0], predicted_stress[:, 0], label=r"Quadratic elastic prediction $\varepsilon_{xx}$" , color = "k", linestyle="--", linewidth = 1)
     pl.plot(case_strain[:, 1], predicted_stress[:, 1], label=r"Quadratic elastic prediction $\varepsilon_{yy}$" , color = "r", linestyle="--", linewidth = 1)
     pl.plot(case_strain[:, 2], predicted_stress[:, 2], label=r"Quadratic elastic prediction $\gamma_{xy}$"      , color = "b", linestyle="--", linewidth = 1)
