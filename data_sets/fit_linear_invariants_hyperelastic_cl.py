@@ -21,7 +21,7 @@ def AppendSelectedInvariants(my_list, I1, I2, I3, J2, J3, detF):
         # 1.0 / (detF - 1.0),
         # (detF - 1.0)**2
         # math.log(detF) # bad out
-        (detF) # linear beh
+        (detF - 1.0) # linear beh
     ])
     # my_list = np.log(my_list)
 
