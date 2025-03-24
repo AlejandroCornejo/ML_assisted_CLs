@@ -5,7 +5,7 @@ import KratosMultiphysics.StructuralMechanicsApplication as SMA
 import KratosMultiphysics.ConstitutiveLawsApplication    as CLA
 import json
 import math
-import scienceplots
+# import scienceplots
 
 #====================================================================================
 #====================================================================================
@@ -174,13 +174,14 @@ while theta <= 360.0:
 
         output_type = "plot"
         if output_type == "plot":
-            pl.style.use('science')
+            #pl.style.use('science')
             name = "neo_hookean_hyperelastic_law/strain_stress_plots/strain_stress_data_case_" + str(case_number) + ".png"
             title = "theta = " + str(theta) + " ; phi = " + str(phi)
-            title = r"$\theta$ = " + str(theta) + r" ; $\phi$ = " + str(phi)
-            pl.plot(strain_history[:, 0], stress_history[:, 0], label=r"Ground truth $\varepsilon_{xx}$", marker='X', color="k",  markersize=2, markerfacecolor='none')
-            pl.plot(strain_history[:, 1], stress_history[:, 1], label=r"Ground truth $\varepsilon_{yy}$", marker='X', color="r",  markersize=2, markerfacecolor='none')
-            pl.plot(strain_history[:, 2], stress_history[:, 2], label=r"Ground truth $\gamma_{xy}$",      marker='X', color="b",  markersize=2, markerfacecolor='none')
+            # title = r"$\theta$ = " + str(theta) + r" ; $\phi$ = " + str(phi)
+            title = "theta = " + str(theta) + " ; phi = " + str(phi)
+            pl.plot(strain_history[:, 0], stress_history[:, 0], label="Ground truth \varepsilon_{xx}", marker='X', color="k",  markersize=2, markerfacecolor='none')
+            pl.plot(strain_history[:, 1], stress_history[:, 1], label="Ground truth \varepsilon_{yy}", marker='X', color="r",  markersize=2, markerfacecolor='none')
+            pl.plot(strain_history[:, 2], stress_history[:, 2], label="Ground truth \gamma_{xy}",      marker='X', color="b",  markersize=2, markerfacecolor='none')
             pl.xlabel("Green-Lagrange Strain [-]")
             pl.ylabel("PK2 Stress [Pa]")
             pl.title(title)
@@ -191,12 +192,12 @@ while theta <= 360.0:
 
             name = "neo_hookean_hyperelastic_law/strain_histories_plots/strain_history_case_" + str(case_number) + ".png"
             fig = pl.figure()
-            pl.style.use('default')
+            #pl.style.use('default')
             ax = fig.add_subplot(111, projection='3d')
             ax.scatter(strain_history[:, 0], strain_history[:, 1], strain_history[:, 2], c='r', marker='o', label="Strain history")
-            ax.set_xlabel(r"$\varepsilon_{xx}$")
-            ax.set_ylabel(r"$\varepsilon_{yy}$")
-            ax.set_zlabel(r"$\gamma_{xy}$")
+            ax.set_xlabel("\varepsilon_{xx}")
+            ax.set_ylabel("\varepsilon_{yy}")
+            ax.set_zlabel("\gamma_{xy}")
 
             pl.title(title)
             pl.savefig(name, dpi=300, bbox_inches=None)
