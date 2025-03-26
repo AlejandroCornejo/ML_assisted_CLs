@@ -5,10 +5,15 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 
+Clinear = np.array([[ 7.16042643e+06,  4.27997603e+02, -2.18278728e-11],
+                    [ 4.27997603e+02,  7.14548324e+06,  7.09405867e-11],
+                    [-2.18278728e-11,  7.09405867e-11,  3.57285779e+06]])
+
+c_transform = cl_loader.ApplyCTransform(Clinear)
 
 directory = ".//neo_hookean_hyperelastic_law//raw_data//"
 steps_to_consider = 3
-dataloader = cl_loader.get_dataloader(directory,batch_size=32,steps_to_consider=steps_to_consider)
+dataloader = cl_loader.get_dataloader(directory,batch_size=32,steps_to_consider=steps_to_consider,transform=c_transform)
 
 for strain_history, stress_history,work in dataloader:
     # Your training or processing code here
@@ -42,13 +47,14 @@ _ = torch.manual_seed (2023)
 #         return torch.matmul(x,C)
 
 class SymmetricLayer(nn.Module):
-    def __init__(self, scale_estimate=1e6):
+    def __init__(self, scale_estimate=1.):
         super(SymmetricLayer, self).__init__()
-        # self.C = nn.Parameter(torch.abs(torch.randn(3,3)*scale_estimate))  # Random initialization
+        self.C = nn.Parameter(torch.abs(torch.randn(3,3)*scale_estimate))  # Random initialization
 
-        self.C = nn.Parameter(torch.tensor([[ 7.16042643e+06,  4.27997603e+02, -2.18278728e-11],
-                                    [ 4.27997603e+02,  7.14548324e+06,  7.09405867e-11],
-                                    [-2.18278728e-11,  7.09405867e-11,  3.57285779e+06]], dtype=torch.float32))
+        # self.C = nn.Parameter(torch.tensor([[ 7.16042643e+06,  4.27997603e+02, -2.18278728e-11],
+        #                             [ 4.27997603e+02,  7.14548324e+06,  7.09405867e-11],
+        #                             [-2.18278728e-11,  7.09405867e-11,  3.57285779e+06]], dtype=torch.float32))
+
 
     def forward(self, x):
         return 0.5*torch.matmul(x,self.C+self.C.T)
@@ -63,8 +69,11 @@ class SimpleNet(nn.Module):
 
 model = SimpleNet()
 
-optimizer = optim.Adam(model.parameters(), lr=1.0e-3) #lr=1e-3)
-def train(model, dataloader, optimizer, epochs=10):
+#optimizer = torch.optim.SGD(model.parameters(), lr=1e-2, momentum=0.9, nesterov=True)
+#optimizer = optim.LBFGS(model.parameters(), lr=1.0e4, max_iter=20)
+optimizer = optim.Adagrad(model.parameters(), lr=1.0e-1) #lr=1e-3)
+#optimizer = optim.Adam(model.parameters(), lr=1.0e2) #lr=1e-3)
+def train(model, dataloader, optimizer, epochs):
     model.train()
 
     for epoch in range(epochs):
@@ -97,8 +106,8 @@ def train(model, dataloader, optimizer, epochs=10):
             epoch_loss += loss.item()
 
         print(f"Epoch [{epoch+1}/{epochs}], Loss: {epoch_loss/len(dataloader):.4f}")
-        if epoch%10:
+        if epoch%10==0:
             print(0.5*(model.symmetric_layer.C + model.symmetric_layer.C.T))
 
 # Example usage
-train(model, dataloader, optimizer, epochs=200)
+train(model, dataloader, optimizer, epochs=2000)
