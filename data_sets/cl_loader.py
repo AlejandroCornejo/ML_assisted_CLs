@@ -11,6 +11,7 @@ class CustomDataset(Dataset):
         self.data_list = []  # Store preloaded data
 
         # Load all .npz files into memory
+        print("=========== START READING ====")
         for file in os.listdir(directory):
             if file.endswith('.npz'):
                 file_path = os.path.join(directory, file)
@@ -34,6 +35,7 @@ class CustomDataset(Dataset):
                 work = torch.tensor(work, dtype=torch.float32)
 
                 self.data_list.append((strain_history, stress_history, work))  # Store preloaded data
+        print("=========== READING COMPLETED ====")
 
         print(f"Loaded {len(self.data_list)} files into memory.")
 
