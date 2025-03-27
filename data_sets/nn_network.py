@@ -17,13 +17,14 @@ class StrainInvariants(nn.Module):
 
 class ConvexNN(nn.Module):
     """Convex neural network ensuring convexity in I1, I2."""
-    def __init__(self, hidden_dim=10):
+    def __init__(self, hidden_dim):
         super(ConvexNN, self).__init__()
 
         # Define unconstrained parameters
-        self.raw_weight1 = nn.Parameter(torch.randn(hidden_dim, 2)*1e-6)
-        self.raw_weight2 = nn.Parameter(torch.randn(hidden_dim, hidden_dim)*1e-6)
-        self.raw_weight3 = nn.Parameter(torch.randn(1, hidden_dim)*1e-6)
+        scale = 1.0e-6
+        self.raw_weight1 = nn.Parameter(torch.rand(hidden_dim, 2)*scale)
+        self.raw_weight2 = nn.Parameter(torch.rand(hidden_dim, hidden_dim)*scale)
+        self.raw_weight3 = nn.Parameter(torch.rand(1, hidden_dim)*scale)
 
     def forward(self, I):
         """Ensures convexity using non-negative weights and convex activations."""
@@ -31,8 +32,12 @@ class ConvexNN(nn.Module):
         W2 = torch.relu(self.raw_weight2)
         W3 = torch.relu(self.raw_weight3)
 
-        x = (I @ W1.T) ** 2  # Convex activation (square function)
-        x = (x @ W2.T) ** 2  # Convex activation
+        # x = (I @ W1.T) ** 2  # Convex activation (square function)
+        # x = (x @ W2.T) ** 2  # Convex activation
+        # output = x @ W3.T    # Final convex output
+
+        x = I @ W1.T  # Convex activation (square function)
+        x = x @ W2.T  # Convex activation
         output = x @ W3.T    # Final convex output
 
         return output
@@ -55,7 +60,8 @@ class StrainEnergyPotential(nn.Module):
         strain_norm_sq = torch.sum(E_voigt ** 2, dim=2, keepdim=True)
 
         # Compute final potential
-        psi = 0.5*(strain_norm_sq) #+ self.convex_nn(I)
+        #psi = 0.5*(strain_norm_sq + self.convex_nn(I))
+        psi = 0.5*(self.convex_nn(I))
 
         # Compute the derivative of psi with respect to E_voigt using autograd
         # Since psi is (batch_size, 1), we sum it to get a scalar for grad computation
@@ -63,5 +69,7 @@ class StrainEnergyPotential(nn.Module):
 
         #print(2.0*E_voigt - d_psi_d_E)
         #print(d_psi_d_E)
+
+        #print(self.convex_nn.raw_weight1)
 
         return d_psi_d_E
