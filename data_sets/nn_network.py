@@ -30,7 +30,13 @@ class ConvexNN(nn.Module):
 
     def forward(self, I):
         """Ensures convexity using non-negative weights and convex activations."""
-        # NOTE AC esto basicamente clipea los valores < 0
+
+        """
+        NOTE torch.relu(self.raw_weight1) // AC esto basicamente clipea los valores < 0;
+        TODO no seria mejor hacer el RELU de las predicciones por layer? es decir x = relu(I @ W1.T)  ?? esto hacen las ANNs; lo digo pq los invariantes
+        pueden ser negativos...
+        """
+
         W1 = torch.relu(self.raw_weight1)
         W2 = torch.relu(self.raw_weight2)
         W3 = torch.relu(self.raw_weight3)
@@ -40,9 +46,9 @@ class ConvexNN(nn.Module):
         # output = x @ W3.T    # Final convex output
 
         # NOTE: supone que I es un matriz de n_batch x 2  --> (I1, I2)
-        x = I @ W1.T  # Convex activation (square function)
-        x = x @ W2.T  # Convex activation
-        output = x @ W3.T    # Final convex output
+        x = I @ W1.T         # Convex activation (square function) //  CHECK: (n x n_hid) = (n x 2) @ (2 x n_hid)
+        x = x @ W2.T         # Convex activation                   //  CHECK: (n x n_hid) = (n x n_hid) @ (n_hid x n_hid)
+        output = x @ W3.T    # Final convex output                 //  CHECK: (n x 1) = (n x n_hid) @ (n_hid x 1) --> OK!!
 
         return output
 
@@ -61,7 +67,7 @@ class StrainEnergyPotential(nn.Module):
         I = self.invariant_layer(E_voigt)
 
         # Compute ||E||^2 (Frobenius norm squared)
-        strain_norm_sq = torch.sum(E_voigt ** 2, dim=2, keepdim=True)
+        strain_norm_sq = torch.sum(E_voigt ** 2, dim=2, keepdim=True) # NOTE: Pregunta estupida, la norma es invariante? yo diría que no... Esto es un problema
 
         # Compute final potential
         #psi = 0.5*(strain_norm_sq + self.convex_nn(I))
@@ -69,11 +75,11 @@ class StrainEnergyPotential(nn.Module):
 
         # Compute the derivative of psi with respect to E_voigt using autograd
         # Since psi is (batch_size, 1), we sum it to get a scalar for grad computation
-        d_psi_d_E = torch.autograd.grad(psi.sum(), E_voigt, create_graph=True)[0]
+        d_psi_d_E = torch.autograd.grad(psi.sum(), E_voigt, create_graph=True)[0] # NOTE: Comentemos esto... que hace?
 
         #print(2.0*E_voigt - d_psi_d_E)
         #print(d_psi_d_E)
 
         #print(self.convex_nn.raw_weight1)
 
-        return d_psi_d_E
+        return d_psi_d_E # NOTE: no deberia de hacer return psi ?????
