@@ -26,8 +26,11 @@ class ConvexNN(nn.Module):
         self.raw_weight2 = nn.Parameter(torch.rand(hidden_dim, hidden_dim)*scale)
         self.raw_weight3 = nn.Parameter(torch.rand(1, hidden_dim)*scale)
 
+        # NOTE AC: So this is a 2 x hidden_dim x 1    kind of ANN
+
     def forward(self, I):
         """Ensures convexity using non-negative weights and convex activations."""
+        # NOTE AC esto basicamente clipea los valores < 0
         W1 = torch.relu(self.raw_weight1)
         W2 = torch.relu(self.raw_weight2)
         W3 = torch.relu(self.raw_weight3)
@@ -36,6 +39,7 @@ class ConvexNN(nn.Module):
         # x = (x @ W2.T) ** 2  # Convex activation
         # output = x @ W3.T    # Final convex output
 
+        # NOTE: supone que I es un matriz de n_batch x 2  --> (I1, I2)
         x = I @ W1.T  # Convex activation (square function)
         x = x @ W2.T  # Convex activation
         output = x @ W3.T    # Final convex output
