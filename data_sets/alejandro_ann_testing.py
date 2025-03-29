@@ -1,0 +1,56 @@
+
+import numpy as np
+import scipy as sp
+import torch as torch
+
+import torch.nn as nn
+import torch.optim as optim
+
+import cl_loader as cl_loader
+
+
+number_of_steps = 25
+database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps)
+
+ref_strain_database = torch.stack([item[0] for item in database]) # batch x steps x strain_size
+ref_stress_database = torch.stack([item[1] for item in database]) # batch x steps x strain_size
+ref_work_database   = torch.stack([item[2] for item in database]) # batch x steps x 1
+
+# ==========================================================================================
+# Define the neural network
+class StressPredictor(nn.Module):
+    def __init__(self):
+        super(StressPredictor, self).__init__()
+        hidden_neurons = 5
+        self.hidden = nn.Linear(3, hidden_neurons, bias=False)  # Input: 3 -> Hidden: 5
+        self.output = nn.Linear(hidden_neurons, 3, bias=False)  # Hidden: 5 -> Output: 3
+
+    def forward(self, strain):
+        x = torch.relu(self.hidden(strain))  # ReLU activation
+        stress = self.output(x)              # Linear output
+        return stress
+# ==========================================================================================
+
+
+
+
+
+# Initialize model, optimizer, and loss function
+model = StressPredictor()
+optimizer = optim.Adam(model.parameters(), lr = 1.0)
+
+# Training loop
+n_epochs = 10000
+for epoch in range(n_epochs):
+    optimizer.zero_grad()
+    predicted_stress = model(ref_strain_database)
+
+    predicted_work = torch.sum((ref_strain_database[:, 1 :, :] - ref_strain_database[:, : -1, :]) * predicted_stress[:, 1 :, :], axis=2)
+    predicted_work = torch.cumsum(predicted_work, dim=1)
+
+    loss = torch.mean((predicted_work - ref_work_database[:, 1:, 0]) ** 2)  # Squared difference of work
+    loss.backward()
+    optimizer.step()
+    
+    if epoch % 10 == 0:
+        print(f"Epoch {epoch}, Loss: {loss.item():.6f}")
