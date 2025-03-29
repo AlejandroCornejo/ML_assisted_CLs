@@ -8,6 +8,8 @@ import torch.optim as optim
 
 import cl_loader as cl_loader
 
+import matplotlib.pyplot as plt
+
 
 number_of_steps = 25
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps)
@@ -37,7 +39,7 @@ class StressPredictor(nn.Module):
 
 # Initialize model, optimizer, and loss function
 model = StressPredictor()
-optimizer = optim.Adam(model.parameters(), lr = 1.0)
+optimizer = optim.Adam(model.parameters(), lr = 10.0)
 
 # Training loop
 n_epochs = 10000
@@ -45,12 +47,31 @@ for epoch in range(n_epochs):
     optimizer.zero_grad()
     predicted_stress = model(ref_strain_database)
 
-    predicted_work = torch.sum((ref_strain_database[:, 1 :, :] - ref_strain_database[:, : -1, :]) * predicted_stress[:, 1 :, :], axis=2)
-    predicted_work = torch.cumsum(predicted_work, dim=1)
+    predicted_work = torch.sum((ref_strain_database[:, 1 :, :] - ref_strain_database[:, : -1, :]) * predicted_stress[:, 1 :, :], axis=2) # batch x steps-2
+    predicted_work = torch.cumsum(predicted_work, dim=1) # sumation along rows, horizontally
 
-    loss = torch.mean((predicted_work - ref_work_database[:, 1:, 0]) ** 2)  # Squared difference of work
+    # loss = torch.mean((predicted_work - ref_work_database[:, 1:, 0]) ** 2)  # Squared difference of work
+    loss = torch.mean((predicted_stress - ref_stress_database) ** 2)  # Squared difference of work
     loss.backward()
     optimizer.step()
     
-    if epoch % 10 == 0:
+    if epoch % 100 == 0:
         print(f"Epoch {epoch}, Loss: {loss.item():.6f}")
+
+
+
+
+# ===============================================================
+# Let's print the results of the ANN for one batch
+batch = 1
+strain_component = 0
+stress_component = 0
+strain_for_print = ref_strain_database[batch, :, strain_component]
+
+predicted_stress_ANN = model(ref_strain_database)[batch, :, strain_component].detach().numpy()
+
+plt.plot(strain_for_print, ref_stress_database[batch, :, stress_component], label='REF', color='b', marker='o')
+plt.plot(strain_for_print, predicted_stress_ANN, label='ANN', color='r', marker='o')
+plt.legend()
+
+plt.show()
