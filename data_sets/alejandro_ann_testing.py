@@ -1,14 +1,15 @@
-
+# std libs imports
 import numpy as np
 import scipy as sp
 import torch as torch
-
+import matplotlib.pyplot as plt
 import torch.nn as nn
 import torch.optim as optim
+import sklearn as sk
 
+# custom imports
 import cl_loader as cl_loader
 
-import matplotlib.pyplot as plt
 
 
 number_of_steps = 25
@@ -22,6 +23,14 @@ print("Launching the training of a ANN...")
 print("Number of batches: ", ref_strain_database.shape[0])
 print("Number of steps  : ", ref_strain_database.shape[1])
 print("Strain size      : ", ref_strain_database.shape[2])
+
+# Why not normalizing?
+"""
+scaler = MinMaxScaler()
+normalized_db = scaler.fit_transform(database_np)
+--> only works with 2Dim tensors....
+original_db = scaler.inverse_transform(normalized_db.numpy())
+"""
 
 # ==========================================================================================
 # Define the neural network
@@ -56,8 +65,8 @@ for epoch in range(n_epochs):
     predicted_work = torch.sum((ref_strain_database[:, 1 :, :] - ref_strain_database[:, : -1, :]) * predicted_stress[:, 1 :, :], axis=2) # batch x steps-2
     predicted_work = torch.cumsum(predicted_work, dim=1) # sumation along rows, horizontally
 
-    # loss = torch.mean((predicted_work - ref_work_database[:, 1:, 0]) ** 2)  # Squared difference of work
-    loss = torch.mean((predicted_work - ref_work_database[:, 1:, 0]) ** 2) + 1e2 * torch.mean((predicted_stress[:, :, :] - ref_stress_database[:, :, :]) ** 2)
+    loss = torch.mean((predicted_work - ref_work_database[:, 1:, 0]) ** 2)  # Squared difference of work
+    # loss = torch.mean((predicted_work - ref_work_database[:, 1:, 0]) ** 2) + 1e2 * torch.mean((predicted_stress[:, :, :] - ref_stress_database[:, :, :]) ** 2)
     # loss = torch.mean((predicted_stress - ref_stress_database) ** 2)  # Squared difference of work
     loss.backward()
     optimizer.step()
