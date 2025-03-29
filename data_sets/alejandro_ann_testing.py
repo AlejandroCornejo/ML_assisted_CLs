@@ -63,15 +63,17 @@ for epoch in range(n_epochs):
 
 # ===============================================================
 # Let's print the results of the ANN for one batch
-batch = 1
+batch = [1, 25]
 strain_component = 0
 stress_component = 0
-strain_for_print = ref_strain_database[batch, :, strain_component]
 
-predicted_stress_ANN = model(ref_strain_database)[batch, :, strain_component].detach().numpy()
 
-plt.plot(strain_for_print, ref_stress_database[batch, :, stress_component], label='REF', color='b', marker='o')
-plt.plot(strain_for_print, predicted_stress_ANN, label='ANN', color='r', marker='o')
-plt.legend()
+prediction_ANN = model(ref_strain_database)
 
-plt.show()
+for elem in batch:
+    strain_for_print = ref_strain_database[elem, :, strain_component]
+    plt.plot(strain_for_print, ref_stress_database[elem, :, stress_component], label='REF', color='b', marker='o')
+    predicted_stress_ANN = prediction_ANN[elem, :, strain_component].detach().numpy()
+    plt.plot(strain_for_print, predicted_stress_ANN, label='ANN', color='r', marker='o')
+    plt.legend()
+    plt.show()
