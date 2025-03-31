@@ -50,12 +50,11 @@ class CustomDataset(Dataset):
 
         return strain_history, stress_history, work
 
-def get_dataloader(directory, batch_size=32, shuffle=True, num_workers=0,steps_to_consider=-1,transform=None):
-
+def get_dataloader(directory, batch_size = 32, shuffle = True, num_workers = 0, steps_to_consider = -1, transform = None):
 
     dataset = CustomDataset(directory,steps_to_consider,transform=transform)
     print("number of files", len(dataset))
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
+    dataloader = DataLoader(dataset, batch_size = batch_size, shuffle = shuffle, num_workers = num_workers)
     return dataloader
 
 class ApplyCTransform:
@@ -78,6 +77,9 @@ class ApplyCTransform:
             sample (dict): A dictionary containing 'stress_history' and 'strain_history'.
         Returns:
             dict: Transformed sample with the applied Csqrt multiplication.
+
+        Comment: This maping implies that the relationship between the
+        stress transformed and the strain transformed is the identity matrix.
         """
         stress_transformed =  stress_history @ self.Csqrt_inv
         strain_transformed =  strain_history @ self.Csqrt
