@@ -77,8 +77,8 @@ for epoch in range(n_epochs):
 
 # ===============================================================
 # Let's print the results of the ANN for one batch
-# batch = [1, 2, 3, 4, 6, 16, 350]
-batch = [2]
+batch = [1, 2, 3, 4, 6, 16, 350]
+
 def GetColor(component):
     if component == 0:
         return "r"

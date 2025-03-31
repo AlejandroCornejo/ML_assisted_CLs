@@ -31,12 +31,6 @@ class ConvexNN(nn.Module):
     def forward(self, I):
         """Ensures convexity using non-negative weights and convex activations."""
 
-        """
-        NOTE torch.relu(self.raw_weight1) // AC esto basicamente clipea los valores < 0;
-        TODO no seria mejor hacer el RELU de las predicciones por layer? es decir x = relu(I @ W1.T)  ?? esto hacen las ANNs; lo digo pq los invariantes
-        pueden ser negativos...
-        """
-
         W1 = torch.relu(self.raw_weight1)
         W2 = torch.relu(self.raw_weight2)
         W3 = torch.relu(self.raw_weight3)
