@@ -17,7 +17,7 @@ c_transform = cl_loader.ApplyCTransform(Clinear)
 ############## loading data and applying transform
 directory = ".//neo_hookean_hyperelastic_law//raw_data//"
 steps_to_consider = -1 #3
-dataloader = cl_loader.get_dataloader(directory,batch_size=32,steps_to_consider=steps_to_consider,transform=c_transform)
+dataloader = cl_loader.get_dataloader(directory,batch_size=8,steps_to_consider=steps_to_consider,transform=c_transform)
 
 for strain_history, stress_history,work in dataloader:
     # Your training or processing code here
@@ -25,18 +25,22 @@ for strain_history, stress_history,work in dataloader:
 
 _ = torch.manual_seed (2023)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 print("Using device:", device)
 
 #model = linear_network.SimpleNet(identity_init=True)
 model = nn_network.StrainEnergyPotential(identity_init=True)
-model.to(device)
+# model.to(device)
 
-#optimizer = torch.optim.SGD(model.parameters(), lr=1e-2, momentum=0.9, nesterov=True)
+
+#optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9, nesterov=True)
 #optimizer = optim.LBFGS(model.parameters(), lr=1.0e4, max_iter=20)
 print(model.parameters())
-#optimizer = optim.Adagrad(model.parameters(), lr=1.0e-6) #lr=1e-3)
-optimizer = optim.Adam(model.parameters(), lr=1.0e-4) #lr=1e-3)
+#optimizer = optim.Adagrad(model.parameters(), lr=1.0e-4) #lr=1e-3)
+optimizer = optim.Adam(model.parameters(), lr=3e-1) #lr=1e-3)
+scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.1)
+
 def train(model, dataloader, optimizer, epochs):
     model.train()
 
@@ -49,17 +53,22 @@ def train(model, dataloader, optimizer, epochs):
     for epoch in range(epochs):
         epoch_loss = 0.0
         for strain_history, stress_history, target_work in dataloader:
+            # strain_history = strain_history.to(device)
+            # stress_history = stress_history.to(device)
+            #target_work = target_work.to(device)
+
             strain_rate = strain_history.detach().clone()
             strain_rate[:,1:,:] = strain_history[:,1:,:] - strain_history[:,0:-1,:]
+            # strain_rate = strain_rate.to(device)
 
             strain_history = strain_history.requires_grad_(True)
+            # strain_history = strain_history.to(device)
 
 
             # Forward pass
             predicted_stress_history = model(strain_history)
             err_stress = stress_history - predicted_stress_history
             err_work_aux = torch.sum(err_stress*strain_rate,axis=2)
-            #err_work = err_work_aux #TODO uncomment the one below
             err_work = torch.cumsum(err_work_aux, dim=1) #ensure that we accumulate the error over time
 
             #TODO: missing the scansum
@@ -74,7 +83,7 @@ def train(model, dataloader, optimizer, epochs):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
+            scheduler.step()
             #print("raw",model.convex_nn.raw_weight1,model.convex_nn.raw_weight2,model.convex_nn.raw_weight3)
 
             epoch_loss += loss.item()
@@ -104,4 +113,41 @@ def train(model, dataloader, optimizer, epochs):
     plt.show()
 
 # Example usage
-train(model, dataloader, optimizer, epochs=2000)
+#train(model, dataloader, optimizer, epochs=300)
+
+# ===============================================================
+# Let's print the results of the ANN for one batch
+validation_dataloader = cl_loader.get_dataloader(directory,batch_size=1,steps_to_consider=-1,transform=c_transform)
+batch = [1, 2, 3, 4, 6, 16, 350]
+
+def GetColor(component):
+    if component == 0:
+        return "r"
+    elif component==1:
+        return "b"
+    else:
+        return "k"
+
+visualization_strain = []
+visualization_stress = []
+
+for strain_history, stress_history, target_work in validation_dataloader:
+    strain_history = strain_history.requires_grad_(True) #cannot remove this
+    predicted_stress_history = model(strain_history)
+    index_in_batch = 0
+    strain_for_print = strain_history[index_in_batch].detach().numpy()
+    visualization_stress = predicted_stress_history[index_in_batch].detach().numpy()
+    visualization_stress_ref = stress_history[index_in_batch].detach().numpy()
+    print(strain_for_print.shape)
+    for compo in [0, 1, 2]:
+        strain = strain_for_print[:, compo].ravel()
+        print("strain_for_print.shape",strain_for_print.shape)
+        print("visualization_stress_ref[:, compo].shape",visualization_stress_ref[:, compo].shape)
+        plt.plot(strain_for_print[:, compo].ravel(), visualization_stress_ref[:, compo].ravel(), label='REF_' + str(compo), color=GetColor(compo), marker='o')
+        predicted_stress_ANN = visualization_stress[:, compo].ravel()
+        print("predicted_stress_ANN.shape",predicted_stress_ANN.shape)
+        plt.plot(strain_for_print[:, compo].ravel(), visualization_stress[:, compo].ravel(), label='ANN_' + str(compo), color=GetColor(compo), marker='x')
+        #plt.title("batch: " + str(elem))
+        plt.legend()
+    plt.show()
+err
