@@ -64,11 +64,8 @@ class ApplyCTransform:
         Args:
             C (torch.Tensor): A 3x3 numpy matrix to apply to the stress and strain history.
         """
-        aux = scipy.linalg.sqrtm(C)
-        self.Csqrt = torch.tensor(aux, dtype=torch.float32)
-        self.Csqrt_inv = torch.tensor(np.linalg.inv(aux), dtype=torch.float32)
-        print(self.Csqrt)
-        print(self.Csqrt_inv)
+        self.Cinv = torch.tensor(np.linalg.inv(C), dtype=torch.float32)
+        print(self.Cinv)
 
     def __call__(self, strain_history, stress_history):
         """
@@ -81,8 +78,8 @@ class ApplyCTransform:
         Comment: This maping implies that the relationship between the
         stress transformed and the strain transformed is the identity matrix.
         """
-        stress_transformed =  stress_history @ self.Csqrt_inv
-        strain_transformed =  strain_history @ self.Csqrt
+        stress_transformed =  stress_history @ self.Cinv
+        strain_transformed =  strain_history
         #print(stress_transformed.shape, stress_history.shape)
 
         return strain_transformed,stress_transformed
