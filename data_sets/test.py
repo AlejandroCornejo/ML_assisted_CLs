@@ -33,13 +33,34 @@ print("Using device:", device)
 model = nn_network.StrainEnergyPotential(identity_init=True)
 # model.to(device)
 
+################ DEBUGGING
+# E_voigt = torch.rand(1, 1, 3, requires_grad=True)*1e-3  # Example input (batch_size=1)
+# E_voigt[0,0,0] = 1e-3
+# E_voigt[0,0,1] = 2e-3
+# E_voigt[0,0,2] = 3e-3
+# stress = model(E_voigt)
+# print("strain=",E_voigt)
+# print("stress",stress)
+# print("psi ", model.EvaluatePsi(E_voigt))
+# err
+
+print("Model parameters:")
+for name, param in model.named_parameters():
+    print(f"{name}: shape={param.shape}, requires_grad={param.requires_grad}")
+
+##############################
+E_voigt = torch.rand(1, 1, 3, requires_grad=True)  # Dummy input
+
+##############################
+# Check gradients
+
 
 #optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9, nesterov=True)
 #optimizer = optim.LBFGS(model.parameters(), lr=1.0e4, max_iter=20)
 print(model.parameters())
 #optimizer = optim.Adagrad(model.parameters(), lr=1.0e-4) #lr=1e-3)
-optimizer = optim.Adam(model.parameters(), lr=3e-1) #lr=1e-3)
-scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.1)
+optimizer = optim.Adam(model.parameters(), lr=3e-4) #lr=1e-3)
+#scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.1)
 
 def train(model, dataloader, optimizer, epochs):
     model.train()
@@ -69,10 +90,10 @@ def train(model, dataloader, optimizer, epochs):
             predicted_stress_history = model(strain_history)
             err_stress = stress_history - predicted_stress_history
             err_work_aux = torch.sum(err_stress*strain_rate,axis=2)
+            #err_work = err_work_aux
             err_work = torch.cumsum(err_work_aux, dim=1) #ensure that we accumulate the error over time
-
-            #TODO: missing the scansum
             loss = torch.norm(err_work)**2
+
             #loss = torch.norm(stress_history - predicted_stress_history)
             if initial_loss==None:
                 initial_loss=loss.item()
@@ -82,8 +103,9 @@ def train(model, dataloader, optimizer, epochs):
             # Backward pass and optimization
             optimizer.zero_grad()
             loss.backward()
+
             optimizer.step()
-            scheduler.step()
+            # scheduler.step()
             #print("raw",model.convex_nn.raw_weight1,model.convex_nn.raw_weight2,model.convex_nn.raw_weight3)
 
             epoch_loss += loss.item()
@@ -100,6 +122,11 @@ def train(model, dataloader, optimizer, epochs):
             ax.set_ylabel("Loss")
             ax.legend()
             plt.pause(0.1)  # Pause to update the plot
+
+            print("W",model.convex_nn.Wdiag)
+            print("a",model.convex_nn.a_b)
+            print("d",model.convex_nn.d_e)
+
         # print("epoch_loss",epoch_loss)
 
         print(f"Epoch [{epoch+1}/{epochs}], Loss: {loss.item()/(initial_loss)}")
@@ -113,7 +140,7 @@ def train(model, dataloader, optimizer, epochs):
     plt.show()
 
 # Example usage
-#train(model, dataloader, optimizer, epochs=300)
+train(model, dataloader, optimizer, epochs=500)
 
 # ===============================================================
 # Let's print the results of the ANN for one batch
@@ -139,6 +166,7 @@ for strain_history, stress_history, target_work in validation_dataloader:
     visualization_stress = predicted_stress_history[index_in_batch].detach().numpy()
     visualization_stress_ref = stress_history[index_in_batch].detach().numpy()
     print(strain_for_print.shape)
+    print(visualization_stress)
     for compo in [0, 1, 2]:
         strain = strain_for_print[:, compo].ravel()
         print("strain_for_print.shape",strain_for_print.shape)

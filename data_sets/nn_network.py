@@ -21,13 +21,9 @@ class ConvexNN(nn.Module):
     def __init__(self, hidden_dim):
         super(ConvexNN, self).__init__()
 
-        #self.W = nn.Parameter(torch.randn(2, 2))
-        self.W = nn.Parameter(torch.tensor([[1.0,0.0],[0.0,0.0]]))
-        #self.bias_exp = nn.Parameter(torch.randn(2))
-
-        # Learnable scaling factors a and b
+        #self.W = nn.Parameter(torch.tensor([[1.0,0.0],[0.0,1.0]]))
+        self.Wdiag = nn.Parameter(torch.tensor([1.0,1.0]))
         self.a_b = nn.Parameter(torch.tensor([1.0,1.0]))
-        # Learnable additive constants d and e
         self.d_e = nn.Parameter(torch.tensor([-2.0,-1.0]))
 
 
@@ -53,10 +49,9 @@ class ConvexNN(nn.Module):
         log_input = torch.log(input_vec)
 
         # Linear transformation: W * [log(x), log(y)]^T + bias_exp
-        exp_inputs = torch.exp(log_input @ self.W.T) # + self.bias_exp)
+        #exp_inputs = torch.exp(log_input @ self.W.T) # + self.bias_exp)
+        exp_inputs = torch.exp(log_input * self.Wdiag) # + self.bias_exp) #note the use of * instead of @ to keep W digaonal
 
-        # Compute the final function: a * (x^c + d)
-        # + b * (y^n + e)
         output = self.a_b * (exp_inputs + self.d_e)
 
         return output.sum(axis=2)  # Sum the contributions
@@ -71,52 +66,48 @@ class ConvexNN(nn.Module):
         # return z3
 
 class StrainEnergyPotential(nn.Module):
-    """Computes the potential Psi(E) = ||E||^2 + convex function NN(I1, I2) and its derivative."""
-    def __init__(self, hidden_dim=2,identity_init=True):
-        if identity_init==False:
-            raise Exception("expects the stress to be rescaled")
+    def __init__(self, hidden_dim=2, identity_init=True):
         super(StrainEnergyPotential, self).__init__()
         self.invariant_layer = StrainInvariants()
         self.convex_nn = ConvexNN(hidden_dim)
 
     def EvaluatePsi(self, E_voigt):
-        """Compute strain energy potential Psi(E) and its derivative with respect to E_voigt."""
-        # Compute invariants I1, I2
-        C_voigt = 2.*E_voigt
-        # C_voigt.to(E_voigt.device)
-        C_voigt[:,:,0] += 1.0
-        C_voigt[:,:,1] += 1.0
+        """Compute strain energy potential Psi(E)"""
+        # Ensure we maintain gradient tracking
+        identity = torch.tensor([1.0, 1.0, 0.0], device=E_voigt.device).view(1, 1, 3)
+        C_voigt = E_voigt * 2.0 + identity
         I = self.invariant_layer(C_voigt)
-
-        # Compute final potential
-        psi = 0.5*(self.convex_nn(I))
+        psi = 0.5 * (self.convex_nn(I))
         return psi
 
     def forward(self, E_voigt):
-
-        # psi = self.EvaluatePsi(E_voigt)
-        # d_psi_d_E = torch.autograd.grad(psi, E_voigt, grad_outputs=torch.ones_like(psi), create_graph=True, retain_graph=True)[0]
-
-        # #COMPUTES THE GRADIENT AT ZERO STRAIN - SERVES TO TAKE OUT THE EFFECT OF BIAS
-        # zeros = torch.zeros_like(E_voigt).clone().detach().requires_grad_(True)
-        # psi_0 = self.EvaluatePsi(zeros)
-        # d_psi_d_E_0 = torch.autograd.grad(psi_0, zeros, grad_outputs=torch.ones_like(psi_0), create_graph=True, retain_graph=True)[0]
-
-        # return d_psi_d_E - d_psi_d_E_0
-        ########################
+        # Ensure gradient tracking
+        E_voigt = E_voigt.detach().requires_grad_(True)  # detach() avoids any existing graph
 
         psi = self.EvaluatePsi(E_voigt)
 
-        #COMPUTES THE GRADIENT AT ZERO STRAIN - SERVES TO TAKE OUT THE EFFECT OF BIAS
-        zeros = torch.zeros_like(E_voigt).clone().detach().requires_grad_(True)
+        # ALWAYS create graph - we need gradients for physics
+        d_psi_d_E = torch.autograd.grad(
+            outputs=psi,
+            inputs=E_voigt,
+            grad_outputs=torch.ones_like(psi),
+            create_graph=True,  # Always True for physical gradients
+            retain_graph=True,
+            allow_unused=False
+        )[0]
 
+        assert not torch.allclose(d_psi_d_E, torch.zeros_like(d_psi_d_E)), "Gradients are zero!"
+
+        # Zero strain computation
+        zeros = torch.zeros_like(E_voigt).requires_grad_(True)
         psi_0 = self.EvaluatePsi(zeros)
+        d_psi_d_E_0 = torch.autograd.grad(
+            outputs=psi_0,
+            inputs=zeros,
+            grad_outputs=torch.ones_like(psi_0),
+            create_graph=True,  # Also needed here
+            retain_graph=True,
+            allow_unused=False
+        )[0]
 
-        #d_psi_d_E_0 = torch.autograd.grad(psi_0[:], zeros, create_graph=True)[0]
-        d_psi_d_E_0 = torch.autograd.grad(psi_0, zeros, grad_outputs=torch.ones_like(psi_0), create_graph=True, retain_graph=True)[0]
-
-        #compute corrected psi (to take out the effect of the bias)
-        psi_corrected = psi - psi_0 - torch.sum(E_voigt*d_psi_d_E_0, axis=2)
-
-        d_psi_d_E = torch.autograd.grad(psi_corrected, E_voigt, grad_outputs=torch.ones_like(psi_corrected), create_graph=True, retain_graph=True)[0]
-        return d_psi_d_E
+        return d_psi_d_E - d_psi_d_E_0
