@@ -3,17 +3,28 @@ import torch.nn as nn
 
 class StrainInvariants(nn.Module):
     """Computes the first two invariants (I1, I2) from the Green-Lagrange strain tensor in Voigt form."""
-    def forward(self, tensor_voigt):
-        # E_voigt = E_voigt.requires_grad_(True)
-        E11, E22, E12 = tensor_voigt[:,:, 0], tensor_voigt[:,:, 1], tensor_voigt[:,:, 2]
+    def forward(self, C):
+        I1 = C[:, :, 0, 0] + C[:, :, 1, 1] + C[:, :, 2, 2]
 
-        # Compute first invariant I1 = Tr(E)
-        I1 = E11 + E22
+        C2 = torch.matmul(C, C)
+        trace_C2 = C2[:, :, 0, 0] + C2[:, :, 1, 1] + C2[:, :, 2, 2]
+        I2 = 0.5 * (I1**2 - trace_C2)
 
-        # Compute second invariant I2 = det(E) in 2D, simplified
-        I2 = E11 * E22 - (0.5 * E12) ** 2  # Voigt notation adjustment
-        aux = torch.stack([I1, I2], dim=2)  # Shape: (batch_size, 2)
-        return aux
+        I3 = torch.linalg.det(C)
+        return torch.stack([I1, I2, I3], dim=2)
+
+        # # E_voigt = E_voigt.requires_grad_(True)
+        # E11, E22, E12 = tensor_voigt[:,:, 0], tensor_voigt[:,:, 1], tensor_voigt[:,:, 2]
+
+        # # Compute first invariant I1 = Tr(E)
+        # I1 = E11 + E22
+
+        # # Compute second invariant I2 = det(E) in 2D, simplified
+        # I2 = E11 * E22 - (0.5 * E12) ** 2  # Voigt notation adjustment
+        # aux = torch.stack([I1, I2], dim=2)  # Shape: (batch_size, 2)
+        # return aux
+
+
 
 #ICNN as described in https://arxiv.org/pdf/1609.07152
 class ConvexNN(nn.Module):
@@ -21,10 +32,13 @@ class ConvexNN(nn.Module):
     def __init__(self, hidden_dim):
         super(ConvexNN, self).__init__()
 
-        #self.W = nn.Parameter(torch.tensor([[1.0,0.0],[0.0,1.0]]))
-        self.Wdiag = nn.Parameter(torch.tensor([1.0,1.0]))
-        self.a_b = nn.Parameter(torch.tensor([1.0,1.0]))
-        self.d_e = nn.Parameter(torch.tensor([-2.0,-1.0]))
+        self.W = nn.Parameter(torch.tensor([[1.0,0.0,-2/3],
+                                            [0.0,1.0,-4/3],
+                                            [0.0,0.0,1.0]]))
+        #self.Wdiag = nn.Parameter(torch.tensor([1.0,1.0]))
+        self.bias_exp = nn.Parameter(torch.tensor([0.0,0.0,0.0]))
+        self.a_b = nn.Parameter(torch.tensor([1.0,1.0,1.0]))
+        self.d_e = nn.Parameter(torch.tensor([-3.0,-3.0,0.0]))
 
 
         # Define unconstrained parameters
@@ -48,9 +62,12 @@ class ConvexNN(nn.Module):
 
         log_input = torch.log(input_vec)
 
+        # W = nn.Parameter(torch.tensor([[1.0,0.0,-2/3],
+        #                                     [0.0,1.0,-4/3],
+        #                                     [0.0,0.0,1.0]]))
+
         # Linear transformation: W * [log(x), log(y)]^T + bias_exp
-        #exp_inputs = torch.exp(log_input @ self.W.T) # + self.bias_exp)
-        exp_inputs = torch.exp(log_input * self.Wdiag) # + self.bias_exp) #note the use of * instead of @ to keep W digaonal
+        exp_inputs = torch.exp(log_input @ self.W.T) # + self.bias_exp) TODO: reactivat the bias_exp
 
         output = self.a_b * (exp_inputs + self.d_e)
 
@@ -71,14 +88,32 @@ class StrainEnergyPotential(nn.Module):
         self.invariant_layer = StrainInvariants()
         self.convex_nn = ConvexNN(hidden_dim)
 
+    def preprocess_strain(self,E_voigt): #convert it from 2D to 3D
+        # E_voigt: (N, 63)
+        B, T, _ = E_voigt.shape
+        E = torch.zeros((B, T, 3, 3), dtype=E_voigt.dtype, device=E_voigt.device)
+        E[:, :, 0, 0] = E_voigt[:, :, 0]
+        E[:, :, 1, 1] = E_voigt[:, :, 1]
+        E[:, :, 2, 2] = 0.0
+        E[:, :, 0, 1] = E[:, :, 1, 0] = 0.5*E_voigt[:, :, 2]
+        E[:, :, 0, 2] = E[:, :, 2, 0] = 0.0
+        E[:, :, 1, 2] = E[:, :, 2, 1] = 0.0
+        return E
+
     def EvaluatePsi(self, E_voigt):
         """Compute strain energy potential Psi(E)"""
-        # Ensure we maintain gradient tracking
-        identity = torch.tensor([1.0, 1.0, 0.0], device=E_voigt.device).view(1, 1, 3)
-        C_voigt = E_voigt * 2.0 + identity
-        I = self.invariant_layer(C_voigt)
+        E = self.preprocess_strain(E_voigt)
+        I = torch.eye(3, dtype=E.dtype, device=E.device).view(1, 1, 3, 3)
+        C = 2.0 * E + I
+        I = self.invariant_layer(C)
         psi = 0.5 * (self.convex_nn(I))
         return psi
+        # Ensure we maintain gradient tracking
+        # identity = torch.tensor([1.0, 1.0, 0.0], device=E_voigt.device).view(1, 1, 3)
+        # C_voigt = E_voigt * 2.0 + identity
+        # I = self.invariant_layer(C_voigt)
+        # psi = 0.5 * (self.convex_nn(I))
+        # return psi
 
     def forward(self, E_voigt):
         # Ensure gradient tracking
