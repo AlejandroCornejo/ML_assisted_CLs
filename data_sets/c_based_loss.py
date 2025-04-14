@@ -1,8 +1,7 @@
 import torch
 import matplotlib.pyplot as plt
-from torch.autograd.functional import hessian
-
-
+#from torch.autograd.functional import hessian
+from torch.func import  vmap
 
 
 def train(model, dataloader, optimizer, epochs):
@@ -36,7 +35,7 @@ def train(model, dataloader, optimizer, epochs):
             x_b = strain[b]  # shape (1, 3)
             x_b = (x_b.detach().squeeze()).requires_grad_(True)
 
-            H_b = hessian(psi_fn, x_b, create_graph=True)  # shape (1, 3)
+            H_b = torch.autograd.functional.hessian(psi_fn, x_b, create_graph=True)  # shape (1, 3)
 
             H_all.append(H_b)
         return torch.stack(H_all)  # shape (B, 3, 3)
@@ -47,11 +46,10 @@ def train(model, dataloader, optimizer, epochs):
         for strain_history in dataloader:
             strain = strain_history[0].detach().requires_grad_(True)
 
+            #Ccalculated = compute_hessian_vectorized(model,strain)
             Ccalculated = compute_hessian_manual(psi_fn, strain)
 
             loss = torch.norm(Ctarget[:]-Ccalculated)**2
-
-            print("epoch=",epoch," loss=",loss)
 
             if initial_loss==None:
                 initial_loss=loss.item()
@@ -69,13 +67,13 @@ def train(model, dataloader, optimizer, epochs):
             plot_epochs.append(epoch)
 
         # Update plot
-        if epoch%2 == 0:
+        if epoch%1 == 0:
             ax.clear()
             ax.plot(plot_epochs, losses, label="Loss")
             ax.set_xlabel("Epoch")
             ax.set_ylabel("Loss")
             ax.legend()
-            plt.pause(0.1)  # Pause to update the plot
+            plt.pause(0.01)  # Pause to update the plot
 
             print(Ccalculated)
 
@@ -93,5 +91,16 @@ def train(model, dataloader, optimizer, epochs):
         # if epoch%20 == 0:
         #     print("raw",model.convex_nn.raw_weight1,model.convex_nn.raw_weight2,model.convex_nn.raw_weight3)
 
+    ax.clear()
+    ax.plot(plot_epochs, losses, label="Loss")
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Loss")
+    ax.legend()
+    plt.pause(0.01)  # Pause to update the plot
+
+    fig = ax.get_figure()  # Get the parent Figure object
+    fig.savefig("c_based_loss_plot.png")
+    plt.close(fig)  # If you want to free memory
+
     plt.ioff()  # Turn off interactive mode
-    plt.show()
+    #plt.show()

@@ -7,9 +7,9 @@ import numpy as np
 #import linear_network
 import nn_network
 import matplotlib.pyplot as plt
-#import work_based_loss
+import work_based_loss
 #from work_based_loss import train
-from c_based_loss import train
+import c_based_loss
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 
 ##############here we define transformation to apply to input strains and stresses
@@ -20,13 +20,9 @@ Clinear = np.eye(3,3)
 c_transform = cl_loader.ApplyCTransform(Clinear)
 
 ############## loading data and applying transform
-directory = ".//neo_hookean_hyperelastic_law//raw_data//"
-steps_to_consider = -1 #3
-#dataset = cl_loader.CustomDataset(directory,steps_to_consider,transform=c_transform)
+
 #
-E_voigt = torch.zeros(1000, 1, 3, requires_grad=True)*1e-5  #small random strain!
-dataset = TensorDataset(E_voigt)
-dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=0)
+
 
 _ = torch.manual_seed (2023)
 
@@ -34,7 +30,6 @@ _ = torch.manual_seed (2023)
 device = torch.device("cpu")
 print("Using device:", device)
 
-#model = linear_network.SimpleNet(identity_init=True)
 model = nn_network.StrainEnergyPotential(identity_init=True)
 # model.to(device)
 
@@ -55,12 +50,27 @@ for name, param in model.named_parameters():
     print(f"{name}: shape={param.shape}, requires_grad={param.requires_grad}")
 
 ##############################
+
+
+##first of all train with random small strains, so to fit the linear C
+E_voigt = torch.zeros(1000, 1, 3, requires_grad=True)*1e-5  #small random strain!
+random_dataset = TensorDataset(E_voigt)
+dataloader = DataLoader(random_dataset, batch_size=32, shuffle=True, num_workers=0)
 optimizer = optim.Adam(model.parameters(), lr=1. ) #lr=3e-4) #lr=1e-3)
-train(model, dataloader, optimizer, epochs=200)
+c_based_loss.train(model, dataloader, optimizer, epochs=5)
+
+#now load the real data
+directory = ".//neo_hookean_hyperelastic_law//raw_data//"
+steps_to_consider = -1 #3
+dataset = cl_loader.CustomDataset(directory,steps_to_consider,transform=c_transform)
+dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=0)
+optimizer = optim.Adam(model.parameters(), lr=1.e-4 ) #lr=3e-4) #lr=1e-3)
+work_based_loss.train(model, dataloader, optimizer, epochs=10)
+
 
 # ===============================================================
 # Let's print the results of the ANN for one batch
-validation_dataloader = cl_loader.get_dataloader(directory,batch_size=1,steps_to_consider=-1,transform=c_transform)
+validation_dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0)
 
 def GetColor(component):
     if component == 0:
@@ -73,6 +83,7 @@ def GetColor(component):
 visualization_strain = []
 visualization_stress = []
 
+counter = 0
 for strain_history, stress_history, target_work in validation_dataloader:
     strain_history = strain_history.requires_grad_(True) #cannot remove this
     predicted_stress_history = model(strain_history)
@@ -89,5 +100,10 @@ for strain_history, stress_history, target_work in validation_dataloader:
         plt.plot(strain_for_print[:, compo].ravel(), visualization_stress[:, compo].ravel(), label='ANN_' + str(compo), color=GetColor(compo), marker='x')
         #plt.title("batch: " + str(elem))
         plt.legend()
-    plt.show()
+    plt.savefig(f"data_{counter}_stress_strain_component_{compo}.png", dpi=300, bbox_inches="tight")
+    plt.close()
+    counter += 1
+    if(counter == 10):
+        break
+
 err
