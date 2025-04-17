@@ -45,7 +45,8 @@ class StressPredictor(nn.Module):
         # input_size = 1
         # output_size = 1
 
-        self.C1 = nn.Parameter(torch.tensor(1.0))
+        self.C1 = nn.Parameter(torch.tensor(1.0e6))
+        self.C2 = nn.Parameter(torch.tensor(1.0e6))
 
         # self.hidden = nn.Linear(input_size,     hidden_neurons,  bias=False)  # Input: input_size      -> Hidden: hidden_neurons
         # self.output = nn.Linear(hidden_neurons, output_size,     bias=False)  # Hidden: hidden_neurons -> Output: output_size
@@ -53,45 +54,44 @@ class StressPredictor(nn.Module):
     def forward(self, strain):
         batches     = strain.shape[0]
         steps       = strain.shape[1]
-        strain_size = strain.shape[2]
 
         strain = strain.detach().requires_grad_(True)
 
-        # left cauchy strain
-        C = torch.zeros((batches, steps, 3))
-        C[:, :, :] = 2.0 * strain[:, :, :]
-        C[:, :, 0] += 1.0
-        C[:, :, 1] += 1.0
+        # left cauchy strain tensor
+        C = torch.zeros((batches, steps, 2, 2))
+        C[:, :, 0, 0] = 2.0 * strain[:, :, 0] + 1.0 # Exx
+        C[:, :, 1, 1] = 2.0 * strain[:, :, 1] + 1.0 # Eyy
+        C[:, :, 0, 1] = strain[:, :, 2] # Exy
+        C[:, :, 1, 0] = strain[:, :, 2] # Eyx
 
-        I1 = torch.zeros((batches, steps, 1))
-        I1[:, :, 0] = (C[:, :, 0] + C[:, :, 1]) - 3.0 # (I1-3)
+        # I1 = C[:, :, 0, 0] + C[:, :, 1, 1]
+        I1 = strain[:, :, 0] + strain[:, :, 1]
 
-        # W = nn.functional.softplus(self.C1) * I1
-        W = (self.C1) * I1
+        # C2 = torch.matmul(C, C)
+        # trace_C2 = C2[:, :, 0, 0] + C2[:, :, 1, 1]
+        # I2 = 0.5 * (I1**2 - trace_C2)
+
+        J = torch.linalg.det(C)**0.5 # does the det of the last two dimensions
+
+        W = nn.functional.softplus(self.C1) * (I1 - 2.0) - nn.functional.softplus(self.C1) * torch.log(J) + \
+            0.5 * nn.functional.softplus(self.C2) * (J - 1.0)**2.0
 
         grad = torch.autograd.grad(
             outputs = W,
             inputs = strain,
             grad_outputs = torch.ones_like(W),
             create_graph=True)[0]
-        
-        # print(self.C1)
-        # print(grad)
 
-        return -grad
+        return grad
 
 # ==========================================================================================
-
-
-
-
 
 # Initialize model, optimizer, and loss function
 model = StressPredictor()
 optimizer = optim.Adam(model.parameters(), lr = 1.0e4)
 
 # Training loop
-n_epochs = 10000
+n_epochs = 3000
 for epoch in range(n_epochs):
     optimizer.zero_grad()
     predicted_stress = model(ref_strain_database)
@@ -108,14 +108,9 @@ for epoch in range(n_epochs):
     if epoch % 200 == 0:
         print(f"Epoch {epoch}, Loss: {loss.item():.6f}")
 
-
-
-# test_strain = torch.tensor([[[0.001, 0.001, 0.0]]])
-# print("model = ", model(test_strain))
-
 # ===============================================================
 # Let's print the results of the ANN for one batch
-batch = [1]
+batch = [1, 5, 10]
 
 def GetColor(component):
     if component == 0:
@@ -126,17 +121,16 @@ def GetColor(component):
         return "k"
 
 prediction_ANN = model(ref_strain_database)
-# print(prediction_ANN[0,10,:])
-# print(ref_stress_database[0,10,:])
-# a
 
 for elem in batch:
     for compo in [0, 1, 2]:
         strain_for_print = ref_strain_database[elem, :, compo]
-        plt.plot(strain_for_print, ref_stress_database[elem, :, compo], label='REF_' + str(compo), color=GetColor(compo), marker='o')
         predicted_stress_ANN = prediction_ANN[elem, :, compo].detach().numpy()
-        plt.plot(strain_for_print, predicted_stress_ANN, label='ANN_' + str(compo), color=GetColor(compo), marker='x')
+        plt.plot(strain_for_print, predicted_stress_ANN, label='ANN_' + str(compo), color=GetColor(compo), marker='x', markersize=8)
+        plt.plot(strain_for_print, ref_stress_database[elem, :, compo], label='REF_' + str(compo), color=GetColor(compo), marker='o')
         plt.title("batch: " + str(elem))
+        plt.xlabel("strain [-]")
+        plt.ylabel("stress [Pa]")
         plt.legend()
     plt.show()
 
