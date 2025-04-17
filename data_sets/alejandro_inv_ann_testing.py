@@ -101,9 +101,8 @@ for name, param in model.named_parameters():
 """
 Training finished.
 model parameters:
-C1 tensor(3587378.7500)
-C2 tensor(-177.4099)
-
+C1 tensor(3587376.7500)
+C2 tensor(-93.8205)
 """
 
 batch = [1, 5, 10]
