@@ -47,17 +47,12 @@ class StressPredictor(nn.Module):
         C[:, :, 0, 1] = strain[:, :, 2] # Exy
         C[:, :, 1, 0] = strain[:, :, 2] # Eyx
 
-        # I1 = C[:, :, 0, 0] + C[:, :, 1, 1]
+        # I1 = C[:, :, 0, 0] + C[:, :, 1, 1] - 2.0
         I1 = strain[:, :, 0] + strain[:, :, 1]
-
-        # C2 = torch.matmul(C, C)
-        # trace_C2 = C2[:, :, 0, 0] + C2[:, :, 1, 1]
-        # I2 = 0.5 * (I1**2 - trace_C2)
 
         J = torch.linalg.det(C)**0.5 # does the det of the last two dimensions
 
-        W = nn.functional.softplus(self.C1) * (I1 - 3.0) - nn.functional.softplus(self.C1) * torch.log(J) + \
-            0.5 * nn.functional.softplus(self.C2) * (J - 1.0)**2.0
+        W = nn.functional.softplus(self.C1) * (I1) - nn.functional.softplus(self.C1) * torch.log(J) + 0.5 * nn.functional.softplus(self.C2) * (J - 1.0)**2.0
 
         grad = torch.autograd.grad(
             outputs = W,
@@ -71,10 +66,10 @@ class StressPredictor(nn.Module):
 
 # Initialize model, optimizer, and loss function
 model = StressPredictor()
-optimizer = optim.Adam(model.parameters(), lr = 1000)
+optimizer = optim.Adam(model.parameters(), lr = 10000)
 
 # Training loop
-n_epochs = 15000
+n_epochs = 2500
 for epoch in range(n_epochs):
     optimizer.zero_grad()
     predicted_stress = model(ref_strain_database)
@@ -105,7 +100,7 @@ C1 tensor(3587376.7500)
 C2 tensor(-93.8205)
 """
 
-batch = [1, 5, 10]
+batch = [1, 5, 10, 320]
 
 def GetColor(component):
     if component == 0:
