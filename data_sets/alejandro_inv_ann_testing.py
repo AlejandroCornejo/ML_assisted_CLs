@@ -11,7 +11,8 @@ import sklearn as sk
 import cl_loader as cl_loader
 
 number_of_steps = 25
-database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps)
+ADD_NOISE = False
+database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
 
 ref_strain_database = torch.stack([item[0] for item in database]) # batch x steps x strain_size
 ref_stress_database = torch.stack([item[1] for item in database]) # batch x steps x strain_size

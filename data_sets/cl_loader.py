@@ -5,7 +5,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 class CustomDataset(Dataset):
-    def __init__(self, directory, steps_to_consider, transform=None):
+    def __init__(self, directory, steps_to_consider, transform=None, add_noise=False):
         self.steps_to_consider = steps_to_consider
         self.transform = transform
         self.data_list = []  # Store preloaded data
@@ -23,6 +23,17 @@ class CustomDataset(Dataset):
 
                 strain_history = all_strains[1:self.steps_to_consider, :]
                 stress_history = all_stresses[1:self.steps_to_consider, :]
+
+                # Add noise if necessary
+                if add_noise:
+                    noise_level = 0.1  # 1% of the std
+                    strain_noise = np.random.normal(loc=0.0, scale=noise_level * np.std(strain_history), size=strain_history.shape)
+                    stress_noise = np.random.normal(loc=0.0, scale=noise_level * np.std(stress_history), size=stress_history.shape)
+
+                    # strain_history += strain_noise
+                    stress_history += stress_noise
+
+
                 strain_rate = strain_history - all_strains[:self.steps_to_consider - 1, :]
 
                 # Compute work and ensure correct shape
