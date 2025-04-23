@@ -27,7 +27,9 @@ print("Strain size      : ", ref_strain_database.shape[2])
 # Define the neural network
 class StressPredictor(nn.Module):
     """
-    This ANN inputs the strain, transforms to I1 invariant and returns the Stress
+    This ANN inputs the strain, the computes the I1 from the left cauchy strain tensor, and J=detF
+    and then computes the stress using the neo-hookean hyperelastic law.
+        W = C1*(I1 - 2) - C1*log(J) + 0.5*C2*(J-1)^2
     """
     def __init__(self):
         super(StressPredictor, self).__init__()
