@@ -47,12 +47,11 @@ class StressPredictor(nn.Module):
         C[:, :, 0, 1] = strain[:, :, 2] # Exy
         C[:, :, 1, 0] = strain[:, :, 2] # Eyx
 
-        I1 = 0.5*(C[:, :, 0, 0] + C[:, :, 1, 1] - 2.0) # in 2D
-        # I1 = strain[:, :, 0] + strain[:, :, 1]
+        I1 = C[:, :, 0, 0] + C[:, :, 1, 1]
 
-        J = torch.linalg.det(C)**0.5 # does the det of the last two dimensions
+        J = torch.linalg.det(C)
 
-        W = nn.functional.relu(self.C1) * (I1) - nn.functional.relu(self.C1) * torch.log(J) + 0.5 * nn.functional.relu(self.C2) * (J - 1.0)**2.0
+        W = nn.functional.relu(self.C1) * (I1 - 2.0) - nn.functional.relu(self.C1) * torch.log(J) + 0.5 * nn.functional.relu(self.C2) * (J - 1.0)**2.0
 
         grad = torch.autograd.grad(
             outputs = W,
@@ -69,7 +68,7 @@ model = StressPredictor()
 optimizer = optim.Adam(model.parameters(), lr = 10000)
 
 # Training loop
-n_epochs = 2500
+n_epochs = 2000
 for epoch in range(n_epochs):
     optimizer.zero_grad()
     predicted_stress = model(ref_strain_database)
@@ -96,8 +95,8 @@ for name, param in model.named_parameters():
 """
 Training finished.
 model parameters:
-C1 tensor(3587376.7500)
-C2 tensor(-93.8205)
+C1 tensor(1793389.8750)
+C2 tensor(613.7129)
 """
 
 batch = [1, 5, 10, 320]
