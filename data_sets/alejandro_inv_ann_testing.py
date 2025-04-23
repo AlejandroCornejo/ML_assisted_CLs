@@ -71,17 +71,30 @@ optimizer = optim.Adam(model.parameters(), lr = 10000)
 n_epochs = 2000
 for epoch in range(n_epochs):
     optimizer.zero_grad()
+
     predicted_stress = model(ref_strain_database)
 
-    predicted_work = torch.sum((ref_strain_database[:, 1 :, :] - ref_strain_database[:, : -1, :]) * predicted_stress[:, 1 :, :], axis=2) # batch x steps-2
+    strain_rate = ref_strain_database[:, 1 :, :] - ref_strain_database[:, : -1, :]
+    predicted_work = torch.sum(strain_rate * predicted_stress[:, 1 :, :], axis=2) # batch x steps-1
     predicted_work_accum = torch.cumsum(predicted_work, dim=1) # sumation along rows, horizontally
+    error = predicted_work_accum[:, :] - ref_work_database[:, 1 :, 0]
 
-    loss = 0.5*torch.mean((predicted_work_accum - ref_work_database[:, 1 :, 0]) ** 2)  # Squared difference of work
+    loss = 0.5*torch.mean(error ** 2)  # Squared difference of work
     # loss = torch.mean((predicted_stress - ref_stress_database) ** 2)  # Squared difference of work
     loss.backward()
     optimizer.step()
-    
-    if epoch % 200 == 0:
+
+    if epoch == n_epochs - 1:
+        print("Final loss: ", loss.item())
+        # print("error; ", error[0, :])
+        # print("predicted_work_accum; ", predicted_work_accum[0, :])
+        # print("ref_work_database; ", ref_work_database[0, 1:, 0])
+        # print("strain_rate; ", strain_rate[0, :, :])
+        # print("predicted_stress; ", model(ref_strain_database)[0, :, :])
+        # print("ref_strain_database; ", ref_strain_database[0, :, :])
+        # print("ref_stress_database; ", ref_stress_database[0, :, :])
+
+    if epoch % 500 == 0:
         print(f"Epoch {epoch}, Loss: {loss.item():.6f}")
 
 # ===============================================================
@@ -99,7 +112,7 @@ C1 tensor(1793389.8750)
 C2 tensor(613.7129)
 """
 
-batch = [1, 5, 10, 320]
+batch = [0, 1, 5, 10, 320]
 
 def GetColor(component):
     if component == 0:
