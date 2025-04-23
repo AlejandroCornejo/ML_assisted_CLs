@@ -52,7 +52,8 @@ class StressPredictor(nn.Module):
 
         J = torch.linalg.det(C)
 
-        W = nn.functional.relu(self.C1) * (I1 - 2.0) - nn.functional.relu(self.C1) * torch.log(J) + 0.5 * nn.functional.relu(self.C2) * (J - 1.0)**2.0
+        W = nn.functional.relu(self.C1) * (I1 - 2.0) - nn.functional.relu(self.C1) * torch.log(J) + \
+            0.5 * nn.functional.relu(self.C2) * (J - 1.0)**2.0
 
         grad = torch.autograd.grad(
             outputs = W,
