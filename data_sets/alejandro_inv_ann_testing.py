@@ -47,12 +47,12 @@ class StressPredictor(nn.Module):
         C[:, :, 0, 1] = strain[:, :, 2] # Exy
         C[:, :, 1, 0] = strain[:, :, 2] # Eyx
 
-        # I1 = C[:, :, 0, 0] + C[:, :, 1, 1] - 2.0
-        I1 = strain[:, :, 0] + strain[:, :, 1]
+        I1 = 0.5*(C[:, :, 0, 0] + C[:, :, 1, 1] - 2.0) # in 2D
+        # I1 = strain[:, :, 0] + strain[:, :, 1]
 
         J = torch.linalg.det(C)**0.5 # does the det of the last two dimensions
 
-        W = nn.functional.softplus(self.C1) * (I1) - nn.functional.softplus(self.C1) * torch.log(J) + 0.5 * nn.functional.softplus(self.C2) * (J - 1.0)**2.0
+        W = nn.functional.relu(self.C1) * (I1) - nn.functional.relu(self.C1) * torch.log(J) + 0.5 * nn.functional.relu(self.C2) * (J - 1.0)**2.0
 
         grad = torch.autograd.grad(
             outputs = W,
@@ -75,9 +75,9 @@ for epoch in range(n_epochs):
     predicted_stress = model(ref_strain_database)
 
     predicted_work = torch.sum((ref_strain_database[:, 1 :, :] - ref_strain_database[:, : -1, :]) * predicted_stress[:, 1 :, :], axis=2) # batch x steps-2
-    predicted_work = torch.cumsum(predicted_work, dim=1) # sumation along rows, horizontally
+    predicted_work_accum = torch.cumsum(predicted_work, dim=1) # sumation along rows, horizontally
 
-    loss = 0.5*torch.mean((predicted_work - ref_work_database[:, 1 :, 0]) ** 2)  # Squared difference of work
+    loss = 0.5*torch.mean((predicted_work_accum - ref_work_database[:, 1 :, 0]) ** 2)  # Squared difference of work
     # loss = torch.mean((predicted_stress - ref_stress_database) ** 2)  # Squared difference of work
     loss.backward()
     optimizer.step()
@@ -88,7 +88,7 @@ for epoch in range(n_epochs):
 # ===============================================================
 # Let's print the results of the ANN for one batch
 
-print("Training finished.")
+print("\nTraining finished.")
 print("model parameters:")
 for name, param in model.named_parameters():
     print(name, param.data)
