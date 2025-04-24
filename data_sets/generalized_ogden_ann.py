@@ -11,7 +11,7 @@ import cl_loader as cl_loader
 
 torch.set_num_threads(20)
 
-n_epochs = 10000
+n_epochs = 15000
 learning_rate = 0.1
 number_of_steps = 25
 ADD_NOISE = False
@@ -38,7 +38,7 @@ class StressPredictor(nn.Module):
         super(StressPredictor, self).__init__()
 
         self.N = 2 # number of terms in the Ogden series
-        self.tol = 1.0e-7
+        self.tol = 1.0e-12
 
         self.K = nn.Parameter(torch.tensor(1.0))
 
@@ -76,7 +76,7 @@ class StressPredictor(nn.Module):
         reg_eigenvalues[:,:, 0] = eigenvalues[:,:,0] * aux
         reg_eigenvalues[:,:, 1] = eigenvalues[:,:,1] * aux
 
-        W = 0.5 * 1.0 * (J - 1.0)**2.0
+        W = 0.5 * self.K * (J - 1.0)**2.0
         for p in range(self.N):
             W += (self.mu_p[p] / (self.alpha_p[p] + self.tol)) * (reg_eigenvalues[:,:,0]**self.alpha_p[p] + reg_eigenvalues[:,:,1]**self.alpha_p[p] + (1.0 /(reg_eigenvalues[:,:,0] * reg_eigenvalues[:,:,1]))**self.alpha_p[p] - 3.0)
 
@@ -93,9 +93,9 @@ class StressPredictor(nn.Module):
 model = StressPredictor()
 
 optimizer = optim.Adam(model.parameters(),
-                       lr = learning_rate,
-                    #    weight_decay=1e-8
-                       )
+                       lr = learning_rate)
+
+strain_rate = ref_strain_database[:, 1 :, :] - ref_strain_database[:, : -1, :]
 
 # Training loop
 for epoch in range(n_epochs):
@@ -103,7 +103,6 @@ for epoch in range(n_epochs):
 
     predicted_stress = model(ref_strain_database)
 
-    strain_rate = ref_strain_database[:, 1 :, :] - ref_strain_database[:, : -1, :]
     predicted_work = torch.sum(strain_rate * predicted_stress[:, 1 :, :], axis=2) # batch x steps-1
     predicted_work_accum = torch.cumsum(predicted_work, dim=1) # sumation along rows, horizontally
     error = predicted_work_accum[:, :] - ref_work_database[:, 1 :, 0]
@@ -136,7 +135,7 @@ print("Null strain ANN prediction: ", 1.0e6*null_prediction_ANN)
 torch.save(model.state_dict(), "model_weights.pth")
 
 
-batch = [0, 1, 5]
+batch = [0, 1, 5, 300]
 
 def GetColor(component):
     if component == 0:
