@@ -5,15 +5,14 @@ import torch as torch
 import matplotlib.pyplot as plt
 import torch.nn as nn
 import torch.optim as optim
-import sklearn as sk
 
 # custom imports
 import cl_loader as cl_loader
 
 torch.set_num_threads(20)
 
-n_epochs = 5000
-learning_rate = 150
+n_epochs = 10000
+learning_rate = 0.5
 number_of_steps = 25
 ADD_NOISE = False
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
@@ -21,6 +20,8 @@ database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", numb
 ref_strain_database = torch.stack([item[0] for item in database]) # batch x steps x strain_size
 ref_stress_database = torch.stack([item[1] for item in database]) # batch x steps x strain_size
 ref_work_database   = torch.stack([item[2] for item in database]) # batch x steps x 1
+
+ref_stress_database /= 1.0e6 # to MPa
 
 print("Launching the training of a ANN...")
 print("Number of batches: ", ref_strain_database.shape[0])
@@ -36,23 +37,24 @@ class StressPredictor(nn.Module):
     def __init__(self):
         super(StressPredictor, self).__init__()
 
-        self.N = 1 # number of terms in the Ogden series
+        self.N = 3 # number of terms in the Ogden series
         self.tol = 1.0e-7
 
-        self.K = nn.Parameter(torch.tensor(1.0e3))
+        self.K = nn.Parameter(torch.tensor(1.0))
+        # self.K = torch.tensor(1.0e6)
 
         self.mu_p = nn.ParameterList([
-            nn.Parameter(torch.tensor(1.0e3)) for _ in range(self.N)
+            nn.Parameter(((-1.0) ** (p + 1)) * torch.rand(1)) for p in range(self.N)
         ])
 
         self.alpha_p = nn.ParameterList([
-            nn.Parameter(torch.tensor(1.0)) for _ in range(self.N)
+            nn.Parameter(((-1.0) ** (p + 1)) * torch.rand(1)) for p in range(self.N)
         ])
 
 
     def forward(self, strain):
-        batches     = strain.shape[0]
-        steps       = strain.shape[1]
+        batches = strain.shape[0]
+        steps   = strain.shape[1]
 
         strain = strain.detach().requires_grad_(True)
 
@@ -69,33 +71,40 @@ class StressPredictor(nn.Module):
         eigenvalues = torch.sqrt(square_eigenvalues)
 
         reg_eigenvalues = torch.zeros_like(eigenvalues) # batch x steps x 2
-        reg_eigenvalues[:,:, 0] = eigenvalues[:,:,0] * J**(-1/3)
-        reg_eigenvalues[:,:, 1] = eigenvalues[:,:,1] * J**(-1/3)
+        aux = J**(-1/3)
+        reg_eigenvalues[:,:, 0] = eigenvalues[:,:,0] * aux
+        reg_eigenvalues[:,:, 1] = eigenvalues[:,:,1] * aux
         
-
-        W = 0.5 * self.K * (J - 1.0)**2.0
+        # K = 0.0
+        W = 0.0
         for p in range(self.N):
             W += (self.mu_p[p] / (self.alpha_p[p] + self.tol)) *           \
                 (reg_eigenvalues[:,:,0]**self.alpha_p[p] + reg_eigenvalues[:,:,1]**self.alpha_p[p] - 2.0)
+
+        W += 0.5 * self.K * (J - 1.0)**2.0
 
         grad = torch.autograd.grad(
             outputs = W,
             inputs = strain,
             grad_outputs = torch.ones_like(W),
             create_graph=True)[0]
+        
+        # trace = torch.zeros((batches, steps))
+        # trace[:, :] = C[:, :, 0, 0] + C[:, :, 1, 1]
+        # identity_vector = torch.zeros((batches, steps, 3))
+        # identity_vector[:, :, 0] = trace
+        # identity_vector[:, :, 1] = trace
 
-        return grad
+        # print(grad.shape, trace.shape, identity_vector.shape)
+        # a
+
+        return grad #- self.mu_p[0]  * 0.5 * identity_vector
 # ==========================================================================================
 
 
 
 # Initialize model, optimizer, and loss function
 model = StressPredictor()
-# prediction_ANN = model(torch.tensor([[[0.0, 0.0, 0.0]]]))
-# print("ANN prediction: ", prediction_ANN)
-# a
-
-
 
 optimizer = optim.Adam(model.parameters(),
                        lr = learning_rate,
@@ -134,6 +143,9 @@ print("\nTraining finished.")
 print("model parameters:")
 for name, param in model.named_parameters():
     print(name, param.data)
+
+null_prediction_ANN = model(torch.tensor([[[0.0, 0.0, 0.0]]]))
+print("Null strain ANN prediction: ", 1.0e6*null_prediction_ANN)
 
 torch.save(model.state_dict(), "model_weights.pth")
 
