@@ -12,7 +12,7 @@ import cl_loader as cl_loader
 torch.set_num_threads(20)
 
 n_epochs = 10000
-learning_rate = 0.5
+learning_rate = 0.1
 number_of_steps = 25
 ADD_NOISE = False
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
@@ -37,20 +37,18 @@ class StressPredictor(nn.Module):
     def __init__(self):
         super(StressPredictor, self).__init__()
 
-        self.N = 3 # number of terms in the Ogden series
+        self.N = 2 # number of terms in the Ogden series
         self.tol = 1.0e-7
 
         self.K = nn.Parameter(torch.tensor(1.0))
-        # self.K = torch.tensor(1.0e6)
 
         self.mu_p = nn.ParameterList([
-            nn.Parameter(((-1.0) ** (p + 1)) * torch.rand(1)) for p in range(self.N)
+            nn.Parameter(((-1.0) ** (p + 2)) * torch.rand(1)) for p in range(self.N)
         ])
 
         self.alpha_p = nn.ParameterList([
-            nn.Parameter(((-1.0) ** (p + 1)) * torch.rand(1)) for p in range(self.N)
+            nn.Parameter(((-1.0) ** (p + 2)) * torch.rand(1)) for p in range(self.N)
         ])
-
 
     def forward(self, strain):
         batches = strain.shape[0]
@@ -58,12 +56,15 @@ class StressPredictor(nn.Module):
 
         strain = strain.detach().requires_grad_(True)
 
+        E = torch.zeros((batches, steps, 2, 2))
+        E[:, :, 0, 0] = strain[:, :, 0] # Exx
+        E[:, :, 1, 1] = strain[:, :, 1] # Eyy
+        E[:, :, 0, 1] = 0.5 * strain[:, :, 2] # Exy
+        E[:, :, 1, 0] = 0.5 * strain[:, :, 2] # Eyx
+
         # left cauchy strain tensor
-        C = torch.zeros((batches, steps, 2, 2))
-        C[:, :, 0, 0] = 2.0 * strain[:, :, 0] + 1.0 # Exx
-        C[:, :, 1, 1] = 2.0 * strain[:, :, 1] + 1.0 # Eyy
-        C[:, :, 0, 1] = strain[:, :, 2] # Exy
-        C[:, :, 1, 0] = strain[:, :, 2] # Eyx
+        C = torch.zeros_like(E)
+        C = 2.0 * E + torch.eye(2)
 
         J = torch.linalg.det(C)**0.5
 
@@ -71,37 +72,22 @@ class StressPredictor(nn.Module):
         eigenvalues = torch.sqrt(square_eigenvalues)
 
         reg_eigenvalues = torch.zeros_like(eigenvalues) # batch x steps x 2
-        aux = J**(-1/3)
+        aux = J**(-1 / 3)
         reg_eigenvalues[:,:, 0] = eigenvalues[:,:,0] * aux
         reg_eigenvalues[:,:, 1] = eigenvalues[:,:,1] * aux
-        
-        # K = 0.0
-        W = 0.0
-        for p in range(self.N):
-            W += (self.mu_p[p] / (self.alpha_p[p] + self.tol)) *           \
-                (reg_eigenvalues[:,:,0]**self.alpha_p[p] + reg_eigenvalues[:,:,1]**self.alpha_p[p] - 2.0)
 
-        W += 0.5 * self.K * (J - 1.0)**2.0
+        W = 0.5 * 1.0 * (J - 1.0)**2.0
+        for p in range(self.N):
+            W += (self.mu_p[p] / (self.alpha_p[p] + self.tol)) * (reg_eigenvalues[:,:,0]**self.alpha_p[p] + reg_eigenvalues[:,:,1]**self.alpha_p[p] + (1.0 /(reg_eigenvalues[:,:,0] * reg_eigenvalues[:,:,1]))**self.alpha_p[p] - 3.0)
 
         grad = torch.autograd.grad(
             outputs = W,
             inputs = strain,
             grad_outputs = torch.ones_like(W),
             create_graph=True)[0]
-        
-        # trace = torch.zeros((batches, steps))
-        # trace[:, :] = C[:, :, 0, 0] + C[:, :, 1, 1]
-        # identity_vector = torch.zeros((batches, steps, 3))
-        # identity_vector[:, :, 0] = trace
-        # identity_vector[:, :, 1] = trace
+        return grad
 
-        # print(grad.shape, trace.shape, identity_vector.shape)
-        # a
-
-        return grad #- self.mu_p[0]  * 0.5 * identity_vector
 # ==========================================================================================
-
-
 
 # Initialize model, optimizer, and loss function
 model = StressPredictor()
