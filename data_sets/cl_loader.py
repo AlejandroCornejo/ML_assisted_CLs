@@ -26,7 +26,7 @@ class CustomDataset(Dataset):
 
                 # Add noise if necessary
                 if add_noise:
-                    noise_level = 0.1  # 1% of the std
+                    noise_level = 0.05
                     # strain_noise = np.random.normal(loc=0.0, scale=noise_level * np.std(strain_history), size=strain_history.shape)
                     stress_noise = np.random.normal(loc=0.0, scale=noise_level * np.std(stress_history), size=stress_history.shape)
                     # strain_history += strain_noise

@@ -15,10 +15,10 @@ torch.set_num_threads(20)
 """
 INPUT DATASET:
 """
-n_epochs = 5000
+n_epochs = 1000
 learning_rate = 0.1
 number_of_steps = 25
-ADD_NOISE = False
+ADD_NOISE = True
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
 #=============================================================================================================
 
@@ -44,17 +44,17 @@ class StressPredictor(nn.Module):
     def __init__(self):
         super(StressPredictor, self).__init__()
 
-        self.N = 2 # number of terms in the Ogden series
+        self.N = 1 # number of terms in the Ogden series
         self.tol = 1.0e-12
 
         self.K = nn.Parameter(torch.tensor(1.0))
 
         self.mu_p = nn.ParameterList([
-            nn.Parameter(((-1.0)**(p + 2)) * torch.tensor(1.0)) for p in range(self.N)
+            nn.Parameter(((-1.0)**(p + 2)) * (torch.tensor(1.0 + torch.rand(1)))) for p in range(self.N)
         ])
 
         self.alpha_p = nn.ParameterList([
-            nn.Parameter(((-1.0)**(p + 2)) * torch.tensor(1.0)) for p in range(self.N)
+            nn.Parameter(((-1.0)**(p + 2)) * (torch.tensor(1.0 + torch.rand(1)))) for p in range(self.N)
         ])
 
     def forward(self, strain):
@@ -104,7 +104,7 @@ model = StressPredictor()
 print("\nNull strain ANN prediction CHECK: ", model(torch.tensor([[[0.0, 0.0, 0.0]]])))
 
 # optimizer = optim.AdamW(model.parameters(), lr = learning_rate)
-optimizer = optim.LBFGS(model.parameters(), lr=learning_rate, max_iter=30, history_size=50)
+optimizer = optim.LBFGS(model.parameters(), lr=learning_rate, max_iter=20, history_size=20)
 
 # Training loop
 # for epoch in range(n_epochs):
@@ -167,6 +167,34 @@ print("Null strain ANN prediction: ", 1.0e6*null_prediction_ANN)
 
 torch.save(model.state_dict(), "model_weights.pth")
 
+"""
+Final loss:  5.0818498493754305e-06
+
+Training finished.
+model parameters:
+K tensor(2.4771)
+mu_p.0 tensor([1.5097])
+mu_p.1 tensor([-1.9176])
+mu_p.2 tensor([1.0885])
+mu_p.3 tensor([-0.8082])
+mu_p.4 tensor([1.4733])
+mu_p.5 tensor([-1.4340])
+mu_p.6 tensor([3.4724])
+mu_p.7 tensor([-1.5844])
+mu_p.8 tensor([2.1116])
+mu_p.9 tensor([-0.1809])
+alpha_p.0 tensor([2.6309])
+alpha_p.1 tensor([-0.6829])
+alpha_p.2 tensor([1.5550])
+alpha_p.3 tensor([-1.1157])
+alpha_p.4 tensor([2.4447])
+alpha_p.5 tensor([-0.8099])
+alpha_p.6 tensor([-2.2412])
+alpha_p.7 tensor([-0.8259])
+alpha_p.8 tensor([0.3265])
+alpha_p.9 tensor([-1.8103])
+"""
+
 
 batch = [0, 1, 5, 255, 200, 300]
 
@@ -184,8 +212,8 @@ for elem in batch:
     for compo in [0, 1, 2]:
         strain_for_print = ref_strain_database[elem, :, compo]
         predicted_stress_ANN = prediction_ANN[elem, :, compo].detach().numpy()
-        plt.plot(strain_for_print, predicted_stress_ANN, label='ANN_' + str(compo), color=GetColor(compo), marker='x', markersize=8)
-        plt.plot(strain_for_print, ref_stress_database[elem, :, compo], label='REF_' + str(compo), color=GetColor(compo), marker='o')
+        plt.plot(strain_for_print, predicted_stress_ANN, label='ANN_' + str(compo), color=GetColor(compo), marker='', markersize=8)
+        plt.plot(strain_for_print, ref_stress_database[elem, :, compo], label='DATA_' + str(compo), marker='o', color=GetColor(compo), markersize=4, linestyle='')
         plt.title("batch: " + str(elem))
         plt.xlabel("strain [-]")
         plt.ylabel("stress [Pa]")
