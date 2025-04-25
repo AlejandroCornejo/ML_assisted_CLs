@@ -11,11 +11,16 @@ import cl_loader as cl_loader
 
 torch.set_num_threads(20)
 
-n_epochs = 20000
-learning_rate = 1.0
+#=============================================================================================================
+"""
+INPUT DATASET:
+"""
+n_epochs = 5000
+learning_rate = 0.1
 number_of_steps = 25
 ADD_NOISE = False
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
+#=============================================================================================================
 
 ref_strain_database = torch.stack([item[0] for item in database]) # batch x steps x strain_size
 ref_stress_database = torch.stack([item[1] for item in database]) # batch x steps x strain_size
@@ -23,6 +28,7 @@ ref_work_database   = torch.stack([item[2] for item in database]) # batch x step
 
 ref_stress_database /= 1.0e6 # to MPa
 ref_work_database   /= 1.0e6 # to MPa vs strain
+strain_rate = ref_strain_database[:, 1 :, :] - ref_strain_database[:, : -1, :]
 
 print("Launching the training of a ANN...")
 print("Number of batches: ", ref_strain_database.shape[0])
@@ -30,7 +36,7 @@ print("Number of steps  : ", ref_strain_database.shape[1])
 print("Strain size      : ", ref_strain_database.shape[2])
 
 # ==========================================================================================
-# Define the neural network
+
 class StressPredictor(nn.Module):
     """
 
@@ -89,7 +95,7 @@ class StressPredictor(nn.Module):
             create_graph=True)[0]
         return grad
 
-# ==========================================================================================
+#==========================================================================================
 
 # Initialize model, optimizer, and loss function
 model = StressPredictor()
@@ -97,26 +103,47 @@ model = StressPredictor()
 
 print("\nNull strain ANN prediction CHECK: ", model(torch.tensor([[[0.0, 0.0, 0.0]]])))
 
-optimizer = optim.AdamW(model.parameters(),
-                       lr = learning_rate)
-
-strain_rate = ref_strain_database[:, 1 :, :] - ref_strain_database[:, : -1, :]
+# optimizer = optim.AdamW(model.parameters(), lr = learning_rate)
+optimizer = optim.LBFGS(model.parameters(), lr=learning_rate, max_iter=30, history_size=50)
 
 # Training loop
+# for epoch in range(n_epochs):
+#     optimizer.zero_grad()
+
+#     predicted_stress = model(ref_strain_database)
+
+#     predicted_work = torch.sum(strain_rate * predicted_stress[:, 1 :, :], axis=2) # batch x steps-1
+#     predicted_work_accum = torch.cumsum(predicted_work, dim=1) # sumation along rows, horizontally
+#     error = predicted_work_accum[:, :] - ref_work_database[:, 1 :, 0]
+
+#     loss = 0.5*torch.mean(error ** 2)  # Squared difference of work
+#     # loss = torch.mean((predicted_stress - ref_stress_database) ** 2)
+
+#     loss.backward()
+#     optimizer.step()
+
+#     if epoch == n_epochs - 1:
+#         print("Final loss: ", loss.item())
+
+#     if epoch % 100 == 0:
+#         print(f"Epoch {epoch}, Loss: {loss.item():.6f}")
+#         for name, param in model.named_parameters():
+#             print("\t", name, param.data)
+
 for epoch in range(n_epochs):
-    optimizer.zero_grad()
 
-    predicted_stress = model(ref_strain_database)
+    def closure():
+        optimizer.zero_grad()
 
-    predicted_work = torch.sum(strain_rate * predicted_stress[:, 1 :, :], axis=2) # batch x steps-1
-    predicted_work_accum = torch.cumsum(predicted_work, dim=1) # sumation along rows, horizontally
-    error = predicted_work_accum[:, :] - ref_work_database[:, 1 :, 0]
+        predicted_stress = model(ref_strain_database)
+        predicted_work = torch.sum(strain_rate * predicted_stress[:, 1 :, :], axis=2)
+        predicted_work_accum = torch.cumsum(predicted_work, dim=1)
+        error = predicted_work_accum - ref_work_database[:, 1 :, 0]
+        loss = 0.5 * torch.mean(error ** 2)
+        loss.backward()
+        return loss
 
-    loss = 0.5*torch.mean(error ** 2)  # Squared difference of work
-    # loss = torch.mean((predicted_stress - ref_stress_database) ** 2)
-
-    loss.backward()
-    optimizer.step()
+    loss = optimizer.step(closure)
 
     if epoch == n_epochs - 1:
         print("Final loss: ", loss.item())
@@ -125,6 +152,7 @@ for epoch in range(n_epochs):
         print(f"Epoch {epoch}, Loss: {loss.item():.6f}")
         for name, param in model.named_parameters():
             print("\t", name, param.data)
+
 
 # ===============================================================
 # Let's print the results of the ANN for one batch
