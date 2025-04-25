@@ -11,8 +11,8 @@ import cl_loader as cl_loader
 
 torch.set_num_threads(20)
 
-n_epochs = 15000
-learning_rate = 0.1
+n_epochs = 20000
+learning_rate = 1.0
 number_of_steps = 25
 ADD_NOISE = False
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
@@ -22,6 +22,7 @@ ref_stress_database = torch.stack([item[1] for item in database]) # batch x step
 ref_work_database   = torch.stack([item[2] for item in database]) # batch x steps x 1
 
 ref_stress_database /= 1.0e6 # to MPa
+ref_work_database   /= 1.0e6 # to MPa vs strain
 
 print("Launching the training of a ANN...")
 print("Number of batches: ", ref_strain_database.shape[0])
@@ -43,11 +44,11 @@ class StressPredictor(nn.Module):
         self.K = nn.Parameter(torch.tensor(1.0))
 
         self.mu_p = nn.ParameterList([
-            nn.Parameter(((-1.0) ** (p + 2)) * torch.rand(1)) for p in range(self.N)
+            nn.Parameter(((-1.0)**(p + 2)) * torch.tensor(1.0)) for p in range(self.N)
         ])
 
         self.alpha_p = nn.ParameterList([
-            nn.Parameter(((-1.0) ** (p + 2)) * torch.rand(1)) for p in range(self.N)
+            nn.Parameter(((-1.0)**(p + 2)) * torch.tensor(1.0)) for p in range(self.N)
         ])
 
     def forward(self, strain):
@@ -77,8 +78,9 @@ class StressPredictor(nn.Module):
         reg_eigenvalues[:,:, 1] = eigenvalues[:,:,1] * aux
 
         W = 0.5 * self.K * (J - 1.0)**2.0
+        # W = 0.5 * self.K * torch.log(J)**2
         for p in range(self.N):
-            W += (self.mu_p[p] / (self.alpha_p[p] + self.tol)) * (reg_eigenvalues[:,:,0]**self.alpha_p[p] + reg_eigenvalues[:,:,1]**self.alpha_p[p] + (1.0 /(reg_eigenvalues[:,:,0] * reg_eigenvalues[:,:,1]))**self.alpha_p[p] - 3.0)
+            W += (self.mu_p[p] / (self.alpha_p[p] + self.tol)) * (reg_eigenvalues[:,:,0]**self.alpha_p[p] + reg_eigenvalues[:,:,1]**self.alpha_p[p] + (1.0 / (reg_eigenvalues[:,:,0]*reg_eigenvalues[:,:,1]))**self.alpha_p[p] - 3.0)
 
         grad = torch.autograd.grad(
             outputs = W,
@@ -92,7 +94,10 @@ class StressPredictor(nn.Module):
 # Initialize model, optimizer, and loss function
 model = StressPredictor()
 
-optimizer = optim.Adam(model.parameters(),
+
+print("\nNull strain ANN prediction CHECK: ", model(torch.tensor([[[0.0, 0.0, 0.0]]])))
+
+optimizer = optim.AdamW(model.parameters(),
                        lr = learning_rate)
 
 strain_rate = ref_strain_database[:, 1 :, :] - ref_strain_database[:, : -1, :]
@@ -107,8 +112,8 @@ for epoch in range(n_epochs):
     predicted_work_accum = torch.cumsum(predicted_work, dim=1) # sumation along rows, horizontally
     error = predicted_work_accum[:, :] - ref_work_database[:, 1 :, 0]
 
-    # loss = 0.5*torch.mean(error ** 2)  # Squared difference of work
-    loss = torch.mean((predicted_stress - ref_stress_database) ** 2)
+    loss = 0.5*torch.mean(error ** 2)  # Squared difference of work
+    # loss = torch.mean((predicted_stress - ref_stress_database) ** 2)
 
     loss.backward()
     optimizer.step()
@@ -135,7 +140,7 @@ print("Null strain ANN prediction: ", 1.0e6*null_prediction_ANN)
 torch.save(model.state_dict(), "model_weights.pth")
 
 
-batch = [0, 1, 5, 300]
+batch = [0, 1, 5, 255, 200, 300]
 
 def GetColor(component):
     if component == 0:
