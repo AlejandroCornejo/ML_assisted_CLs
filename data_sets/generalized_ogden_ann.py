@@ -9,14 +9,60 @@ import torch.optim as optim
 # custom imports
 import cl_loader as cl_loader
 
+from sklearn.model_selection import train_test_split
+
 torch.set_num_threads(20)
+
+"""
+# Generalized Ogden ANN Script
+
+This script implements a machine learning model to predict stress-strain relationships using a generalized Ogden hyperelastic law. The model is based on an Artificial Neural Network (ANN) and is trained on synthetic datasets generated from hyperelastic material behavior.
+
+## Features
+
+1. **Dataset Preparation**:
+   - The script loads a custom dataset containing strain, stress, and work data.
+   - The dataset is split into training and testing subsets using an 80-20 split.
+
+2. **Model Architecture**:
+   - The ANN is implemented as a PyTorch module (`StressPredictor`) with trainable parameters for the Ogden hyperelastic law.
+   - The model predicts stress based on strain input using the Ogden strain energy function.
+
+3. **Training**:
+   - The model is trained using the LBFGS optimizer.
+   - The loss function minimizes the squared difference between predicted and reference work values.
+
+4. **Visualization**:
+   - The script plots the predicted stress-strain curves for both training and testing datasets.
+   - Training and testing data points are distinguished using different markers (`o` for training and `x` for testing) but share the same colors for each stress component.
+
+5. **Model Saving**:
+   - The trained model's weights are saved to a file (`model_weights.pth`) for future use.
+
+---
+
+## Requirements
+
+The script requires the following Python libraries:
+
+- `numpy`
+- `scipy`
+- `torch`
+- `matplotlib`
+- `scikit-learn`
+
+To install the required libraries, run:
+
+```bash
+pip install numpy scipy torch matplotlib scikit-learn
+"""
 
 #=============================================================================================================
 """
 INPUT DATASET:
 """
-n_epochs = 1000
-learning_rate = 0.1
+n_epochs = 100
+learning_rate = 0.01
 number_of_steps = 25
 ADD_NOISE = True
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
@@ -29,6 +75,19 @@ ref_work_database   = torch.stack([item[2] for item in database]) # batch x step
 ref_stress_database /= 1.0e6 # to MPa
 ref_work_database   /= 1.0e6 # to MPa vs strain
 strain_rate = ref_strain_database[:, 1 :, :] - ref_strain_database[:, : -1, :]
+
+# Split the dataset into training and testing datasets
+train_indices, test_indices = train_test_split(
+    range(len(database)), test_size=0.2, random_state=42
+)
+
+train_strain_database = ref_strain_database[train_indices]
+train_stress_database = ref_stress_database[train_indices]
+train_work_database = ref_work_database[train_indices]
+
+test_strain_database = ref_strain_database[test_indices]
+test_stress_database = ref_stress_database[test_indices]
+test_work_database = ref_work_database[test_indices]
 
 print("Launching the training of a ANN...")
 print("Number of batches: ", ref_strain_database.shape[0])
@@ -44,7 +103,7 @@ class StressPredictor(nn.Module):
     def __init__(self):
         super(StressPredictor, self).__init__()
 
-        self.N = 1 # number of terms in the Ogden series
+        self.N = 2 # number of terms in the Ogden series
         self.tol = 1.0e-12
 
         self.K = nn.Parameter(torch.tensor(1.0))
@@ -130,15 +189,16 @@ optimizer = optim.LBFGS(model.parameters(), lr=learning_rate, max_iter=20, histo
 #         for name, param in model.named_parameters():
 #             print("\t", name, param.data)
 
+# Update the training loop to use only the training dataset
 for epoch in range(n_epochs):
 
     def closure():
         optimizer.zero_grad()
 
-        predicted_stress = model(ref_strain_database)
-        predicted_work = torch.sum(strain_rate * predicted_stress[:, 1 :, :], axis=2)
+        predicted_stress = model(train_strain_database)
+        predicted_work = torch.sum(strain_rate[train_indices] * predicted_stress[:, 1 :, :], axis=2)
         predicted_work_accum = torch.cumsum(predicted_work, dim=1)
-        error = predicted_work_accum - ref_work_database[:, 1 :, 0]
+        error = predicted_work_accum - train_work_database[:, 1 :, 0]
         loss = 0.5 * torch.mean(error ** 2)
         loss.backward()
         return loss
@@ -155,7 +215,7 @@ for epoch in range(n_epochs):
 
 
 # ===============================================================
-# Let's print the results of the ANN for one batch
+# Let's print the results of the ANN for training and testing datasets
 
 print("\nTraining finished.")
 print("model parameters:")
@@ -167,56 +227,74 @@ print("Null strain ANN prediction: ", 1.0e6*null_prediction_ANN)
 
 torch.save(model.state_dict(), "model_weights.pth")
 
-"""
-Final loss:  5.0818498493754305e-06
-
-Training finished.
-model parameters:
-K tensor(2.4771)
-mu_p.0 tensor([1.5097])
-mu_p.1 tensor([-1.9176])
-mu_p.2 tensor([1.0885])
-mu_p.3 tensor([-0.8082])
-mu_p.4 tensor([1.4733])
-mu_p.5 tensor([-1.4340])
-mu_p.6 tensor([3.4724])
-mu_p.7 tensor([-1.5844])
-mu_p.8 tensor([2.1116])
-mu_p.9 tensor([-0.1809])
-alpha_p.0 tensor([2.6309])
-alpha_p.1 tensor([-0.6829])
-alpha_p.2 tensor([1.5550])
-alpha_p.3 tensor([-1.1157])
-alpha_p.4 tensor([2.4447])
-alpha_p.5 tensor([-0.8099])
-alpha_p.6 tensor([-2.2412])
-alpha_p.7 tensor([-0.8259])
-alpha_p.8 tensor([0.3265])
-alpha_p.9 tensor([-1.8103])
-"""
-
-
-batch = [0, 1, 5, 255, 200, 300]
+# Plot results for training and testing datasets
+batch = [0, 1, 5, 255, 200, 300]  # Specify batches to plot
 
 def GetColor(component):
     if component == 0:
         return "r"
-    elif component==1:
+    elif component == 1:
         return "b"
     else:
         return "k"
 
-prediction_ANN = model(ref_strain_database)
+def GetMarker(dataset_type):
+    return "o" if dataset_type == "train" else "x"
 
+prediction_ANN_train = model(train_strain_database)
+prediction_ANN_test = model(test_strain_database)
+
+# Plot for each batch
 for elem in batch:
-    for compo in [0, 1, 2]:
-        strain_for_print = ref_strain_database[elem, :, compo]
-        predicted_stress_ANN = prediction_ANN[elem, :, compo].detach().numpy()
-        plt.plot(strain_for_print, predicted_stress_ANN, label='ANN_' + str(compo), color=GetColor(compo), marker='', markersize=8)
-        plt.plot(strain_for_print, ref_stress_database[elem, :, compo], label='DATA_' + str(compo), marker='o', color=GetColor(compo), markersize=4, linestyle='')
-        plt.title("batch: " + str(elem))
-        plt.xlabel("strain [-]")
-        plt.ylabel("stress [Pa]")
-        plt.legend()
+    plt.figure(figsize=(8, 6))  # Create a new figure for each batch
+
+    # Plot training data
+    if elem < len(train_strain_database):
+        for compo in [0, 1, 2]:
+            strain_for_print = train_strain_database[elem, :, compo]
+            predicted_stress_ANN = prediction_ANN_train[elem, :, compo].detach().numpy()
+            plt.plot(
+                strain_for_print,
+                predicted_stress_ANN,
+                label=f"ANN_train_comp{compo}",
+                color=GetColor(compo),
+                linestyle="-",
+            )
+            plt.scatter(
+                strain_for_print,
+                train_stress_database[elem, :, compo],
+                label=f"DATA_train_comp{compo}",
+                marker=GetMarker("train"),
+                color=GetColor(compo),
+                s=20,
+            )
+
+    # Plot testing data
+    if elem < len(test_strain_database):
+        for compo in [0, 1, 2]:
+            strain_for_print = test_strain_database[elem, :, compo]
+            predicted_stress_ANN = prediction_ANN_test[elem, :, compo].detach().numpy()
+            plt.plot(
+                strain_for_print,
+                predicted_stress_ANN,
+                label=f"ANN_test_comp{compo}",
+                color=GetColor(compo),
+                linestyle="--",
+            )
+            plt.scatter(
+                strain_for_print,
+                test_stress_database[elem, :, compo],
+                label=f"DATA_test_comp{compo}",
+                marker=GetMarker("test"),
+                color=GetColor(compo),
+                s=20,
+            )
+
+    # Add plot details
+    plt.title(f"Batch: {elem}")
+    plt.xlabel("Strain [-]")
+    plt.ylabel("Stress [Pa]")
+    plt.legend()
+    plt.grid(True)
     plt.show()
 
