@@ -27,7 +27,7 @@ INPUT DATASET:
 n_epochs = 80
 learning_rate = 0.02
 number_of_steps = 25
-ADD_NOISE = False
+ADD_NOISE = True
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
 #=============================================================================================================
 
@@ -68,16 +68,17 @@ class KANStressPredictor(nn.Module):
         super(KANStressPredictor, self).__init__()
 
         self.order_stretches = 2  # Number of orders (can be set to any value)
-        self.input_size = 3 * self.order_stretches  # Total inputs: 2 * reg_eigenvalues + 1 * (J-1) for each order
 
+        self.input_size = 3 * self.order_stretches  # Total inputs: 2 * reg_eigenvalues + 1 * (J-1) for each order
         self.k = 3  # Degree of splines
         self.grid = 3  # Number of knots
 
         # KAN framework layers
         self.KAN_W = KAN.MultKAN(
-            width=[self.input_size, self.order_stretches, 1],
-            grid=self.grid, k=self.k
-        )  # 2 x 1 x 1
+            width=[self.input_size,   self.order_stretches,   1],
+            grid=self.grid,
+            k=self.k
+        )
 
     def forward(self, strain):
         batches = strain.shape[0]
