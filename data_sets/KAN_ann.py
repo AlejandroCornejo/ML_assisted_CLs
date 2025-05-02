@@ -24,8 +24,8 @@ from sklearn.model_selection import train_test_split
 """
 INPUT DATASET:
 """
-n_epochs = 1000
-learning_rate = 0.01
+n_epochs = 80
+learning_rate = 0.02
 number_of_steps = 25
 ADD_NOISE = False
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
@@ -68,10 +68,10 @@ class KANStressPredictor(nn.Module):
         super(KANStressPredictor, self).__init__()
 
         self.order_stretches = 1
-        self.input_size = 2 * self.order_stretches
+        self.input_size = 3 * self.order_stretches
 
         self.k = 3
-        self.grid = 3
+        self.grid = 4
 
         # KAN framework layers
         self.KAN_W = KAN.MultKAN(width=[self.input_size, self.order_stretches, 1], grid=self.grid, k=self.k)  # 2 x 1 x 1
@@ -104,11 +104,27 @@ class KANStressPredictor(nn.Module):
         reg_eigenvalues[:,:, 1] = eigenvalues[:,:,1] * aux
 
         # KAN cannot read 3D tensors, so we need to flatten the input
-        flat_reg_eigenvalues = reg_eigenvalues.view(-1, 2) # (batch x steps) x 2
-        W_flat = self.KAN_W(flat_reg_eigenvalues) # (batch x steps) x 2
+        # flat_reg_eigenvalues = reg_eigenvalues.view(-1, 2) # (batch x steps) x 2
+
+        # Compute (J - 1) and prepare it as an additional input
+        J_minus_1 = (J - 1).unsqueeze(-1)  # Add an extra dimension to match the shape
+
+        # Concatenate reg_eigenvalues and (J - 1) along the last dimension
+        KAN_input = torch.cat((reg_eigenvalues, J_minus_1), dim=-1)  # Shape: (batches, steps, 3)
+
+        # Flatten the input for KAN (KAN cannot read 3D tensors)
+        flat_KAN_input = KAN_input.view(-1, 3)  # Shape: (batch x steps, 3)
+
+        # Pass the input through the KAN layer
+        W_flat = self.KAN_W(flat_KAN_input)  # Shape: (batch x steps, 1)
+
+        # Reshape the output back to the original shape
+        W = W_flat.view(batches, steps, -1)  # Shape: (batches, steps, 1)
+
+        # W_flat = self.KAN_W(flat_reg_eigenvalues) # (batch x steps) x 2
 
         # Here we need to reshape the output back to the original shape
-        W = W_flat.view(batches, steps, -1)
+        # W = W_flat.view(batches, steps, -1)
 
         grad = torch.autograd.grad(
             outputs = W,
@@ -128,9 +144,8 @@ print("\nNull strain KAN prediction initial CHECK: ", model(torch.tensor([[[0.0,
 optimizer = optim.LBFGS(
     model.parameters(),
     lr=learning_rate,          # Learning rate
-    max_iter=150,               # Increase max iterations per optimization step
-    history_size=10,           # Increase history size for better curvature approximation
-    line_search_fn="strong_wolfe"  # Use a more robust line search method
+    max_iter=20,               # Increase max iterations per optimization step
+    history_size=30           # Increase history size for better curvature approximation
 )
 
 # Update the training loop to use only the training dataset
@@ -149,14 +164,14 @@ for epoch in range(n_epochs):
 
     loss = optimizer.step(closure)
 
-    if epoch == n_epochs - 1:
-        print("\nFinal loss: ", loss.item())
 
     if epoch % 20 == 0:
         print(f"Epoch {epoch}, Loss: {loss.item():.6f}")
         # for name, param in model.named_parameters():
         #     print("\t", name, param.data)
 
+    if epoch == n_epochs - 1:
+        print("\nFinal loss: ", loss.item())
 
 # ===============================================================
 # Let's print the results of the ANN for training and testing datasets
