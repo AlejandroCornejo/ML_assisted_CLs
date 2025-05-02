@@ -5,6 +5,7 @@ import torch as torch
 import matplotlib.pyplot as plt
 import torch.nn as nn
 import torch.optim as optim
+import os
 
 # custom imports
 import cl_loader as cl_loader
@@ -61,7 +62,7 @@ pip install numpy scipy torch matplotlib scikit-learn
 """
 INPUT DATASET:
 """
-n_epochs = 5000
+n_epochs = 1500
 learning_rate = 0.1
 number_of_steps = 25
 ADD_NOISE = False
@@ -228,25 +229,26 @@ print("\nNull strain ANN prediction: ", 1.0e6*null_prediction_ANN)
 
 torch.save(model.state_dict(), "model_weights.pth")
 
-# Plot results for predefined batches
-batch = [0, 1, 5, 255, 200, 300]  # Specify batches to plot
-
+# Define the GetColor method
 def GetColor(component):
     if component == 0:
-        return "r"
+        return "r"  # Red for component 0
     elif component == 1:
-        return "b"
+        return "b"  # Blue for component 1
+    elif component == 2:
+        return "g"  # Green for component 2
     else:
-        return "k"
+        return "k"  # Black for any other component
+
+# Create the folder to save the plots if it doesn't exist
+output_folder = "generalized_ogden_predictions"
+os.makedirs(output_folder, exist_ok=True)
 
 # Generate predictions for the full dataset
 prediction_ANN = model(ref_strain_database)
 
-# Plot for each batch
-for elem in batch:
-    if elem >= len(ref_strain_database):  # Skip if batch index is out of range
-        continue
-
+# Plot and save results for all testing batches
+for elem in test_indices:
     plt.figure(figsize=(8, 6))  # Create a new figure for each batch
 
     for compo in [0, 1, 2]:
@@ -274,5 +276,11 @@ for elem in batch:
     plt.ylabel("Stress [MPa]")
     plt.legend()
     plt.grid(True)
-    plt.show()
+
+    # Save the plot in the output folder
+    output_path = os.path.join(output_folder, f"batch_{elem}.png")
+    plt.savefig(output_path)
+    plt.close()  # Close the figure to free memory
+
+print(f"Plots saved in the folder: {output_folder}")
 
