@@ -62,8 +62,8 @@ pip install numpy scipy torch matplotlib scikit-learn
 """
 INPUT DATASET:
 """
-n_epochs = 1500
-learning_rate = 0.1
+n_epochs = 6000
+learning_rate = 0.08
 number_of_steps = 25
 ADD_NOISE = False
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
@@ -105,7 +105,7 @@ class StressPredictor(nn.Module):
     def __init__(self):
         super(StressPredictor, self).__init__()
 
-        self.N = 1 # number of terms in the Ogden series
+        self.N = 2 # number of terms in the Ogden series
         self.tol = 1.0e-12
 
         self.K = nn.Parameter(torch.tensor(1.0))
@@ -271,7 +271,7 @@ for elem in test_indices:
         )
 
     # Add plot details
-    plt.title(f"Batch: {elem}")
+    plt.title(f"Batch: {elem}" + f" Ogden N= {model.N}")
     plt.xlabel("Strain [-]")
     plt.ylabel("Stress [MPa]")
     plt.legend()
