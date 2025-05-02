@@ -24,8 +24,8 @@ from sklearn.model_selection import train_test_split
 """
 INPUT DATASET:
 """
-n_epochs = 6000
-learning_rate = 0.08
+n_epochs = 1000
+learning_rate = 0.01
 number_of_steps = 25
 ADD_NOISE = False
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
@@ -52,7 +52,7 @@ test_strain_database = ref_strain_database[test_indices]
 test_stress_database = ref_stress_database[test_indices]
 test_work_database = ref_work_database[test_indices]
 
-print("\nLaunching the training of a ANN...")
+print("\nLaunching the training of a KAN...")
 print("Number of training batches: ", train_strain_database.shape[0])
 print("Number of total batches: ", ref_strain_database.shape[0])
 print("Number of steps  : ", train_strain_database.shape[1])
@@ -70,8 +70,11 @@ class KANStressPredictor(nn.Module):
         self.order_stretches = 1
         self.input_size = 2 * self.order_stretches
 
+        self.k = 3
+        self.grid = 3
+
         # KAN framework layers
-        self.KAN_W = KAN.MultKAN(width=[self.input_size, self.order_stretches, 1], grid=3, k=3)  # 2 x 1 x 1
+        self.KAN_W = KAN.MultKAN(width=[self.input_size, self.order_stretches, 1], grid=self.grid, k=self.k)  # 2 x 1 x 1
 
 
     def forward(self, strain):
@@ -119,9 +122,16 @@ class KANStressPredictor(nn.Module):
 # Initialize model, optimizer, and loss function
 model = KANStressPredictor()
 
-print("\nNull strain ANN prediction CHECK: ", model(torch.tensor([[[0.0, 0.0, 0.0]]]))) # for the order 1
+print("\nNull strain KAN prediction initial CHECK: ", model(torch.tensor([[[0.0, 0.0, 0.0]]]))) # for the order 1
 
-optimizer = optim.LBFGS(model.parameters(), lr=learning_rate, max_iter=10, history_size=25)
+# optimizer = optim.LBFGS(model.parameters(), lr=learning_rate, max_iter=20, history_size=10)
+optimizer = optim.LBFGS(
+    model.parameters(),
+    lr=learning_rate,          # Learning rate
+    max_iter=150,               # Increase max iterations per optimization step
+    history_size=10,           # Increase history size for better curvature approximation
+    line_search_fn="strong_wolfe"  # Use a more robust line search method
+)
 
 # Update the training loop to use only the training dataset
 for epoch in range(n_epochs):
@@ -142,7 +152,7 @@ for epoch in range(n_epochs):
     if epoch == n_epochs - 1:
         print("\nFinal loss: ", loss.item())
 
-    if epoch % 100 == 0:
+    if epoch % 20 == 0:
         print(f"Epoch {epoch}, Loss: {loss.item():.6f}")
         # for name, param in model.named_parameters():
         #     print("\t", name, param.data)
@@ -157,7 +167,7 @@ for name, param in model.named_parameters():
     print(name, param.data)
 
 null_prediction_ANN = model(torch.tensor([[[0.0, 0.0, 0.0]]]))
-print("\nNull strain ANN prediction: ", 1.0e6*null_prediction_ANN)
+print("\nNull strain post training KAN prediction: ", 1.0e6*null_prediction_ANN)
 
 torch.save(model.state_dict(), "KAN_model_weights.pth")
 
@@ -203,7 +213,7 @@ for elem in test_indices:
         )
 
     # Add plot details
-    plt.title(f"Batch: {elem}" + f" Ogden N= {model.N}")
+    plt.title(f"Batch: {elem}" + f" KAN")
     plt.xlabel("Strain [-]")
     plt.ylabel("Stress [MPa]")
     plt.legend()
