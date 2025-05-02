@@ -11,7 +11,7 @@ import cl_loader as cl_loader
 
 from sklearn.model_selection import train_test_split
 
-torch.set_num_threads(20)
+# torch.set_num_threads(20)
 
 """
 # Generalized Ogden ANN Script
@@ -227,7 +227,7 @@ print("Null strain ANN prediction: ", 1.0e6*null_prediction_ANN)
 
 torch.save(model.state_dict(), "model_weights.pth")
 
-# Plot results for training and testing datasets
+# Plot results for predefined batches
 batch = [0, 1, 5, 255, 200, 300]  # Specify batches to plot
 
 def GetColor(component):
@@ -238,57 +238,34 @@ def GetColor(component):
     else:
         return "k"
 
-def GetMarker(dataset_type):
-    return "o" if dataset_type == "train" else "x"
-
-prediction_ANN_train = model(train_strain_database)
-prediction_ANN_test = model(test_strain_database)
+# Generate predictions for the full dataset
+prediction_ANN = model(ref_strain_database)
 
 # Plot for each batch
 for elem in batch:
+    if elem >= len(ref_strain_database):  # Skip if batch index is out of range
+        continue
+
     plt.figure(figsize=(8, 6))  # Create a new figure for each batch
 
-    # Plot training data
-    if elem < len(train_strain_database):
-        for compo in [0, 1, 2]:
-            strain_for_print = train_strain_database[elem, :, compo]
-            predicted_stress_ANN = prediction_ANN_train[elem, :, compo].detach().numpy()
-            plt.plot(
-                strain_for_print,
-                predicted_stress_ANN,
-                label=f"ANN_train_comp{compo}",
-                color=GetColor(compo),
-                linestyle="-",
-            )
-            plt.scatter(
-                strain_for_print,
-                train_stress_database[elem, :, compo],
-                label=f"DATA_train_comp{compo}",
-                marker=GetMarker("train"),
-                color=GetColor(compo),
-                s=20,
-            )
-
-    # Plot testing data
-    if elem < len(test_strain_database):
-        for compo in [0, 1, 2]:
-            strain_for_print = test_strain_database[elem, :, compo]
-            predicted_stress_ANN = prediction_ANN_test[elem, :, compo].detach().numpy()
-            plt.plot(
-                strain_for_print,
-                predicted_stress_ANN,
-                label=f"ANN_test_comp{compo}",
-                color=GetColor(compo),
-                linestyle="--",
-            )
-            plt.scatter(
-                strain_for_print,
-                test_stress_database[elem, :, compo],
-                label=f"DATA_test_comp{compo}",
-                marker=GetMarker("test"),
-                color=GetColor(compo),
-                s=20,
-            )
+    for compo in [0, 1, 2]:
+        strain_for_print = ref_strain_database[elem, :, compo]
+        predicted_stress_ANN = prediction_ANN[elem, :, compo].detach().numpy()
+        plt.plot(
+            strain_for_print,
+            predicted_stress_ANN,
+            label=f"ANN_comp{compo}",
+            color=GetColor(compo),
+            linestyle="-",
+        )
+        plt.scatter(
+            strain_for_print,
+            ref_stress_database[elem, :, compo],
+            label=f"DATA_comp{compo}",
+            marker="o",
+            color=GetColor(compo),
+            s=20,
+        )
 
     # Add plot details
     plt.title(f"Batch: {elem}")
