@@ -61,10 +61,10 @@ pip install numpy scipy torch matplotlib scikit-learn
 """
 INPUT DATASET:
 """
-n_epochs = 100
+n_epochs = 500
 learning_rate = 0.01
 number_of_steps = 25
-ADD_NOISE = True
+ADD_NOISE = False
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
 #=============================================================================================================
 
@@ -89,10 +89,10 @@ test_strain_database = ref_strain_database[test_indices]
 test_stress_database = ref_stress_database[test_indices]
 test_work_database = ref_work_database[test_indices]
 
-print("Launching the training of a ANN...")
-print("Number of batches: ", ref_strain_database.shape[0])
-print("Number of steps  : ", ref_strain_database.shape[1])
-print("Strain size      : ", ref_strain_database.shape[2])
+print("\nLaunching the training of a ANN...")
+print("Number of training batches: ", train_strain_database.shape[0])
+print("Number of steps  : ", train_strain_database.shape[1])
+print("Strain size      : ", train_strain_database.shape[2])
 
 # ==========================================================================================
 
@@ -103,17 +103,17 @@ class StressPredictor(nn.Module):
     def __init__(self):
         super(StressPredictor, self).__init__()
 
-        self.N = 2 # number of terms in the Ogden series
+        self.N = 1 # number of terms in the Ogden series
         self.tol = 1.0e-12
 
         self.K = nn.Parameter(torch.tensor(1.0))
 
         self.mu_p = nn.ParameterList([
-            nn.Parameter(((-1.0)**(p + 2)) * (torch.tensor(1.0 + torch.rand(1)))) for p in range(self.N)
+            nn.Parameter(((-1.0)**(p + 2)) * (torch.tensor(1.0 + torch.rand(1.0)))) for p in range(self.N)
         ])
 
         self.alpha_p = nn.ParameterList([
-            nn.Parameter(((-1.0)**(p + 2)) * (torch.tensor(1.0 + torch.rand(1)))) for p in range(self.N)
+            nn.Parameter(((-1.0)**(p + 2)) * (torch.tensor(1.0 + torch.rand(1.0)))) for p in range(self.N)
         ])
 
     def forward(self, strain):
@@ -163,7 +163,7 @@ model = StressPredictor()
 print("\nNull strain ANN prediction CHECK: ", model(torch.tensor([[[0.0, 0.0, 0.0]]])))
 
 # optimizer = optim.AdamW(model.parameters(), lr = learning_rate)
-optimizer = optim.LBFGS(model.parameters(), lr=learning_rate, max_iter=20, history_size=20)
+optimizer = optim.LBFGS(model.parameters(), lr=learning_rate, max_iter=10, history_size=25)
 
 # Training loop
 # for epoch in range(n_epochs):
