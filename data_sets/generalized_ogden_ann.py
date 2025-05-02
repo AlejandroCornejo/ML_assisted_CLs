@@ -61,8 +61,8 @@ pip install numpy scipy torch matplotlib scikit-learn
 """
 INPUT DATASET:
 """
-n_epochs = 500
-learning_rate = 0.01
+n_epochs = 5000
+learning_rate = 0.1
 number_of_steps = 25
 ADD_NOISE = False
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
@@ -91,6 +91,7 @@ test_work_database = ref_work_database[test_indices]
 
 print("\nLaunching the training of a ANN...")
 print("Number of training batches: ", train_strain_database.shape[0])
+print("Number of total batches: ", ref_strain_database.shape[0])
 print("Number of steps  : ", train_strain_database.shape[1])
 print("Strain size      : ", train_strain_database.shape[2])
 
@@ -109,11 +110,11 @@ class StressPredictor(nn.Module):
         self.K = nn.Parameter(torch.tensor(1.0))
 
         self.mu_p = nn.ParameterList([
-            nn.Parameter(((-1.0)**(p + 2)) * (torch.tensor(1.0 + torch.rand(1.0)))) for p in range(self.N)
+            nn.Parameter(((-1.0)**(p + 2)) * (torch.tensor(1.0 + torch.rand(1)))) for p in range(self.N)
         ])
 
         self.alpha_p = nn.ParameterList([
-            nn.Parameter(((-1.0)**(p + 2)) * (torch.tensor(1.0 + torch.rand(1.0)))) for p in range(self.N)
+            nn.Parameter(((-1.0)**(p + 2)) * (torch.tensor(1.0 + torch.rand(1)))) for p in range(self.N)
         ])
 
     def forward(self, strain):
@@ -206,7 +207,7 @@ for epoch in range(n_epochs):
     loss = optimizer.step(closure)
 
     if epoch == n_epochs - 1:
-        print("Final loss: ", loss.item())
+        print("\nFinal loss: ", loss.item())
 
     if epoch % 100 == 0:
         print(f"Epoch {epoch}, Loss: {loss.item():.6f}")
@@ -218,12 +219,12 @@ for epoch in range(n_epochs):
 # Let's print the results of the ANN for training and testing datasets
 
 print("\nTraining finished.")
-print("model parameters:")
+print("\nmodel parameters:")
 for name, param in model.named_parameters():
     print(name, param.data)
 
 null_prediction_ANN = model(torch.tensor([[[0.0, 0.0, 0.0]]]))
-print("Null strain ANN prediction: ", 1.0e6*null_prediction_ANN)
+print("\nNull strain ANN prediction: ", 1.0e6*null_prediction_ANN)
 
 torch.save(model.state_dict(), "model_weights.pth")
 
@@ -270,7 +271,7 @@ for elem in batch:
     # Add plot details
     plt.title(f"Batch: {elem}")
     plt.xlabel("Strain [-]")
-    plt.ylabel("Stress [Pa]")
+    plt.ylabel("Stress [MPa]")
     plt.legend()
     plt.grid(True)
     plt.show()
