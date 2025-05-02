@@ -74,7 +74,9 @@ class KANStressPredictor(nn.Module):
         self.grid = 3 # number of knots
 
         # KAN framework layers
-        self.KAN_W = KAN.MultKAN(width=[self.input_size, self.order_stretches, 1], grid=self.grid, k=self.k)  # 2 x 1 x 1
+        self.KAN_W = KAN.MultKAN(
+            width=[self.input_size, self.order_stretches, 1],
+            grid=self.grid, k=self.k)  # 2 x 1 x 1
 
 
     def forward(self, strain):
@@ -137,9 +139,9 @@ print("\nNull strain KAN prediction initial CHECK: ", model(torch.tensor([[[0.0,
 # optimizer = optim.LBFGS(model.parameters(), lr=learning_rate, max_iter=20, history_size=10)
 optimizer = optim.LBFGS(
     model.parameters(),
-    lr=learning_rate,          # Learning rate
-    max_iter=20,               # Increase max iterations per optimization step
-    history_size=30           # Increase history size for better curvature approximation
+    lr=learning_rate,
+    max_iter=20,
+    history_size=30
 )
 
 # Update the training loop to use only the training dataset
