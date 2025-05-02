@@ -70,8 +70,8 @@ class KANStressPredictor(nn.Module):
         self.order_stretches = 1
         self.input_size = 3 * self.order_stretches
 
-        self.k = 3
-        self.grid = 4
+        self.k = 3 # degree splines
+        self.grid = 3 # number of knots
 
         # KAN framework layers
         self.KAN_W = KAN.MultKAN(width=[self.input_size, self.order_stretches, 1], grid=self.grid, k=self.k)  # 2 x 1 x 1
@@ -104,7 +104,6 @@ class KANStressPredictor(nn.Module):
         reg_eigenvalues[:,:, 1] = eigenvalues[:,:,1] * aux
 
         # KAN cannot read 3D tensors, so we need to flatten the input
-        # flat_reg_eigenvalues = reg_eigenvalues.view(-1, 2) # (batch x steps) x 2
 
         # Compute (J - 1) and prepare it as an additional input
         J_minus_1 = (J - 1).unsqueeze(-1)  # Add an extra dimension to match the shape
@@ -120,11 +119,6 @@ class KANStressPredictor(nn.Module):
 
         # Reshape the output back to the original shape
         W = W_flat.view(batches, steps, -1)  # Shape: (batches, steps, 1)
-
-        # W_flat = self.KAN_W(flat_reg_eigenvalues) # (batch x steps) x 2
-
-        # Here we need to reshape the output back to the original shape
-        # W = W_flat.view(batches, steps, -1)
 
         grad = torch.autograd.grad(
             outputs = W,
@@ -177,14 +171,15 @@ for epoch in range(n_epochs):
 # Let's print the results of the ANN for training and testing datasets
 
 print("\nTraining finished.")
-print("\nmodel parameters:")
-for name, param in model.named_parameters():
-    print(name, param.data)
+# print("\nmodel parameters:")
+# for name, param in model.named_parameters():
+#     print(name, param.data)
 
 null_prediction_ANN = model(torch.tensor([[[0.0, 0.0, 0.0]]]))
 print("\nNull strain post training KAN prediction: ", 1.0e6*null_prediction_ANN)
 
 torch.save(model.state_dict(), "KAN_model_weights.pth")
+
 
 # Define the GetColor method
 def GetColor(component):
@@ -214,7 +209,7 @@ for elem in test_indices:
         plt.plot(
             strain_for_print,
             predicted_stress_ANN,
-            label=f"ANN_comp{compo}",
+            label=f"KAN_comp{compo}",
             color=GetColor(compo),
             linestyle="-",
         )
@@ -241,3 +236,4 @@ for elem in test_indices:
 
 print(f"Plots saved in the folder: {output_folder}")
 
+model.KAN_W.plot(folder="./KAN_predictions")
