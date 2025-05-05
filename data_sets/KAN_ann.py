@@ -28,7 +28,6 @@ n_epochs = 150
 learning_rate = 0.05
 number_of_steps = 25
 ADD_NOISE = False
-penalty = 0.0
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
 #=============================================================================================================
 
@@ -90,7 +89,7 @@ class KANStressPredictor(nn.Module):
             nn.Parameter(torch.tensor(float(1))) for p in range(2 * self.order_stretches)
         ])
         
-    
+
     def CalculateW(self, strain):
         batches = strain.shape[0]
         steps = strain.shape[1]
@@ -185,13 +184,10 @@ class KANStressPredictor(nn.Module):
             outputs=W0,
             inputs=zeros,
             grad_outputs=torch.ones_like(W0),
-            create_graph=True,  # Also needed here
-            retain_graph=True,
-            allow_unused=False
+            create_graph=True
         )[0]
 
         return grad - grad_at_zero
-        # return grad
 
 #==========================================================================================
 
@@ -220,7 +216,6 @@ for epoch in range(n_epochs):
         error = predicted_work_accum - train_work_database[:, 1 :, 0]
 
         loss = 0.5 * torch.mean(error ** 2)
-        # loss += penalty * torch.linalg.vector_norm(model(torch.tensor([[[0.0, 0.0, 0.0]]])))
         loss.backward()
         return loss
 
@@ -229,8 +224,6 @@ for epoch in range(n_epochs):
 
     if epoch % 20 == 0:
         print(f"Epoch {epoch}, Loss: {loss.item():.6e}")
-        # for name, param in model.named_parameters():
-        #     print("\t", name, param.data)
 
     if epoch == n_epochs - 1:
         print("\nFinal loss: ", loss.item())
@@ -265,7 +258,7 @@ output_folder = "KAN_predictions"
 os.makedirs(output_folder, exist_ok=True)
 
 # Generate predictions for the full dataset
-prediction_ANN = model(ref_strain_database)
+prediction_KAN = model(ref_strain_database)
 
 # Plot and save results for all testing batches
 for elem in test_indices:
@@ -273,7 +266,7 @@ for elem in test_indices:
 
     for compo in [0, 1, 2]:
         strain_for_print = ref_strain_database[elem, :, compo]
-        predicted_stress_ANN = prediction_ANN[elem, :, compo].detach().numpy()
+        predicted_stress_ANN = prediction_KAN[elem, :, compo].detach().numpy()
         plt.plot(
             strain_for_print,
             predicted_stress_ANN,
