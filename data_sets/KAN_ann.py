@@ -24,7 +24,7 @@ from sklearn.model_selection import train_test_split
 """
 INPUT DATASET:
 """
-n_epochs = 200
+n_epochs = 150
 learning_rate = 0.05
 number_of_steps = 25
 ADD_NOISE = False
@@ -89,13 +89,11 @@ class KANStressPredictor(nn.Module):
         self.ki = nn.ParameterList([ # order of the log, 2 params per mode: one per lambdas and another for J
             nn.Parameter(torch.tensor(float(1))) for p in range(2 * self.order_stretches)
         ])
-        # self.ki = torch.tensor([1, 2])
-
-    def forward(self, strain):
+        
+    
+    def CalculateW(self, strain):
         batches = strain.shape[0]
         steps = strain.shape[1]
-
-        strain = strain.detach().requires_grad_(True)
 
         # Compute strain tensor components
         E = torch.zeros((batches, steps, 2, 2))
@@ -164,6 +162,14 @@ class KANStressPredictor(nn.Module):
         # Reshape the output back to the original shape
         W = torch.exp(W_flat.view(batches, steps, -1))  # Shape: (batches, steps, 1)
 
+        return W
+
+
+    def forward(self, strain):
+        strain = strain.detach().requires_grad_(True)
+
+        W = self.CalculateW(strain)  # Shape: (batches, steps, 1)
+
         # Compute gradients
         grad = torch.autograd.grad(
             outputs=W,
@@ -172,8 +178,9 @@ class KANStressPredictor(nn.Module):
             create_graph=True
         )[0]
 
+
         zeros = torch.zeros_like(strain).requires_grad_(True)
-        W0 = torch.zeros_like(W)
+        W0 = self.CalculateW(zeros)
         grad_at_zero = torch.autograd.grad(
             outputs=W0,
             inputs=zeros,
@@ -184,6 +191,7 @@ class KANStressPredictor(nn.Module):
         )[0]
 
         return grad - grad_at_zero
+        # return grad
 
 #==========================================================================================
 
