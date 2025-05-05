@@ -24,10 +24,10 @@ from sklearn.model_selection import train_test_split
 """
 INPUT DATASET:
 """
-n_epochs = 40
-learning_rate = 0.02
+n_epochs = 200
+learning_rate = 0.05
 number_of_steps = 25
-ADD_NOISE = True
+ADD_NOISE = False
 penalty = 0.0
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
 #=============================================================================================================
@@ -42,7 +42,7 @@ strain_rate = ref_strain_database[:, 1 :, :] - ref_strain_database[:, : -1, :]
 
 # Split the dataset into training and testing datasets
 train_indices, test_indices = train_test_split(
-    range(len(database)), test_size=0.2, random_state=42
+    range(len(database)), test_size=0.05, random_state=42 # 0.2 for 20% test size
 )
 
 train_strain_database = ref_strain_database[train_indices]
@@ -75,17 +75,21 @@ class KANStressPredictor(nn.Module):
         super(KANStressPredictor, self).__init__()
 
         self.order_stretches = 2  # Number of orders (can be set to any value)
-
-        self.input_size = 3 * self.order_stretches  # Total inputs: 2 * reg_eigenvalues + 1 * (J-1) for each order
         self.k = 3  # Degree of splines
         self.grid = 3  # Number of knots
 
+        self.input_size = 3 * self.order_stretches  # Total inputs: 2 * reg_eigenvalues + 1 * (J-1) for each order
         # KAN framework layers
         self.KAN_W = KAN.MultKAN(
-            width=[self.input_size,   self.order_stretches,   1],
+            width=[self.input_size, self.order_stretches, 1],
             grid=self.grid,
             k=self.k
         )
+
+        self.ki = nn.ParameterList([ # order of the log, 2 params per mode: one per lambdas and another for J
+            nn.Parameter(torch.tensor(float(1))) for p in range(2 * self.order_stretches)
+        ])
+        # self.ki = torch.tensor([1, 2])
 
     def forward(self, strain):
         batches = strain.shape[0]
@@ -117,10 +121,10 @@ class KANStressPredictor(nn.Module):
         # Prepare inputs for KAN
         kan_inputs = []  # List to store inputs for each order
 
-        for order in range(1, self.order_stretches + 1):
+        for index in range(self.order_stretches):
             # Compute reg_eigenvalues**order and (J-1)**order
-            reg_eigenvalues_order = reg_eigenvalues ** order
-            J_minus_1_order = (J - 1) ** order
+            reg_eigenvalues_order = self.ki[2*index]     * torch.log(reg_eigenvalues)
+            J_minus_1_order       = self.ki[2*index + 1] * torch.log(J)  # Avoid log(0)
 
             # Concatenate reg_eigenvalues_order and J_minus_1_order
             J_minus_1_order = J_minus_1_order.unsqueeze(-1)  # Add an extra dimension
@@ -158,7 +162,7 @@ class KANStressPredictor(nn.Module):
         W_flat = self.KAN_W(flat_KAN_input)  # Shape: (batch x steps, 1)
 
         # Reshape the output back to the original shape
-        W = W_flat.view(batches, steps, -1)  # Shape: (batches, steps, 1)
+        W = torch.exp(W_flat.view(batches, steps, -1))  # Shape: (batches, steps, 1)
 
         # Compute gradients
         grad = torch.autograd.grad(
@@ -168,7 +172,18 @@ class KANStressPredictor(nn.Module):
             create_graph=True
         )[0]
 
-        return grad
+        zeros = torch.zeros_like(strain).requires_grad_(True)
+        W0 = torch.zeros_like(W)
+        grad_at_zero = torch.autograd.grad(
+            outputs=W0,
+            inputs=zeros,
+            grad_outputs=torch.ones_like(W0),
+            create_graph=True,  # Also needed here
+            retain_graph=True,
+            allow_unused=False
+        )[0]
+
+        return grad - grad_at_zero
 
 #==========================================================================================
 
@@ -196,10 +211,8 @@ for epoch in range(n_epochs):
         predicted_work_accum = torch.cumsum(predicted_work, dim=1)
         error = predicted_work_accum - train_work_database[:, 1 :, 0]
 
-
         loss = 0.5 * torch.mean(error ** 2)
-        # weakly enforce the consistency of the null strain
-        loss += penalty * torch.linalg.vector_norm(model(torch.tensor([[[0.0, 0.0, 0.0]]])))
+        # loss += penalty * torch.linalg.vector_norm(model(torch.tensor([[[0.0, 0.0, 0.0]]])))
         loss.backward()
         return loss
 
@@ -207,7 +220,7 @@ for epoch in range(n_epochs):
 
 
     if epoch % 20 == 0:
-        print(f"Epoch {epoch}, Loss: {loss.item():.6f}")
+        print(f"Epoch {epoch}, Loss: {loss.item():.6e}")
         # for name, param in model.named_parameters():
         #     print("\t", name, param.data)
 
@@ -217,7 +230,7 @@ for epoch in range(n_epochs):
 # ===============================================================
 # Let's print the results of the ANN for training and testing datasets
 
-print("\nTraining finished.")
+print("\nTraining finished.\n")
 # print("\nmodel parameters:")
 # for name, param in model.named_parameters():
 #     print(name, param.data)
