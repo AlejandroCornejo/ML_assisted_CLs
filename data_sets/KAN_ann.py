@@ -24,8 +24,8 @@ from sklearn.model_selection import train_test_split
 """
 INPUT DATASET:
 """
-n_epochs = 150
-learning_rate = 0.05
+n_epochs = 250
+learning_rate = 0.025
 number_of_steps = 25
 ADD_NOISE = False
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
@@ -37,6 +37,7 @@ ref_work_database   = torch.stack([item[2] for item in database]) # batch x step
 
 ref_stress_database /= 1.0e6 # to MPa
 ref_work_database   /= 1.0e6 # to MPa vs strain
+
 strain_rate = ref_strain_database[:, 1 :, :] - ref_strain_database[:, : -1, :]
 
 # Split the dataset into training and testing datasets
@@ -78,6 +79,7 @@ class KANStressPredictor(nn.Module):
         self.grid = 3  # Number of knots
 
         self.input_size = 3 * self.order_stretches  # Total inputs: 2 * reg_eigenvalues + 1 * (J-1) for each order
+
         # KAN framework layers
         self.KAN_W = KAN.MultKAN(
             width=[self.input_size, self.order_stretches, 1],
@@ -86,9 +88,9 @@ class KANStressPredictor(nn.Module):
         )
 
         self.ki = nn.ParameterList([ # order of the log, 2 params per mode: one per lambdas and another for J
-            nn.Parameter(torch.tensor(float(1))) for p in range(2 * self.order_stretches)
+            nn.Parameter(torch.tensor(float(p))) for p in range(2 * self.order_stretches)
         ])
-        
+
 
     def CalculateW(self, strain):
         batches = strain.shape[0]
@@ -186,6 +188,7 @@ class KANStressPredictor(nn.Module):
             grad_outputs=torch.ones_like(W0),
             create_graph=True
         )[0]
+        # zeros = torch.zeros_like(strain).requires_grad_(False)
 
         return grad - grad_at_zero
 
@@ -193,6 +196,11 @@ class KANStressPredictor(nn.Module):
 
 # Initialize model, optimizer, and loss function
 model = KANStressPredictor()
+
+# model(torch.tensor([[[0.0, 0.0, 0.0],
+#                      [1.0, 1.0, 1.0]]]))
+# model.KAN_W.plot(folder="./KAN_predictions")
+# a
 
 print("\nNull strain KAN prediction initial CHECK: ", model(torch.tensor([[[0.0, 0.0, 0.0]]]))) # for the order 1
 
@@ -298,3 +306,4 @@ for elem in test_indices:
 print(f"Plots saved in the folder: {output_folder}")
 
 model.KAN_W.plot(folder="./KAN_predictions")
+plt.savefig("./KAN_predictions/KAN_splines.png")
