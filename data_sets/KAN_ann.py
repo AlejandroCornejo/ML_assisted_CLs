@@ -24,10 +24,11 @@ from sklearn.model_selection import train_test_split
 """
 INPUT DATASET:
 """
-n_epochs = 80
+n_epochs = 40
 learning_rate = 0.02
 number_of_steps = 25
 ADD_NOISE = True
+penalty = 0.0
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
 #=============================================================================================================
 
@@ -63,6 +64,12 @@ print("Strain size      : ", train_strain_database.shape[2])
 class KANStressPredictor(nn.Module):
     """
     KAN-based Stress Predictor with support for multiple orders of stretches.
+
+    pip install pyyaml
+    pip install pykan
+    pip install scikit-learn
+    pip install tqdm
+    pip install pandas
     """
     def __init__(self):
         super(KANStressPredictor, self).__init__()
@@ -188,7 +195,11 @@ for epoch in range(n_epochs):
         predicted_work = torch.sum(strain_rate[train_indices] * predicted_stress[:, 1 :, :], axis=2)
         predicted_work_accum = torch.cumsum(predicted_work, dim=1)
         error = predicted_work_accum - train_work_database[:, 1 :, 0]
+
+
         loss = 0.5 * torch.mean(error ** 2)
+        # weakly enforce the consistency of the null strain
+        loss += penalty * torch.linalg.vector_norm(model(torch.tensor([[[0.0, 0.0, 0.0]]])))
         loss.backward()
         return loss
 
