@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.optim as optim
 import os
 import kan as KAN
+import random
 
 
 # custom imports
@@ -24,7 +25,7 @@ from sklearn.model_selection import train_test_split
 """
 INPUT DATASET:
 """
-n_epochs = 250
+n_epochs = 500
 learning_rate = 0.025
 number_of_steps = 25
 ADD_NOISE = False
@@ -82,14 +83,15 @@ class KANStressPredictor(nn.Module):
 
         # KAN framework layers
         self.KAN_W = KAN.MultKAN(
-            width=[self.input_size, self.order_stretches, 1],
+            width=[self.input_size, 1, 1],
             grid=self.grid,
             k=self.k
         )
 
         self.ki = nn.ParameterList([ # order of the log, 2 params per mode: one per lambdas and another for J
-            nn.Parameter(torch.tensor(float(p))) for p in range(2 * self.order_stretches)
+            nn.Parameter(torch.tensor(random.random())) for p in range(2 * self.order_stretches)
         ])
+        # self.ki = [1.0, 2.0, 2.0, 0.0]
 
 
     def CalculateW(self, strain):
@@ -240,7 +242,9 @@ for epoch in range(n_epochs):
 # Let's print the results of the ANN for training and testing datasets
 
 print("\nTraining finished.\n")
+
 # print("\nmodel parameters:")
+# print("\n \tKi: ", model.ki.data)
 # for name, param in model.named_parameters():
 #     print(name, param.data)
 
