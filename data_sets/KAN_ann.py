@@ -25,7 +25,7 @@ from sklearn.model_selection import train_test_split
 """
 INPUT DATASET:
 """
-n_epochs = 500
+n_epochs = 1000
 learning_rate = 0.05
 number_of_steps = 25
 ADD_NOISE = False
@@ -91,10 +91,11 @@ class KANStressPredictor(nn.Module):
 
         self.ki = nn.ParameterList([ # order of the log, 2 params per mode: one per lambdas and another for J
             # nn.Parameter(torch.tensor(random.random())) for p in range(2 * self.order_stretches)
-            nn.Parameter(torch.tensor(float(p + 1) + random.random())) for p in range(self.order_stretches)
+            nn.Parameter(torch.tensor(float(p + 1) + random.random())) for p in range(self.order_stretches + 1)
         ])
         # The parameter multiplying the log(J) is initially set to 2.0
-        self.ki.append(nn.Parameter(torch.tensor(2.0)))
+        self.ki[-1] = nn.Parameter(torch.tensor(1.0))
+
 
     def CalculateW(self, strain):
         batches = strain.shape[0]
@@ -223,6 +224,10 @@ for epoch in range(n_epochs):
 
 print("\nTraining finished.\n")
 
+print("self.ki[0]: ", model.ki[0].data)
+print("self.ki[1]: ",model.ki[1].data)
+
+
 # print("\nmodel parameters:")
 # print("\n \tKi: ", model.ki.data)
 # for name, param in model.named_parameters():
@@ -231,7 +236,7 @@ print("\nTraining finished.\n")
 # null_prediction_ANN = model(torch.tensor([[[0.0, 0.0, 0.0]]]))
 # print("\nNull strain post training KAN prediction: ", 1.0e6*null_prediction_ANN)
 
-# torch.save(model.state_dict(), "KAN_model_weights.pth")
+torch.save(model.state_dict(), "KAN_model_weights.pth")
 
 
 # Define the GetColor method
