@@ -26,7 +26,7 @@ from sklearn.model_selection import train_test_split
 INPUT DATASET:
 """
 n_epochs = 500
-learning_rate = 0.025
+learning_rate = 0.05
 number_of_steps = 25
 ADD_NOISE = False
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
@@ -75,11 +75,11 @@ class KANStressPredictor(nn.Module):
     def __init__(self):
         super(KANStressPredictor, self).__init__()
 
-        self.order_stretches = 2  # Number of orders (can be set to any value)
+        self.order_stretches = 1  # Number of orders (can be set to any value)
         self.k = 3  # Degree of splines
         self.grid = 3  # Number of knots
 
-        self.input_size = 3 * self.order_stretches  # Total inputs: 2 * reg_eigenvalues + 1 * (J-1) for each order
+        self.input_size = 2 * self.order_stretches + 1  # Total inputs: 2 * reg_eigenvalues for each order + 1 * log(J)
 
         # KAN framework layers
         self.KAN_W = KAN.MultKAN(
@@ -88,11 +88,13 @@ class KANStressPredictor(nn.Module):
             k=self.k
         )
 
-        self.ki = nn.ParameterList([ # order of the log, 2 params per mode: one per lambdas and another for J
-            nn.Parameter(torch.tensor(random.random())) for p in range(2 * self.order_stretches)
-        ])
-        # self.ki = [1.0, 2.0, 2.0, 0.0]
 
+        self.ki = nn.ParameterList([ # order of the log, 2 params per mode: one per lambdas and another for J
+            # nn.Parameter(torch.tensor(random.random())) for p in range(2 * self.order_stretches)
+            nn.Parameter(torch.tensor(float(p + 1) + random.random())) for p in range(self.order_stretches)
+        ])
+        # The parameter multiplying the log(J) is initially set to 2.0
+        self.ki.append(nn.Parameter(torch.tensor(2.0)))
 
     def CalculateW(self, strain):
         batches = strain.shape[0]
@@ -109,7 +111,8 @@ class KANStressPredictor(nn.Module):
         C = torch.zeros_like(E)
         C = 2.0 * E + torch.eye(2)
 
-        J = torch.linalg.det(C) ** 0.5
+        J = torch.linalg.det(C) ** 0.5  # Determinant of C (Jacobian)
+        log_J = torch.log(J)  # Logarithm of J
 
         square_eigenvalues = torch.linalg.eigvalsh(C)  # Eigenvalues: batch x steps x 2
         eigenvalues = torch.sqrt(square_eigenvalues)
@@ -123,47 +126,28 @@ class KANStressPredictor(nn.Module):
         kan_inputs = []  # List to store inputs for each order
 
         for index in range(self.order_stretches):
-            # Compute reg_eigenvalues**order and (J-1)**order
-            reg_eigenvalues_order = self.ki[2*index]     * torch.log(reg_eigenvalues)
-            J_minus_1_order       = self.ki[2*index + 1] * torch.log(J)  # Avoid log(0)
+            # Compute reg_eigenvalues**order
+            reg_eigenvalues_order = reg_eigenvalues**self.ki[index]
 
-            # Concatenate reg_eigenvalues_order and J_minus_1_order
-            J_minus_1_order = J_minus_1_order.unsqueeze(-1)  # Add an extra dimension
-            kan_input_order = torch.cat((reg_eigenvalues_order, J_minus_1_order), dim=-1)  # Shape: (batches, steps, 3)
-            """
-            example
-                Original reg_eigenvalues_order:
-                tensor([[[1., 2.],
-                        [3., 4.]]])
-                Shape: torch.Size([1, 2, 2])
+            # Append the pair of stretches for this order
+            kan_inputs.append(reg_eigenvalues_order)
 
-                Original J_minus_1_order:
-                tensor([[5., 6.]])
-                Shape: torch.Size([1, 2])
+        # Append log(J) multiplied by the last ki factor
+        log_J_scaled = log_J * self.ki[-1]  # Multiply log(J) by the last ki factor
+        log_J_expanded = log_J_scaled.unsqueeze(-1)  # Add an extra dimension for concatenation
+        kan_inputs.append(log_J_expanded)
 
-                J_minus_1_order after unsqueeze:
-                tensor([[[5.],
-                        [6.]]])
-                Shape: torch.Size([1, 2, 1])
-
-                Concatenated kan_input_order:
-                tensor([[[1., 2., 5.],
-                        [3., 4., 6.]]])
-                Shape: torch.Size([1, 2, 3])
-            """
-            kan_inputs.append(kan_input_order)
-
-        # Concatenate all orders along the last dimension
-        KAN_input = torch.cat(kan_inputs, dim=-1)  # Shape: (batches, steps, 3 * self.order_stretches)
+        # Concatenate all inputs along the last dimension
+        KAN_input = torch.cat(kan_inputs, dim=-1)  # Shape: (batches, steps, 2 * self.order_stretches + 1)
 
         # Flatten the input for KAN (KAN cannot read 3D tensors)
-        flat_KAN_input = KAN_input.view(-1, self.input_size)  # Shape: (batch x steps, 3 * self.order_stretches)
+        flat_KAN_input = KAN_input.view(-1, self.input_size)  # Shape: (batch x steps, input_size)
 
         # Pass the input through the KAN layer
         W_flat = self.KAN_W(flat_KAN_input)  # Shape: (batch x steps, 1)
 
         # Reshape the output back to the original shape
-        W = torch.exp(W_flat.view(batches, steps, -1))  # Shape: (batches, steps, 1)
+        W = W_flat.view(batches, steps, -1)  # Shape: (batches, steps, 1)
 
         return W
 
@@ -190,7 +174,6 @@ class KANStressPredictor(nn.Module):
             grad_outputs=torch.ones_like(W0),
             create_graph=True
         )[0]
-        # zeros = torch.zeros_like(strain).requires_grad_(False)
 
         return grad - grad_at_zero
 
@@ -199,12 +182,9 @@ class KANStressPredictor(nn.Module):
 # Initialize model, optimizer, and loss function
 model = KANStressPredictor()
 
-# model(torch.tensor([[[0.0, 0.0, 0.0],
-#                      [1.0, 1.0, 1.0]]]))
-# model.KAN_W.plot(folder="./KAN_predictions")
-# a
-
 print("\nNull strain KAN prediction initial CHECK: ", model(torch.tensor([[[0.0, 0.0, 0.0]]]))) # for the order 1
+print("\n")
+
 
 # optimizer = optim.LBFGS(model.parameters(), lr=learning_rate, max_iter=20, history_size=10)
 optimizer = optim.LBFGS(
@@ -248,10 +228,10 @@ print("\nTraining finished.\n")
 # for name, param in model.named_parameters():
 #     print(name, param.data)
 
-null_prediction_ANN = model(torch.tensor([[[0.0, 0.0, 0.0]]]))
-print("\nNull strain post training KAN prediction: ", 1.0e6*null_prediction_ANN)
+# null_prediction_ANN = model(torch.tensor([[[0.0, 0.0, 0.0]]]))
+# print("\nNull strain post training KAN prediction: ", 1.0e6*null_prediction_ANN)
 
-torch.save(model.state_dict(), "KAN_model_weights.pth")
+# torch.save(model.state_dict(), "KAN_model_weights.pth")
 
 
 # Define the GetColor method
