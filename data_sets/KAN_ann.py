@@ -25,7 +25,7 @@ from sklearn.model_selection import train_test_split
 """
 INPUT DATASET:
 """
-n_epochs = 1000
+n_epochs = 200
 learning_rate = 0.05
 number_of_steps = 25
 ADD_NOISE = False
@@ -76,7 +76,7 @@ class KANStressPredictor(nn.Module):
         super(KANStressPredictor, self).__init__()
 
         self.order_stretches = 1  # Number of orders (can be set to any value)
-        self.k = 3  # Degree of splines
+        self.k = 2  # Degree of splines
         self.grid = 3  # Number of knots
 
         self.input_size = 2 * self.order_stretches + 1  # Total inputs: 2 * reg_eigenvalues for each order + 1 * log(J)
@@ -178,6 +178,53 @@ class KANStressPredictor(nn.Module):
 
         return grad - grad_at_zero
 
+    def ComputeHessian(self, strain):
+        """
+        Compute the Hessian (gradient of the gradient) of the model's output with respect to the strain.
+        Check that the eigenvalues of the Hessian are positive for each strain.
+
+        Args:
+            strain (torch.Tensor): Input strain tensor of shape (batches, steps, strain_size).
+
+        Returns:
+            hessian_eigenvalues (torch.Tensor): Eigenvalues of the Hessian for each strain.
+        """
+        strain = strain.detach().requires_grad_(True)  # Ensure strain requires gradients
+
+        # Compute the first gradient (Jacobian)
+        W = self.CalculateW(strain)  # Shape: (batches, steps, 1)
+        grad = torch.autograd.grad(
+            outputs=W,
+            inputs=strain,
+            grad_outputs=torch.ones_like(W),
+            create_graph=True
+        )[0]  # Shape: (batches, steps, strain_size)
+
+        # Compute the second gradient (Hessian)
+        hessian = []
+        for i in range(strain.shape[-1]):  # Loop over strain components
+            grad_i = grad[..., i]  # Select the i-th component of the gradient
+            hessian_row = torch.autograd.grad(
+                outputs=grad_i,
+                inputs=strain,
+                grad_outputs=torch.ones_like(grad_i),
+                create_graph=True
+            )[0]  # Shape: (batches, steps, strain_size)
+            hessian.append(hessian_row)
+
+        # Stack the Hessian rows to form the full Hessian matrix
+        hessian = torch.stack(hessian, dim=-1)  # Shape: (batches, steps, strain_size, strain_size)
+
+        # Compute eigenvalues of the Hessian for each strain
+        hessian_eigenvalues = torch.linalg.eigvalsh(hessian)  # Shape: (batches, steps, strain_size)
+
+        # Check if all eigenvalues are positive
+        is_positive_definite = (hessian_eigenvalues > 0).all(dim=-1)  # Shape: (batches, steps)
+        if not is_positive_definite.all():
+            print("Warning: Hessian is not positive definite for some strains.")
+
+        return hessian
+
 #==========================================================================================
 
 # Initialize model, optimizer, and loss function
@@ -237,6 +284,10 @@ print("self.ki[1]: ",model.ki[1].data)
 # print("\nNull strain post training KAN prediction: ", 1.0e6*null_prediction_ANN)
 
 torch.save(model.state_dict(), "KAN_model_weights.pth")
+
+Hessian = model.ComputeHessian(ref_strain_database[:, :, :])  # Check the Hessian for the first batch
+
+# print(Hessian)
 
 
 # Define the GetColor method
