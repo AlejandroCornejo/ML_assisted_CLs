@@ -17,7 +17,7 @@ from sklearn.model_selection import train_test_split
 """
 INPUT DATASET:
 """
-n_epochs = 500
+n_epochs = 40
 learning_rate = 0.05
 number_of_steps = 25
 ADD_NOISE = False
@@ -79,7 +79,6 @@ class KANStressPredictor(nn.Module):
             grid=self.grid,
             k=self.k
         )
-
 
         self.ki = nn.ParameterList([ # order of the log, 2 params per mode: one per lambdas and another for J
             # nn.Parameter(torch.tensor(random.random())) for p in range(2 * self.order_stretches)
@@ -272,6 +271,11 @@ class KANStressPredictor(nn.Module):
 
         print(f"Spline edge plots saved in the folder: {folder}")
 
+    # ==========================================================================================
+    def prune_KAN(self, threshold=0.01):
+        print(f"Pruning KAN with threshold: {threshold}")
+        self.KAN_W.prune(threshold)  # Prune the KAN using the threshold
+        print("Pruning completed.")
 # =========================================================================================
 #==========================================================================================
 
@@ -280,6 +284,11 @@ model = KANStressPredictor()
 
 print("\nNull strain KAN prediction initial CHECK: ", model(torch.tensor([[[0.0, 0.0, 0.0]]]))) # for the order 1
 print("\n")
+
+
+
+# model.KAN_W.fix_symbolic(0,0,0,'cos')
+
 
 
 # optimizer = optim.LBFGS(model.parameters(), lr=learning_rate, max_iter=20, history_size=10)
@@ -319,8 +328,8 @@ for epoch in range(n_epochs):
 
 print("\nTraining finished.\n")
 
-print("self.ki[0]: ", model.ki[0].data)
-print("self.ki[1]: ",model.ki[1].data)
+for i, ki in enumerate(model.ki):
+    print("self.ki[i]: ", ki.data)
 
 
 # print("\nmodel parameters:")
@@ -388,11 +397,21 @@ for elem in test_indices:
     output_path = os.path.join(output_folder, f"batch_{elem}.png")
     plt.savefig(output_path)
     plt.close()  # Close the figure to free memory
-
 print(f"Plots saved in the folder: {output_folder}")
 
-model.KAN_W.save_act = True
+
+
+# model.KAN_W.save_act = True
 model.CalculateW(ref_strain_database[:, :, :])  # Compute the spline activations
 model.plot_spline_edges()
 model.KAN_W.plot(folder="./KAN_predictions")
 plt.savefig("./KAN_predictions/KAN_splines.png")
+
+# attributes = model.KAN_W.attribute()
+# print("Attributes: ", attributes)
+# model.KAN_W.save_act = True
+# model.prune_KAN(threshold=0.01)  # Prune the KAN with a threshold of 0.01
+# model.KAN_W.remove_node(0, 0, mode='all', log_history=True)
+# model.CalculateW(ref_strain_database[:, :, :])  # Compute the spline activations
+# model.KAN_W.plot(folder="./KAN_predictions")
+# plt.savefig("./KAN_predictions/KAN_splines_pruned.png")
