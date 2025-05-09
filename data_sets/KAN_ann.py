@@ -8,24 +8,16 @@ import torch.optim as optim
 import os
 import kan as KAN
 import random
-
-
-# custom imports
 import cl_loader as cl_loader
-
 from sklearn.model_selection import train_test_split
 
-# torch.set_num_threads(20)
 
-"""
-
-"""
 
 #=============================================================================================================
 """
 INPUT DATASET:
 """
-n_epochs = 200
+n_epochs = 500
 learning_rate = 0.05
 number_of_steps = 25
 ADD_NOISE = False
@@ -76,7 +68,7 @@ class KANStressPredictor(nn.Module):
         super(KANStressPredictor, self).__init__()
 
         self.order_stretches = 1  # Number of orders (can be set to any value)
-        self.k = 2  # Degree of splines
+        self.k = 3  # Degree of splines
         self.grid = 3  # Number of knots
 
         self.input_size = 2 * self.order_stretches + 1  # Total inputs: 2 * reg_eigenvalues for each order + 1 * log(J)
@@ -96,7 +88,7 @@ class KANStressPredictor(nn.Module):
         # The parameter multiplying the log(J) is initially set to 2.0
         self.ki[-1] = nn.Parameter(torch.tensor(1.0))
 
-
+    # ==========================================================================================
     def CalculateW(self, strain):
         batches = strain.shape[0]
         steps = strain.shape[1]
@@ -152,7 +144,7 @@ class KANStressPredictor(nn.Module):
 
         return W
 
-
+    # ==========================================================================================
     def forward(self, strain):
         strain = strain.detach().requires_grad_(True)
 
@@ -178,6 +170,7 @@ class KANStressPredictor(nn.Module):
 
         return grad - grad_at_zero
 
+    # ==========================================================================================
     def ComputeHessian(self, strain):
         """
         Compute the Hessian (gradient of the gradient) of the model's output with respect to the strain.
@@ -221,10 +214,65 @@ class KANStressPredictor(nn.Module):
         # Check if all eigenvalues are positive
         is_positive_definite = (hessian_eigenvalues > 0).all(dim=-1)  # Shape: (batches, steps)
         if not is_positive_definite.all():
+            print("**************************************************************")
             print("Warning: Hessian is not positive definite for some strains.")
+            print("**************************************************************")
 
         return hessian
 
+
+    # ==========================================================================================
+    def plot_spline_edges(self, folder="./KAN_predictions", scale=0.5):
+        """
+        Plot the spline edges for each connection in the KAN layer.
+
+        Args:
+            folder (str): The folder to save the plots.
+            scale (float): Scale factor for the plot size.
+        """
+
+        if not self.KAN_W.save_act:
+            raise ValueError("Cannot plot since activations are not saved. Set `save_act=True` before the forward pass.")
+
+        if self.KAN_W.acts is None:
+            if self.KAN_W.cache_data is None:
+                raise ValueError("No cached data available. Perform a forward pass with input data.")
+            self.KAN_W.forward(self.KAN_W.cache_data)  # Populate activations
+
+        # Create the folder if it doesn't exist
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+
+        depth = len(self.KAN_W.width) - 1  # Number of layers
+        for l in range(depth):
+            for i in range(self.KAN_W.width_in[l]):  # Loop over input nodes
+                for j in range(self.KAN_W.width_out[l + 1]):  # Loop over output nodes
+                    # Extract activations and spline outputs
+                    x = self.KAN_W.acts[l][:, i].cpu().detach().numpy()  # Input activations
+                    y = self.KAN_W.spline_postacts[l][:, j, i].cpu().detach().numpy()  # Spline outputs
+
+                    # Sort the activations for a smooth plot
+                    sorted_indices = x.argsort()
+                    x_sorted = x[sorted_indices]
+                    y_sorted = y[sorted_indices]
+
+                    # Plot the spline edge
+                    plt.figure(figsize=(6 * scale, 4 * scale))
+                    plt.plot(x_sorted, y_sorted, label=f"Edge {i} -> {j}", color="blue", lw=2)
+                    plt.xlabel("Activation (Input)")
+                    plt.ylabel("Spline Output")
+                    plt.title(f"Spline Edge: Layer {l}, Node {i} -> Node {j}")
+                    plt.legend()
+                    plt.grid(True)
+
+                    # Save the plot
+                    plot_path = os.path.join(folder, f"spline_edge_layer{l}_node{i}_to_node{j}.png")
+                    plt.savefig(plot_path, bbox_inches="tight", dpi=300)
+                    plt.close()
+
+        print(f"Spline edge plots saved in the folder: {folder}")
+
+# =========================================================================================
 #==========================================================================================
 
 # Initialize model, optimizer, and loss function
@@ -285,9 +333,7 @@ print("self.ki[1]: ",model.ki[1].data)
 
 torch.save(model.state_dict(), "KAN_model_weights.pth")
 
-Hessian = model.ComputeHessian(ref_strain_database[:, :, :])  # Check the Hessian for the first batch
-
-# print(Hessian)
+Hessian = model.ComputeHessian(ref_strain_database[:, :, :])  # Check the Hessian for the whole strain
 
 
 # Define the GetColor method
@@ -345,5 +391,8 @@ for elem in test_indices:
 
 print(f"Plots saved in the folder: {output_folder}")
 
+model.KAN_W.save_act = True
+model.CalculateW(ref_strain_database[:, :, :])  # Compute the spline activations
+model.plot_spline_edges()
 model.KAN_W.plot(folder="./KAN_predictions")
 plt.savefig("./KAN_predictions/KAN_splines.png")
