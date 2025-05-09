@@ -11,13 +11,22 @@ import random
 import cl_loader as cl_loader
 from sklearn.model_selection import train_test_split
 
-
+# Define the GetColor method
+def GetColor(component):
+    if component == 0:
+        return "r"  # Red for component 0
+    elif component == 1:
+        return "b"  # Blue for component 1
+    elif component == 2:
+        return "g"  # Green for component 2
+    else:
+        return "k"  # Black for any other component
 
 #=============================================================================================================
 """
 INPUT DATASET:
 """
-n_epochs = 40
+n_epochs = 100
 learning_rate = 0.05
 number_of_steps = 25
 ADD_NOISE = False
@@ -67,24 +76,27 @@ class KANStressPredictor(nn.Module):
     def __init__(self):
         super(KANStressPredictor, self).__init__()
 
+        # EDIT:
         self.order_stretches = 1  # Number of orders (can be set to any value)
         self.k = 3  # Degree of splines
         self.grid = 3  # Number of knots
+        # -------------------------------------
 
         self.input_size = 2 * self.order_stretches + 1  # Total inputs: 2 * reg_eigenvalues for each order + 1 * log(J)
 
-        # KAN framework layers
+        # KAN definition
         self.KAN_W = KAN.MultKAN(
-            width=[self.input_size, 1, 1],
+            width=[self.input_size,   1,   1],
             grid=self.grid,
             k=self.k
         )
 
+        # Initialize some extra parameters
         self.ki = nn.ParameterList([ # order of the log, 2 params per mode: one per lambdas and another for J
-            # nn.Parameter(torch.tensor(random.random())) for p in range(2 * self.order_stretches)
             nn.Parameter(torch.tensor(float(p + 1) + random.random())) for p in range(self.order_stretches + 1)
         ])
-        # The parameter multiplying the log(J) is initially set to 2.0
+
+        # The parameter multiplying the log(J) is initially set to 1.0
         self.ki[-1] = nn.Parameter(torch.tensor(1.0))
 
     # ==========================================================================================
@@ -171,16 +183,6 @@ class KANStressPredictor(nn.Module):
 
     # ==========================================================================================
     def ComputeHessian(self, strain):
-        """
-        Compute the Hessian (gradient of the gradient) of the model's output with respect to the strain.
-        Check that the eigenvalues of the Hessian are positive for each strain.
-
-        Args:
-            strain (torch.Tensor): Input strain tensor of shape (batches, steps, strain_size).
-
-        Returns:
-            hessian_eigenvalues (torch.Tensor): Eigenvalues of the Hessian for each strain.
-        """
         strain = strain.detach().requires_grad_(True)  # Ensure strain requires gradients
 
         # Compute the first gradient (Jacobian)
@@ -216,7 +218,6 @@ class KANStressPredictor(nn.Module):
             print("**************************************************************")
             print("Warning: Hessian is not positive definite for some strains.")
             print("**************************************************************")
-
         return hessian
 
 
@@ -279,82 +280,88 @@ class KANStressPredictor(nn.Module):
 # =========================================================================================
 #==========================================================================================
 
+def TRAIN_KAN(model, optimizer, train_strain_database, train_work_database, strain_rate, train_indices, n_epochs):
+    for epoch in range(n_epochs):
+
+        def closure():
+            optimizer.zero_grad()
+
+            predicted_stress = model(train_strain_database)
+            predicted_work = torch.sum(strain_rate[train_indices] * predicted_stress[:, 1:, :], axis=2)
+            predicted_work_accum = torch.cumsum(predicted_work, dim=1)
+            error = predicted_work_accum - train_work_database[:, 1:, 0]
+
+            loss = 0.5 * torch.mean(error ** 2)
+            loss.backward()
+            return loss
+
+        loss = optimizer.step(closure)
+
+        if epoch % 20 == 0:
+            print(f"Epoch {epoch}, Loss: {loss.item():.6e}")
+
+        if epoch == n_epochs - 1:
+            print("\nTraining finished.\n")
+            print("\nFinal loss: ", loss.item())
+
+
 # Initialize model, optimizer, and loss function
 model = KANStressPredictor()
 
-print("\nNull strain KAN prediction initial CHECK: ", model(torch.tensor([[[0.0, 0.0, 0.0]]]))) # for the order 1
-print("\n")
+# print("\nNull strain KAN prediction initial CHECK: ", model(torch.tensor([[[0.0, 0.0, 0.0]]]))) # for the order 1
+# print("\n")
 
 
-
-# model.KAN_W.fix_symbolic(0,0,0,'cos')
-
-
-
-# optimizer = optim.LBFGS(model.parameters(), lr=learning_rate, max_iter=20, history_size=10)
+# Initialize the optimizer
 optimizer = optim.LBFGS(
-    model.parameters(),
-    lr=learning_rate,
-    max_iter=20,
-    history_size=30
-)
-
-# Update the training loop to use only the training dataset
-for epoch in range(n_epochs):
-
-    def closure():
-        optimizer.zero_grad()
-
-        predicted_stress = model(train_strain_database)
-        predicted_work = torch.sum(strain_rate[train_indices] * predicted_stress[:, 1 :, :], axis=2)
-        predicted_work_accum = torch.cumsum(predicted_work, dim=1)
-        error = predicted_work_accum - train_work_database[:, 1 :, 0]
-
-        loss = 0.5 * torch.mean(error ** 2)
-        loss.backward()
-        return loss
-
-    loss = optimizer.step(closure)
+                    model.parameters(),
+                    lr=learning_rate,
+                    max_iter=20,
+                    history_size=30
+                )
 
 
-    if epoch % 20 == 0:
-        print(f"Epoch {epoch}, Loss: {loss.item():.6e}")
+# Train the KAN model
+TRAIN_KAN(
+        model=model,
+        optimizer=optimizer,
+        train_strain_database=train_strain_database,
+        train_work_database=train_work_database,
+        strain_rate=strain_rate,
+        train_indices=train_indices,
+        n_epochs=n_epochs)
 
-    if epoch == n_epochs - 1:
-        print("\nFinal loss: ", loss.item())
+# for i, ki in enumerate(model.ki):
+#     print("self.ki[i]: ", ki.data)
 
-# ===============================================================
-# Let's print the results of the ANN for training and testing datasets
+fix_symbolic = True
 
-print("\nTraining finished.\n")
+if fix_symbolic:
 
-for i, ki in enumerate(model.ki):
-    print("self.ki[i]: ", ki.data)
+    model.KAN_W.suggest_symbolic(0,0,0)
+    # model.KAN_W.suggest_symbolic(0,1,0,weight_simple=0.)
+    # model.KAN_W.suggest_symbolic(0,2,0,weight_simple=0.)
 
+    # model.KAN_W.fix_symbolic(0,0,0,'x^2')
+    # model.KAN_W.fix_symbolic(0,1,0,'x^2')
+    # model.KAN_W.fix_symbolic(0,2,0,'x^2')
+
+    # TRAIN_KAN(
+    #     model=model,
+    #     optimizer=optimizer,
+    #     train_strain_database=train_strain_database,
+    #     train_work_database=train_work_database,
+    #     strain_rate=strain_rate,
+    #     train_indices=train_indices,
+    #     n_epochs=n_epochs)
 
 # print("\nmodel parameters:")
-# print("\n \tKi: ", model.ki.data)
 # for name, param in model.named_parameters():
 #     print(name, param.data)
 
-# null_prediction_ANN = model(torch.tensor([[[0.0, 0.0, 0.0]]]))
-# print("\nNull strain post training KAN prediction: ", 1.0e6*null_prediction_ANN)
-
 torch.save(model.state_dict(), "KAN_model_weights.pth")
+Hessian = model.ComputeHessian(ref_strain_database[:, :, :])  # Check the Hessian eigenvalues for the whole strain
 
-Hessian = model.ComputeHessian(ref_strain_database[:, :, :])  # Check the Hessian for the whole strain
-
-
-# Define the GetColor method
-def GetColor(component):
-    if component == 0:
-        return "r"  # Red for component 0
-    elif component == 1:
-        return "b"  # Blue for component 1
-    elif component == 2:
-        return "g"  # Green for component 2
-    else:
-        return "k"  # Black for any other component
 
 # Create the folder to save the plots if it doesn't exist
 output_folder = "KAN_predictions"
@@ -406,6 +413,9 @@ model.CalculateW(ref_strain_database[:, :, :])  # Compute the spline activations
 model.plot_spline_edges()
 model.KAN_W.plot(folder="./KAN_predictions")
 plt.savefig("./KAN_predictions/KAN_splines.png")
+
+
+
 
 # attributes = model.KAN_W.attribute()
 # print("Attributes: ", attributes)
