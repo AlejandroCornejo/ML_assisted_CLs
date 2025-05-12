@@ -340,17 +340,14 @@ fix_symbolic = False
 
 
 model.CalculateW(train_strain_database)  # Forward pass to compute activations
-model.KAN_W.node_attribute()
-model.KAN_W.node_attribute_scores
-model.KAN_W.attribute()
-att = model.KAN_W.feature_score
-print("model.KAN_W.attribute() = ", att)
+# model.KAN_W.node_attribute()
+# model.KAN_W.node_attribute_scores
+# model.KAN_W.attribute()
+# att = model.KAN_W.feature_score
+# print("model.KAN_W.attribute() = ", att)
 # print("model.KAN_W.node_attribute() = ", model.KAN_W.node_attribute_scores)
-model.KAN_W.prune(node_th=0.8, edge_th=0.8)
-model.KAN_W = model.KAN_W.prune_input(0.2)
-
-model.KAN_W.plot(folder="./KAN_predictions")
-plt.savefig("./KAN_predictions/KAN_splines.png")
+model.KAN_W = model.KAN_W.prune(node_th=0.1, edge_th=0.1)
+# model.KAN_W = model.KAN_W.prune_input(0.2)
 
 
 
