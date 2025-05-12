@@ -334,25 +334,32 @@ TRAIN_KAN(
 # for i, ki in enumerate(model.ki):
 #     print("self.ki[i]: ", ki.data)
 
-fix_symbolic = True
+fix_symbolic = False
 
 if fix_symbolic:
-    model.KAN_W.suggest_symbolic(0,0,0,weight_simple=0.0)
-    model.KAN_W.suggest_symbolic(0,1,0,weight_simple=0.)
-    model.KAN_W.suggest_symbolic(0,2,0,weight_simple=0.)
+    # model.KAN_W.suggest_symbolic(0,0,0,weight_simple=0.0)
+    # model.KAN_W.suggest_symbolic(0,1,0,weight_simple=0.)
+    # model.KAN_W.suggest_symbolic(0,2,0,weight_simple=0.)
 
-    # model.KAN_W.fix_symbolic(0,0,0,'x^2')
-    # model.KAN_W.fix_symbolic(0,1,0,'x^2')
+    model.KAN_W.fix_symbolic(0,0,0,'x^2', random=False)
+    model.KAN_W.fix_symbolic(0,1,0,'x^2', random=False)
     # model.KAN_W.fix_symbolic(0,2,0,'x^2')
 
-    # TRAIN_KAN(
-    #     model=model,
-    #     optimizer=optimizer,
-    #     train_strain_database=train_strain_database,
-    #     train_work_database=train_work_database,
-    #     strain_rate=strain_rate,
-    #     train_indices=train_indices,
-    #     n_epochs=n_epochs)
+    # Re-initialize the optimizer
+    optimizer = optim.LBFGS(
+                        model.parameters(),
+                        lr=0.002,
+                        max_iter=20,
+                        history_size=30)
+
+    TRAIN_KAN(
+        model=model,
+        optimizer=optimizer,
+        train_strain_database=train_strain_database,
+        train_work_database=train_work_database,
+        strain_rate=strain_rate,
+        train_indices=train_indices,
+        n_epochs=1000)
 
 # print("\nmodel parameters:")
 # for name, param in model.named_parameters():
