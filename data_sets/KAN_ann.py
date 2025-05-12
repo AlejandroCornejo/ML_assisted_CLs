@@ -26,7 +26,7 @@ def GetColor(component):
 """
 INPUT DATASET:
 """
-n_epochs = 100
+n_epochs = 50
 learning_rate = 0.05
 number_of_steps = 25
 ADD_NOISE = False
@@ -89,7 +89,8 @@ class KANStressPredictor(nn.Module):
             width=[self.input_size,   1,   1],
             grid=self.grid,
             k=self.k
-        )
+            # symbolic_enabled = False
+            )
 
         # Initialize some extra parameters
         self.ki = nn.ParameterList([ # order of the log, 2 params per mode: one per lambdas and another for J
@@ -148,7 +149,7 @@ class KANStressPredictor(nn.Module):
         flat_KAN_input = KAN_input.view(-1, self.input_size)  # Shape: (batch x steps, input_size)
 
         # Pass the input through the KAN layer
-        W_flat = self.KAN_W(flat_KAN_input)  # Shape: (batch x steps, 1)
+        W_flat = self.KAN_W.forward(flat_KAN_input)  # Shape: (batch x steps, 1)
 
         # Reshape the output back to the original shape
         W = W_flat.view(batches, steps, -1)  # Shape: (batches, steps, 1)
@@ -336,6 +337,23 @@ TRAIN_KAN(
 
 fix_symbolic = False
 
+
+
+model.CalculateW(train_strain_database)  # Forward pass to compute activations
+model.KAN_W.node_attribute()
+model.KAN_W.node_attribute_scores
+model.KAN_W.attribute()
+att = model.KAN_W.feature_score
+print("model.KAN_W.attribute() = ", att)
+# print("model.KAN_W.node_attribute() = ", model.KAN_W.node_attribute_scores)
+model.KAN_W.prune(node_th=0.8, edge_th=0.8)
+model.KAN_W = model.KAN_W.prune_input(0.2)
+
+model.KAN_W.plot(folder="./KAN_predictions")
+plt.savefig("./KAN_predictions/KAN_splines.png")
+
+
+
 if fix_symbolic:
     # model.KAN_W.suggest_symbolic(0,0,0,weight_simple=0.0)
     # model.KAN_W.suggest_symbolic(0,1,0,weight_simple=0.)
@@ -365,8 +383,8 @@ if fix_symbolic:
 # for name, param in model.named_parameters():
 #     print(name, param.data)
 
-torch.save(model.state_dict(), "KAN_model_weights.pth")
-Hessian = model.ComputeHessian(ref_strain_database[:, :, :])  # Check the Hessian eigenvalues for the whole strain
+# torch.save(model.state_dict(), "KAN_model_weights.pth")
+# Hessian = model.ComputeHessian(ref_strain_database[:, :, :])  # Check the Hessian eigenvalues for the whole strain
 
 
 # Create the folder to save the plots if it doesn't exist
