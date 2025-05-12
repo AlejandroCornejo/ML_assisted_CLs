@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import torch.nn as nn
 import torch.optim as optim
 import os
-import kan as KAN
+import pykan.kan as KAN # now the repo is local, not pip
 import random
 import cl_loader as cl_loader
 from sklearn.model_selection import train_test_split
@@ -337,10 +337,9 @@ TRAIN_KAN(
 fix_symbolic = True
 
 if fix_symbolic:
-
-    model.KAN_W.suggest_symbolic(0,0,0)
-    # model.KAN_W.suggest_symbolic(0,1,0,weight_simple=0.)
-    # model.KAN_W.suggest_symbolic(0,2,0,weight_simple=0.)
+    model.KAN_W.suggest_symbolic(0,0,0,weight_simple=0.0)
+    model.KAN_W.suggest_symbolic(0,1,0,weight_simple=0.)
+    model.KAN_W.suggest_symbolic(0,2,0,weight_simple=0.)
 
     # model.KAN_W.fix_symbolic(0,0,0,'x^2')
     # model.KAN_W.fix_symbolic(0,1,0,'x^2')
