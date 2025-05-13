@@ -26,7 +26,7 @@ def GetColor(component):
 """
 INPUT DATASET:
 """
-n_epochs = 50
+n_epochs = 200
 learning_rate = 0.05
 number_of_steps = 25
 ADD_NOISE = False
@@ -273,11 +273,6 @@ class KANStressPredictor(nn.Module):
 
         print(f"Spline edge plots saved in the folder: {folder}")
 
-    # ==========================================================================================
-    def prune_KAN(self, threshold=0.01):
-        print(f"Pruning KAN with threshold: {threshold}")
-        self.KAN_W.prune(threshold)  # Prune the KAN using the threshold
-        print("Pruning completed.")
 # =========================================================================================
 #==========================================================================================
 
@@ -287,7 +282,7 @@ def TRAIN_KAN(model, optimizer, train_strain_database, train_work_database, stra
         def closure():
             optimizer.zero_grad()
 
-            predicted_stress = model(train_strain_database)
+            predicted_stress = model.forward(train_strain_database)
             predicted_work = torch.sum(strain_rate[train_indices] * predicted_stress[:, 1:, :], axis=2)
             predicted_work_accum = torch.cumsum(predicted_work, dim=1)
             error = predicted_work_accum - train_work_database[:, 1:, 0]
@@ -309,8 +304,8 @@ def TRAIN_KAN(model, optimizer, train_strain_database, train_work_database, stra
 # Initialize model, optimizer, and loss function
 model = KANStressPredictor()
 
-# print("\nNull strain KAN prediction initial CHECK: ", model(torch.tensor([[[0.0, 0.0, 0.0]]]))) # for the order 1
-# print("\n")
+print("\nNull strain KAN prediction initial CHECK: ", model.forward(torch.tensor([[[0.0, 0.0, 0.0]]]))) # for the order 1
+print("\n")
 
 
 # Initialize the optimizer
@@ -324,48 +319,23 @@ optimizer = optim.LBFGS(
 
 # Train the KAN model
 TRAIN_KAN(
-        model=model,
-        optimizer=optimizer,
-        train_strain_database=train_strain_database,
-        train_work_database=train_work_database,
-        strain_rate=strain_rate,
-        train_indices=train_indices,
-        n_epochs=n_epochs)
+    model=model,
+    optimizer=optimizer,
+    train_strain_database=train_strain_database,
+    train_work_database=train_work_database,
+    strain_rate=strain_rate,
+    train_indices=train_indices,
+    n_epochs=n_epochs)
 
 # for i, ki in enumerate(model.ki):
 #     print("self.ki[i]: ", ki.data)
 
-fix_symbolic = False
-
-
-
-model.CalculateW(train_strain_database)  # Forward pass to compute activations
-# model.KAN_W.node_attribute()
-# model.KAN_W.node_attribute_scores
-# model.KAN_W.attribute()
-# att = model.KAN_W.feature_score
-# print("model.KAN_W.attribute() = ", att)
-# print("model.KAN_W.node_attribute() = ", model.KAN_W.node_attribute_scores)
-model.KAN_W = model.KAN_W.prune(node_th=0.1, edge_th=0.1)
-# model.KAN_W = model.KAN_W.prune_input(0.2)
-
-
-
-if fix_symbolic:
-    # model.KAN_W.suggest_symbolic(0,0,0,weight_simple=0.0)
-    # model.KAN_W.suggest_symbolic(0,1,0,weight_simple=0.)
-    # model.KAN_W.suggest_symbolic(0,2,0,weight_simple=0.)
-
-    model.KAN_W.fix_symbolic(0,0,0,'x^2', random=False)
-    model.KAN_W.fix_symbolic(0,1,0,'x^2', random=False)
-    # model.KAN_W.fix_symbolic(0,2,0,'x^2')
-
-    # Re-initialize the optimizer
-    optimizer = optim.LBFGS(
-                        model.parameters(),
-                        lr=0.002,
-                        max_iter=20,
-                        history_size=30)
+# Prune the KAN model
+prune_KAN = False
+if prune_KAN:
+    model.CalculateW(train_strain_database)  # Forward pass to compute activations
+    model.KAN_W = model.KAN_W.prune(node_th=0.01, edge_th=0.01)
+    model.CalculateW(train_strain_database)  # Forward pass to compute activations
 
     TRAIN_KAN(
         model=model,
@@ -374,14 +344,36 @@ if fix_symbolic:
         train_work_database=train_work_database,
         strain_rate=strain_rate,
         train_indices=train_indices,
-        n_epochs=1000)
+        n_epochs=n_epochs)
 
-# print("\nmodel parameters:")
-# for name, param in model.named_parameters():
-#     print(name, param.data)
+fix_symbolic = False
+if fix_symbolic:
+    model.KAN_W.suggest_symbolic(0,0,0,weight_simple=0.0)
+    model.KAN_W.suggest_symbolic(0,1,0,weight_simple=0.)
+    model.KAN_W.suggest_symbolic(0,2,0,weight_simple=0.)
 
-# torch.save(model.state_dict(), "KAN_model_weights.pth")
-# Hessian = model.ComputeHessian(ref_strain_database[:, :, :])  # Check the Hessian eigenvalues for the whole strain
+    # model.KAN_W.fix_symbolic(0,0,0,'x^2', random=False)
+    # model.KAN_W.fix_symbolic(0,1,0,'x^2', random=False)
+    # # model.KAN_W.fix_symbolic(0,2,0,'x^2')
+
+    # # Re-initialize the optimizer
+    # optimizer = optim.LBFGS(
+    #                     model.parameters(),
+    #                     lr=0.002,
+    #                     max_iter=20,
+    #                     history_size=30)
+
+    # TRAIN_KAN(
+    #     model=model,
+    #     optimizer=optimizer,
+    #     train_strain_database=train_strain_database,
+    #     train_work_database=train_work_database,
+    #     strain_rate=strain_rate,
+    #     train_indices=train_indices,
+    #     n_epochs=1000)
+
+torch.save(model.state_dict(), "KAN_model_weights.pth")
+model.ComputeHessian(ref_strain_database[:, :, :])  # Check the Hessian eigenvalues for the whole strain
 
 
 # Create the folder to save the plots if it doesn't exist
@@ -389,7 +381,7 @@ output_folder = "KAN_predictions"
 os.makedirs(output_folder, exist_ok=True)
 
 # Generate predictions for the full dataset
-prediction_KAN = model(ref_strain_database)
+prediction_KAN = model.forward(ref_strain_database)
 
 # Plot and save results for all testing batches
 for elem in test_indices:
@@ -428,21 +420,7 @@ for elem in test_indices:
 print(f"Plots saved in the folder: {output_folder}")
 
 
-
-# model.KAN_W.save_act = True
 model.CalculateW(ref_strain_database[:, :, :])  # Compute the spline activations
 model.plot_spline_edges()
 model.KAN_W.plot(folder="./KAN_predictions")
 plt.savefig("./KAN_predictions/KAN_splines.png")
-
-
-
-
-# attributes = model.KAN_W.attribute()
-# print("Attributes: ", attributes)
-# model.KAN_W.save_act = True
-# model.prune_KAN(threshold=0.01)  # Prune the KAN with a threshold of 0.01
-# model.KAN_W.remove_node(0, 0, mode='all', log_history=True)
-# model.CalculateW(ref_strain_database[:, :, :])  # Compute the spline activations
-# model.KAN_W.plot(folder="./KAN_predictions")
-# plt.savefig("./KAN_predictions/KAN_splines_pruned.png")
