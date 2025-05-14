@@ -1,111 +1,79 @@
-import torch
 import numpy as np
 import matplotlib.pyplot as plt
-
-class BSpline:
-    # https://en.wikipedia.org/wiki/B-spline https://rohangautam.github.io/blog/b_spline_intro/
-    def __init__(self, num_knots, order, x_data, coefficients):
-        """
-        Parameters:
-            num_knots (int): Number of knots for the B-spline.
-            order (int): Polynomial order (e.g., 3 for cubic).
-            x_data (array-like): Full x-domain to evaluate the spline (not just a min/max).
-            coefficients (torch.tensor): Coefficients for the spline basis functions (to be optimized).
-        """
-        self.num_knots = num_knots
-        self.order = order
-        self.x_data = np.asarray(x_data)
-        self.x_min, self.x_max = np.min(x_data), np.max(x_data)
-        self.coefficients = coefficients  # torch.tensor, differentiable
-
-        # Uniform open knot vector in parametric space [0, 1]
-        self.knot_vector = np.concatenate((
-            np.zeros(order),
-            np.linspace(0, 1, num_knots - order + 1),
-            np.ones(order)
-        ))
-
-    def _cox_de_boor(self, x, i, k, t):
-        """
-        Recursive Cox-de Boor formula to compute B-spline basis functions.
-        B_{i,k}(x) = (x - t_i) / (t_{i+k} - t_i) * B_{i,k-1}(x)
-                   + (t_{i+k+1} - x) / (t_{i+k+1} - t_{i+1}) * B_{i+1,k-1}(x)
-        """
-        # Number of B-spline basis functions is determined by:
-        #     num_basis = num_knots - order - 1
-        # where:
-        #     num_knots = total number of knots in the knot vector
-        #     order     = polynomial order (e.g., 4 for cubic, since degree = order - 1)
-        #
-        # Each basis function is defined over (order + 1) consecutive knots,
-        # so the total number of basis functions is reduced accordingly.
-        #
-        # Example:
-        #     num_knots = 10, order = 4 (cubic) ⇒ num_basis = 10 - 4 - 1 = 5
-
-        if k == 0:
-            if i == len(t) - 2:  # Special case for the last knot
-                return 1.0 if t[i] <= x <= t[i + 1] else 0.0
-            return 1.0 if t[i] <= x < t[i + 1] else 0.0
-        denom1 = t[i + k] - t[i]
-        denom2 = t[i + k + 1] - t[i + 1]
-        term1 = 0.0 if denom1 == 0 else (x - t[i]) / denom1 * self._cox_de_boor(x, i, k - 1, t)
-        term2 = 0.0 if denom2 == 0 else (t[i + k + 1] - x) / denom2 * self._cox_de_boor(x, i + 1, k - 1, t)
-        return term1 + term2
-
-    def evaluate(self, x_real):
-        """
-        Evaluate the spline at a real-world x by mapping it to [0, 1],
-        and summing weighted basis functions.
-        """
-        x_param = (x_real - self.x_min) / (self.x_max - self.x_min)
-        val = 0.0
-        for i in range(len(self.coefficients)):
-            b = self._cox_de_boor(x_param, i, self.order - 1, self.knot_vector)
-            val += self.coefficients[i].item() * b
-        return val
-
-    def plot(self, num_points=200):
-        x_vals = np.linspace(self.x_min, self.x_max, num_points)
-        y_vals = [self.evaluate(x) for x in x_vals]
-
-        plt.figure(figsize=(10, 6))
-        plt.plot(x_vals, y_vals, label="B-spline curve")
-        # ctrl_x = np.linspace(self.x_min, self.x_max, len(self.coefficients))
-        # plt.plot(ctrl_x, self.coefficients.detach().numpy(), 'ro--', label="Coefficients")
-        plt.xlabel("x")
-        plt.ylabel("Spline Value")
-        plt.title("B-spline Curve")
-        plt.legend()
-        plt.grid(True)
-        plt.show()
-
-    def plot_basis_functions(self, num_points=300):
-        """
-        Plot all B-spline basis functions over the domain.
-        """
-        x_vals = np.linspace(self.x_min, self.x_max, num_points)
-        x_param = (x_vals - self.x_min) / (self.x_max - self.x_min)
-
-        plt.figure(figsize=(10, 6))
-        for i in range(len(self.coefficients)):
-            y_vals = [self._cox_de_boor(x, i, self.order - 1, self.knot_vector) for x in x_param]
-            plt.plot(x_vals, y_vals, label=f"B{i}(x)")
-
-        plt.title(f"B-spline Basis Functions (order={self.order})")
-        plt.xlabel("x")
-        plt.ylabel("Basis Value")
-        plt.legend()
-        plt.grid(True)
-        plt.show()
+from scipy.interpolate import BSpline
 
 
+def evaluate_bspline(t, c, k, x):
+    """
+    Evaluate the B-spline at given x values.
+
+    Parameters:
+        t (list): Knot vector.
+        c (list): Coefficients of the spline.
+        k (int): Degree of the spline.
+        x (array-like): Points at which to evaluate the spline.
+
+    Returns:
+        array: Evaluated spline values.
+    """
+    spl = BSpline(t, c, k)
+    return spl(x)
 
 
-# Suppose this is your full history of x-coordinates
-x_history = np.linspace(-1, 6, 300)
-coeffs = torch.tensor([1.0, -1.0, 1.0, -1.0, 1.0], requires_grad=True)
+def plot_bspline(t, c, k, num_points=200):
+    """
+    Plot the B-spline and its basis functions.
 
-bspline = BSpline(num_knots=9, order=4, x_data=x_history, coefficients=coeffs)
-bspline.plot_basis_functions()
-bspline.plot()
+    Parameters:
+        t (list): Knot vector.
+        c (list): Coefficients of the spline.
+        k (int): Degree of the spline.
+        num_points (int): Number of points for plotting.
+    """
+    # Create x values for evaluation
+    x = np.linspace(min(t), max(t), num_points, endpoint=True)
+
+    # Evaluate the B-spline
+    spl = BSpline(t, c, k)
+    y = spl(x)
+
+    # Create the figure and subplots
+    fig, axs = plt.subplots(2, 1, figsize=(10, 10), gridspec_kw={'height_ratios': [2, 1]})
+
+    # Top subplot: B-spline curve
+    axs[0].plot(x, y, label="B-spline curve", color="blue")
+
+    axs[0].set_title("B-spline Curve with Coefficients")
+    axs[0].set_xlabel("x")
+    axs[0].set_ylabel("Spline Value")
+    axs[0].legend()
+    axs[0].grid(True)
+
+    # Bottom subplot: Basis functions
+    for i in range(len(c)):
+        basis = BSpline.basis_element(t[i:i + k + 2], extrapolate=False)
+        axs[1].plot(x, basis(x), label=f"B{i}(x)")
+    axs[1].set_title(f"B-spline Basis Functions (degree={k})")
+    axs[1].set_xlabel("x")
+    axs[1].set_ylabel("Basis Value")
+    axs[1].legend()
+    axs[1].grid(True)
+
+    # Adjust layout and show the plot
+    plt.tight_layout()
+    plt.show()
+
+
+# Example usage
+if __name__ == "__main__":
+    k = 2  # Degree of the spline
+    t = [0, 0, 0, 1, 2, 2, 2]  # Knot vector
+    c = [0, 1.1, 2.8, 6.8]  # Coefficients
+
+    # Evaluate the spline at a specific point
+    x_val = 2.5
+    spl_val = evaluate_bspline(t, c, k, x_val)
+    print(f"Spline value at x={x_val}: {spl_val}")
+
+    # Plot the spline and its basis functions
+    plot_bspline(t, c, k)
