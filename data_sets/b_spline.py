@@ -20,6 +20,25 @@ def evaluate_bspline(t, c, k, x):
     return spl(x)
 
 
+def check_convexity_and_monotonicity(c):
+    """
+    Check if the coefficients satisfy the convexity and monotonicity condition:
+    coef_{i+2} - coef_{i+1} >= coef_{i+1} - coef_{i} >= 0.0 for all coefficients.
+
+    Parameters:
+        c (list): Coefficients of the spline.
+
+    Returns:
+        bool: True if the condition is satisfied, False otherwise.
+    """
+    for i in range(len(c) - 2):
+        diff1 = c[i + 1] - c[i]
+        diff2 = c[i + 2] - c[i + 1]
+        if not (diff2 >= diff1 >= 0.0):
+            return False
+    return True
+
+
 def plot_bspline(t, c, k, num_points=200):
     """
     Plot the B-spline and its basis functions.
@@ -30,6 +49,10 @@ def plot_bspline(t, c, k, num_points=200):
         k (int): Degree of the spline.
         num_points (int): Number of points for plotting.
     """
+    # Check convexity and monotonicity
+    if not check_convexity_and_monotonicity(c):
+        print("The coefficients do not satisfy the convexity and monotonicity condition.")
+
     # Create x values for evaluation
     x = np.linspace(min(t), max(t), num_points, endpoint=True)
 
@@ -42,7 +65,6 @@ def plot_bspline(t, c, k, num_points=200):
 
     # Top subplot: B-spline curve
     axs[0].plot(x, y, label="B-spline curve", color="blue")
-
     axs[0].set_title("B-spline Curve with Coefficients")
     axs[0].set_xlabel("x")
     axs[0].set_ylabel("Spline Value")
@@ -75,5 +97,4 @@ if __name__ == "__main__":
     spl_val = evaluate_bspline(t, c, k, x_val)
     print(f"Spline value at x={x_val}: {spl_val}")
 
-    # Plot the spline and its basis functions
     plot_bspline(t, c, k)
