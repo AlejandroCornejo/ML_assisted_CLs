@@ -11,6 +11,7 @@ import random
 import cl_loader as cl_loader
 from sklearn.model_selection import train_test_split
 
+
 # Define the GetColor method
 def GetColor(component):
     if component == 0:
@@ -22,16 +23,21 @@ def GetColor(component):
     else:
         return "k"  # Black for any other component
 
+
+
 #=============================================================================================================
 """
 INPUT DATASET:
 """
-n_epochs = 200
+n_epochs = 80
 learning_rate = 0.05
 number_of_steps = 25
 ADD_NOISE = False
 database = cl_loader.CustomDataset("neo_hookean_hyperelastic_law/raw_data", number_of_steps, None, ADD_NOISE)
 #=============================================================================================================
+
+
+
 
 ref_strain_database = torch.stack([item[0] for item in database]) # batch x steps x strain_size
 ref_stress_database = torch.stack([item[1] for item in database]) # batch x steps x strain_size
@@ -66,13 +72,8 @@ print("Strain size      : ", train_strain_database.shape[2])
 class KANStressPredictor(nn.Module):
     """
     KAN-based Stress Predictor with support for multiple orders of stretches.
-
-    pip install pyyaml
-    pip install pykan
-    pip install scikit-learn
-    pip install tqdm
-    pip install pandas
     """
+
     def __init__(self):
         super(KANStressPredictor, self).__init__()
 
@@ -86,14 +87,13 @@ class KANStressPredictor(nn.Module):
 
         # KAN definition
         self.KAN_W = KAN.MultKAN(
-            width=[self.input_size,   1,   1],
+            width=[self.input_size, 1, 1],
             grid=self.grid,
             k=self.k
-            # symbolic_enabled = False
-            )
+        )
 
         # Initialize some extra parameters
-        self.ki = nn.ParameterList([ # order of the log, 2 params per mode: one per lambdas and another for J
+        self.ki = nn.ParameterList([
             nn.Parameter(torch.tensor(float(p + 1) + random.random())) for p in range(self.order_stretches + 1)
         ])
 
@@ -101,7 +101,10 @@ class KANStressPredictor(nn.Module):
         self.ki[-1] = nn.Parameter(torch.tensor(1.0))
 
     # ==========================================================================================
-    def CalculateW(self, strain):
+    def CalculateWWithoutNormalization(self, strain):
+        """
+        Computes W for the given strain without normalization.
+        """
         batches = strain.shape[0]
         steps = strain.shape[1]
 
@@ -157,8 +160,35 @@ class KANStressPredictor(nn.Module):
         return W
 
     # ==========================================================================================
+    def CalculateW(self, strain):
+        """
+        Computes W for the given strain and subtracts W evaluated at strain = torch.zeros.
+        """
+        # Compute W at strain = torch.zeros
+        zeros = torch.zeros_like(strain)
+        W0 = self.CalculateWWithoutNormalization(zeros)
+
+        # Compute W without normalization
+        W = self.CalculateWWithoutNormalization(strain)
+
+        # Subtract W0 from W
+        return W - W0
+
+    # ==========================================================================================
     def forward(self, strain):
+        """
+        Forward pass to compute the gradient of W with respect to strain.
+        """
         strain = strain.detach().requires_grad_(True)
+        zeros = torch.zeros_like(strain).requires_grad_(True)
+
+        W0 = self.CalculateW(zeros)
+        grad_at_zero = torch.autograd.grad(
+            outputs=W0,
+            inputs=zeros,
+            grad_outputs=torch.ones_like(W0),
+            create_graph=True
+        )[0]
 
         W = self.CalculateW(strain)  # Shape: (batches, steps, 1)
 
@@ -170,17 +200,8 @@ class KANStressPredictor(nn.Module):
             create_graph=True
         )[0]
 
-
-        zeros = torch.zeros_like(strain).requires_grad_(True)
-        W0 = self.CalculateW(zeros)
-        grad_at_zero = torch.autograd.grad(
-            outputs=W0,
-            inputs=zeros,
-            grad_outputs=torch.ones_like(W0),
-            create_graph=True
-        )[0]
-
         return grad - grad_at_zero
+
 
     # ==========================================================================================
     def ComputeHessian(self, strain):
@@ -356,13 +377,6 @@ if fix_symbolic:
     # model.KAN_W.fix_symbolic(0,1,0,'x^2', random=False)
     # # model.KAN_W.fix_symbolic(0,2,0,'x^2')
 
-    # # Re-initialize the optimizer
-    # optimizer = optim.LBFGS(
-    #                     model.parameters(),
-    #                     lr=0.002,
-    #                     max_iter=20,
-    #                     history_size=30)
-
     # TRAIN_KAN(
     #     model=model,
     #     optimizer=optimizer,
@@ -380,7 +394,7 @@ model.ComputeHessian(ref_strain_database[:, :, :])  # Check the Hessian eigenval
 output_folder = "KAN_predictions"
 os.makedirs(output_folder, exist_ok=True)
 
-# Generate predictions for the full dataset
+# Generate predictions for the full database
 prediction_KAN = model.forward(ref_strain_database)
 
 # Plot and save results for all testing batches
@@ -421,6 +435,7 @@ print(f"Plots saved in the folder: {output_folder}")
 
 
 model.CalculateW(ref_strain_database[:, :, :])  # Compute the spline activations
+# print("check that W is null at zero strain: ", model.CalculateW(torch.zeros_like(ref_strain_database[:, :, :])))
 model.plot_spline_edges()
 model.KAN_W.plot(folder="./KAN_predictions")
 plt.savefig("./KAN_predictions/KAN_splines.png")
