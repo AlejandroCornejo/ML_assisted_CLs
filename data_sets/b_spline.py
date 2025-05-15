@@ -13,6 +13,9 @@ def evaluate_bspline(t, c, k, x):
         k (int): Degree of the spline.
         x (array-like): Points at which to evaluate the spline.
 
+        uses scipy.interpolate.BSpline to create the spline object and evaluate it.
+        https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.BSpline.html
+
     Returns:
         array: Evaluated spline values.
     """
@@ -39,7 +42,7 @@ def check_convexity_and_monotonicity(c):
     return True
 
 
-def plot_bspline(t, c, k, num_points=200):
+def plot_bspline(t, c, k, x_range, num_points=200):
     """
     Plot the B-spline and its basis functions.
 
@@ -54,7 +57,8 @@ def plot_bspline(t, c, k, num_points=200):
         print("The coefficients do not satisfy the convexity and monotonicity condition.")
 
     # Create x values for evaluation
-    x = np.linspace(min(t), max(t), num_points, endpoint=True)
+    # x = np.linspace(min(x_range), max(x_range), num_points, endpoint=True)
+    x = x_range
 
     # Evaluate the B-spline
     spl = BSpline(t, c, k)
@@ -89,12 +93,14 @@ def plot_bspline(t, c, k, num_points=200):
 # Example usage
 if __name__ == "__main__":
     k = 2  # Degree of the spline
-    t = [0, 0, 0, 1, 2, 2, 2]  # Knot vector
-    c = [0, 1.1, 2.8, 6.8]  # Coefficients
+    t = [0, 0, 0, 0.5, 1, 1, 1]  # Knot vector
+    c = [0, 1.1, 3, 4]  # Coefficients
+
+    x = np.linspace(0.0, 15.0, 500, endpoint=True)
 
     # Evaluate the spline at a specific point
     x_val = 2.5
     spl_val = evaluate_bspline(t, c, k, x_val)
     print(f"Spline value at x={x_val}: {spl_val}")
 
-    plot_bspline(t, c, k)
+    plot_bspline(t, c, k, x)
