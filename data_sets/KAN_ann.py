@@ -29,7 +29,7 @@ def GetColor(component):
 """
 INPUT DATASET:
 """
-n_epochs = 80
+n_epochs = 200
 learning_rate = 0.05
 number_of_steps = 25
 ADD_NOISE = False
@@ -78,8 +78,8 @@ class KANStressPredictor(nn.Module):
         super(KANStressPredictor, self).__init__()
 
         # EDIT:
-        self.order_stretches = 1  # Number of orders (can be set to any value)
-        self.k = 3  # Degree of splines
+        self.order_stretches = 5  # Number of orders (can be set to any value)
+        self.k = 2  # Degree of splines
         self.grid = 3  # Number of knots
         # -------------------------------------
 
@@ -92,6 +92,15 @@ class KANStressPredictor(nn.Module):
             k=self.k
         )
 
+        # Initialize some extra parameters
+        self.ki = nn.ParameterList([
+            nn.Parameter(torch.tensor(float(p + 1) + random.random())) for p in range(self.order_stretches + 1)
+        ])
+
+        # The parameter multiplying the log(J) is initially set to 1.0
+        self.ki[-1] = nn.Parameter(torch.tensor(1.0))
+    
+    def ResetParameters(self):
         # Initialize some extra parameters
         self.ki = nn.ParameterList([
             nn.Parameter(torch.tensor(float(p + 1) + random.random())) for p in range(self.order_stretches + 1)
@@ -293,6 +302,25 @@ class KANStressPredictor(nn.Module):
                     plt.close()
 
         print(f"Spline edge plots saved in the folder: {folder}")
+    
+    def reset_splines(self):
+        """
+        Reset the spline parameters to their initial state.
+        This is useful if you want to reinitialize the splines without creating a new model instance.
+        """
+        depth = len(self.KAN_W.width) - 1  # Number of layers
+        for l in range(depth):
+            for i in range(self.KAN_W.width_in[l]):  # Loop over input nodes
+                for j in range(self.KAN_W.width_out[l + 1]):  # Loop over output nodes
+                    # Extract activations and spline outputs
+                    x = self.KAN_W.acts[l][:, i]  # Input activations
+                    y = self.KAN_W.spline_postacts[l][:, j, i]  # Spline outputs
+                    self.KAN_W.acts[l][:, j, i] = torch.zeros_like(x)  # Reset spline outputs to zero
+                    self.KAN_W.spline_postacts[l][:, j, i] = torch.zeros_like(y)  # Reset spline outputs to zero
+                    self.KAN_W.spline_preacts[l][:, j, i]  = torch.zeros_like(x)  # Reset spline pre-activations to zero
+                    # print(x)
+                    # print(y)
+        print("Spline parameters have been reset to their initial state.")
 
 # =========================================================================================
 #==========================================================================================
@@ -352,11 +380,25 @@ TRAIN_KAN(
 #     print("self.ki[i]: ", ki.data)
 
 # Prune the KAN model
-prune_KAN = False
+prune_KAN = True
 if prune_KAN:
+    print("Pruning the KAN...")
     model.CalculateW(train_strain_database)  # Forward pass to compute activations
-    model.KAN_W = model.KAN_W.prune(node_th=0.01, edge_th=0.01)
+    model.KAN_W = model.KAN_W.prune(node_th=0.1, edge_th=0.1)
+    model.KAN_W.reset_model()  # new implementation
+    model.ResetParameters()  # Reset the parameters after pruning
     model.CalculateW(train_strain_database)  # Forward pass to compute activations
+
+    # Reinicializar completamente el modelo después del pruning
+    # model = KANStressPredictor()
+    print("All model parameters have been reset after pruning.")
+
+    optimizer = optim.LBFGS(
+                        model.parameters(),
+                        lr=0.01,
+                        max_iter=20,
+                        history_size=30
+                    )
 
     TRAIN_KAN(
         model=model,
@@ -365,7 +407,7 @@ if prune_KAN:
         train_work_database=train_work_database,
         strain_rate=strain_rate,
         train_indices=train_indices,
-        n_epochs=n_epochs)
+        n_epochs=600)
 
 fix_symbolic = False
 if fix_symbolic:
@@ -389,6 +431,8 @@ if fix_symbolic:
 torch.save(model.state_dict(), "KAN_model_weights.pth")
 model.ComputeHessian(ref_strain_database[:, :, :])  # Check the Hessian eigenvalues for the whole strain
 
+print("\nNull strain KAN prediction POST CHECK: ", model.forward(torch.tensor([[[0.0, 0.0, 0.0]]]))) # for the order 1
+print("\n")
 
 # Create the folder to save the plots if it doesn't exist
 output_folder = "KAN_predictions"

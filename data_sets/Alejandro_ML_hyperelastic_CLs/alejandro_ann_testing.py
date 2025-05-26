@@ -66,8 +66,6 @@ for epoch in range(n_epochs):
     predicted_work = torch.cumsum(predicted_work, dim=1) # sumation along rows, horizontally
 
     loss = torch.mean((predicted_work - ref_work_database[:, 1:, 0]) ** 2)  # Squared difference of work
-    # loss = torch.mean((predicted_work - ref_work_database[:, 1:, 0]) ** 2) + 1e2 * torch.mean((predicted_stress[:, :, :] - ref_stress_database[:, :, :]) ** 2)
-    # loss = torch.mean((predicted_stress - ref_stress_database) ** 2)  # Squared difference of work
     loss.backward()
     optimizer.step()
     
