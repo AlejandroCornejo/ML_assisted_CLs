@@ -4,6 +4,7 @@ import KratosMultiphysics.analysis_stage as analysis_stage
 import importlib
 from KratosMultiphysics.StructuralMechanicsApplication import python_solvers_wrapper_structural as structural_solvers
 import KratosMultiphysics.StructuralMechanicsApplication as SMApp
+import numpy as np
 
 """"
 
@@ -30,7 +31,6 @@ class RVE_homogenization_dataset_generator(analysis_stage.AnalysisStage):
             self.InitializeSolutionStep()
             self._GetSolver().Predict()
             is_converged = self._GetSolver().SolveSolutionStep()
-            # self.__CheckIfSolveSolutionStepReturnsAValue(is_converged)
             self.FinalizeSolutionStep()
             self.OutputSolutionStep()
 
@@ -59,13 +59,22 @@ class RVE_homogenization_dataset_generator(analysis_stage.AnalysisStage):
 
         KM.Logger.PrintInfo(self._GetSimulationName(), "Analysis -START- ")
 
-    #### Internal functions ####
+    def FinalizeSolutionStep(self):
+        super().FinalizeSolutionStep()
+
+        process_info = self._GetSolver().GetComputingModelPart().ProcessInfo
+        for element in self._GetSolver().GetComputingModelPart().Elements:
+            strain = element.CalculateOnIntegrationPoints(KM.GREEN_LAGRANGE_STRAIN_VECTOR, process_info)
+            stress = element.CalculateOnIntegrationPoints(KM.PK2_STRESS_VECTOR, process_info)
+            stress_vector_numpy = np.array(stress)
+            stress_vector_numpy = np.array(strain)
+            
+            print(stress_vector_numpy)
+
     def _CreateSolver(self):
         return structural_solvers.CreateSolver(self.model, self.project_parameters)
 
     def __CreateListOfProcesses(self):
-        """This function creates the processes and the output-processes
-        """
         order_processes_initialization = self._GetOrderOfProcessesInitialization()
         self._list_of_processes        = self._CreateProcesses("processes", order_processes_initialization)
         deprecated_output_processes    = self._CheckDeprecatedOutputProcesses(self._list_of_processes)
@@ -75,17 +84,15 @@ class RVE_homogenization_dataset_generator(analysis_stage.AnalysisStage):
         self._list_of_output_processes.extend(deprecated_output_processes)
 
     def ApplyBoundaryConditions(self):
-
-        for process in self._GetListOfProcesses():
-            process.ExecuteInitializeSolutionStep()
+        super().ApplyBoundaryConditions()
 
         for node in self._GetSolver().GetComputingModelPart().Nodes:
             x_coord = node.X0
             y_coord = node.Y0
             z_coord = node.Z0
             displ_x = 1.0e-3 * x_coord
-            displ_y = 0.0
-            displ_z = 0.0
+            displ_y = 1.0e-3 * y_coord
+            displ_z = 1.0e-3 * z_coord
             if node.IsFixed(KM.DISPLACEMENT_X):
                 node.SetSolutionStepValue(KM.DISPLACEMENT_X, displ_x)
             if node.IsFixed(KM.DISPLACEMENT_Y):
