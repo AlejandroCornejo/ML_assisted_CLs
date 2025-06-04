@@ -3,7 +3,7 @@ import KratosMultiphysics as KM
 import KratosMultiphysics.analysis_stage as analysis_stage
 import importlib
 from KratosMultiphysics.StructuralMechanicsApplication import python_solvers_wrapper_structural as structural_solvers
-
+import KratosMultiphysics.StructuralMechanicsApplication as SMApp
 
 """"
 
@@ -30,7 +30,7 @@ class RVE_homogenization_dataset_generator(analysis_stage.AnalysisStage):
             self.InitializeSolutionStep()
             self._GetSolver().Predict()
             is_converged = self._GetSolver().SolveSolutionStep()
-            self.__CheckIfSolveSolutionStepReturnsAValue(is_converged)
+            # self.__CheckIfSolveSolutionStepReturnsAValue(is_converged)
             self.FinalizeSolutionStep()
             self.OutputSolutionStep()
 
@@ -55,9 +55,9 @@ class RVE_homogenization_dataset_generator(analysis_stage.AnalysisStage):
         self.end_time = self.project_parameters["problem_data"]["end_time"].GetDouble()
 
         self.time = self.project_parameters["problem_data"]["start_time"].GetDouble()
-        self._GetSolver().GetComputingModelPart().ProcessInfo[KratosMultiphysics.TIME] = self.time
+        self._GetSolver().GetComputingModelPart().ProcessInfo[KM.TIME] = self.time
 
-        KratosMultiphysics.Logger.PrintInfo(self._GetSimulationName(), "Analysis -START- ")
+        KM.Logger.PrintInfo(self._GetSimulationName(), "Analysis -START- ")
 
     #### Internal functions ####
     def _CreateSolver(self):
@@ -73,6 +73,25 @@ class RVE_homogenization_dataset_generator(analysis_stage.AnalysisStage):
         self._list_of_output_processes = self._CreateProcesses("output_processes", order_processes_initialization)
         self._list_of_processes.extend(self._list_of_output_processes) # Adding the output processes to the regular processes
         self._list_of_output_processes.extend(deprecated_output_processes)
+
+    def ApplyBoundaryConditions(self):
+
+        for process in self._GetListOfProcesses():
+            process.ExecuteInitializeSolutionStep()
+
+        for node in self._GetSolver().GetComputingModelPart().Nodes:
+            x_coord = node.X0
+            y_coord = node.Y0
+            z_coord = node.Z0
+            displ_x = 1.0e-3 * x_coord
+            displ_y = 0.0
+            displ_z = 0.0
+            if node.IsFixed(KM.DISPLACEMENT_X):
+                node.SetSolutionStepValue(KM.DISPLACEMENT_X, displ_x)
+            if node.IsFixed(KM.DISPLACEMENT_Y):
+                node.SetSolutionStepValue(KM.DISPLACEMENT_Y, displ_y)
+            if node.IsFixed(KM.DISPLACEMENT_Z):
+                node.SetSolutionStepValue(KM.DISPLACEMENT_Z, displ_z)
 
 #====================================================================================================
 #====================================================================================================
