@@ -22,8 +22,6 @@ class RVE_homogenization_dataset_generator(analysis_stage.AnalysisStage):
         self.RunSolutionLoop()
         self.Finalize()
 
-        # TODO to be modified
-
     def RunSolutionLoop(self):
         print("RVE_homogenization_dataset_generator run solution loop started\n")
         while self.KeepAdvancingSolutionLoop():
@@ -59,17 +57,8 @@ class RVE_homogenization_dataset_generator(analysis_stage.AnalysisStage):
 
         KM.Logger.PrintInfo(self._GetSimulationName(), "Analysis -START- ")
 
-    def FinalizeSolutionStep(self):
-        super().FinalizeSolutionStep()
-
-        process_info = self._GetSolver().GetComputingModelPart().ProcessInfo
-        for element in self._GetSolver().GetComputingModelPart().Elements:
-            strain = element.CalculateOnIntegrationPoints(KM.GREEN_LAGRANGE_STRAIN_VECTOR, process_info)
-            stress = element.CalculateOnIntegrationPoints(KM.PK2_STRESS_VECTOR, process_info)
-            stress_vector_numpy = np.array(stress)
-            stress_vector_numpy = np.array(strain)
-            
-            print(stress_vector_numpy)
+    # def FinalizeSolutionStep(self):
+    #     super().FinalizeSolutionStep()
 
     def _CreateSolver(self):
         return structural_solvers.CreateSolver(self.model, self.project_parameters)
@@ -91,7 +80,7 @@ class RVE_homogenization_dataset_generator(analysis_stage.AnalysisStage):
             y_coord = node.Y0
             z_coord = node.Z0
             displ_x = 1.0e-3 * x_coord
-            displ_y = 1.0e-3 * y_coord
+            displ_y = 2.0e-3 * y_coord
             displ_z = 1.0e-3 * z_coord
             if node.IsFixed(KM.DISPLACEMENT_X):
                 node.SetSolutionStepValue(KM.DISPLACEMENT_X, displ_x)
@@ -99,6 +88,45 @@ class RVE_homogenization_dataset_generator(analysis_stage.AnalysisStage):
                 node.SetSolutionStepValue(KM.DISPLACEMENT_Y, displ_y)
             if node.IsFixed(KM.DISPLACEMENT_Z):
                 node.SetSolutionStepValue(KM.DISPLACEMENT_Z, displ_z)
+
+
+    def CalculateHomogenizedStressAndStrain(self):
+
+        process_info = self._GetSolver().GetComputingModelPart().ProcessInfo
+        computing_model_part = self._GetSolver().GetComputingModelPart()
+
+        for element in computing_model_part.Elements:
+            dummy_strain = np.array(element.CalculateOnIntegrationPoints(KM.GREEN_LAGRANGE_STRAIN_VECTOR, process_info))
+            break
+        # NOTE: this assumes that all elements have the same number of integration points and the same strain vector size
+        n_ips = dummy_strain.shape[0]
+        voigt_size  = dummy_strain.shape[1]
+
+        homogenized_stress = np.zeros(voigt_size)
+        homogenized_srain  = np.zeros(voigt_size)
+        RVE_area = 0.0
+
+        for element in computing_model_part.Elements:
+            strain = element.CalculateOnIntegrationPoints(KM.GREEN_LAGRANGE_STRAIN_VECTOR, process_info)
+            stress = element.CalculateOnIntegrationPoints(KM.PK2_STRESS_VECTOR, process_info)
+
+            stress_vector_sum_ip = np.sum(np.array(stress), axis=0)
+            strain_vector_sum_ip = np.sum(np.array(strain), axis=0)
+
+            element_area = element.GetGeometry().Area()
+
+            RVE_area += element_area
+            homogenized_stress += element_area * stress_vector_sum_ip / n_ips
+            homogenized_srain  += element_area * strain_vector_sum_ip / n_ips
+
+        homogenized_stress /= RVE_area
+        homogenized_srain  /= RVE_area
+
+        print("Homogenized stress: ", homogenized_stress)
+        print("Homogenized strain: ", homogenized_srain)
+        print("RVE_area: ", RVE_area)
+
+        return homogenized_stress, homogenized_srain
 
 #====================================================================================================
 #====================================================================================================
@@ -117,3 +145,5 @@ analysis_stage_class = getattr(analysis_stage_module, analysis_stage_class_name)
 global_model = KM.Model()
 simulation = RVE_homogenization_dataset_generator(global_model, parameters)
 simulation.Run()
+
+simulation.CalculateHomogenizedStressAndStrain()
