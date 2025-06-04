@@ -44,45 +44,6 @@ class RVE_homogenization_dataset_generator(analysis_stage.AnalysisStage):
 
         self.batch_strain = np.array([])
 
-    def Run(self):
-        self.Initialize()
-        self.RunSolutionLoop()
-        self.Finalize()
-
-    def RunSolutionLoop(self):
-        while self.KeepAdvancingSolutionLoop():
-            self.time = self._AdvanceTime()
-            self.InitializeSolutionStep()
-            self._GetSolver().Predict()
-            is_converged = self._GetSolver().SolveSolutionStep()
-            self.FinalizeSolutionStep()
-            self.OutputSolutionStep()
-
-    def Initialize(self):
-
-        self._GetSolver().ImportModelPart()
-        self._GetSolver().PrepareModelPart()
-        self._GetSolver().AddDofs()
-
-        ##here we initialize user-provided processes
-        self.__CreateListOfProcesses() # has to be done after importing and preparing the ModelPart
-        for process in self._GetListOfProcesses():
-            process.ExecuteInitialize()
-
-        self._GetSolver().Initialize()
-        self.Check()
-
-        for process in self._GetListOfProcesses():
-            process.ExecuteBeforeSolutionLoop()
-
-        ## Stepping and time settings
-        self.end_time = self.project_parameters["problem_data"]["end_time"].GetDouble()
-
-        self.time = self.project_parameters["problem_data"]["start_time"].GetDouble()
-        self._GetSolver().GetComputingModelPart().ProcessInfo[KM.TIME] = self.time
-
-        KM.Logger.PrintInfo(self._GetSimulationName(), "Analysis -START- ")
-
     def _CreateSolver(self):
         return structural_solvers.CreateSolver(self.model, self.project_parameters)
 
