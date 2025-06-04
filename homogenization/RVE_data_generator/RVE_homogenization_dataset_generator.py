@@ -147,9 +147,11 @@ analysis_stage_class_name = ''.join(x.title() for x in analysis_stage_class_name
 analysis_stage_module = importlib.import_module(analysis_stage_module_name)
 analysis_stage_class = getattr(analysis_stage_module, analysis_stage_class_name)
 
+log_lines = []
+
 theta = 0.0
 phi = 0.0
-angle_increment = 100.0
+angle_increment = 25.0
 max_stretch_factor  = 0.01 # lambda
 
 # Here we will store the strain and stress histories for all batches
@@ -161,9 +163,10 @@ batch = 0
 while theta <= 360.0:
     while phi <= 360.0:
         batch += 1
-        print(f"Batch {batch}:")
-        print(f"Theta: {theta}, Phi: {phi}")
+        # print(f"Batch {batch}:")
+        # print(f"Theta: {theta}, Phi: {phi}")
 
+        # NOTE: Each batch creates a new analysis_stage
         global_model = KM.Model()
         simulation = RVE_homogenization_dataset_generator(global_model, parameters)
 
@@ -172,6 +175,10 @@ while theta <= 360.0:
                 np.sin(np.radians(theta))  * np.cos(np.radians(phi)),  # E_yy
                 (np.sin(np.radians(theta)) * np.sin(np.radians(phi))), # E_xy
         ])
+
+        log_lines.append(
+            f"Batch {batch}: theta={theta:.2f}, phi={phi:.2f}, strain={simulation.batch_strain.tolist()}"
+        )
 
         # strains/stresses for one batch history, start with null values
         strain_history = [[0,0,0]]
@@ -216,9 +223,9 @@ for batch_idx in range(stress_tensor.shape[0]):
     Eyy = strain_tensor[batch_idx, :, 1]
     Exy = strain_tensor[batch_idx, :, 2]
 
-    plt.plot(Exx, Sxx, marker='o', color='r')
-    plt.plot(Eyy, Syy, marker='o', color='b')
-    plt.plot(Exy, Sxy, marker='o', color='k')
+    plt.plot(Exx, Sxx, marker='o', color='r', label = "XX")
+    plt.plot(Eyy, Syy, marker='o', color='b', label = "YY")
+    plt.plot(Exy, Sxy, marker='o', color='k', label = "XY")
     plt.xlabel("Strain [-]")
     plt.ylabel("Stress [Pa]")
     plt.title(f"Batch {batch_idx+1}")
@@ -227,3 +234,9 @@ for batch_idx in range(stress_tensor.shape[0]):
     plt.tight_layout()
     plt.savefig(f"data_set/batch_{batch_idx+1}_stress_strain_plots.png")
     plt.close()
+
+with open("data_set/batch_log.txt", "w") as f:
+    f.write(f"Total batches: {batch}\n")
+    f.write("Batch info (theta, phi, strain):\n")
+    for line in log_lines:
+        f.write(line + "\n")
