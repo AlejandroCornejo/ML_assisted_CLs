@@ -8,26 +8,48 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 
-""""
+"""
+@file RVE_homogenization_dataset_generator.py
+@brief Generator for RVE homogenization datasets using Kratos Multiphysics.
+
+This script runs homogenization simulations on a Representative Volume Element (RVE)
+for different combinations of applied strains (defined by theta and phi angles).
+For each batch (combination of angles), it stores the homogenized strain and stress histories
+in .npz files and generates plots of the stress-strain curves.
+Additionally, it creates a log file with information about each batch.
+
+- Saves stress and strain histories in: data_set/all_stress_histories.npz and data_set/all_strain_histories.npz
+- Saves a log of the batches in: data_set/batch_log.txt
+- Saves stress-strain plots for each batch in: data_set/batch_X_stress_strain_plots.png
+
+@author Alejandro Cornejo
+@date 2025
+
+@section Usage
+1. Configure the ProjectParameters.json file with the model parameters.
+2. Run this script to generate the homogenization dataset.
+
+@section Details
+- Uses KratosMultiphysics and StructuralMechanicsApplication.
+- Each batch corresponds to a combination of theta and phi.
+- The history of each batch is stored as a tensor [batch, steps, voigt_size].
+
 
 """
 
 class RVE_homogenization_dataset_generator(analysis_stage.AnalysisStage):
 
     def __init__(self, model, project_parameters):
-        print("RVE_homogenization_dataset_generator initialized\n")
         super().__init__(model, project_parameters)
 
         self.batch_strain = np.array([])
 
     def Run(self):
-        print("RVE_homogenization_dataset_generator run started\n")
         self.Initialize()
         self.RunSolutionLoop()
         self.Finalize()
 
     def RunSolutionLoop(self):
-        print("RVE_homogenization_dataset_generator run solution loop started\n")
         while self.KeepAdvancingSolutionLoop():
             self.time = self._AdvanceTime()
             self.InitializeSolutionStep()
@@ -61,9 +83,6 @@ class RVE_homogenization_dataset_generator(analysis_stage.AnalysisStage):
 
         KM.Logger.PrintInfo(self._GetSimulationName(), "Analysis -START- ")
 
-    # def FinalizeSolutionStep(self):
-    #     super().FinalizeSolutionStep()
-
     def _CreateSolver(self):
         return structural_solvers.CreateSolver(self.model, self.project_parameters)
 
@@ -83,14 +102,13 @@ class RVE_homogenization_dataset_generator(analysis_stage.AnalysisStage):
         Ey = self.batch_strain[1]
         Exy = self.batch_strain[2]
 
-        time = self._GetSolver().GetComputingModelPart().ProcessInfo[KM.TIME]
-
         for node in self._GetSolver().GetComputingModelPart().Nodes:
+            # NOTE: here we assume that one corner of the RVE is at (0,0,0)
             x_coord = node.X0
             y_coord = node.Y0
             z_coord = node.Z0
-            displ_x = (Ex * x_coord + Exy * y_coord) * time
-            displ_y = (Ey * y_coord + Exy * x_coord) * time
+            displ_x = (Ex * x_coord + Exy * y_coord) * self.time / self.end_time
+            displ_y = (Ey * y_coord + Exy * x_coord) * self.time / self.end_time
             displ_z = 0.0  # Assuming no displacement in Z direction for 2D RVE
 
             if node.IsFixed(KM.DISPLACEMENT_X):
@@ -107,8 +125,7 @@ class RVE_homogenization_dataset_generator(analysis_stage.AnalysisStage):
 
         for element in computing_model_part.Elements:
             dummy_strain = np.array(element.CalculateOnIntegrationPoints(KM.GREEN_LAGRANGE_STRAIN_VECTOR, process_info))
-            break
-        # NOTE: this assumes that all elements have the same number of IP
+            break # NOTE: this assumes that all elements have the same number of IP
         n_ips = dummy_strain.shape[0]
         voigt_size  = dummy_strain.shape[1]
 
@@ -130,7 +147,7 @@ class RVE_homogenization_dataset_generator(analysis_stage.AnalysisStage):
             homogenized_strain  += element_area * strain_vector_sum_ip / n_ips
 
         homogenized_stress /= RVE_area
-        homogenized_strain  /= RVE_area
+        homogenized_strain /= RVE_area
 
         return homogenized_strain, homogenized_stress
 
