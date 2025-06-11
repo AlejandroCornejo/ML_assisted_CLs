@@ -29,7 +29,7 @@ def GetColor(component):
 """
 INPUT DATASET:
 """
-n_epochs = 200
+n_epochs = 100
 learning_rate = 0.05
 number_of_steps = 25
 ADD_NOISE = False
@@ -78,7 +78,7 @@ class KANStressPredictor(nn.Module):
         super(KANStressPredictor, self).__init__()
 
         # EDIT:
-        self.order_stretches = 5  # Number of orders (can be set to any value)
+        self.order_stretches = 1  # Number of orders (can be set to any value)
         self.k = 2  # Degree of splines
         self.grid = 3  # Number of knots
         # -------------------------------------
@@ -95,6 +95,7 @@ class KANStressPredictor(nn.Module):
         # Initialize some extra parameters
         self.ki = nn.ParameterList([
             nn.Parameter(torch.tensor(float(p + 1) + random.random())) for p in range(self.order_stretches + 1)
+            # nn.Parameter(torch.tensor(float(p + 1))) for p in range(self.order_stretches + 1)
         ])
 
         # The parameter multiplying the log(J) is initially set to 1.0
@@ -104,6 +105,7 @@ class KANStressPredictor(nn.Module):
         # Initialize some extra parameters
         self.ki = nn.ParameterList([
             nn.Parameter(torch.tensor(float(p + 1) + random.random())) for p in range(self.order_stretches + 1)
+            # nn.Parameter(torch.tensor(float(p + 1))) for p in range(self.order_stretches + 1)
         ])
 
         # The parameter multiplying the log(J) is initially set to 1.0
@@ -380,7 +382,7 @@ TRAIN_KAN(
 #     print("self.ki[i]: ", ki.data)
 
 # Prune the KAN model
-prune_KAN = True
+prune_KAN = False
 if prune_KAN:
     print("Pruning the KAN...")
     model.CalculateW(train_strain_database)  # Forward pass to compute activations
@@ -407,26 +409,26 @@ if prune_KAN:
         train_work_database=train_work_database,
         strain_rate=strain_rate,
         train_indices=train_indices,
-        n_epochs=600)
+        n_epochs=100 )
 
 fix_symbolic = False
 if fix_symbolic:
-    model.KAN_W.suggest_symbolic(0,0,0,weight_simple=0.0)
-    model.KAN_W.suggest_symbolic(0,1,0,weight_simple=0.)
-    model.KAN_W.suggest_symbolic(0,2,0,weight_simple=0.)
+    # model.KAN_W.suggest_symbolic(0,0,0,weight_simple=0.0)
+    # model.KAN_W.suggest_symbolic(0,1,0,weight_simple=0.)
+    # model.KAN_W.suggest_symbolic(0,2,0,weight_simple=0.)
 
-    # model.KAN_W.fix_symbolic(0,0,0,'x^2', random=False)
-    # model.KAN_W.fix_symbolic(0,1,0,'x^2', random=False)
-    # # model.KAN_W.fix_symbolic(0,2,0,'x^2')
+    model.KAN_W.fix_symbolic(0,0,0,'abs', random=False)
+    model.KAN_W.fix_symbolic(0,1,0,'abs', random=False)
+    # model.KAN_W.fix_symbolic(0,2,0,'x^2')
 
-    # TRAIN_KAN(
-    #     model=model,
-    #     optimizer=optimizer,
-    #     train_strain_database=train_strain_database,
-    #     train_work_database=train_work_database,
-    #     strain_rate=strain_rate,
-    #     train_indices=train_indices,
-    #     n_epochs=1000)
+    TRAIN_KAN(
+        model=model,
+        optimizer=optimizer,
+        train_strain_database=train_strain_database,
+        train_work_database=train_work_database,
+        strain_rate=strain_rate,
+        train_indices=train_indices,
+        n_epochs=200)
 
 torch.save(model.state_dict(), "KAN_model_weights.pth")
 model.ComputeHessian(ref_strain_database[:, :, :])  # Check the Hessian eigenvalues for the whole strain
