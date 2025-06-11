@@ -33,8 +33,6 @@ Additionally, it creates a log file with information about each batch.
 - Uses KratosMultiphysics and StructuralMechanicsApplication.
 - Each batch corresponds to a combination of theta and phi.
 - The history of each batch is stored as a tensor [batch, steps, voigt_size].
-
-
 """
 
 class RVE_homogenization_dataset_generator(analysis_stage.AnalysisStage):
