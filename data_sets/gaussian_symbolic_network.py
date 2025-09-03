@@ -33,9 +33,13 @@ class GaussianSymbolicNetwork(nn.Module):
 
         # Parameters for normal distribution
         self.norm_factor = 9.0  # number of functions
-        self.mu = nn.Parameter(torch.tensor(1.0 / self.norm_factor))  # scaled down for stability
-        self.sigma = nn.Parameter(torch.tensor(0.01))
-        # self.sigma = torch.tensor(0.1)
+        self.mu = nn.Parameter(
+            torch.tensor(3.0 / self.norm_factor)
+        )  # scaled down for stability
+        self.sigma = nn.Parameter(
+            torch.tensor(0.25 / self.norm_factor)
+        )  # scaled down for stability
+        # self.sigma = torch.tensor(0.25 / self.norm_factor)
 
     def EvaluateNormalDistribution(self, i):
         """
@@ -48,8 +52,12 @@ class GaussianSymbolicNetwork(nn.Module):
             Normal distribution evaluated at x
         """
         # return (1.0 / torch.sqrt(2 * np.pi * self.sigma**2)) * torch.exp(-0.5 * (i-self.mu)**2 / (self.sigma**2))
+
         real_mu = self.mu * self.norm_factor
-        return torch.exp(-0.5 * (i - real_mu) ** 2 / (self.sigma**2))  # normalized
+        real_sigma = self.sigma * self.norm_factor
+        return (1.0 / torch.sqrt(2 * np.pi * real_sigma**2)) * torch.exp(
+            -0.5 * (i - real_mu) ** 2 / (real_sigma**2)
+        )  # normalized
 
     def EvalFunction(self, i, x):
         if i == 0:
@@ -117,8 +125,14 @@ def fit_model(X_ref, Y_ref, max_iter, lr, init_params=None, verbose=True):
     criterion = nn.MSELoss()
 
     # Define optimizer
-    optimizer = optim.Adam(model.parameters(), lr=lr)
-    # optimizer = optim.LBFGS(model.parameters(), lr=lr)
+    # optimizer = optim.Adam(model.parameters(), lr=lr)
+    optimizer = optim.LBFGS(
+        model.parameters(),
+        lr=lr,
+        line_search_fn="strong_wolfe",
+        max_iter=20,
+        history_size=30,
+    )
 
     # Store losses
     losses = []
@@ -140,9 +154,10 @@ def fit_model(X_ref, Y_ref, max_iter, lr, init_params=None, verbose=True):
         losses.append(loss.item())
 
         if verbose and (i % 100 == 0 or i == max_iter - 1):
-            print(f"Iteration {i+1}/{max_iter}, Loss: {loss.item():.6f}")
+            print(f"Iteration {i}/{max_iter}, Loss: {loss.item():.6e}")
 
     return model, losses
+
 
 def plot_results(X_ref, Y_ref, model, losses):
     """
@@ -218,20 +233,20 @@ if __name__ == "__main__":
     X_ref = torch.linspace(-1, 1, 100)
 
     # True parameters for generating data
-    true_a = 2.0
-    true_b = 1.0
-    true_c = 0.5
-    true_d = -1.0
+    true_a = 1.0
+    true_b = 0.0
+    true_c = 1.0
+    true_d = 0.0
 
     # Generate reference Y values with some noise
     order_poly = 1.0
     Y_ref = (
         true_c * (true_a * torch.exp(X_ref) + true_b) + true_d
-    )   # + 0.2 * torch.randn_like(X_ref)
+    )  # + 0.2 * torch.randn_like(X_ref)
     Y_ref = Y_ref / Y_ref.max()  # normalize
 
     # Fit the model
-    model, losses = fit_model(X_ref, Y_ref, max_iter=5000, lr=0.01, verbose=True)
+    model, losses = fit_model(X_ref, Y_ref, max_iter=1500, lr=1.0e-1, verbose=True)
 
     # Print final parameters
     print("\nFinal parameters:")
@@ -240,7 +255,12 @@ if __name__ == "__main__":
     print(f"c: {model.c.item():.4f} (true: {true_c})")
     print(f"d: {model.d.item():.4f} (true: {true_d})")
     print(f"mu: {model.norm_factor * model.mu.item():.4f}")
-    print(f"sigma: {model.sigma.item():.4f}")
+    print(f"sigma: {model.norm_factor * model.sigma.item():.4f}")
 
     # Plot the results
     plot_results(X_ref, Y_ref, model, losses)
+
+    i = torch.linspace(0.0, 9.0, 10000)
+    N = model.EvaluateNormalDistribution(i)
+    plt.plot(i.detach().numpy(), N.detach().numpy())
+    plt.show()
