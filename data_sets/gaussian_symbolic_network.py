@@ -6,6 +6,7 @@ import numpy as np
 
 
 class GaussianSymbolicNetwork(nn.Module):
+
     def __init__(self, init_params=None):
         """
         Initialize the linear transformation module
@@ -19,7 +20,7 @@ class GaussianSymbolicNetwork(nn.Module):
         # Initialize parameters
         if init_params is None:
             init_params = {
-                "a": torch.tensor(1.0),
+                "a": torch.tensor(6.0),
                 "b": torch.tensor(0.0),
                 "c": torch.tensor(1.0),
                 "d": torch.tensor(0.0),
@@ -33,13 +34,20 @@ class GaussianSymbolicNetwork(nn.Module):
 
         # Parameters for normal distribution
         self.norm_factor = 9.0  # number of functions
+
+        #############################
+        #############################
         self.mu = nn.Parameter(
-            torch.tensor(3.0 / self.norm_factor)
+            torch.tensor(5.0 / self.norm_factor)
         )  # scaled down for stability
+
         self.sigma = nn.Parameter(
-            torch.tensor(0.25 / self.norm_factor)
+            torch.tensor(2.0 / self.norm_factor)
         )  # scaled down for stability
+
         # self.sigma = torch.tensor(0.25 / self.norm_factor)
+        #############################
+        #############################
 
     def EvaluateNormalDistribution(self, i):
         """
@@ -51,13 +59,11 @@ class GaussianSymbolicNetwork(nn.Module):
         Returns:
             Normal distribution evaluated at x
         """
-        # return (1.0 / torch.sqrt(2 * np.pi * self.sigma**2)) * torch.exp(-0.5 * (i-self.mu)**2 / (self.sigma**2))
-
         real_mu = self.mu * self.norm_factor
         real_sigma = self.sigma * self.norm_factor
         return (1.0 / torch.sqrt(2 * np.pi * real_sigma**2)) * torch.exp(
             -0.5 * (i - real_mu) ** 2 / (real_sigma**2)
-        )  # normalized
+        )  # normalized, peak always 1.0
 
     def EvalFunction(self, i, x):
         if i == 0:
@@ -73,13 +79,13 @@ class GaussianSymbolicNetwork(nn.Module):
         elif i == 5:
             return torch.exp(x)
         elif i == 6:
-            return torch.log(torch.abs(x) + 1e-6)  # avoid log(0)
+            return torch.log(torch.abs(x) + 1e-10)  # avoid log(0)
         elif i == 7:
             return torch.tanh(x)
         elif i == 8:
             return torch.sin(x)
         elif i == 9:
-            return torch.sqrt(torch.abs(x))
+            return torch.sqrt(torch.abs(x) + 1.0e-10)  # avoid sqrt(0)
         else:
             raise ValueError("Index i must be between 0 and 9")
 
@@ -230,7 +236,7 @@ def plot_results(X_ref, Y_ref, model, losses):
 if __name__ == "__main__":
     # Generate some sample data
     torch.manual_seed(42)
-    X_ref = torch.linspace(-1, 1, 100)
+    X_ref = torch.linspace(0.0, 1.0, 100)
 
     # True parameters for generating data
     true_a = 1.0
@@ -239,14 +245,14 @@ if __name__ == "__main__":
     true_d = 0.0
 
     # Generate reference Y values with some noise
-    order_poly = 1.0
+    order_poly = 1
     Y_ref = (
-        true_c * (true_a * torch.exp(X_ref) + true_b) + true_d
+        true_c * torch.sin(true_a * X_ref + true_b) + true_d
     )  # + 0.2 * torch.randn_like(X_ref)
     Y_ref = Y_ref / Y_ref.max()  # normalize
 
     # Fit the model
-    model, losses = fit_model(X_ref, Y_ref, max_iter=1500, lr=1.0e-1, verbose=True)
+    model, losses = fit_model(X_ref, Y_ref, max_iter=500, lr=1.0e-2, verbose=True)
 
     # Print final parameters
     print("\nFinal parameters:")
