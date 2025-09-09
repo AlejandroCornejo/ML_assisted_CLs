@@ -27,7 +27,7 @@ class GaussianFixedOriginNetwork(nn.Module):
         self.mu = torch.tensor([0.5, 0.5])
 
         # Trainable sigma
-        self.sigma = nn.Parameter(torch.tensor(0.05))
+        self.sigma = nn.Parameter(torch.tensor(0.5))
 
         # Trainable positions for each function
         self.positions = nn.Parameter(torch.rand(self.num_funcs, 2))  # random [0,1]
@@ -95,24 +95,24 @@ class GaussianFixedOriginNetwork(nn.Module):
 if __name__ == "__main__":
     # Generate synthetic data
     torch.manual_seed(42)
-    X_ref = torch.linspace(0.0, 1.0, 1000)
-    Y_ref = torch.abs(X_ref + 1.0) # torch.sin(X_ref) torch.log(X_ref+5) torch.exp(X_ref)
+    X_ref = torch.linspace(0.0, 1.0, 100)
+    Y_ref = (X_ref - 0.25)**2 # torch.sin(X_ref) torch.log(X_ref+5) torch.exp(X_ref)
     Y_ref = Y_ref / Y_ref.max()
 
     model = GaussianFixedOriginNetwork()
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
     losses = []
 
-    max_iter = 10000
+    max_iter = 50000
     for it in range(max_iter + 1):
         optimizer.zero_grad()
         Y_pred = model(X_ref)
         loss = 0.5 * torch.mean((Y_pred - Y_ref) ** 2)
-        loss += 1.0e-2 * torch.abs(model.sigma)**2  # sigma penalty
+        loss += 1.0e-3 * torch.abs(model.sigma)**2  # sigma penalty
         loss.backward()
         optimizer.step()
         losses.append(loss.item())
-        if it % 200 == 0:
+        if it % 500 == 0:
             print(f"Iter {it}, Loss {loss.item():.6e}")
 
     # Print parameters
