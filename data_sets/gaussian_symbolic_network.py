@@ -20,7 +20,7 @@ class GaussianSymbolicNetwork(nn.Module):
         # Initialize parameters
         if init_params is None:
             init_params = {
-                "a": torch.tensor(6.0),
+                "a": torch.tensor(1.0),
                 "b": torch.tensor(0.0),
                 "c": torch.tensor(1.0),
                 "d": torch.tensor(0.0),
@@ -42,7 +42,7 @@ class GaussianSymbolicNetwork(nn.Module):
         )  # scaled down for stability
 
         self.sigma = nn.Parameter(
-            torch.tensor(2.0 / self.norm_factor)
+            torch.tensor(4.0 / self.norm_factor)
         )  # scaled down for stability
 
         # self.sigma = torch.tensor(0.25 / self.norm_factor)
@@ -79,13 +79,13 @@ class GaussianSymbolicNetwork(nn.Module):
         elif i == 5:
             return torch.exp(x)
         elif i == 6:
-            return torch.log(torch.abs(x) + 1e-10)  # avoid log(0)
+            return torch.log(torch.abs(x) + 1)  # avoid log(0)
         elif i == 7:
             return torch.tanh(x)
         elif i == 8:
             return torch.sin(x)
         elif i == 9:
-            return torch.sqrt(torch.abs(x) + 1.0e-10)  # avoid sqrt(0)
+            return torch.sqrt(torch.abs(x) + 1e-12)  # avoid sqrt(0)
         else:
             raise ValueError("Index i must be between 0 and 9")
 
@@ -147,7 +147,27 @@ def fit_model(X_ref, Y_ref, max_iter, lr, init_params=None, verbose=True):
     def closure():
         optimizer.zero_grad()
         output = model(X_ref)
-        loss = criterion(output, Y_ref)
+        # loss = criterion(output, Y_ref)
+        loss = 0.5 * torch.mean((output - Y_ref) ** 2)
+
+        # Add sparse penalty to c to avoid too large values
+        # for param in model.parameters():
+        #     loss += 1.0e-3 * torch.sum(param**2)
+
+        # promote low deviations
+        loss += 1.0e-4 * (model.sigma)
+
+
+        # Add penalty to mu and sigma to keep them in reasonable range
+        penalty = 1.0e1
+        real_mu = model.mu * model.norm_factor
+        if real_mu < 0.0:
+            loss += penalty * (real_mu**2)
+        elif real_mu > 9.0:
+            loss += penalty * (real_mu - 9.0) ** 2
+        if model.sigma * model.norm_factor < 0.0:
+            loss += penalty * (model.sigma * model.norm_factor)**2
+
         loss.backward()
         return loss
 
@@ -247,12 +267,13 @@ if __name__ == "__main__":
     # Generate reference Y values with some noise
     order_poly = 1
     Y_ref = (
-        true_c * torch.sin(true_a * X_ref + true_b) + true_d
-    )  # + 0.2 * torch.randn_like(X_ref)
+        true_c * (true_a * X_ref + true_b) + true_d   # sine
+        # true_c * torch.exp(true_a * X_ref + true_b) + true_d     # exp
+    )   # + 0.02 * torch.randn_like(X_ref)
     Y_ref = Y_ref / Y_ref.max()  # normalize
 
     # Fit the model
-    model, losses = fit_model(X_ref, Y_ref, max_iter=500, lr=1.0e-2, verbose=True)
+    model, losses = fit_model(X_ref, Y_ref, max_iter=300, lr=1.0e-2, verbose=True)
 
     # Print final parameters
     print("\nFinal parameters:")
