@@ -96,19 +96,19 @@ if __name__ == "__main__":
     # Generate synthetic data
     torch.manual_seed(42)
     X_ref = torch.linspace(0.0, 1.0, 100)
-    Y_ref = torch.sinh(X_ref) # torch.sin(X_ref) torch.log(X_ref+5) torch.exp(X_ref)
+    Y_ref = torch.sin(X_ref-8.0) # torch.sin(X_ref) torch.log(X_ref+5) torch.exp(X_ref)
     Y_ref = Y_ref / Y_ref.max()
 
     model = GaussianFixedOriginNetwork()
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
     losses = []
 
-    max_iter = 15000
+    max_iter = 20000
     for it in range(max_iter + 1):
         optimizer.zero_grad()
         Y_pred = model(X_ref)
         loss = 0.5 * torch.mean((Y_pred - Y_ref) ** 2)
-        loss += 1.0e-1 * torch.abs(model.sigma)**2  # sigma penalty
+        loss += 1.0e-2 * torch.abs(model.sigma)**2  # sigma penalty
         loss.backward()
         optimizer.step()
         losses.append(loss.item())
