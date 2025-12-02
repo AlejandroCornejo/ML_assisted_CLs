@@ -136,11 +136,11 @@ all_stress_histories = []
 
 batch = 0
 
-while theta <= 360.0:
-    while phi <= 360.0:
+while theta <= 50.0:
+    while phi <= 50.0:
         batch += 1
-        # print(f"Batch {batch}:")
-        # print(f"Theta: {theta}, Phi: {phi}")
+        print(f"Batch {batch}:")
+        print(f"Theta: {theta}, Phi: {phi}")
 
         # NOTE: Each batch creates a new analysis_stage
         global_model = KM.Model()
