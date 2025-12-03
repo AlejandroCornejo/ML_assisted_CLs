@@ -4,7 +4,8 @@
 """
 POD of displacement snapshots for the RVE J2 solver.
 
-- Loads data_set/all_displacement_snapshots.npz (key: 'U')
+- Loads all displacement files U_*.npy from a given directory (e.g. 'training_set')
+- Each file is expected to have shape (n_steps+1, n_dof)
 - Builds snapshot matrix S of shape (n_dof, n_snapshots)
 - Computes thin SVD: S = U @ diag(s) @ Vt
 - Plots squared energy loss vs mode index with tolerance markers
@@ -25,45 +26,101 @@ plt.rc('font', family='serif')
 # ------------------------------------------------------------
 # 1. Load displacement snapshots and build snapshot matrix
 # ------------------------------------------------------------
-def load_snapshot_matrix(npz_path="data_set/all_displacement_snapshots.npz"):
+def load_snapshot_matrix_from_dir(
+    snapshots_dir="training_set",
+    prefix="U_",
+    verbose=True
+):
     """
-    Loads the displacement tensor U and reshapes it into a 2D snapshot matrix S.
+    Loads all displacement snapshots U_*.npy from a directory and reshapes them
+    into a 2D snapshot matrix S.
 
-    Expected format in the npz:
-        U : array of shape (n_batches, n_steps+1, n_dof)
+    Expected per-file format:
+        U_file : array of shape (n_steps+1, n_dof)
+
+    Parameters
+    ----------
+    snapshots_dir : str
+        Directory where U_*.npy are stored (e.g. 'training_set' or 'testing_set').
+    prefix : str
+        Filename prefix for displacement files (default: 'U_').
+    verbose : bool
 
     Returns
     -------
     S : ndarray, shape (n_dof, n_snapshots)
         Snapshot matrix with each column = one displacement snapshot.
-    U_tensor : ndarray, original tensor (n_batches, n_steps+1, n_dof)
+    U_tensor : ndarray or None
+        If all files share the same shape, returns a tensor of shape
+        (n_batches, n_steps+1, n_dof). Otherwise, returns None.
     """
-    if not os.path.isfile(npz_path):
-        raise FileNotFoundError(f"File not found: {npz_path}")
+    if not os.path.isdir(snapshots_dir):
+        raise NotADirectoryError(f"Directory not found: {snapshots_dir}")
 
-    data = np.load(npz_path)
-    if "U" not in data.files:
-        raise KeyError(f"'U' key not found in {npz_path}. Available: {data.files}")
+    # Collect all U_*.npy files
+    files = [
+        f for f in os.listdir(snapshots_dir)
+        if f.startswith(prefix) and f.endswith(".npy")
+    ]
+    files.sort()
 
-    U_tensor = data["U"]  # (n_batches, n_steps+1, n_dof)
-    n_batches, n_steps_plus_1, n_dof = U_tensor.shape
+    if len(files) == 0:
+        raise FileNotFoundError(
+            f"No files matching '{prefix}*.npy' found in {snapshots_dir}"
+        )
 
-    print(f"[INFO] Loaded U with shape (n_batches, n_steps+1, n_dof) "
-          f"= {U_tensor.shape}")
-    print(f"       n_batches       = {n_batches}")
-    print(f"       n_steps+1       = {n_steps_plus_1}")
-    print(f"       n_dof (FOM DoFs)= {n_dof}")
+    if verbose:
+        print(f"[INFO] Found {len(files)} displacement files in '{snapshots_dir}':")
+        for f in files:
+            print(f"       {f}")
 
-    # Flatten batches and time into a single snapshot index
-    # Result: (n_batches * (n_steps+1), n_dof)
-    U_flat = U_tensor.reshape(-1, n_dof)
+    U_list = []
+    shapes = []
+
+    for f in files:
+        path = os.path.join(snapshots_dir, f)
+        U = np.load(path)  # expected (n_steps+1, n_dof)
+        if U.ndim != 2:
+            raise ValueError(
+                f"File {path} has shape {U.shape}, expected 2D (n_steps+1, n_dof)"
+            )
+        U_list.append(U)
+        shapes.append(U.shape)
+
+    # Determine if all batches share same shape
+    same_shape = all(sh == shapes[0] for sh in shapes)
+    if verbose:
+        print(f"[INFO] First U shape = {shapes[0]}")
+        if same_shape:
+            print("[INFO] All batches share the same shape.")
+        else:
+            print("[WARN] Batches have different shapes; U_tensor will be None.")
+
+    # Concatenate along time/batch dimension
+    # Each U is (n_steps+1, n_dof) -> stack them vertically
+    U_concat = np.concatenate(U_list, axis=0)  # (sum_over_batches n_steps+1, n_dof)
+    n_total_snapshots, n_dof = U_concat.shape
+
+    if verbose:
+        print(f"[INFO] Concatenated U_concat shape = {U_concat.shape}")
+        print(f"       total_snapshots = {n_total_snapshots}")
+        print(f"       n_dof (FOM DoFs)= {n_dof}")
 
     # Snapshot matrix S: (n_dof, n_snapshots)
-    S = U_flat.T
+    S = U_concat.T
     n_snapshots = S.shape[1]
 
-    print(f"[INFO] Snapshot matrix S has shape (n_dof, n_snapshots) = {S.shape}")
-    print(f"       n_snapshots = {n_snapshots}")
+    if verbose:
+        print(f"[INFO] Snapshot matrix S has shape (n_dof, n_snapshots) = {S.shape}")
+        print(f"       n_snapshots = {n_snapshots}")
+
+    # Optionally build U_tensor if all shapes equal
+    if same_shape:
+        U_tensor = np.stack(U_list, axis=0)  # (n_batches, n_steps+1, n_dof)
+        if verbose:
+            print(f"[INFO] U_tensor shape = {U_tensor.shape}")
+    else:
+        U_tensor = None
 
     return S, U_tensor
 
@@ -112,7 +169,8 @@ def plot_squared_energy_loss(sigmas,
     plt.yscale('log')
     plt.grid(True, which="both", linestyle="--", linewidth=0.5)
     plt.xlabel(r"Singular value index $n$", fontsize=13)
-    plt.ylabel(r"$\epsilon^2(n)=1-\frac{\sum_{i=1}^{n}\sigma_i^2}{\sum_{j=1}^{r}\sigma_j^2}$",
+    plt.ylabel(r"$\epsilon^2(n)=1-\frac{\sum_{i=1}^{n}\sigma_i^2}"
+               r"{\sum_{j=1}^{r}\sigma_j^2}$",
                fontsize=13)
 
     if tol_list is not None:
@@ -136,8 +194,9 @@ def plot_squared_energy_loss(sigmas,
 # 3. Main: run POD and generate plots + saved modes
 # ------------------------------------------------------------
 def main():
-    # 1) Load snapshot matrix
-    S, _ = load_snapshot_matrix("data_set/all_displacement_snapshots.npz")
+    # 1) Load snapshot matrix from directory (e.g. 'training_set')
+    snapshots_dir = "training_set"   # change to "testing_set" if needed
+    S, _ = load_snapshot_matrix_from_dir(snapshots_dir=snapshots_dir, prefix="U_")
 
     # 2) Thin SVD
     print("[INFO] Computing thin SVD of S ...")

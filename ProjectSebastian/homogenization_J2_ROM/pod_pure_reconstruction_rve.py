@@ -2,13 +2,14 @@
 # -*- coding: utf-8 -*-
 
 """
-POD pure reconstruction test for the RVE J2 problem.
+POD pure reconstruction test for the RVE J2 problem (per (theta, phi)).
 
 Workflow:
 - Load:
-    * data_set/all_displacement_snapshots.npz  (U tensor)
-    * modes/U_modes_tol_*.npy                 (POD basis Phi)
-- Choose a batch (parameter combination) and restrict to the first 51 steps.
+    * training/testing displacement file:
+          {data_dir}/U_theta{theta:.1f}_phi{phi:.1f}.npy   (U trajectory)
+    * modes/U_modes_tol_*.npy                             (POD basis Phi)
+- Restrict to the first n_steps_use time steps.
 - Reconstruct displacements via pure projection:
         U_POD(t) = Phi Phi^T U_FOM(t)
 - Rebuild the RVE mesh from ProjectParameters.json, precompute B_all etc.
@@ -16,7 +17,7 @@ Workflow:
         - U_FOM(t)
         - U_POD(t)
   using the J2 law.
-- Plot FOM vs POD stress–strain curves for that batch.
+- Plot FOM vs POD stress–strain curves for that (theta, phi).
 """
 
 import numpy as np
@@ -31,113 +32,29 @@ from j2_plane_stress_plastic_strain_rve_simo_optimized import (
     VonMisesIsotropicPlasticityPlaneStress
 )
 
+# Import mesh helpers from the FOM solver (to avoid duplication)
+from fom_solver_rve import build_node_global_map, precompute_mesh_arrays
+
 # ----------------------------------------------------------------------
 # User parameters
 # ----------------------------------------------------------------------
-# 1-based batch index: 1 = first parameter combo, 9 = ninth, etc.
-batch_index_user = 8
+# Angle combination to test (must match what you used in the FOM runs)
+theta = 50.0      # [deg]
+phi   = 50.0      # [deg]
+
+# Directory where the FOM files were saved by run_fom_batch
+#   e.g. "training_set" or "testing_set"
+data_dir = "training_set"
 
 # Number of time steps to use (including the initial configuration).
-# You mentioned 51 steps per training parameter combination.
+# You mentioned ~51 steps per training parameter combination.
 n_steps_use = 51
 
 # POD basis file to use
 basis_file = "modes/U_modes_tol_1e-16.npy"
 
-# Paths to data files
-disp_npz_path      = "data_set/all_displacement_snapshots.npz"
+# Path to ProjectParameters.json
 project_params_file = "ProjectParameters.json"
-
-
-# ----------------------------------------------------------------------
-# Helpers from your solver: mesh + B-matrices
-# ----------------------------------------------------------------------
-def build_node_global_map(mp):
-    """
-    Deterministic map:
-      [ux(node0), uy(node0), ux(node1), uy(node1), ...]
-    following mp.Nodes iteration.
-    """
-    idx_ux, idx_uy = {}, {}
-    for k, node in enumerate(mp.Nodes):
-        idx_ux[node.Id] = 2 * k
-        idx_uy[node.Id] = 2 * k + 1
-    n_dof = 2 * mp.NumberOfNodes()
-    return idx_ux, idx_uy, n_dof
-
-
-def build_B_from_DNDX(DNDX):
-    """
-    DNDX: (nnode, 2) with columns [dN/dx, dN/dy] in global coords.
-    Returns B (3, 2*nnode) for 2D small strain with ENGINEERING shear (γxy).
-    Voigt order: [εxx, εyy, γxy].
-    """
-    nnode = DNDX.shape[0]
-    B = np.zeros((3, 2 * nnode))
-    for a in range(nnode):
-        Nx, Ny = DNDX[a, 0], DNDX[a, 1]
-        # εxx
-        B[0, 2 * a]     = Nx
-        B[0, 2 * a + 1] = 0.0
-        # εyy
-        B[1, 2 * a]     = 0.0
-        B[1, 2 * a + 1] = Ny
-        # γxy
-        B[2, 2 * a]     = Ny
-        B[2, 2 * a + 1] = Nx
-    return B
-
-
-def precompute_mesh_arrays(mp, idx_ux, idx_uy):
-    """
-    Precompute element connectivity, B-matrices, GP weights and areas.
-
-    Returns
-    -------
-    conn      : (n_elem, nd)        DOF ids per element
-    B_all     : (n_elem, n_gp, 3, nd)
-    w_all     : (n_elem, n_gp)
-    area_all  : (n_elem,)
-    """
-    elems = list(mp.Elements)
-    n_elem = len(elems)
-
-    if n_elem == 0:
-        raise RuntimeError("No elements found in the computing model part.")
-
-    geom0 = elems[0].GetGeometry()
-    nnode = geom0.PointsNumber()
-    nd    = 2 * nnode
-
-    Ns   = np.array(geom0.ShapeFunctionsValues())
-    n_gp = Ns.shape[0]
-
-    conn     = np.zeros((n_elem, nd), dtype=int)
-    B_all    = np.zeros((n_elem, n_gp, 3, nd), dtype=float)
-    w_all    = np.zeros((n_elem, n_gp), dtype=float)
-    area_all = np.zeros(n_elem, dtype=float)
-
-    for e_idx, elem in enumerate(elems):
-        geom = elem.GetGeometry()
-        area = geom.Area()
-        area_all[e_idx] = area
-
-        # DOF indices
-        col_ids = []
-        for node in geom:
-            col_ids.append(idx_ux[node.Id])
-            col_ids.append(idx_uy[node.Id])
-        conn[e_idx, :] = np.array(col_ids, dtype=int)
-
-        for igauss in range(n_gp):
-            DNDe = np.array(geom.ShapeFunctionDerivatives(1, igauss))
-            J    = np.array(geom.Jacobian(igauss))
-            DNDX = DNDe @ np.linalg.inv(J)
-            B_loc = build_B_from_DNDX(DNDX)
-            B_all[e_idx, igauss, :, :] = B_loc
-            w_all[e_idx, igauss] = area / n_gp
-
-    return conn, B_all, w_all, area_all
 
 
 # ----------------------------------------------------------------------
@@ -170,7 +87,9 @@ def load_rve_mesh_and_material(params_file):
     mp = simulation._GetSolver().GetComputingModelPart()
 
     idx_ux, idx_uy, n_dof = build_node_global_map(mp)
-    conn, B_all, w_all, area_all = precompute_mesh_arrays(mp, idx_ux, idx_uy)
+    # precompute_mesh_arrays from fom_solver_rve returns:
+    #   conn, B_all, w_all, area_all, pattern_I, pattern_J
+    conn, B_all, w_all, area_all, _, _ = precompute_mesh_arrays(mp, idx_ux, idx_uy)
 
     # Material properties from first element
     elem0 = next(iter(mp.Elements))
@@ -261,8 +180,8 @@ def homogenized_history_from_displacements(U_traj, conn, B_all, w_all, area_all,
 # ----------------------------------------------------------------------
 def plot_stress_strain_fom_vs_pod(strain_fom, stress_fom,
                                   strain_pod, stress_pod,
-                                  batch_index_user,
-                                  save_dir="data_set"):
+                                  theta, phi,
+                                  save_dir):
     os.makedirs(save_dir, exist_ok=True)
 
     labels_comp = [r"$\sigma_{xx}$", r"$\sigma_{yy}$", r"$\sigma_{xy}$"]
@@ -284,13 +203,16 @@ def plot_stress_strain_fom_vs_pod(strain_fom, stress_fom,
 
     plt.xlabel("Strain component [-]")
     plt.ylabel("Stress [Pa]")
-    plt.title(f"Batch {batch_index_user}: FOM vs POD (homogenized)")
+    plt.title(f"FOM vs POD (homogenized)\n"
+              f"theta = {theta:.1f} deg, phi = {phi:.1f} deg")
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
 
-    fname = os.path.join(save_dir,
-                         f"batch_{batch_index_user}_stress_strain_FOM_vs_POD.png")
+    fname = os.path.join(
+        save_dir,
+        f"stress_strain_FOM_vs_POD_theta{theta:.1f}_phi{phi:.1f}.png"
+    )
     plt.savefig(fname, dpi=300)
     plt.show()
     print(f"[INFO] Saved comparison plot to {fname}")
@@ -301,30 +223,33 @@ def plot_stress_strain_fom_vs_pod(strain_fom, stress_fom,
 # ----------------------------------------------------------------------
 def main():
     # -----------------------------------------
-    # Load FOM displacement data
+    # Load FOM displacement data for given (theta, phi)
     # -----------------------------------------
-    if not os.path.isfile(disp_npz_path):
-        raise FileNotFoundError(disp_npz_path)
+    disp_file = os.path.join(
+        data_dir,
+        f"U_theta{theta:.1f}_phi{phi:.1f}.npy"
+    )
+    if not os.path.isfile(disp_file):
+        raise FileNotFoundError(
+            f"Displacement file not found: {disp_file}\n"
+            f"Make sure run_fom_batch(theta={theta}, phi={phi}, "
+            f"out_dir='{data_dir}') has been executed."
+        )
 
-    disp_data = np.load(disp_npz_path)
-    U_tensor  = disp_data["U"]        # (n_batches, n_steps_total, n_dof)
+    U_fom_full = np.load(disp_file)  # expected shape: (n_steps_total, n_dof)
+    if U_fom_full.ndim != 2:
+        raise ValueError(
+            f"{disp_file} has shape {U_fom_full.shape}, expected 2D (n_steps, n_dof)"
+        )
 
-    n_batches, n_steps_total, n_dof = U_tensor.shape
-    print(f"[INFO] U_tensor shape = {U_tensor.shape}")
-
-    # -----------------------------------------
-    # Select batch and truncate to first n_steps_use
-    # -----------------------------------------
-    ibatch = batch_index_user - 1
-    if ibatch < 0 or ibatch >= n_batches:
-        raise IndexError(f"batch_index_user={batch_index_user} out of range "
-                         f"(1..{n_batches})")
-
+    n_steps_total, n_dof = U_fom_full.shape
     n_steps = min(n_steps_use, n_steps_total)
-    print(f"[INFO] Using batch {batch_index_user} (0-based index {ibatch})")
+
+    print(f"[INFO] Loaded FOM displacements from {disp_file}")
+    print(f"       shape = {U_fom_full.shape}")
     print(f"[INFO] Using first {n_steps} time steps (of {n_steps_total})")
 
-    U_fom_batch = U_tensor[ibatch, :n_steps, :]        # (n_steps, n_dof)
+    U_fom_batch = U_fom_full[:n_steps, :]   # (n_steps, n_dof)
 
     # -----------------------------------------
     # Build RVE mesh + material (for J2 evaluation)
@@ -333,8 +258,10 @@ def main():
         load_rve_mesh_and_material(project_params_file)
 
     if n_dof_rve != n_dof:
-        raise ValueError(f"n_dof from Kratos ({n_dof_rve}) != n_dof in snapshots ({n_dof}). "
-                         "Check consistency between solver and POD script.")
+        raise ValueError(
+            f"n_dof from Kratos ({n_dof_rve}) != n_dof in snapshots ({n_dof}). "
+            "Check consistency between solver and POD script."
+        )
 
     # -----------------------------------------
     # Homogenized FOM history from displacements
@@ -356,8 +283,10 @@ def main():
     n_modes = Phi.shape[1]
 
     if Phi.shape[0] != n_dof:
-        raise ValueError(f"POD basis size mismatch: Phi has {Phi.shape[0]} rows, "
-                         f"but FOM has n_dof = {n_dof}")
+        raise ValueError(
+            f"POD basis size mismatch: Phi has {Phi.shape[0]} rows, "
+            f"but FOM has n_dof = {n_dof}"
+        )
 
     print(f"[INFO] Loaded POD basis from {basis_file}")
     print(f"       Phi shape = {Phi.shape}  (n_dof x n_modes)")
@@ -391,8 +320,8 @@ def main():
     plot_stress_strain_fom_vs_pod(
         strain_fom, stress_fom,
         strain_pod, stress_pod,
-        batch_index_user=batch_index_user,
-        save_dir="data_set"
+        theta=theta, phi=phi,
+        save_dir=data_dir
     )
 
 

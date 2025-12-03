@@ -2,30 +2,39 @@
 # -*- coding: utf-8 -*-
 
 """
-PROM–POD solver for the J2 RVE problem.
+PROM–POD solver for the J2 RVE problem (per (theta, phi)).
 
 - Builds the Kratos model and vectorized FE/J2 machinery (same as FOM).
 - Loads a POD basis Phi (from your snapshot-based POD).
-- Chooses one macro-strain batch (theta, phi) via user parameters.
+- Chooses one macro-strain direction via user parameters (theta, phi).
 - Runs a quasi-static time stepping using a reduced Newton in q:
 
       u_D = Dirichlet lifting (from Kratos BCs)
-      u(free) = u_prev_free + Phi_f @ q
-      R_f(u) = internal force residual (free DOFs)
-      r(q)   = Phi_f^T R_f(u(q))
-      K_r    = Phi_f^T K_ff(u(q)) Phi_f
+      u(free) = u_D(free) + Phi_f @ q
+      R_f(u)  = internal force residual (free DOFs)
+      r(q)    = Phi_f^T R_f(u(q))
+      K_r     = Phi_f^T K_ff(u(q)) Phi_f
 
   Solve K_r Δq = -r until convergence.
 
-- Homogenizes stress/strain at each step from J2 and compares PROM vs FOM
-  if all_strain_histories.npz / all_stress_histories.npz exist.
+- Homogenizes stress/strain at each step from J2.
+
+- For FOM comparison:
+    1) Tries to load:
+         training_set/strain_theta{theta:.1f}_phi{phi:.1f}.npy
+         training_set/stress_theta{theta:.1f}_phi{phi:.1f}.npy
+    2) If not found, tries the same in testing_set/
+    3) If still not found, calls run_fom_batch(theta, phi, out_dir="testing_set")
+       from fom_solver_rve, and then loads those .npy files.
 
 Requires:
   - ProjectParameters.json
   - j2_plane_stress_plastic_strain_rve_simo_optimized.py
+  - fom_solver_rve.py exposing:
+        build_node_global_map, precompute_mesh_arrays,
+        extract_dirichlet_bcs, assemble_K_and_fint_vec, homogenize_from_J2_vec,
+        run_fom_batch
   - modes/U_modes_tol_*.npy
-  - (optional, for comparison) data_set/all_strain_histories.npz,
-    data_set/all_stress_histories.npz and data_set/batch_log.txt
 """
 
 import numpy as np
@@ -38,11 +47,12 @@ import KratosMultiphysics.analysis_stage as analysis_stage
 from KratosMultiphysics.StructuralMechanicsApplication import \
     python_solvers_wrapper_structural as structural_solvers
 
-from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
+
 from fom_solver_rve import (
     build_node_global_map, precompute_mesh_arrays,
-    extract_dirichlet_bcs, assemble_K_and_fint_vec, homogenize_from_J2_vec
+    extract_dirichlet_bcs, assemble_K_and_fint_vec, homogenize_from_J2_vec,
+    run_fom_batch,   # <-- new: FOM driver for a single (theta, phi)
 )
 
 from j2_plane_stress_plastic_strain_rve_simo_optimized import (
@@ -56,9 +66,8 @@ from j2_plane_stress_plastic_strain_rve_simo_optimized import (
 basis_file = "modes/U_modes_tol_1e-06.npy"
 
 # Choose which macro-strain direction to reproduce via PROM
-# (same grid as in your dataset generator: theta, phi in {0, 25, 50} deg)
-theta = 50.0   # [deg]
-phi   = 50.0   # [deg]
+theta = 75.0   # [deg]
+phi   = 75.0   # [deg]
 max_stretch_factor = 0.01  # lambda
 
 # Time stepping (same as in ProjectParameters.json ideally)
@@ -70,9 +79,10 @@ tol_rel = 1e-3
 tol_abs = 1e-2
 max_ls_it = 5   # backtracking line-search iterations (analogous to FOM)
 
-# For mapping (theta, phi) to batch index in your original dataset
-angle_increment = 25.0    # must match generator
-n_phi = int(50.0 / angle_increment) + 1  # = 3
+# Directories where FOM data may live
+training_dir = "training_set"
+testing_dir  = "testing_set"
+
 
 # ----------------------------------------------------------------------
 # Custom AnalysisStage just to get BCs (same pattern as in generator)
@@ -115,6 +125,89 @@ class RVE_homogenization_PROM(analysis_stage.AnalysisStage):
                 node.SetSolutionStepValue(KM.DISPLACEMENT_Y, displ_y)
             if node.IsFixed(KM.DISPLACEMENT_Z):
                 node.SetSolutionStepValue(KM.DISPLACEMENT_Z, displ_z)
+
+
+# ----------------------------------------------------------------------
+# Helper: load or generate FOM histories for (theta, phi)
+# ----------------------------------------------------------------------
+def _fom_file_paths(base_dir, theta, phi):
+    strain_path = os.path.join(
+        base_dir,
+        f"strain_theta{theta:.1f}_phi{phi:.1f}.npy"
+    )
+    stress_path = os.path.join(
+        base_dir,
+        f"stress_theta{theta:.1f}_phi{phi:.1f}.npy"
+    )
+    return strain_path, stress_path
+
+
+def get_fom_histories(theta,
+                      phi,
+                      parameters,
+                      max_stretch_factor=max_stretch_factor,
+                      max_newton_it=100,
+                      max_ls_it=5):
+    """
+    Returns (strain_fom, stress_fom) for the given (theta, phi).
+
+    Logic:
+      1) Look for .npy files in training_set/
+      2) If not found, look in testing_set/
+      3) If still not found, call run_fom_batch(theta, phi, parameters, out_dir='testing_set'),
+         then load them from testing_set/.
+    """
+    # 1) Try training_set
+    strain_path, stress_path = _fom_file_paths(training_dir, theta, phi)
+    if os.path.isfile(strain_path) and os.path.isfile(stress_path):
+        print(f"[PROM] Found FOM histories in {training_dir}/")
+        strain_fom = np.load(strain_path)
+        stress_fom = np.load(stress_path)
+        return strain_fom, stress_fom
+
+    # 2) Try testing_set
+    strain_path, stress_path = _fom_file_paths(testing_dir, theta, phi)
+    if os.path.isfile(strain_path) and os.path.isfile(stress_path):
+        print(f"[PROM] Found FOM histories in {testing_dir}/")
+        strain_fom = np.load(strain_path)
+        stress_fom = np.load(stress_path)
+        return strain_fom, stress_fom
+
+    # 3) Run new FOM in testing_set
+    print(f"[PROM] FOM histories for theta={theta:.1f}, phi={phi:.1f} "
+          f"not found in {training_dir}/ or {testing_dir}/.")
+    print(f"[PROM] Running FOM for this case and saving into {testing_dir}/ ...")
+
+    os.makedirs(testing_dir, exist_ok=True)
+
+    # This function will:
+    #   - run the full FOM for this (theta, phi)
+    #   - save strain_theta*_phi*.npy, stress_theta*_phi*.npy, U_theta*_phi*.npy
+    run_fom_batch(
+        theta,
+        phi,
+        parameters,
+        max_stretch_factor=max_stretch_factor,
+        max_newton_it=max_newton_it,
+        max_ls_it=max_ls_it,
+        out_dir=testing_dir,
+        save_plot=True,
+    )
+
+    # Now load them
+    strain_path, stress_path = _fom_file_paths(testing_dir, theta, phi)
+    if not (os.path.isfile(strain_path) and os.path.isfile(stress_path)):
+        raise FileNotFoundError(
+            f"After run_fom_batch, cannot find:\n"
+            f"  {strain_path}\n"
+            f"  {stress_path}"
+        )
+
+    strain_fom = np.load(strain_path)
+    stress_fom = np.load(stress_path)
+    print(f"[PROM] Loaded newly generated FOM histories from {testing_dir}/")
+    return strain_fom, stress_fom
+
 
 
 # ----------------------------------------------------------------------
@@ -349,38 +442,30 @@ def main():
     stress_prom_hist = np.stack(stress_prom_hist, axis=0)
 
     # ------------------------------------------------------------------
-    # Try to load FOM dataset for comparison (if available)
+    # FOM dataset for comparison: training_set / testing_set / new FOM
     # ------------------------------------------------------------------
-    fom_strain = None
-    fom_stress = None
+    strain_fom, stress_fom = get_fom_histories(theta, phi, parameters)
 
-    strain_npz = "data_set/all_strain_histories.npz"
-    stress_npz = "data_set/all_stress_histories.npz"
+    # If lengths differ (rounding, etc.), align them
+    n_prom = strain_prom_hist.shape[0]
+    n_fom  = strain_fom.shape[0]
+    n_min  = min(n_prom, n_fom)
 
-    if os.path.isfile(strain_npz) and os.path.isfile(stress_npz):
-        strain_data = np.load(strain_npz)
-        stress_data = np.load(stress_npz)
-
-        strain_tensor = strain_data["strain"]   # (n_batches, n_steps+1, 3)
-        stress_tensor = stress_data["stress"]   # (n_batches, n_steps+1, 3)
-
-        # Map (theta, phi) -> batch index consistent with your generator
-        ith_theta = int(round(theta / angle_increment))
-        jth_phi   = int(round(phi   / angle_increment))
-        batch_index = ith_theta * n_phi + jth_phi   # 0-based
-
-        if batch_index < 0 or batch_index >= strain_tensor.shape[0]:
-            print(f"[WARN] Computed batch_index {batch_index} out of range "
-                  f"(0..{strain_tensor.shape[0]-1}), skipping FOM comparison.")
-        else:
-            fom_strain = strain_tensor[batch_index, :, :]
-            fom_stress = stress_tensor[batch_index, :, :]
-
-            print(f"[PROM] Comparing to FOM batch index {batch_index+1} "
-                  f"(theta={theta}, phi={phi})")
+    if n_prom != n_fom:
+        print(f"[PROM] Warning: PROM history length ({n_prom}) != FOM ({n_fom}). "
+              f"Truncating both to {n_min} for plotting.")
+        strain_prom_plot = strain_prom_hist[:n_min, :]
+        stress_prom_plot = stress_prom_hist[:n_min, :]
+        strain_fom_plot  = strain_fom[:n_min, :]
+        stress_fom_plot  = stress_fom[:n_min, :]
+    else:
+        strain_prom_plot = strain_prom_hist
+        stress_prom_plot = stress_prom_hist
+        strain_fom_plot  = strain_fom
+        stress_fom_plot  = stress_fom
 
     # ------------------------------------------------------------------
-    # Plots: PROM vs FOM (if FOM available)
+    # Plots: PROM vs FOM
     # ------------------------------------------------------------------
     os.makedirs("prom_results", exist_ok=True)
     labels = [r"$\sigma_{xx}$", r"$\sigma_{yy}$", r"$\sigma_{xy}$"]
@@ -388,14 +473,13 @@ def main():
 
     plt.figure(figsize=(8, 6))
     for i in range(3):
-        if fom_strain is not None and fom_stress is not None:
-            plt.plot(
-                fom_strain[:, i], fom_stress[:, i],
-                color=colors[i], linestyle="-", marker="o",
-                label=f"FOM {labels[i]}"
-            )
         plt.plot(
-            strain_prom_hist[:, i], stress_prom_hist[:, i],
+            strain_fom_plot[:, i], stress_fom_plot[:, i],
+            color=colors[i], linestyle="-", marker="o",
+            label=f"FOM {labels[i]}"
+        )
+        plt.plot(
+            strain_prom_plot[:, i], stress_prom_plot[:, i],
             color=colors[i], linestyle="--", marker="",
             label=f"PROM {labels[i]}"
         )
@@ -407,15 +491,19 @@ def main():
     plt.legend()
     plt.tight_layout()
 
-    fig_name = f"prom_results/stress_strain_PROM_vs_FOM_theta{theta:.0f}_phi{phi:.0f}.png"
+    fig_name = f"prom_results/stress_strain_PROM_vs_FOM_theta{theta:.1f}_phi{phi:.1f}.png"
     plt.savefig(fig_name, dpi=300)
     plt.show()
     print(f"[PROM] Saved comparison plot to {fig_name}")
 
     # Save raw histories
-    np.savez("prom_results/prom_histories_theta{:.0f}_phi{:.0f}.npz".format(theta, phi),
-             strain_prom=strain_prom_hist,
-             stress_prom=stress_prom_hist)
+    np.savez(
+        f"prom_results/prom_histories_theta{theta:.1f}_phi{phi:.1f}.npz",
+        strain_prom=strain_prom_hist,
+        stress_prom=stress_prom_hist,
+        strain_fom=strain_fom,
+        stress_fom=stress_fom,
+    )
 
 
 if __name__ == "__main__":
