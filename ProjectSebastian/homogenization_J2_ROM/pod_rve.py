@@ -2,13 +2,18 @@
 # -*- coding: utf-8 -*-
 
 """
-POD of displacement snapshots for the RVE J2 solver.
+POD of displacement snapshots for the RVE J2 solver (multipath version).
 
 - Loads all displacement files U_*.npy from a given directory (e.g. 'training_set')
-- Each file is expected to have shape (n_steps+1, n_dof)
-- Builds snapshot matrix S of shape (n_dof, n_snapshots)
+- Each file is expected to have shape (n_steps+1, n_dof), where the underlying
+  trajectory in strain space can be a two-segment path 0 -> E1 -> E2 defined by
+  (theta, phi, gamma, psi_deg).
+- Typical filename pattern after the new multipath generator:
+      U_theta{..}_phi{..}_gamma{..}_psi{..}.npy
+- Builds snapshot matrix S of shape (n_dof, n_snapshots) by concatenating
+  all time steps from all batches.
 - Computes thin SVD: S = U @ diag(s) @ Vt
-- Plots squared energy loss vs mode index with tolerance markers
+- Plots squared energy loss vs. mode index with tolerance markers
 - Saves truncated bases for several squared-loss tolerances
 """
 
@@ -38,6 +43,9 @@ def load_snapshot_matrix_from_dir(
     Expected per-file format:
         U_file : array of shape (n_steps+1, n_dof)
 
+    This is compatible with both single-path and multipath datasets, as long
+    as each file stores the full time history for one loading case.
+
     Parameters
     ----------
     snapshots_dir : str
@@ -57,7 +65,7 @@ def load_snapshot_matrix_from_dir(
     if not os.path.isdir(snapshots_dir):
         raise NotADirectoryError(f"Directory not found: {snapshots_dir}")
 
-    # Collect all U_*.npy files
+    # Collect all U_*.npy files (e.g. U_theta0.0_phi0.0_gamma0.532_psi45.0.npy, ...)
     files = [
         f for f in os.listdir(snapshots_dir)
         if f.startswith(prefix) and f.endswith(".npy")
@@ -87,7 +95,7 @@ def load_snapshot_matrix_from_dir(
         U_list.append(U)
         shapes.append(U.shape)
 
-    # Determine if all batches share same shape
+    # Check if all batches share the same shape
     same_shape = all(sh == shapes[0] for sh in shapes)
     if verbose:
         print(f"[INFO] First U shape = {shapes[0]}")
@@ -96,7 +104,7 @@ def load_snapshot_matrix_from_dir(
         else:
             print("[WARN] Batches have different shapes; U_tensor will be None.")
 
-    # Concatenate along time/batch dimension
+    # Concatenate all time histories along the snapshot axis
     # Each U is (n_steps+1, n_dof) -> stack them vertically
     U_concat = np.concatenate(U_list, axis=0)  # (sum_over_batches n_steps+1, n_dof)
     n_total_snapshots, n_dof = U_concat.shape
@@ -126,7 +134,7 @@ def load_snapshot_matrix_from_dir(
 
 
 # ------------------------------------------------------------
-# 2. SVD helpers (same logic as your reference)
+# 2. SVD helpers
 # ------------------------------------------------------------
 def n_for_tol_squared(sigmas, eps2):
     """
@@ -195,7 +203,8 @@ def plot_squared_energy_loss(sigmas,
 # ------------------------------------------------------------
 def main():
     # 1) Load snapshot matrix from directory (e.g. 'training_set')
-    snapshots_dir = "training_set"   # change to "testing_set" if needed
+    #    All U_theta*_phi*_gamma*_psi*.npy files will be used.
+    snapshots_dir = "training_set"   # change to "testing_set" or another dir if needed
     S, _ = load_snapshot_matrix_from_dir(snapshots_dir=snapshots_dir, prefix="U_")
 
     # 2) Thin SVD
@@ -225,7 +234,7 @@ def main():
         show=True
     )
 
-    # 5) Save leading modes for later PROM experiments
+    # 5) Save leading modes for later PROM / ROM experiments
     for e2, nm in zip(eps2_list, n_modes_list):
         fname_modes = f"modes/U_modes_tol_{e2:.0e}.npy"
         fname_svals = f"modes/Singular_values_modes_tol_{e2:.0e}.npy"

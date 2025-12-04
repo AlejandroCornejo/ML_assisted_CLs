@@ -2,14 +2,15 @@
 # -*- coding: utf-8 -*-
 
 """
-POD pure reconstruction test for the RVE J2 problem (per (theta, phi)).
+POD pure reconstruction test for the RVE J2 problem (per (theta, phi, gamma, psi_deg)).
 
 Workflow:
 - Load:
     * training/testing displacement file:
-          {data_dir}/U_theta{theta:.1f}_phi{phi:.1f}.npy   (U trajectory)
+          {data_dir}/U_theta{theta:.1f}_phi{phi:.1f}_gamma{gamma:.3f}_psi{psi_deg:.1f}.npy
+      (full U trajectory for the 0 -> E1 -> E2 path)
     * modes/U_modes_tol_*.npy                             (POD basis Phi)
-- Restrict to the first n_steps_use time steps.
+- Optionally restrict to the first n_steps_use time steps (if not None).
 - Reconstruct displacements via pure projection:
         U_POD(t) = Phi Phi^T U_FOM(t)
 - Rebuild the RVE mesh from ProjectParameters.json, precompute B_all etc.
@@ -17,7 +18,7 @@ Workflow:
         - U_FOM(t)
         - U_POD(t)
   using the J2 law.
-- Plot FOM vs POD stress–strain curves for that (theta, phi).
+- Plot FOM vs POD stress–strain curves for that (theta, phi, gamma, psi_deg).
 """
 
 import numpy as np
@@ -39,16 +40,19 @@ from fom_solver_rve import build_node_global_map, precompute_mesh_arrays
 # User parameters
 # ----------------------------------------------------------------------
 # Angle combination to test (must match what you used in the FOM runs)
-theta = 50.0      # [deg]
-phi   = 50.0      # [deg]
+theta   = 50.0      # [deg]
+phi     = 50.0      # [deg]
+gamma   = 0.553      # radius factor used in that FOM batch
+psi_deg = 2.5      # angle between E1 and E2 [deg] used in that FOM batch
 
 # Directory where the FOM files were saved by run_fom_batch
 #   e.g. "training_set" or "testing_set"
 data_dir = "training_set"
 
 # Number of time steps to use (including the initial configuration).
-# You mentioned ~51 steps per training parameter combination.
-n_steps_use = 51
+# If None: use all time steps contained in the file.
+# If an integer: use min(n_steps_use, n_steps_total).
+n_steps_use = None  # was 51 for old single-path; now we default to "all"
 
 # POD basis file to use
 basis_file = "modes/U_modes_tol_1e-16.npy"
@@ -180,7 +184,7 @@ def homogenized_history_from_displacements(U_traj, conn, B_all, w_all, area_all,
 # ----------------------------------------------------------------------
 def plot_stress_strain_fom_vs_pod(strain_fom, stress_fom,
                                   strain_pod, stress_pod,
-                                  theta, phi,
+                                  theta, phi, gamma, psi_deg,
                                   save_dir):
     os.makedirs(save_dir, exist_ok=True)
 
@@ -203,15 +207,19 @@ def plot_stress_strain_fom_vs_pod(strain_fom, stress_fom,
 
     plt.xlabel("Strain component [-]")
     plt.ylabel("Stress [Pa]")
-    plt.title(f"FOM vs POD (homogenized)\n"
-              f"theta = {theta:.1f} deg, phi = {phi:.1f} deg")
+    plt.title(
+        "FOM vs POD (homogenized)\n"
+        + f"theta = {theta:.1f}°, phi = {phi:.1f}°, "
+        + f"gamma = {gamma:.3f}, psi = {psi_deg:.1f}°"
+    )
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
 
     fname = os.path.join(
         save_dir,
-        f"stress_strain_FOM_vs_POD_theta{theta:.1f}_phi{phi:.1f}.png"
+        f"stress_strain_FOM_vs_POD_theta{theta:.1f}_phi{phi:.1f}"
+        f"_gamma{gamma:.3f}_psi{psi_deg:.1f}.png"
     )
     plt.savefig(fname, dpi=300)
     plt.show()
@@ -223,16 +231,17 @@ def plot_stress_strain_fom_vs_pod(strain_fom, stress_fom,
 # ----------------------------------------------------------------------
 def main():
     # -----------------------------------------
-    # Load FOM displacement data for given (theta, phi)
+    # Load FOM displacement data for given (theta, phi, gamma, psi)
     # -----------------------------------------
     disp_file = os.path.join(
         data_dir,
-        f"U_theta{theta:.1f}_phi{phi:.1f}.npy"
+        f"U_theta{theta:.1f}_phi{phi:.1f}_gamma{gamma:.3f}_psi{psi_deg:.1f}.npy"
     )
     if not os.path.isfile(disp_file):
         raise FileNotFoundError(
             f"Displacement file not found: {disp_file}\n"
             f"Make sure run_fom_batch(theta={theta}, phi={phi}, "
+            f"gamma={gamma}, psi_deg={psi_deg}, "
             f"out_dir='{data_dir}') has been executed."
         )
 
@@ -243,7 +252,11 @@ def main():
         )
 
     n_steps_total, n_dof = U_fom_full.shape
-    n_steps = min(n_steps_use, n_steps_total)
+
+    if n_steps_use is None:
+        n_steps = n_steps_total
+    else:
+        n_steps = min(n_steps_use, n_steps_total)
 
     print(f"[INFO] Loaded FOM displacements from {disp_file}")
     print(f"       shape = {U_fom_full.shape}")
@@ -320,10 +333,11 @@ def main():
     plot_stress_strain_fom_vs_pod(
         strain_fom, stress_fom,
         strain_pod, stress_pod,
-        theta=theta, phi=phi,
+        theta=theta, phi=phi, gamma=gamma, psi_deg=psi_deg,
         save_dir=data_dir
     )
 
 
 if __name__ == "__main__":
     main()
+

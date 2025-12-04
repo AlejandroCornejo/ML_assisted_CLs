@@ -210,7 +210,7 @@ log_lines = []
 theta = 0.0
 phi = 0.0
 angle_increment = 25.0
-max_stretch_factor  = 0.01 # lambda
+max_stretch_factor  = 0.005 # lambda
 
 # Here we will store the strain and stress histories for all batches
 all_strain_histories       = []   # Kratos
@@ -220,8 +220,8 @@ all_stress_histories_ours  = []   # Ours (J2)
 
 batch = 0
 
-while theta <= 50.0:
-    while phi <= 50.0:
+while theta <= 25.0:
+    while phi <= 25.0:
         batch += 1
 
         # NOTE: Each batch creates a new analysis_stage

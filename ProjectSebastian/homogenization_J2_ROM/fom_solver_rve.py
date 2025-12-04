@@ -363,28 +363,106 @@ class RVE_homogenization_dataset_generator(analysis_stage.AnalysisStage):
 
 
 # =========================================================
-# Single-batch FOM driver (theta, phi, out_dir)
+# Helper: build E1 and E2 from (theta, phi, gamma, psi_deg)
+# =========================================================
+
+def _build_E1_E2(theta, phi, max_stretch_factor, gamma, psi_deg):
+    """
+    Given (theta, phi) in degrees and scalars gamma, psi_deg, construct:
+
+      E1 : base macro-strain direction (same as before)
+      E2 : second point in strain space such that
+
+         ||E2|| = gamma * ||E1||
+         angle(E1, E2) = psi_deg
+
+    using a deterministic perpendicular direction to E1,
+    with the same logic as in the Kratos multipath script.
+    """
+    theta_rad = np.radians(theta)
+    phi_rad   = np.radians(phi)
+    psi_rad   = np.radians(psi_deg)
+
+    # Base direction in strain space (same as original single-path)
+    dir1 = np.array([
+        np.cos(phi_rad),                     # E_xx
+        np.sin(theta_rad) * np.cos(phi_rad), # E_yy
+        np.sin(theta_rad) * np.sin(phi_rad), # E_xy
+    ], dtype=float)
+
+    norm_dir1 = np.linalg.norm(dir1)
+    if norm_dir1 < 1e-14:
+        # Degenerate: just return E2 collinear with E1 (or zero)
+        E1 = max_stretch_factor * dir1
+        return E1, gamma * E1
+
+    # Unit direction for E1
+    e1 = dir1 / norm_dir1
+    E1 = max_stretch_factor * dir1
+    norm_E1 = np.linalg.norm(E1)
+
+    # If psi ~ 0 or pi, just align E2 with E1 (possibly reversed) with scaled norm
+    if abs(np.sin(psi_rad)) < 1e-8:
+        E2 = gamma * E1 * np.sign(np.cos(psi_rad))
+        return E1, E2
+
+    # Build a perpendicular direction in strain space (robustly)
+    a = np.array([1.0, 0.0, 0.0])
+    if abs(np.dot(a, e1)) > 0.99:
+        a = np.array([0.0, 1.0, 0.0])
+    v = a - np.dot(a, e1) * e1
+    nv = np.linalg.norm(v)
+    if nv < 1e-14:
+        # Try another fallback direction
+        a = np.array([0.0, 0.0, 1.0])
+        v = a - np.dot(a, e1) * e1
+        nv = np.linalg.norm(v)
+        if nv < 1e-14:
+            # Worst case: keep E2 collinear
+            E2 = gamma * E1
+            return E1, E2
+    e_perp = v / nv
+
+    # Direction for E2 at angle psi w.r.t. e1
+    dir2 = np.cos(psi_rad) * e1 + np.sin(psi_rad) * e_perp
+    dir2 /= np.linalg.norm(dir2)
+
+    # Enforce ||E2|| = gamma * ||E1||
+    E2 = gamma * norm_E1 * dir2
+
+    return E1, E2
+
+
+# =========================================================
+# Single-batch FOM driver (theta, phi, gamma, psi_deg, out_dir)
 # =========================================================
 
 def run_fom_batch(theta,
                   phi,
                   parameters,
+                  gamma,
+                  psi_deg,
                   max_stretch_factor=0.01,
                   max_newton_it=100,
                   max_ls_it=5,
                   out_dir=DEFAULT_OUTPUT_DIR,
                   save_plot=True):
     """
-    Run ONE FOM batch for given (theta, phi) and save per-batch .npy files.
+    Run ONE FOM batch for given (theta, phi, gamma, psi_deg)
+    and save per-batch .npy files.
 
     Parameters
     ----------
     theta, phi : float
-        Loading direction angles [deg].
+        Base loading direction angles [deg] defining E1.
+    gamma : float
+        Radius factor for E2 (||E2|| = gamma * ||E1||).
+    psi_deg : float
+        Angle in strain space between E1 and E2 [deg].
     parameters : KM.Parameters
         ProjectParameters.
     max_stretch_factor : float
-        Lambda scaling for macro strain.
+        Lambda scaling for macro strain (base radius for E1).
     max_newton_it : int
     max_ls_it     : int
     out_dir       : str
@@ -397,7 +475,7 @@ def run_fom_batch(theta,
     stress_history_BC : (n_steps+1, 3)
     U_history         : (n_steps+1, n_dof)
     log_line          : str
-        Info line with theta, phi, and macro strain.
+        Info line with theta, phi, gamma, psi_deg, E1 and E2.
     """
 
     os.makedirs(out_dir, exist_ok=True)
@@ -410,16 +488,13 @@ def run_fom_batch(theta,
     global_model = KM.Model()
     simulation = RVE_homogenization_dataset_generator(global_model, parameters)
 
-    # Macro-strain definition
-    simulation.batch_strain = max_stretch_factor * np.array([
-        np.cos(np.radians(phi)),                               # E_xx
-        np.sin(np.radians(theta)) * np.cos(np.radians(phi)),   # E_yy
-        np.sin(np.radians(theta)) * np.sin(np.radians(phi)),   # E_xy
-    ])
+    # Build E1 and E2 according to unified multipath logic
+    E1, E2 = _build_E1_E2(theta, phi, max_stretch_factor, gamma, psi_deg)
 
     log_line = (
         f"theta={theta:.2f}, phi={phi:.2f}, "
-        f"strain={simulation.batch_strain.tolist()}"
+        f"gamma={gamma:.3f}, psi_deg={psi_deg:.1f}, "
+        f"E1={E1.tolist()}, E2={E2.tolist()}"
     )
 
     # History containers
@@ -464,13 +539,48 @@ def run_fom_batch(theta,
     U_history = [u.copy()]
 
     # Predictor tangent (local to this batch)
-    K_old = None
+    # Precompute purely elastic stiffness at u=0, eps_p=0, alpha=0
+    K_elastic, _, _, _ = assemble_K_and_fint_vec(
+        mat, conn, B_all, w_all,
+        eps_p_n, alpha_n,   # both zero here
+        u, n_dof, pattern_I, pattern_J
+    )
+    K_old = K_elastic.copy()
+
+    # Two-segment path: [0 -> E1] then [E1 -> E2]
+    t_mid = 0.5 * end_time
 
     while time < end_time - 1e-12:
         step += 1
         time += dt
         simulation.time = time
         simulation.step = step
+
+        # ------------------------------
+        # Path definition in strain space
+        # ------------------------------
+        if time <= t_mid:
+            # Segment 1: 0 -> E1
+            alpha_seg = time / max(t_mid, 1e-14)
+            E_t = alpha_seg * E1
+            seg_id = 1
+        else:
+            # Segment 2: E1 -> E2
+            beta_seg = (time - t_mid) / max(end_time - t_mid, 1e-14)
+            E_t = (1.0 - beta_seg) * E1 + beta_seg * E2
+            seg_id = 2
+
+        # The ApplyBoundaryConditions uses:
+        #   u_x = (Ex * x + Exy * y) * (time/end_time)
+        # so we set batch_strain = E_t / (time/end_time)
+        # to realize exactly E(t) in the BCs.
+        lambda_t = time / max(end_time, 1e-14)
+        if lambda_t < 1e-14:
+            effective_batch_strain = np.zeros(3)
+        else:
+            effective_batch_strain = E_t / lambda_t
+
+        simulation.batch_strain = effective_batch_strain
 
         # 1) Macro-strain → nodal displacements (Dirichlet targets)
         simulation.ApplyBoundaryConditions()
@@ -506,8 +616,10 @@ def run_fom_batch(theta,
 
             rel = norm_R / R0  # relative residual
 
-            print(f"[theta={theta:.2f}, phi={phi:.2f} | Step {step:03d} | "
-                  f"NR it {it:02d}] ||R_f||_inf = {norm_R:.3e}   rel = {rel:.3e}")
+            print(f"[theta={theta:.2f}, phi={phi:.2f}, "
+                  f"gamma={gamma:.3f}, psi={psi_deg:.1f}, seg={seg_id} "
+                  f"| Step {step:03d} | NR it {it:02d}] "
+                  f"||R_f||_inf = {norm_R:.3e}   rel = {rel:.3e}")
 
             # Convergence test: relative OR absolute
             if rel < 1e-3 or norm_R < 1e-2:
@@ -589,9 +701,9 @@ def run_fom_batch(theta,
     U_history         = np.stack(U_history, axis=0)  # (n_steps+1, n_dof)
 
     # -------------------------------------------------
-    # Save per-(theta, phi) .npy files
+    # Save per-(theta, phi, gamma, psi) .npy files
     # -------------------------------------------------
-    tag = f"theta{theta:.1f}_phi{phi:.1f}"
+    tag = f"theta{theta:.1f}_phi{phi:.1f}_gamma{gamma:.3f}_psi{psi_deg:.1f}"
 
     strain_file = os.path.join(out_dir, f"strain_{tag}.npy")
     stress_file = os.path.join(out_dir, f"stress_{tag}.npy")
@@ -622,7 +734,10 @@ def run_fom_batch(theta,
         plt.plot(Exy, Sxy, marker='o', color='k', label="σ_xy (J2)")
         plt.xlabel("Strain [-]")
         plt.ylabel("Stress [Pa]")
-        plt.title(f"theta={theta:.1f}, phi={phi:.1f}: homogenized response (J2)")
+        plt.title(
+            f"theta={theta:.1f}, phi={phi:.1f}, "
+            f"gamma={gamma:.3f}, psi={psi_deg:.1f}°: homogenized response (J2)"
+        )
         plt.grid(True)
         plt.legend()
         plt.tight_layout()
@@ -636,6 +751,7 @@ def run_fom_batch(theta,
 
 # =========================================================
 # Main: loop over theta, phi grid and call run_fom_batch
+#        with randomly sampled (gamma, psi_deg)
 # =========================================================
 
 def main(out_dir=DEFAULT_OUTPUT_DIR):
@@ -643,10 +759,13 @@ def main(out_dir=DEFAULT_OUTPUT_DIR):
         parameters = KM.Parameters(parameter_file.read())
 
     angle_increment    = 25.0
-    max_stretch_factor = 0.01  # lambda
+    max_stretch_factor = 0.005  # lambda
 
-    theta_vals = np.arange(0.0, 50.0 + 1e-8, angle_increment)
-    phi_vals   = np.arange(0.0, 50.0 + 1e-8, angle_increment)
+    theta_vals = np.arange(0.0, 360.0 + 1e-8, angle_increment)
+    phi_vals   = np.arange(0.0, 360.0 + 1e-8, angle_increment)
+
+    # Same random logic as Kratos multipath script
+    np.random.seed(1234)
 
     log_lines = []
     batch = 0
@@ -654,15 +773,26 @@ def main(out_dir=DEFAULT_OUTPUT_DIR):
     for theta in theta_vals:
         for phi in phi_vals:
             batch += 1
-            print(f"\n[INFO] Starting batch {batch} with theta={theta:.2f}, phi={phi:.2f}")
+
+            # Sample gamma and psi_deg (same ranges as Kratos multipath script)
+            gamma   = np.random.uniform(0.100, 1.000)   # magnitude factor
+            psi_deg = np.random.uniform(0.0,   180.0)   # angle between E1 and E2
+
+            print(
+                f"\n[INFO] Starting batch {batch} with "
+                f"theta={theta:.2f}, phi={phi:.2f}, "
+                f"gamma={gamma:.3f}, psi_deg={psi_deg:.1f}"
+            )
 
             _, _, _, log_line = run_fom_batch(
                 theta=theta,
                 phi=phi,
                 parameters=parameters,
+                gamma=gamma,
+                psi_deg=psi_deg,
                 max_stretch_factor=max_stretch_factor,
                 max_newton_it=100,
-                max_ls_it=5,
+                max_ls_it=50,
                 out_dir=out_dir,
                 save_plot=True
             )
@@ -673,7 +803,7 @@ def main(out_dir=DEFAULT_OUTPUT_DIR):
     log_file = os.path.join(out_dir, "batch_log.txt")
     with open(log_file, "w") as f:
         f.write(f"Total batches: {batch}\n")
-        f.write("Batch info (theta, phi, strain):\n")
+        f.write("Batch info (theta, phi, gamma, psi_deg, E1, E2):\n")
         for line in log_lines:
             f.write(line + "\n")
 
@@ -683,3 +813,4 @@ def main(out_dir=DEFAULT_OUTPUT_DIR):
 
 if __name__ == "__main__":
     main()
+

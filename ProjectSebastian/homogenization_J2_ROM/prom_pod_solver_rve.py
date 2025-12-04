@@ -2,11 +2,18 @@
 # -*- coding: utf-8 -*-
 
 """
-PROM–POD solver for the J2 RVE problem (per (theta, phi)).
+PROM–POD solver for the J2 RVE problem (per (theta, phi, gamma, psi)).
+
+Multipath setting:
+- Two-segment macro-strain path in strain space:
+    Segment 1: 0  -> E1
+    Segment 2: E1 -> E2
+  where:
+    E1 = E1(theta, phi, max_stretch_factor)
+    E2 = E2(E1, gamma, psi_deg)  (same unified logic as in the FOM generator)
 
 - Builds the Kratos model and vectorized FE/J2 machinery (same as FOM).
 - Loads a POD basis Phi (from your snapshot-based POD).
-- Chooses one macro-strain direction via user parameters (theta, phi).
 - Runs a quasi-static time stepping using a reduced Newton in q:
 
       u_D = Dirichlet lifting (from Kratos BCs)
@@ -19,13 +26,18 @@ PROM–POD solver for the J2 RVE problem (per (theta, phi)).
 
 - Homogenizes stress/strain at each step from J2.
 
-- For FOM comparison:
+- For FOM comparison (same multipath case):
     1) Tries to load:
-         training_set/strain_theta{theta:.1f}_phi{phi:.1f}.npy
-         training_set/stress_theta{theta:.1f}_phi{phi:.1f}.npy
+         training_set/strain_theta{theta:.1f}_phi{phi:.1f}_gamma{gamma:.3f}_psi{psi_deg:.1f}.npy
+         training_set/stress_theta{theta:.1f}_phi{phi:.1f}_gamma{gamma:.3f}_psi{psi_deg:.1f}.npy
     2) If not found, tries the same in testing_set/
-    3) If still not found, calls run_fom_batch(theta, phi, out_dir="testing_set")
-       from fom_solver_rve, and then loads those .npy files.
+    3) If still not found, calls:
+
+         run_fom_batch(theta, phi, parameters,
+                       gamma=gamma, psi_deg=psi_deg,
+                       out_dir="testing_set")
+
+       and then loads those .npy files.
 
 Requires:
   - ProjectParameters.json
@@ -33,7 +45,7 @@ Requires:
   - fom_solver_rve.py exposing:
         build_node_global_map, precompute_mesh_arrays,
         extract_dirichlet_bcs, assemble_K_and_fint_vec, homogenize_from_J2_vec,
-        run_fom_batch
+        run_fom_batch, _build_E1_E2
   - modes/U_modes_tol_*.npy
 """
 
@@ -52,7 +64,8 @@ from scipy.sparse.linalg import spsolve
 from fom_solver_rve import (
     build_node_global_map, precompute_mesh_arrays,
     extract_dirichlet_bcs, assemble_K_and_fint_vec, homogenize_from_J2_vec,
-    run_fom_batch,   # <-- new: FOM driver for a single (theta, phi)
+    run_fom_batch,              # FOM driver
+    _build_E1_E2,               # unified multipath E1/E2 builder
 )
 
 from j2_plane_stress_plastic_strain_rve_simo_optimized import (
@@ -65,10 +78,15 @@ from j2_plane_stress_plastic_strain_rve_simo_optimized import (
 # POD basis to use
 basis_file = "modes/U_modes_tol_1e-06.npy"
 
-# Choose which macro-strain direction to reproduce via PROM
-theta = 75.0   # [deg]
-phi   = 75.0   # [deg]
-max_stretch_factor = 0.01  # lambda
+# Choose which macro-strain base direction and multipath parameters
+theta = 125.0    # [deg]
+phi   = 350.0    # [deg]
+
+# Multipath parameters (must match the FOM case you want to compare with)
+gamma   = 0.349   # ||E2|| = gamma * ||E1||
+psi_deg = 144.3    # angle between E1 and E2 in strain space [deg]
+
+max_stretch_factor = 0.005  # lambda (base radius for E1, same as FOM generator)
 
 # Time stepping (same as in ProjectParameters.json ideally)
 project_parameters_file = "ProjectParameters.json"
@@ -77,7 +95,7 @@ project_parameters_file = "ProjectParameters.json"
 max_newton_it = 40
 tol_rel = 1e-3
 tol_abs = 1e-2
-max_ls_it = 5   # backtracking line-search iterations (analogous to FOM)
+max_ls_it = 50   # backtracking line-search iterations (analogous to FOM)
 
 # Directories where FOM data may live
 training_dir = "training_set"
@@ -107,6 +125,10 @@ class RVE_homogenization_PROM(analysis_stage.AnalysisStage):
     def ApplyBoundaryConditions(self):
         """
         Macro-strain → nodal displacements (same formula as in dataset generator).
+
+        Uses:
+            u_x = (Ex * x + Exy * y) * (time / end_time)
+            u_y = (Ey * y + Exy * x) * (time / end_time)
         """
         super().ApplyBoundaryConditions()
 
@@ -128,37 +150,39 @@ class RVE_homogenization_PROM(analysis_stage.AnalysisStage):
 
 
 # ----------------------------------------------------------------------
-# Helper: load or generate FOM histories for (theta, phi)
+# Helper: load or generate FOM histories for (theta, phi, gamma, psi_deg)
 # ----------------------------------------------------------------------
-def _fom_file_paths(base_dir, theta, phi):
-    strain_path = os.path.join(
-        base_dir,
-        f"strain_theta{theta:.1f}_phi{phi:.1f}.npy"
-    )
-    stress_path = os.path.join(
-        base_dir,
-        f"stress_theta{theta:.1f}_phi{phi:.1f}.npy"
-    )
+def _fom_file_paths(base_dir, theta, phi, gamma, psi_deg):
+    tag = f"theta{theta:.1f}_phi{phi:.1f}_gamma{gamma:.3f}_psi{psi_deg:.1f}"
+    strain_path = os.path.join(base_dir, f"strain_{tag}.npy")
+    stress_path = os.path.join(base_dir, f"stress_{tag}.npy")
     return strain_path, stress_path
 
 
 def get_fom_histories(theta,
                       phi,
+                      gamma,
+                      psi_deg,
                       parameters,
                       max_stretch_factor=max_stretch_factor,
                       max_newton_it=100,
                       max_ls_it=5):
     """
-    Returns (strain_fom, stress_fom) for the given (theta, phi).
+    Returns (strain_fom, stress_fom) for the given (theta, phi, gamma, psi_deg).
 
     Logic:
       1) Look for .npy files in training_set/
       2) If not found, look in testing_set/
-      3) If still not found, call run_fom_batch(theta, phi, parameters, out_dir='testing_set'),
+      3) If still not found, call:
+
+            run_fom_batch(theta, phi, parameters,
+                          gamma=gamma, psi_deg=psi_deg,
+                          out_dir='testing_set')
+
          then load them from testing_set/.
     """
     # 1) Try training_set
-    strain_path, stress_path = _fom_file_paths(training_dir, theta, phi)
+    strain_path, stress_path = _fom_file_paths(training_dir, theta, phi, gamma, psi_deg)
     if os.path.isfile(strain_path) and os.path.isfile(stress_path):
         print(f"[PROM] Found FOM histories in {training_dir}/")
         strain_fom = np.load(strain_path)
@@ -166,7 +190,7 @@ def get_fom_histories(theta,
         return strain_fom, stress_fom
 
     # 2) Try testing_set
-    strain_path, stress_path = _fom_file_paths(testing_dir, theta, phi)
+    strain_path, stress_path = _fom_file_paths(testing_dir, theta, phi, gamma, psi_deg)
     if os.path.isfile(strain_path) and os.path.isfile(stress_path):
         print(f"[PROM] Found FOM histories in {testing_dir}/")
         strain_fom = np.load(strain_path)
@@ -174,19 +198,23 @@ def get_fom_histories(theta,
         return strain_fom, stress_fom
 
     # 3) Run new FOM in testing_set
-    print(f"[PROM] FOM histories for theta={theta:.1f}, phi={phi:.1f} "
+    print(f"[PROM] FOM histories for "
+          f"theta={theta:.1f}, phi={phi:.1f}, "
+          f"gamma={gamma:.3f}, psi={psi_deg:.1f} "
           f"not found in {training_dir}/ or {testing_dir}/.")
     print(f"[PROM] Running FOM for this case and saving into {testing_dir}/ ...")
 
     os.makedirs(testing_dir, exist_ok=True)
 
     # This function will:
-    #   - run the full FOM for this (theta, phi)
-    #   - save strain_theta*_phi*.npy, stress_theta*_phi*.npy, U_theta*_phi*.npy
+    #   - run the full FOM for this (theta, phi, gamma, psi_deg)
+    #   - save strain_*, stress_*, U_* with matching tags
     run_fom_batch(
         theta,
         phi,
         parameters,
+        gamma=gamma,
+        psi_deg=psi_deg,
         max_stretch_factor=max_stretch_factor,
         max_newton_it=max_newton_it,
         max_ls_it=max_ls_it,
@@ -195,10 +223,10 @@ def get_fom_histories(theta,
     )
 
     # Now load them
-    strain_path, stress_path = _fom_file_paths(testing_dir, theta, phi)
+    strain_path, stress_path = _fom_file_paths(testing_dir, theta, phi, gamma, psi_deg)
     if not (os.path.isfile(strain_path) and os.path.isfile(stress_path)):
         raise FileNotFoundError(
-            f"After run_fom_batch, cannot find:\n"
+            "After run_fom_batch, cannot find:\n"
             f"  {strain_path}\n"
             f"  {stress_path}"
         )
@@ -207,7 +235,6 @@ def get_fom_histories(theta,
     stress_fom = np.load(stress_path)
     print(f"[PROM] Loaded newly generated FOM histories from {testing_dir}/")
     return strain_fom, stress_fom
-
 
 
 # ----------------------------------------------------------------------
@@ -224,18 +251,19 @@ def main():
     dt       = parameters["solver_settings"]["time_stepping"]["time_step"].GetDouble()
     end_time = parameters["problem_data"]["end_time"].GetDouble()
 
-    # Macro-strain vector for this (theta, phi)
-    batch_strain = max_stretch_factor * np.array([
-        np.cos(np.radians(phi)),                              # Exx
-        np.sin(np.radians(theta)) * np.cos(np.radians(phi)),  # Eyy
-        np.sin(np.radians(theta)) * np.sin(np.radians(phi)),  # Exy
-    ])
+    # Build E1 and E2 using the same unified multipath logic as the FOM
+    E1, E2 = _build_E1_E2(theta, phi, max_stretch_factor, gamma, psi_deg)
 
-    print(f"[PROM] Using batch_strain = {batch_strain}")
+    print(f"[PROM] Using multipath:")
+    print(f"       theta={theta:.1f}, phi={phi:.1f}, gamma={gamma:.3f}, psi={psi_deg:.1f}")
+    print(f"       E1 = {E1}")
+    print(f"       E2 = {E2}")
 
     # --- Build Kratos model and solver wrapper ---
     model = KM.Model()
-    simulation = RVE_homogenization_PROM(model, parameters, batch_strain)
+    # Initial batch_strain can be zero; we update it every time step
+    batch_strain0 = np.zeros(3)
+    simulation = RVE_homogenization_PROM(model, parameters, batch_strain0)
     simulation.Initialize()
 
     mp = simulation._GetSolver().GetComputingModelPart()
@@ -286,13 +314,44 @@ def main():
     strain_prom_hist = [np.zeros(3)]
     stress_prom_hist = [np.zeros(3)]
 
+    # Two-segment path: 0 -> E1 and E1 -> E2
+    t_mid = 0.5 * end_time
+
     while time < end_time - 1e-12:
         step += 1
         time += dt
         simulation.time = time
         simulation.step = step
 
-        print(f"\n[PROM] Time step {step}, t = {time:.6f}")
+        # --------------------------------------------------
+        # Define E(t) along the multipath in strain space
+        # --------------------------------------------------
+        if time <= t_mid:
+            # Segment 1: 0 -> E1
+            alpha_seg = time / max(t_mid, 1e-14)
+            E_t = alpha_seg * E1
+            seg_id = 1
+        else:
+            # Segment 2: E1 -> E2
+            beta_seg = (time - t_mid) / max(end_time - t_mid, 1e-14)
+            E_t = (1.0 - beta_seg) * E1 + beta_seg * E2
+            seg_id = 2
+
+        # The BCs use:
+        #   u_x = (Ex * x + Exy * y) * (time / end_time)
+        # so to realize exactly E_t we set:
+        #   batch_strain = E_t / (time / end_time)
+        lambda_t = time / max(end_time, 1e-14)
+        if lambda_t < 1e-14:
+            effective_batch_strain = np.zeros(3)
+        else:
+            effective_batch_strain = E_t / lambda_t
+
+        simulation.batch_strain = effective_batch_strain
+
+        print(f"\n[PROM] Time step {step}, t = {time:.6f}, seg = {seg_id}")
+        print(f"       E(t) = {E_t}")
+        print(f"       batch_strain (for BCs) = {simulation.batch_strain}")
 
         # 1) Apply BCs and read Dirichlet values
         simulation.ApplyBoundaryConditions()
@@ -344,7 +403,8 @@ def main():
 
             rel = norm_r / norm_r0
 
-            print(f"  [NR it {it:02d}] ||r||_inf = {norm_r:.3e}, rel = {rel:.3e}")
+            print(f"  [seg={seg_id} | NR it {it:02d}] "
+                  f"||r||_inf = {norm_r:.3e}, rel = {rel:.3e}")
 
             # 4) Convergence check
             if (rel < tol_rel) or (norm_r < tol_abs):
@@ -444,7 +504,9 @@ def main():
     # ------------------------------------------------------------------
     # FOM dataset for comparison: training_set / testing_set / new FOM
     # ------------------------------------------------------------------
-    strain_fom, stress_fom = get_fom_histories(theta, phi, parameters)
+    strain_fom, stress_fom = get_fom_histories(
+        theta, phi, gamma, psi_deg, parameters
+    )
 
     # If lengths differ (rounding, etc.), align them
     n_prom = strain_prom_hist.shape[0]
@@ -471,6 +533,8 @@ def main():
     labels = [r"$\sigma_{xx}$", r"$\sigma_{yy}$", r"$\sigma_{xy}$"]
     colors = ["r", "b", "k"]
 
+    tag = f"theta{theta:.1f}_phi{phi:.1f}_gamma{gamma:.3f}_psi{psi_deg:.1f}"
+
     plt.figure(figsize=(8, 6))
     for i in range(3):
         plt.plot(
@@ -486,19 +550,23 @@ def main():
 
     plt.xlabel("Strain component [-]")
     plt.ylabel("Stress [Pa]")
-    plt.title(f"POD-PROM J2 RVE (theta={theta:.1f}, phi={phi:.1f})")
+    plt.title(
+        "POD-PROM J2 RVE\n"
+        f"theta={theta:.1f}, phi={phi:.1f}, "
+        f"gamma={gamma:.3f}, psi={psi_deg:.1f}°"
+    )
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
 
-    fig_name = f"prom_results/stress_strain_PROM_vs_FOM_theta{theta:.1f}_phi{phi:.1f}.png"
+    fig_name = f"prom_results/stress_strain_PROM_vs_FOM_{tag}.png"
     plt.savefig(fig_name, dpi=300)
     plt.show()
     print(f"[PROM] Saved comparison plot to {fig_name}")
 
     # Save raw histories
     np.savez(
-        f"prom_results/prom_histories_theta{theta:.1f}_phi{phi:.1f}.npz",
+        f"prom_results/prom_histories_{tag}.npz",
         strain_prom=strain_prom_hist,
         stress_prom=stress_prom_hist,
         strain_fom=strain_fom,
