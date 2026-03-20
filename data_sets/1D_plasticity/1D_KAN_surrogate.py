@@ -23,8 +23,6 @@ sigma = data["sigma"]
 plt.plot(eps, sigma, label="Truth", marker='o')
 plt.xlabel("Strain")
 plt.ylabel("Stress")
-plt.legend()
-plt.grid()
 
 
 #############################################################################
@@ -40,8 +38,8 @@ class KANStressPredictor(nn.Module):
     # Create surrogate model
         self.model = KAN.MultKAN( # x--[]-->y
             width=[1, 1],
-            grid=6,
-            k=3,
+            grid=3,
+            k=2,
             grid_range=[-0.02, 0.02]
         )
 
@@ -70,16 +68,20 @@ n_epochs = 4000
 for epoch in range(n_epochs):
     optimizer.zero_grad()
 
-    # y_pred_list = []
-    # for i in range(len(x_torch)):
-    #     x_i = x_torch[i].view(1, 1)  # already tensor, no need to recreate
-    #     y_pred_i = model(x_i)        # keep tensor with grad
-    #     y_pred_list.append(y_pred_i)
+    vectorized = True
 
-    # Stack into a tensor
-    # y_pred = torch.vstack(y_pred_list)  # shape (100,1)
+    if vectorized:
+        y_pred = model(x_torch)  # shape (100,1)
+    else:
+        y_pred_list = []
+        for i in range(len(x_torch)):
+            x_i = x_torch[i].view(1, 1)  # already tensor, no need to recreate
+            y_pred_i = model(x_i)        # keep tensor with grad
+            y_pred_list.append(y_pred_i)
 
-    y_pred = model(x_torch)  # shape (100,1)
+        # Stack into a tensor
+        y_pred = torch.vstack(y_pred_list)  # shape (100,1)
+
 
     # L2 loss
     loss = torch.mean((y_pred - y_torch)**2)
@@ -92,5 +94,7 @@ for epoch in range(n_epochs):
 
 # plot the KAN
 y_KAN = model(x_torch).detach().numpy().flatten()
-plt.plot(eps, y_KAN, '--', label='KAN (trained)')
+plt.plot(eps, y_KAN, '--', color="k", label='KAN (trained)')
+plt.legend()
+plt.grid()
 plt.show()
