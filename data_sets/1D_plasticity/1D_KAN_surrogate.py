@@ -261,7 +261,7 @@ class KANStressPredictor(nn.Module):
 
 model = KANStressPredictor()
 
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
 
 x_torch = torch.tensor(eps, dtype=torch.float32).unsqueeze(1)  # (steps,1)
 y_torch = torch.tensor(sigma, dtype=torch.float32).unsqueeze(1)  # (steps,1)
