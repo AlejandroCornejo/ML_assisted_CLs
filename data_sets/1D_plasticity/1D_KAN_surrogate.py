@@ -54,8 +54,13 @@ class KANStressPredictor(nn.Module):
     def __init__(self):
         super(KANStressPredictor, self).__init__()
 
+        # new ones
         self.kappa = torch.tensor(0.0) # dissipation
         self.q = torch.tensor(0.0)     # plastic strain
+
+        # n-1
+        self.old_kappa = torch.tensor(0.0) # dissipation
+        self.old_q = torch.tensor(0.0)     # plastic strain
 
         self.model_psi = KAN.MultKAN( # eps, q, kappa --> psi // stress = grad.psi
             width=[3, 2, 1],
@@ -73,14 +78,13 @@ class KANStressPredictor(nn.Module):
         )
         self.model_F.speed()
 
-    def forward(self, strain):
-
-        strain = strain.detach().requires_grad_(True)
+    # ----------------------------------------------------------------------------------
+    def CalculateStress(self, strain): # returns stress with q and kappa from memory
 
         psi_KAN_inputs = []
         psi_KAN_inputs.append(strain)
-        psi_KAN_inputs.append(torch.full_like(strain, self.q))
-        psi_KAN_inputs.append(torch.full_like(strain, self.kappa))
+        psi_KAN_inputs.append(torch.full_like(strain, self.old_q))
+        psi_KAN_inputs.append(torch.full_like(strain, self.old_kappa))
 
         KAN_input = torch.cat(psi_KAN_inputs, dim=-1)
 
@@ -106,20 +110,16 @@ class KANStressPredictor(nn.Module):
 
         return grad - grad_0[:, :1] # grad_0[:, :1] selects the first column of strain, shape (100, 1)
 
-
-    def FinalizeMaterialResponse(self, strain, old_strain):
-
-        if old_strain is None:
-            # No history step available (first call), skip update.
-            return
+    # ----------------------------------------------------------------------------------
+    def CalculateSecondDerivativesPsi(self, strain): # d2psi/dE, d2Psi/dE dq
         
-        strain = strain.detach().requires_grad_(True)
-
+        q_for_grad = self.old_q.detach().requires_grad_(True)
         # Compute psi as function of strain
         psi_KAN_inputs = []
         psi_KAN_inputs.append(strain)
-        psi_KAN_inputs.append(torch.full_like(strain, self.q))
-        psi_KAN_inputs.append(torch.full_like(strain, self.kappa))
+        # psi_KAN_inputs.append(torch.full_like(strain, q_for_grad))
+        psi_KAN_inputs.append(q_for_grad.expand_as(strain))
+        psi_KAN_inputs.append(torch.full_like(strain, self.old_kappa))
 
         KAN_input = torch.cat(psi_KAN_inputs, dim=-1)
 
@@ -138,11 +138,22 @@ class KANStressPredictor(nn.Module):
             outputs=stress,
             inputs=strain,
             grad_outputs=torch.ones_like(stress),
-            create_graph=True,
-        )[0]
+            create_graph=True)[0]
+
+        d2Psi_dE_dq = torch.autograd.grad(
+            outputs=stress,
+            inputs=q_for_grad,
+            grad_outputs=torch.ones_like(stress),
+            create_graph=True)[0]
         
+        return C, d2Psi_dE_dq
+
+    # ----------------------------------------------------------------------------------
+    def CalculateFandDerivatives(self, strain):
+
+        stress = self.CalculateStress(strain)
         # keep kappa as internal state, but allow grad for this sensitivity computation
-        kappa_for_grad = self.kappa.detach().requires_grad_(True)
+        kappa_for_grad = self.old_kappa.detach().requires_grad_(True)
 
         F_KAN_inputs = []
         F_KAN_inputs.append(stress)
@@ -169,19 +180,55 @@ class KANStressPredictor(nn.Module):
             allow_unused=False,
         )[0]
         
-        
+        return raw_F, dF_d_stress, dF_d_kappa
 
-        # print("strain: ",strain)
-        # print("old strain: ",old_strain)
-        # print("stress: ",stress)
-        print("C : ",C)
-        print("F: ", raw_F)
-        print("dF_d_stress: ", dF_d_stress)
-        print("dF_d_kappa: ", dF_d_kappa)
-        
-        a
+    # ----------------------------------------------------------------------------------
+    def forward(self, strain):
+
+        strain = strain.detach().requires_grad_(True)
+
+        stress = self.CalculateStress(strain) # predicts with old int vars and curr E
+
+        raw_F, dF_d_stress, dF_d_kappa = self.CalculateFandDerivatives(strain)
+
+        if raw_F.item() > 0.0:
+            C, d2Psi_dE_dq = self.CalculateSecondDerivativesPsi(strain)
+            gamma = raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2)
+            dq = -gamma * dF_d_stress
+            dkappa = gamma * dF_d_kappa
+
+            # scalar internal update to avoid shape mismatch
+            self.old_q = (self.old_q + dq.mean()).detach()
+            self.old_kappa = (self.old_kappa + dkappa.mean()).detach()
+
+            stress = self.CalculateStress(strain)
+
+            self.old_q = (self.old_q - dq.mean()).detach()
+            self.old_kappa = (self.old_kappa - dkappa.mean()).detach()
+
+        return stress
+
+    # ----------------------------------------------------------------------------------
+    def FinalizeMaterialResponse(self, strain):
+
+        strain = strain.detach().requires_grad_(True)
+
+        stress = self.CalculateStress(strain) # predicts with old int vars and curr E
+
+        raw_F, dF_d_stress, dF_d_kappa = self.CalculateFandDerivatives(strain)
+
+        if raw_F.item() > 0.0:
+            C, d2Psi_dE_dq = self.CalculateSecondDerivativesPsi(strain)
+            gamma = raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2)
+            dq = -gamma * dF_d_stress
+            dkappa = gamma * dF_d_kappa
+
+            # scalar internal update to avoid shape mismatch
+            self.old_q = (self.old_q + dq.mean()).detach()
+            self.old_kappa = (self.old_kappa + dkappa.mean()).detach()
 
 
+    # ----------------------------------------------------------------------------------
     def ResetInternalVars(self):
         self.kappa = torch.tensor(0.0) # dissipation
         self.q = torch.tensor(0.0)     # plastic strain
@@ -213,15 +260,13 @@ for epoch in range(n_epochs):
         y_pred_list = []
         for i in range(len(x_torch)):
             x_i = x_torch[i].view(1, 1)  # already tensor, no need to recreate
-            y_pred_i = model(x_i)        # keep tensor with grad
+            y_pred_i = model.forward(x_i)        # keep tensor with grad
             y_pred_list.append(y_pred_i)
+            model.FinalizeMaterialResponse(x_i)
 
-            if i > 0:
-                model.FinalizeMaterialResponse(x_i, x_torch[i-1].view(1, 1))
-            else:
-                model.FinalizeMaterialResponse(x_i, None)
 
         # Stack into a tensor
+        model.ResetInternalVars()
         y_pred = torch.vstack(y_pred_list)  # shape (100,1)
 
 
