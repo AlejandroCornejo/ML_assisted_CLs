@@ -81,8 +81,8 @@ H = 10000.0
 mat = Elastoplastic1D(E, sigma_y, H)
 
 # Strain history
-eps = np.linspace(0, 0.02, 50)
-eps_unload = np.linspace(0.02, -0.02, 50)
+eps = np.linspace(0, 0.01, 50)
+eps_unload = np.linspace(0.01, 0.0, 50)
 eps = np.concatenate([eps, eps_unload])
 
 # Run simulation
