@@ -35,19 +35,65 @@ class KANStressPredictor(nn.Module):
     def __init__(self):
         super(KANStressPredictor, self).__init__()
 
-    # Create surrogate model
-        self.model = KAN.MultKAN( # x--[]-->y
-            width=[1, 1],
-            grid=3,
-            k=2,
-            grid_range=[-0.02, 0.02]
-        )
+        self.kappa = torch.tensor(0.0) # dissipation
+        self.q = torch.tensor(0.0)     # plastic strain
 
-        self.model.speed()
+        self.model_psi = KAN.MultKAN( # eps, q, kappa --> psi // stress = grad.psi
+            width=[3, 2, 1],
+            grid=3,
+            k=2
+            # grid_range=[-0.02, 0.02]
+        )
+        self.model_psi.speed()
+        
+        self.model_F = KAN.MultKAN( # eps, kappa --> F
+            width=[2, 1, 1],
+            grid=3,
+            k=2
+            # grid_range=[-0.02, 0.02]
+        )
+        self.model_F.speed()
 
     def forward(self, strain):
-        zeros = torch.zeros_like(strain)
-        return self.model(strain) - self.model(zeros) # normalize
+
+        strain = strain.detach().requires_grad_(True)
+
+        psi_KAN_inputs = []
+        psi_KAN_inputs.append(strain)
+        psi_KAN_inputs.append(torch.full_like(strain, self.q))
+        psi_KAN_inputs.append(torch.full_like(strain, self.kappa))
+
+        KAN_input = torch.cat(psi_KAN_inputs, dim=-1)
+
+        # This method computes the stress without updating internal vars
+        zeros = torch.zeros_like(KAN_input, requires_grad=True)
+
+        raw_psi = self.model_psi(KAN_input)
+        psi_at_0 = self.model_psi(zeros)
+        
+        grad_0 = torch.autograd.grad(
+            outputs=psi_at_0,
+            inputs=zeros,
+            grad_outputs=torch.ones_like(psi_at_0),
+            create_graph=True
+        )[0]
+
+        grad = torch.autograd.grad(
+            outputs=raw_psi,
+            inputs=strain,
+            grad_outputs=torch.ones_like(raw_psi),
+            create_graph=True
+        )[0]
+
+        return grad - grad_0
+
+    def FinalizeMaterialResponse(self, strain):
+        pass
+
+
+    def ResetInternalVars(self):
+        self.kappa = torch.tensor(0.0) # dissipation
+        self.q = torch.tensor(0.0)     # plastic strain
 
 #############################################################################
 #############################################################################
@@ -68,7 +114,7 @@ n_epochs = 4000
 for epoch in range(n_epochs):
     optimizer.zero_grad()
 
-    vectorized = True
+    vectorized = False
 
     if vectorized:
         y_pred = model(x_torch)  # shape (100,1)
