@@ -1,6 +1,15 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+import sys
+import os
+import torch
+
+import torch.nn as nn
+
+sys.path.append('../../')
+# sys.path.append(os.path.join(os.getcwd(), 'pykan'))
+# import pykan.kan as KAN
 
 import pykan.kan as KAN
 
@@ -11,27 +20,50 @@ eps = data["eps"]
 sigma = data["sigma"]
 
 # Plot the results
-plt.plot(eps, sigma, label="Truth")
+plt.plot(eps, sigma, label="Truth", marker='o')
 plt.xlabel("Strain")
 plt.ylabel("Stress")
 plt.legend()
 plt.grid()
 
 
-#-----------------------------
-# Create surrogate model
-model = KAN.MultKAN( # x--[]-->y
-    width=[1, 1],
-    grid=6,
-    k=3,
-    grid_range=[-0.02, 0.02]
-)
-model.speed()
+#############################################################################
+#############################################################################
+#############################################################################
+#############################################################################
+
+class KANStressPredictor(nn.Module):
+
+    def __init__(self):
+        super(KANStressPredictor, self).__init__()
+
+    # Create surrogate model
+        self.model = KAN.MultKAN( # x--[]-->y
+            width=[1, 1],
+            grid=6,
+            k=3,
+            grid_range=[-0.02, 0.02]
+        )
+
+        self.model.speed()
+
+    def forward(self, strain):
+        zeros = torch.zeros_like(strain)
+        return self.model(strain) - self.model(zeros) # normalize
+
+#############################################################################
+#############################################################################
+#############################################################################
+#############################################################################
+
+
+model = KANStressPredictor()
 
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
 x_torch = torch.tensor(eps, dtype=torch.float32).unsqueeze(1)  # (steps,1)
 y_torch = torch.tensor(sigma, dtype=torch.float32).unsqueeze(1)  # (steps,1)
+zeros = torch.zeros_like(x_torch)
 
 n_epochs = 4000
 
@@ -39,15 +71,15 @@ for epoch in range(n_epochs):
     optimizer.zero_grad()
 
     # y_pred_list = []
-    # for i in range(len(x)):
+    # for i in range(len(x_torch)):
     #     x_i = x_torch[i].view(1, 1)  # already tensor, no need to recreate
     #     y_pred_i = model(x_i)        # keep tensor with grad
     #     y_pred_list.append(y_pred_i)
 
-    y_pred = model(x_torch)  # shape (100,1)
-
     # Stack into a tensor
     # y_pred = torch.vstack(y_pred_list)  # shape (100,1)
+
+    y_pred = model(x_torch)  # shape (100,1)
 
     # L2 loss
     loss = torch.mean((y_pred - y_torch)**2)
@@ -58,16 +90,7 @@ for epoch in range(n_epochs):
     if epoch % 20 == 0:
         print(f"Epoch {epoch}, Loss: {loss.item()}")
 
-
-
-
-
-
-
-
-
-
-
-
-
+# plot the KAN
+y_KAN = model(x_torch).detach().numpy().flatten()
+plt.plot(eps, y_KAN, '--', label='KAN (trained)')
 plt.show()
