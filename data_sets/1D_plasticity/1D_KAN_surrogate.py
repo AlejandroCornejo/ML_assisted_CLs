@@ -191,20 +191,31 @@ class KANStressPredictor(nn.Module):
 
         raw_F, dF_d_stress, dF_d_kappa = self.CalculateFandDerivatives(strain)
 
+        accum_q = 0.0
+        accum_kappa = 0.0
         if raw_F.item() > 0.0:
-            C, d2Psi_dE_dq = self.CalculateSecondDerivativesPsi(strain)
-            gamma = raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2)
-            dq = -gamma * dF_d_stress
-            dkappa = gamma * dF_d_kappa
+            max_iter = 20
+            iter = 0
+            while raw_F.item() > 0.0 and iter < max_iter:
+                C, d2Psi_dE_dq = self.CalculateSecondDerivativesPsi(strain)
+                gamma = raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2)
+                dq = -gamma * dF_d_stress
+                dkappa = gamma * dF_d_kappa
 
-            # scalar internal update to avoid shape mismatch
-            self.old_q = (self.old_q + dq.mean()).detach()
-            self.old_kappa = (self.old_kappa + dkappa.mean()).detach()
+                # scalar internal update to avoid shape mismatch
+                self.old_q = (self.old_q + dq.mean()).detach()
+                self.old_kappa = (self.old_kappa + dkappa.mean()).detach()
+                
+                accum_q += dq.mean()
+                accum_kappa += dkappa.mean()
 
-            stress = self.CalculateStress(strain)
+                stress = self.CalculateStress(strain)
+                raw_F, dF_d_stress, dF_d_kappa = self.CalculateFandDerivatives(strain)
+                iter += 1
 
-            self.old_q = (self.old_q - dq.mean()).detach()
-            self.old_kappa = (self.old_kappa - dkappa.mean()).detach()
+            # we cancel the increment, to be done in finalize
+            self.old_q = (self.old_q - accum_q).detach()
+            self.old_kappa = (self.old_kappa - accum_kappa).detach()
 
         return stress
 
@@ -216,16 +227,22 @@ class KANStressPredictor(nn.Module):
         stress = self.CalculateStress(strain) # predicts with old int vars and curr E
 
         raw_F, dF_d_stress, dF_d_kappa = self.CalculateFandDerivatives(strain)
-
         if raw_F.item() > 0.0:
-            C, d2Psi_dE_dq = self.CalculateSecondDerivativesPsi(strain)
-            gamma = raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2)
-            dq = -gamma * dF_d_stress
-            dkappa = gamma * dF_d_kappa
+            max_iter = 20
+            iter = 0
+            while raw_F.item() > 0.0 and iter < max_iter:
+                C, d2Psi_dE_dq = self.CalculateSecondDerivativesPsi(strain)
+                gamma = raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2)
+                dq = -gamma * dF_d_stress
+                dkappa = gamma * dF_d_kappa
 
-            # scalar internal update to avoid shape mismatch
-            self.old_q = (self.old_q + dq.mean()).detach()
-            self.old_kappa = (self.old_kappa + dkappa.mean()).detach()
+                # scalar internal update to avoid shape mismatch
+                self.old_q = (self.old_q + dq.mean()).detach()
+                self.old_kappa = (self.old_kappa + dkappa.mean()).detach()
+
+                stress = self.CalculateStress(strain)
+                raw_F, dF_d_stress, dF_d_kappa = self.CalculateFandDerivatives(strain)
+                iter += 1
 
     # ----------------------------------------------------------------------------------
     def ResetInternalVars(self):
@@ -246,7 +263,7 @@ x_torch = torch.tensor(eps, dtype=torch.float32).unsqueeze(1)  # (steps,1)
 y_torch = torch.tensor(sigma, dtype=torch.float32).unsqueeze(1)  # (steps,1)
 zeros = torch.zeros_like(x_torch)
 
-n_epochs = 25
+n_epochs = 50
 
 for epoch in range(n_epochs):
     optimizer.zero_grad()
@@ -262,7 +279,6 @@ for epoch in range(n_epochs):
             y_pred_i = model.forward(x_i)        # keep tensor with grad
             y_pred_list.append(y_pred_i)
             model.FinalizeMaterialResponse(x_i)
-
 
         # Stack into a tensor
         model.ResetInternalVars()
