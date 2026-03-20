@@ -156,8 +156,8 @@ class KANStressPredictor(nn.Module):
         kappa_for_grad = self.old_kappa.detach().requires_grad_(True)
 
         F_KAN_inputs = []
-        F_KAN_inputs.append(stress)
-        F_KAN_inputs.append(kappa_for_grad.expand_as(strain))
+        F_KAN_inputs.append(stress) # Stress
+        F_KAN_inputs.append(kappa_for_grad.expand_as(strain)) # kappa
         KAN_input = torch.cat(F_KAN_inputs, dim=-1)
 
         raw_F = self.model_F(KAN_input)
@@ -227,11 +227,10 @@ class KANStressPredictor(nn.Module):
             self.old_q = (self.old_q + dq.mean()).detach()
             self.old_kappa = (self.old_kappa + dkappa.mean()).detach()
 
-
     # ----------------------------------------------------------------------------------
     def ResetInternalVars(self):
-        self.kappa = torch.tensor(0.0) # dissipation
-        self.q = torch.tensor(0.0)     # plastic strain
+        self.old_kappa = torch.tensor(0.0) # dissipation
+        self.old_q = torch.tensor(0.0)     # plastic strain
 
 #############################################################################
 #############################################################################
@@ -247,7 +246,7 @@ x_torch = torch.tensor(eps, dtype=torch.float32).unsqueeze(1)  # (steps,1)
 y_torch = torch.tensor(sigma, dtype=torch.float32).unsqueeze(1)  # (steps,1)
 zeros = torch.zeros_like(x_torch)
 
-n_epochs = 20
+n_epochs = 25
 
 for epoch in range(n_epochs):
     optimizer.zero_grad()
@@ -280,7 +279,17 @@ for epoch in range(n_epochs):
         print(f"Epoch {epoch}, Loss: {loss.item()}")
 
 # plot the KAN
-y_KAN = model(x_torch).detach().numpy().flatten()
+y_pred_list = []
+for i in range(len(x_torch)):
+    x_i = x_torch[i].view(1, 1)  # already tensor, no need to recreate
+    y_pred_i = model.forward(x_i)        # keep tensor with grad
+    y_pred_list.append(y_pred_i)
+    model.FinalizeMaterialResponse(x_i)
+model.ResetInternalVars()
+
+# Convert stacked tensor predictions to numpy
+y_pred = torch.vstack(y_pred_list)
+y_KAN = y_pred.detach().cpu().numpy()
 
 plt.plot(eps, y_KAN, '--', color="k", label='KAN (trained)')
 plt.legend()
