@@ -63,16 +63,16 @@ class KANStressPredictor(nn.Module):
         self.old_q = torch.tensor(0.0)     # plastic strain
 
         self.model_psi = KAN.MultKAN( # eps, q, kappa --> psi // stress = grad.psi
-            width=[3, 2, 1],
-            grid=4,
+            width=[3,  1],
+            grid=3,
             k=2,
             grid_range=[0, 1]
         )
         self.model_psi.speed()
         
         self.model_F = KAN.MultKAN( # eps, kappa --> F
-            width=[2, 2, 1],
-            grid=4,
+            width=[2,  1],
+            grid=3,
             k=2,
             grid_range=[0, 1]
         )
@@ -91,16 +91,13 @@ class KANStressPredictor(nn.Module):
         # This method computes the stress without updating internal vars
         zeros = torch.zeros_like(KAN_input, requires_grad=True)
 
+        # PSI is the raw potential from the KAN
         raw_psi = self.model_psi(KAN_input)
         psi_at_0 = self.model_psi(zeros)
         
-        grad_0 = torch.autograd.grad(
-            outputs=psi_at_0,
-            inputs=zeros,
-            grad_outputs=torch.ones_like(psi_at_0),
-            create_graph=True
-        )[0]
-
+        # Stress is dPSI/dstrain - (dPSI/dstrain)|_{strain=0}
+        # The subtraction is necessary to account for the reference state at zero strain,
+        # ensuring the stress response is properly shifted (e.g., stress = 0 at strain = 0 if desired by physics)
         grad = torch.autograd.grad(
             outputs=raw_psi,
             inputs=strain,
@@ -108,7 +105,14 @@ class KANStressPredictor(nn.Module):
             create_graph=True
         )[0]
 
-        return grad - grad_0[:, :1] # grad_0[:, :1] selects the first column of strain, shape (100, 1)
+        grad_0 = torch.autograd.grad(
+            outputs=psi_at_0,
+            inputs=zeros,
+            grad_outputs=torch.ones_like(psi_at_0),
+            create_graph=True
+        )[0]
+
+        return grad - grad_0[:, :1]
 
     # ----------------------------------------------------------------------------------
     def CalculateSecondDerivativesPsi(self, strain): # d2psi/dE, d2Psi/dE dq
@@ -159,8 +163,11 @@ class KANStressPredictor(nn.Module):
         F_KAN_inputs.append(stress) # Stress
         F_KAN_inputs.append(kappa_for_grad.expand_as(strain)) # kappa
         KAN_input = torch.cat(F_KAN_inputs, dim=-1)
+        
+        zeros = torch.zeros_like(KAN_input, requires_grad=True)
 
         raw_F = self.model_F(KAN_input)
+        F_zero = self.model_F(zeros)
 
         dF_d_stress = torch.autograd.grad(
             outputs=raw_F,
@@ -179,8 +186,8 @@ class KANStressPredictor(nn.Module):
             retain_graph=True,
             allow_unused=False,
         )[0]
-        
-        return raw_F, dF_d_stress, dF_d_kappa
+
+        return raw_F - F_zero, dF_d_stress, dF_d_kappa
 
     # ----------------------------------------------------------------------------------
     def forward(self, strain):
@@ -191,33 +198,52 @@ class KANStressPredictor(nn.Module):
 
         raw_F, dF_d_stress, dF_d_kappa = self.CalculateFandDerivatives(strain)
 
-        if raw_F.item() > 0.0:
-            accum_q = 0.0
-            accum_kappa = 0.0
-            max_iter = 50
-            iter = 0
-            while raw_F.item() > 0.0 and iter < max_iter:
-                C, d2Psi_dE_dq = self.CalculateSecondDerivativesPsi(strain)
-                gamma = raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2)
-                if gamma < 0.0:
-                    break
-                dq = -gamma * dF_d_stress
-                dkappa = gamma * dF_d_kappa
+        # if raw_F.item() > 0.0:
+            # accum_q = 0.0
+            # accum_kappa = 0.0
+            # max_iter = 50
+            # iter = 0
+            # while raw_F.item() > 0.0 and iter < max_iter:
+            #     C, d2Psi_dE_dq = self.CalculateSecondDerivativesPsi(strain)
+            #     gamma = raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2)
+            #     if gamma < 0.0:
+            #         break
+            #     dq = -gamma * dF_d_stress
+            #     dkappa = gamma * dF_d_kappa
 
-                # scalar internal update to avoid shape mismatch
-                self.old_q = (self.old_q + dq.mean()).detach()
-                self.old_kappa = (self.old_kappa + dkappa.mean()).detach()
+            #     # scalar internal update to avoid shape mismatch
+            #     self.old_q = (self.old_q + dq.mean()).detach()
+            #     self.old_kappa = (self.old_kappa + dkappa.mean()).detach()
                 
-                accum_q += dq.mean()
-                accum_kappa += dkappa.mean()
+            #     accum_q += dq.mean()
+            #     accum_kappa += dkappa.mean()
 
-                stress = self.CalculateStress(strain)
-                raw_F, dF_d_stress, dF_d_kappa = self.CalculateFandDerivatives(strain)
-                iter += 1
+            #     stress = self.CalculateStress(strain)
+            #     raw_F, dF_d_stress, dF_d_kappa = self.CalculateFandDerivatives(strain)
+            #     iter += 1
 
-            # we cancel the increment, to be done in finalize
-            self.old_q = (self.old_q - accum_q).detach()
-            self.old_kappa = (self.old_kappa - accum_kappa).detach()
+        C, d2Psi_dE_dq = self.CalculateSecondDerivativesPsi(strain)
+        gamma = (-raw_F / (dF_d_stress * d2Psi_dE_dq + dF_d_kappa**2))
+            
+            # if gamma < 0.0:
+            #     print("gamma is lower than 0...")
+
+        dq     = gamma * dF_d_stress  # Removed ReLU to allow negative plastic strain increments
+        dkappa = (gamma * dF_d_kappa)  # Keep ReLU for dissipation to ensure non-negative
+
+        # scalar internal update to avoid shape mismatch
+        self.old_q = (self.old_q + dq.mean()).detach()
+        self.old_kappa = (self.old_kappa + dkappa.mean()).detach()
+        
+        stress = self.CalculateStress(strain)
+
+        # scalar internal update to avoid shape mismatch
+        self.old_q = (self.old_q - dq.mean()).detach()
+        self.old_kappa = (self.old_kappa - dkappa.mean()).detach()
+
+            # # we cancel the increment, to be done in finalize
+            # self.old_q = (self.old_q - accum_q).detach()
+            # self.old_kappa = (self.old_kappa - accum_kappa).detach()
 
         return stress
 
@@ -229,24 +255,34 @@ class KANStressPredictor(nn.Module):
         stress = self.CalculateStress(strain) # predicts with old int vars and curr E
 
         raw_F, dF_d_stress, dF_d_kappa = self.CalculateFandDerivatives(strain)
-        if raw_F.item() > 0.0:
-            max_iter = 50
-            iter = 0
-            while raw_F.item() > 0.0 and iter < max_iter:
-                C, d2Psi_dE_dq = self.CalculateSecondDerivativesPsi(strain)
-                gamma = raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2)
-                if gamma < 0.0:
-                    break
-                dq = -gamma * dF_d_stress
-                dkappa = gamma * dF_d_kappa
+        # if raw_F.item() > 0.0:
+            # max_iter = 50
+            # iter = 0
+            # while raw_F.item() > 0.0 and iter < max_iter:
+            #     C, d2Psi_dE_dq = self.CalculateSecondDerivativesPsi(strain)
+            #     gamma = raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2)
+            #     if gamma < 0.0:
+            #         break
+            #     dq = -gamma * dF_d_stress
+            #     dkappa = gamma * dF_d_kappa
 
-                # scalar internal update to avoid shape mismatch
-                self.old_q = (self.old_q + dq.mean()).detach()
-                self.old_kappa = (self.old_kappa + dkappa.mean()).detach()
+            #     # scalar internal update to avoid shape mismatch
+            #     self.old_q = (self.old_q + dq.mean()).detach()
+            #     self.old_kappa = (self.old_kappa + dkappa.mean()).detach()
 
-                stress = self.CalculateStress(strain)
-                raw_F, dF_d_stress, dF_d_kappa = self.CalculateFandDerivatives(strain)
-                iter += 1
+            #     stress = self.CalculateStress(strain)
+            #     raw_F, dF_d_stress, dF_d_kappa = self.CalculateFandDerivatives(strain)
+            #     iter += 1
+        C, d2Psi_dE_dq = self.CalculateSecondDerivativesPsi(strain)
+        gamma = -(raw_F / (dF_d_stress * d2Psi_dE_dq + dF_d_kappa**2))
+
+        dq     = gamma * dF_d_stress  # Removed ReLU to allow negative plastic strain increments
+        dkappa = (gamma * dF_d_kappa)  # Keep ReLU for dissipation to ensure non-negative
+
+            # scalar internal update to avoid shape mismatch
+        self.old_q = (self.old_q + dq.mean()).detach()
+        self.old_kappa = (self.old_kappa + dkappa.mean()).detach()
+
 
     # ----------------------------------------------------------------------------------
     def ResetInternalVars(self):
@@ -261,13 +297,13 @@ class KANStressPredictor(nn.Module):
 
 model = KANStressPredictor()
 
-optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
+optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
 
 x_torch = torch.tensor(eps, dtype=torch.float32).unsqueeze(1)  # (steps,1)
 y_torch = torch.tensor(sigma, dtype=torch.float32).unsqueeze(1)  # (steps,1)
 zeros = torch.zeros_like(x_torch)
 
-n_epochs = 50
+n_epochs = 15
 
 for epoch in range(n_epochs):
     optimizer.zero_grad()
@@ -285,12 +321,11 @@ for epoch in range(n_epochs):
             model.FinalizeMaterialResponse(x_i)
 
         # Stack into a tensor
-        model.ResetInternalVars()
         y_pred = torch.vstack(y_pred_list)  # shape (100,1)
 
-
     # L2 loss
-    loss = torch.mean((y_pred - y_torch)**2)
+    loss = torch.mean((y_pred - y_torch)**2) + 1e7 * torch.relu(-model.old_kappa)**2
+    model.ResetInternalVars()
 
     loss.backward()
     optimizer.step()
@@ -301,12 +336,14 @@ for epoch in range(n_epochs):
 # plot the KAN
 y_pred_list = []
 kappa_list = []
+q_list = []
 for i in range(len(x_torch)):
     x_i = x_torch[i].view(1, 1)  # already tensor, no need to recreate
     y_pred_i = model.forward(x_i)        # keep tensor with grad
     y_pred_list.append(y_pred_i)
     model.FinalizeMaterialResponse(x_i)
     kappa_list.append(model.old_kappa)
+    q_list.append(model.old_q)
 model.ResetInternalVars()
 
 # Convert stacked tensor predictions to numpy
@@ -322,6 +359,8 @@ plt.show()
 
 # output_file = "KAN_pred.png"
 # plt.savefig(output_file, dpi=300, bbox_inches="tight")
+print(kappa_list)
+print(q_list)
 
-plt.plot(eps, kappa_plot, '--', color="k", label='KAN (trained)')
+plt.plot(eps, kappa_plot, '--', color="red", label='KAN (trained)')
 plt.show()
