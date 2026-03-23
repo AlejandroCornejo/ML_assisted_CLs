@@ -97,16 +97,13 @@ class KANStressPredictor(nn.Module):
         zeros = [torch.zeros_like(strain, requires_grad=True), torch.full_like(strain, self.old_q)]
         KAN_zeros = torch.cat(zeros, dim=-1) # The null input is strain zero and int vars whatever is in memory!
 
+        # PSI is the raw potential from the KAN
         raw_psi = self.model_psi(KAN_input)
         psi_at_0 = self.model_psi(KAN_zeros)
         
-        grad_0 = torch.autograd.grad(
-            outputs=psi_at_0,
-            inputs=KAN_zeros,
-            grad_outputs=torch.ones_like(psi_at_0),
-            create_graph=True
-        )[0]
-
+        # Stress is dPSI/dstrain - (dPSI/dstrain)|_{strain=0}
+        # The subtraction is necessary to account for the reference state at zero strain,
+        # ensuring the stress response is properly shifted (e.g., stress = 0 at strain = 0 if desired by physics)
         grad = torch.autograd.grad(
             outputs=raw_psi,
             inputs=strain,
@@ -114,7 +111,14 @@ class KANStressPredictor(nn.Module):
             create_graph=True
         )[0]
 
-        return grad - grad_0[:, :1] # grad_0[:, :1] selects the first column of strain, shape (100, 1)
+        grad_0 = torch.autograd.grad(
+            outputs=psi_at_0,
+            inputs=KAN_zeros,
+            grad_outputs=torch.ones_like(psi_at_0),
+            create_graph=True
+        )[0]
+
+        return grad - grad_0[:, :1]
 
     # ----------------------------------------------------------------------------------
     def CalculateSecondDerivativesPsi(self, strain): # d2psi/dE, d2Psi/dE dq
@@ -165,8 +169,11 @@ class KANStressPredictor(nn.Module):
         F_KAN_inputs.append(stress) # Stress
         F_KAN_inputs.append(kappa_for_grad.expand_as(strain)) # kappa
         KAN_input = torch.cat(F_KAN_inputs, dim=-1)
+        
+        zeros = torch.zeros_like(KAN_input, requires_grad=True)
 
         raw_F = self.model_F(KAN_input)
+        F_zero = self.model_F(zeros)
 
         zeros = [torch.zeros_like(strain, requires_grad=True), torch.full_like(strain, self.old_kappa)]
         KAN_zeros = torch.cat(zeros, dim=-1) # The null input is strain zero and int vars whatever is in memory!
@@ -244,6 +251,23 @@ class KANStressPredictor(nn.Module):
         #     # we cancel the increment, to be done in finalize
         #     self.old_q = (self.old_q - accum_q).detach()
         #     self.old_kappa = (self.old_kappa - accum_kappa).detach()
+
+        dq     = gamma * dF_d_stress  # Removed ReLU to allow negative plastic strain increments
+        dkappa = (gamma * dF_d_kappa)  # Keep ReLU for dissipation to ensure non-negative
+
+        # scalar internal update to avoid shape mismatch
+        self.old_q = (self.old_q + dq.mean()).detach()
+        self.old_kappa = (self.old_kappa + dkappa.mean()).detach()
+        
+        stress = self.CalculateStress(strain)
+
+        # scalar internal update to avoid shape mismatch
+        self.old_q = (self.old_q - dq.mean()).detach()
+        self.old_kappa = (self.old_kappa - dkappa.mean()).detach()
+
+            # # we cancel the increment, to be done in finalize
+            # self.old_q = (self.old_q - accum_q).detach()
+            # self.old_kappa = (self.old_kappa - accum_kappa).detach()
 
         return stress
 
@@ -336,12 +360,11 @@ for epoch in range(n_epochs):
             model.FinalizeMaterialResponse(x_i)
 
         # Stack into a tensor
-        model.ResetInternalVars()
         y_pred = torch.vstack(y_pred_list)  # shape (100,1)
 
-
     # L2 loss
-    loss = torch.mean((y_pred - y_torch)**2)
+    loss = torch.mean((y_pred - y_torch)**2) + 1e7 * torch.relu(-model.old_kappa)**2
+    model.ResetInternalVars()
 
     loss.backward()
     optimizer.step()
@@ -390,6 +413,8 @@ plt.show()
 
 # output_file = "KAN_pred.png"
 # plt.savefig(output_file, dpi=300, bbox_inches="tight")
+print(kappa_list)
+print(q_list)
 
 plt.plot(eps, kappa_plot, '--', color="k", label='KAN (trained)')
 plt.ylabel("Kappa")
