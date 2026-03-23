@@ -44,9 +44,9 @@ plt.xlabel("Strain (normalized)")
 plt.ylabel("Stress (normalized)")
 
 def atan_regularization(raw_value, k):
-    return torch.atan(k * raw_value) / np.pi # + 0.5, this sets a atan whose range is -1 to 1.0
+    return torch.atan(k * raw_value) / np.pi + 0.5# + 0.5, this sets a atan whose range is -1 to 1.0
 
-def sigmoid_regularitzation(raw_value, k):
+def sigmoid_regularization(raw_value, k):
     return k * torch.sigmoid(raw_value)
 
 #############################################################################
@@ -68,7 +68,7 @@ class KANStressPredictor(nn.Module):
         self.old_q = torch.tensor(0.0)     # plastic strain
 
         self.model_psi = KAN.MultKAN( # eps, q, kappa --> psi // stress = grad.psi
-            width=[3, 2, 1],
+            width=[3, 4, 2, 1],
             grid=3,
             k=2,
             grid_range=[0, 1]
@@ -76,7 +76,7 @@ class KANStressPredictor(nn.Module):
         self.model_psi.speed()
 
         self.model_F = KAN.MultKAN( # eps, kappa --> F
-            width=[2, 2, 1],
+            width=[2, 4, 2, 1],
             grid=3,
             k=2,
             grid_range=[0, 1]
@@ -200,13 +200,13 @@ class KANStressPredictor(nn.Module):
         stress = self.CalculateStress(strain) # predicts with old int vars and curr E
 
         raw_F, dF_d_stress, dF_d_kappa = self.CalculateFandDerivatives(strain)
-        
+
         C, d2Psi_dE_dq = self.CalculateSecondDerivativesPsi(strain)
 
-        k = 10
-        gamma = sigmoid_regularitzation(raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2), k) # we regularise the F condition in here
-        dq = atan_regularization(-gamma * dF_d_stress, k / 10)
-        dkappa = sigmoid_regularitzation(gamma * dF_d_kappa, k)
+        k = 50
+        gamma = sigmoid_regularization(raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2), k) # we regularise the F condition in here
+        dq = atan_regularization(-gamma * dF_d_stress, 1.0)
+        dkappa = sigmoid_regularization(gamma * dF_d_kappa, k)
 
         # scalar internal update to avoid shape mismatch
         self.old_q = (self.old_q + dq.mean()).detach()
@@ -258,10 +258,10 @@ class KANStressPredictor(nn.Module):
 
         C, d2Psi_dE_dq = self.CalculateSecondDerivativesPsi(strain)
 
-        k = 10
-        gamma = sigmoid_regularitzation(raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2), k) # we regularise the F condition in here
-        dq = atan_regularization(-gamma * dF_d_stress, k / 10)
-        dkappa = sigmoid_regularitzation(gamma * dF_d_kappa, k)
+        k = 50
+        gamma = sigmoid_regularization(raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2), k) # we regularise the F condition in here
+        dq = atan_regularization(-gamma * dF_d_stress, 1.0)
+        dkappa = sigmoid_regularization(gamma * dF_d_kappa, k)
 
         # scalar internal update to avoid shape mismatch
         self.old_q = (self.old_q + dq.mean()).detach()
@@ -312,13 +312,13 @@ null_var = torch.tensor([[0.0]])
 print("Before training: ")
 print("model(0)= ", model.forward(null_var), "\n")
 
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
 
 x_torch = torch.tensor(eps, dtype=torch.float32).unsqueeze(1)  # (steps,1)
 y_torch = torch.tensor(sigma, dtype=torch.float32).unsqueeze(1)  # (steps,1)
 zeros = torch.zeros_like(x_torch)
 
-n_epochs = 100
+n_epochs = 50
 
 for epoch in range(n_epochs):
     optimizer.zero_grad()
