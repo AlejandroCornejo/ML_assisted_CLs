@@ -43,6 +43,11 @@ plt.plot(eps, sigma, label="Truth (normalized)", marker='o')
 plt.xlabel("Strain (normalized)")
 plt.ylabel("Stress (normalized)")
 
+def atan_regularization(raw_value, k):
+    return torch.atan(k * raw_value) / np.pi # + 0.5, this sets a atan whose range is -1 to 1.0
+
+def sigmoid_regularitzation(raw_value, k):
+    return k * torch.sigmoid(raw_value)
 
 #############################################################################
 #############################################################################
@@ -64,15 +69,15 @@ class KANStressPredictor(nn.Module):
 
         self.model_psi = KAN.MultKAN( # eps, q, kappa --> psi // stress = grad.psi
             width=[3, 2, 1],
-            grid=3,
+            grid=5,
             k=2,
             grid_range=[0, 1]
         )
         self.model_psi.speed()
 
         self.model_F = KAN.MultKAN( # eps, kappa --> F
-            width=[2, 1, 1],
-            grid=3,
+            width=[2, 2, 1],
+            grid=5,
             k=2,
             grid_range=[0, 1]
         )
@@ -89,14 +94,15 @@ class KANStressPredictor(nn.Module):
         KAN_input = torch.cat(psi_KAN_inputs, dim=-1)
 
         # This method computes the stress without updating internal vars
-        zeros = torch.zeros_like(KAN_input, requires_grad=True)
+        zeros = [torch.zeros_like(strain, requires_grad=True), torch.full_like(strain, self.old_q), torch.full_like(strain, self.old_kappa)]
+        KAN_zeros = torch.cat(zeros, dim=-1) # The null input is strain zero and int vars whatever is in memory!
 
         raw_psi = self.model_psi(KAN_input)
-        psi_at_0 = self.model_psi(zeros)
+        psi_at_0 = self.model_psi(KAN_zeros)
         
         grad_0 = torch.autograd.grad(
             outputs=psi_at_0,
-            inputs=zeros,
+            inputs=KAN_zeros,
             grad_outputs=torch.ones_like(psi_at_0),
             create_graph=True
         )[0]
@@ -195,9 +201,9 @@ class KANStressPredictor(nn.Module):
         C, d2Psi_dE_dq = self.CalculateSecondDerivativesPsi(strain)
 
         k = 10
-        gamma = torch.sigmoid(k * raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2)) # we regularise the F condition in here
-        dq = torch.atan(-gamma * dF_d_stress)
-        dkappa = torch.sigmoid(k * gamma * dF_d_kappa)
+        gamma = sigmoid_regularitzation(raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2), k) # we regularise the F condition in here
+        dq = atan_regularization(-gamma * dF_d_stress, k)
+        dkappa = sigmoid_regularitzation(gamma * dF_d_kappa, k)
 
         # scalar internal update to avoid shape mismatch
         self.old_q = (self.old_q + dq.mean()).detach()
@@ -246,13 +252,13 @@ class KANStressPredictor(nn.Module):
         stress = self.CalculateStress(strain) # predicts with old int vars and curr E
 
         raw_F, dF_d_stress, dF_d_kappa = self.CalculateFandDerivatives(strain)
-        
+
         C, d2Psi_dE_dq = self.CalculateSecondDerivativesPsi(strain)
 
         k = 10
-        gamma = torch.sigmoid(k * raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2)) # we regularise the F condition in here
-        dq = torch.atan(-gamma * dF_d_stress)
-        dkappa = torch.sigmoid(k * gamma * dF_d_kappa)
+        gamma = sigmoid_regularitzation(raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2), k) # we regularise the F condition in here
+        dq = atan_regularization(-gamma * dF_d_stress, k)
+        dkappa = sigmoid_regularitzation(gamma * dF_d_kappa, k)
 
         # scalar internal update to avoid shape mismatch
         self.old_q = (self.old_q + dq.mean()).detach()
@@ -298,6 +304,11 @@ class KANStressPredictor(nn.Module):
 
 model = KANStressPredictor()
 
+# null value at origin check
+null_var = torch.tensor([[0.0]])
+print("Before training: ")
+print("model(0)= ", model.forward(null_var), "\n")
+
 optimizer = torch.optim.Adam(model.parameters(), lr=0.03)
 
 x_torch = torch.tensor(eps, dtype=torch.float32).unsqueeze(1)  # (steps,1)
@@ -335,9 +346,22 @@ for epoch in range(n_epochs):
     if epoch % 2 == 0:
         print(f"Epoch {epoch}, Loss: {loss.item()}")
 
+
+
+
+
+
+
+
+
+
+
 # plot the KAN
 y_pred_list = []
 kappa_list = []
+eps = data["eps"][0:100]  # we take the whole dataset for plot
+eps = eps / eps_max
+x_torch = torch.tensor(eps, dtype=torch.float32).unsqueeze(1)
 for i in range(len(x_torch)):
     x_i = x_torch[i].view(1, 1)  # already tensor, no need to recreate
     y_pred_i = model.forward(x_i)        # keep tensor with grad
@@ -363,3 +387,7 @@ plt.show()
 plt.plot(eps, kappa_plot, '--', color="k", label='KAN (trained)')
 plt.ylabel("Kappa")
 plt.show()
+
+null_var = torch.tensor([[0.0]])
+print("After training: ")
+print("model(0)= ", model.forward(null_var))
