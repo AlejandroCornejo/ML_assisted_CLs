@@ -69,7 +69,7 @@ class KANStressPredictor(nn.Module):
 
         self.model_psi = KAN.MultKAN( # eps, q, kappa --> psi // stress = grad.psi
             width=[3, 2, 1],
-            grid=5,
+            grid=3,
             k=2,
             grid_range=[0, 1]
         )
@@ -77,7 +77,7 @@ class KANStressPredictor(nn.Module):
 
         self.model_F = KAN.MultKAN( # eps, kappa --> F
             width=[2, 2, 1],
-            grid=5,
+            grid=3,
             k=2,
             grid_range=[0, 1]
         )
@@ -167,7 +167,10 @@ class KANStressPredictor(nn.Module):
         KAN_input = torch.cat(F_KAN_inputs, dim=-1)
 
         raw_F = self.model_F(KAN_input)
-        F_at_zeros = self.model_F(torch.zeros_like(KAN_input, requires_grad=True))
+
+        zeros = [torch.zeros_like(strain, requires_grad=True), torch.full_like(strain, self.old_kappa)]
+        KAN_zeros = torch.cat(zeros, dim=-1) # The null input is strain zero and int vars whatever is in memory!
+        F_at_zeros = self.model_F(torch.zeros_like(KAN_zeros, requires_grad=True))
 
         dF_d_stress = torch.autograd.grad(
             outputs=raw_F,
@@ -202,7 +205,7 @@ class KANStressPredictor(nn.Module):
 
         k = 10
         gamma = sigmoid_regularitzation(raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2), k) # we regularise the F condition in here
-        dq = atan_regularization(-gamma * dF_d_stress, k)
+        dq = atan_regularization(-gamma * dF_d_stress, k / 10)
         dkappa = sigmoid_regularitzation(gamma * dF_d_kappa, k)
 
         # scalar internal update to avoid shape mismatch
@@ -257,7 +260,7 @@ class KANStressPredictor(nn.Module):
 
         k = 10
         gamma = sigmoid_regularitzation(raw_F / (dF_d_stress * d2Psi_dE_dq - dF_d_kappa**2), k) # we regularise the F condition in here
-        dq = atan_regularization(-gamma * dF_d_stress, k)
+        dq = atan_regularization(-gamma * dF_d_stress, k / 10)
         dkappa = sigmoid_regularitzation(gamma * dF_d_kappa, k)
 
         # scalar internal update to avoid shape mismatch
@@ -309,7 +312,7 @@ null_var = torch.tensor([[0.0]])
 print("Before training: ")
 print("model(0)= ", model.forward(null_var), "\n")
 
-optimizer = torch.optim.Adam(model.parameters(), lr=0.03)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
 x_torch = torch.tensor(eps, dtype=torch.float32).unsqueeze(1)  # (steps,1)
 y_torch = torch.tensor(sigma, dtype=torch.float32).unsqueeze(1)  # (steps,1)
@@ -359,6 +362,7 @@ for epoch in range(n_epochs):
 # plot the KAN
 y_pred_list = []
 kappa_list = []
+q_list = []
 eps = data["eps"][0:100]  # we take the whole dataset for plot
 eps = eps / eps_max
 x_torch = torch.tensor(eps, dtype=torch.float32).unsqueeze(1)
@@ -368,12 +372,15 @@ for i in range(len(x_torch)):
     model.FinalizeMaterialResponse(x_i)
     y_pred_list.append(y_pred_i)
     kappa_list.append(model.old_kappa)
+    q_list.append(model.old_q)
 model.ResetInternalVars()
 
 # Convert stacked tensor predictions to numpy
 y_pred = torch.vstack(y_pred_list)
 kappa_pred = torch.vstack(kappa_list)
 kappa_plot = kappa_pred.detach().cpu().numpy()
+q_pred = torch.vstack(q_list)
+q_plot = q_pred.detach().cpu().numpy()
 y_KAN = y_pred.detach().cpu().numpy()
 
 plt.plot(eps, y_KAN, '--', color="k", label='KAN (trained)')
@@ -386,6 +393,10 @@ plt.show()
 
 plt.plot(eps, kappa_plot, '--', color="k", label='KAN (trained)')
 plt.ylabel("Kappa")
+plt.show()
+
+plt.plot(eps, q_plot, '--', color="k", label='KAN (trained)')
+plt.ylabel("q")
 plt.show()
 
 null_var = torch.tensor([[0.0]])
