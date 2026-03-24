@@ -40,18 +40,29 @@ eps = eps_norm
 sigma = sigma_norm
 
 # Plot the normalized results
-plt.plot(eps, sigma, label="Truth (normalized)", marker='o')
+plt.plot(eps, sigma, label="Truth (normalized)", marker='o', color="green")
 plt.xlabel("Strain (normalized)")
 plt.ylabel("Stress (normalized)")
 
-def atan_regularization(raw_value, k):
+def atan_regularization(raw_value, k=1):
     return torch.atan(k * raw_value) / np.pi # + 0.5, this sets a atan whose range is -1 to 1.0
 
-def sigmoid_regularization(raw_value, k):
-    return k * torch.sigmoid(raw_value)
+def sigmoid_regularization(raw_value, k=1):
+    return torch.sigmoid((raw_value-0.5) * k)
 
-def silu_regularization(raw_value, k): # AKA swish function
+def silu_regularization(raw_value, k=1): # AKA swish function
     return raw_value * torch.sigmoid(raw_value * k)
+
+# k = 10.0
+# x = np.linspace(-2.5, 2.5, 500)
+# plt.plot(x, np.atan(x * k) / np.pi, label="atan_reg")
+# plt.plot(x, 1/(1+(np.exp((-(x-0.5)*k)))), label="sig_reg")
+# plt.plot(x, x * 1/(1+(np.exp((-x*k)))), label="silu_reg")
+# plt.legend()
+# plt.grid()
+# plt.show()
+# A
+
 
 #############################################################################
 #############################################################################
@@ -68,7 +79,7 @@ class KANStressPredictor(nn.Module):
         self.old_q = torch.tensor(0.0)     # plastic strain
 
         self.model_psi = KAN.MultKAN( # eps, q --> psi // stress = grad.psi
-            width=[2, 1],
+            width=[2, 4, 2, 1],
             grid=3,
             k=2,
             grid_range=[0, 1]
@@ -76,7 +87,7 @@ class KANStressPredictor(nn.Module):
         self.model_psi.speed()
 
         self.model_F = KAN.MultKAN( # stress, kappa --> F
-            width=[2, 1],
+            width=[2, 4, 2, 1],
             grid=3,
             k=2,
             grid_range=[0, 1]
@@ -92,13 +103,14 @@ class KANStressPredictor(nn.Module):
         KAN_input = torch.cat(psi_KAN_inputs, dim=-1)
 
         # This method computes the stress without updating internal vars
-        zeros = [torch.zeros_like(strain, requires_grad=True), torch.full_like(strain, self.old_q)]
-        KAN_zeros = torch.cat(zeros, dim=-1) # The null input is strain zero and int vars whatever is in memory!
+        # zeros = [torch.zeros_like(strain, requires_grad=True), torch.full_like(strain, self.old_q)]
+        # KAN_zeros = torch.cat(zeros, dim=-1) # The null input is at initial configuration
+        KAN_zeros = torch.zeros_like(KAN_input, requires_grad=True)
 
         # PSI is the raw potential from the KAN
         raw_psi = self.model_psi(KAN_input)
         psi_at_0 = self.model_psi(KAN_zeros)
-        
+
         # Stress is dPSI/dstrain - (dPSI/dstrain)|_{strain=0}
         # The subtraction is necessary to account for the reference state at zero strain,
         # ensuring the stress response is properly shifted (e.g., stress = 0 at strain = 0 if desired by physics)
@@ -192,7 +204,8 @@ class KANStressPredictor(nn.Module):
             allow_unused=False,
         )[0]
 
-        return raw_F - F_at_zeros, dF_d_stress, dF_d_kappa
+        # return raw_F - F_at_zeros, dF_d_stress, dF_d_kappa
+        return raw_F, dF_d_stress, dF_d_kappa
 
     # ----------------------------------------------------------------------------------
     def forward(self, strain):
@@ -203,9 +216,9 @@ class KANStressPredictor(nn.Module):
 
         raw_F, dF_d_stress, dF_d_kappa = self.CalculateFandDerivatives(strain)
 
-        k = 1.0
-        dq = silu_regularization(dF_d_stress, k)
-        dkappa = silu_regularization(dF_d_kappa, k)
+        # The sigmoid reg performs the if (F > 0.0) in a soft manner
+        dq     = sigmoid_regularization(raw_F, 5.0) * (dF_d_stress)
+        dkappa = sigmoid_regularization(raw_F, 5.0) * silu_regularization(dF_d_kappa, 5.0) # SiLU since kappa must increase always
 
         # scalar internal update to avoid shape mismatch
         self.old_q = (self.old_q + dq.mean()).detach()
@@ -227,9 +240,9 @@ class KANStressPredictor(nn.Module):
 
         raw_F, dF_d_stress, dF_d_kappa = self.CalculateFandDerivatives(strain)
 
-        k = 1.0
-        dq = silu_regularization(dF_d_stress, k)
-        dkappa = silu_regularization(dF_d_kappa, k)
+        # The sigmoid reg performs the if (F > 0.0) in a soft manner
+        dq     = sigmoid_regularization(raw_F, 5.0) * (dF_d_stress)
+        dkappa = sigmoid_regularization(raw_F, 5.0) * silu_regularization(dF_d_kappa, 5.0) # SiLU since kappa must increase always
 
         # scalar internal update to avoid shape mismatch
         self.old_q = (self.old_q + dq.mean()).detach()
@@ -245,21 +258,21 @@ class KANStressPredictor(nn.Module):
 #############################################################################
 #############################################################################
 
-
+# --------------------
 model = KANStressPredictor()
+n_epochs = 150
+learning_rate = 0.01
+# --------------------
 
 # null value at origin check
-null_var = torch.tensor([[0.0]])
+null_var = torch.tensor([[0.0]], requires_grad=True)
 print("Before training: ")
-print("model(0)= ", model.forward(null_var), "\n")
+print("model(0)= ", model.CalculateStress(null_var), "\n")
 
-optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
-
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 x_torch = torch.tensor(eps, dtype=torch.float32).unsqueeze(1)  # (steps,1)
 y_torch = torch.tensor(sigma, dtype=torch.float32).unsqueeze(1)  # (steps,1)
 zeros = torch.zeros_like(x_torch)
-
-n_epochs = 150
 
 for epoch in range(n_epochs):
     optimizer.zero_grad()
@@ -280,7 +293,7 @@ for epoch in range(n_epochs):
         y_pred = torch.vstack(y_pred_list)  # shape (100,1)
 
     # L2 loss
-    loss = torch.mean((y_pred - y_torch)**2) + 1e7 * torch.relu(-model.old_kappa)**2
+    loss = torch.mean((y_pred - y_torch)**2)
     model.ResetInternalVars()
 
     loss.backward()
@@ -288,15 +301,6 @@ for epoch in range(n_epochs):
 
     if epoch % 10 == 0:
         print(f"Epoch {epoch}, Loss: {loss.item()}")
-
-
-
-
-
-
-
-
-
 
 
 # plot the KAN
@@ -330,8 +334,8 @@ plt.show()
 
 # output_file = "KAN_pred.png"
 # plt.savefig(output_file, dpi=300, bbox_inches="tight")
-print(kappa_list)
-print(q_list)
+# print(kappa_list)
+# print(q_list)
 
 plt.plot(eps, kappa_plot, '--', color="k", label='KAN (trained)')
 plt.ylabel("Kappa")
