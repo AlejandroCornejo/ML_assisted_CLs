@@ -79,7 +79,7 @@ class KANStressPredictor(nn.Module):
         self.old_q = torch.tensor(0.0)     # plastic strain
 
         self.model_psi = KAN.MultKAN( # eps, q --> psi // stress = grad.psi
-            width=[2, 4, 2, 1],
+            width=[2,  1],
             grid=3,
             k=2,
             grid_range=[0, 1]
@@ -87,7 +87,7 @@ class KANStressPredictor(nn.Module):
         self.model_psi.speed()
 
         self.model_F = KAN.MultKAN( # stress, kappa --> F
-            width=[2, 4, 2, 1],
+            width=[2, 1],
             grid=3,
             k=2,
             grid_range=[0, 1]
@@ -217,7 +217,7 @@ class KANStressPredictor(nn.Module):
         raw_F, dF_d_stress, dF_d_kappa = self.CalculateFandDerivatives(strain)
 
         # The sigmoid reg performs the if (F > 0.0) in a soft manner
-        dq     = sigmoid_regularization(raw_F, 5.0) * (dF_d_stress)
+        dq     = (raw_F / torch.abs(raw_F)) * sigmoid_regularization(raw_F, 5.0) * silu_regularization(dF_d_stress, 5.0)
         dkappa = sigmoid_regularization(raw_F, 5.0) * silu_regularization(dF_d_kappa, 5.0) # SiLU since kappa must increase always
 
         # scalar internal update to avoid shape mismatch
@@ -241,7 +241,7 @@ class KANStressPredictor(nn.Module):
         raw_F, dF_d_stress, dF_d_kappa = self.CalculateFandDerivatives(strain)
 
         # The sigmoid reg performs the if (F > 0.0) in a soft manner
-        dq     = sigmoid_regularization(raw_F, 5.0) * (dF_d_stress)
+        dq     = (raw_F / torch.abs(raw_F)) * sigmoid_regularization(raw_F, 5.0) * silu_regularization(dF_d_stress, 5.0)
         dkappa = sigmoid_regularization(raw_F, 5.0) * silu_regularization(dF_d_kappa, 5.0) # SiLU since kappa must increase always
 
         # scalar internal update to avoid shape mismatch
@@ -261,7 +261,7 @@ class KANStressPredictor(nn.Module):
 # --------------------
 model = KANStressPredictor()
 n_epochs = 150
-learning_rate = 0.01
+learning_rate = 0.1
 # --------------------
 
 # null value at origin check
