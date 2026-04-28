@@ -24,11 +24,11 @@ This section is vital for ML integration (e.g., KANs) to understand the input/ou
 
 ### 1.2 Data Array Shapes (`.npy` files)
 The FOM Stage 1 generates trajectories (e.g., `trajectory_1`) containing `.npy` arrays over $N$ time steps:
-- **`trajectory_i_U.npy`**: Shape `(N_steps, N_DoFs)` (e.g., `16802 x 4244`). Contains the full nodal displacement field (affine + fluctuation, $\mathbf{u} = \mathbf{u}_{\text{aff}} + \mathbf{w}$) over time. $N_{DoFs}$ is the total number of free degrees of freedom in the mesh.
+- **`trajectory_i_U.npy`**: Shape `(N_steps, N_DoFs)` (e.g., `16802 x 4244`). Contains the full nodal displacement field (affine + fluctuation, $\mathbf{u} = \mathbf{u}_{\text{aff}} + \mathbf{w}$) over time. The variable $N_{DoFs}$ is the total number of free degrees of freedom in the mesh.
 - **Homogenized Tensors**: Shape `(N_steps, 3)`. The `3` columns correspond to the 2D Voigt notation `[XX, YY, XY]`. Keep in mind the shear component is engineering shear ($\gamma_{xy} = 2 E_{xy}$).
-  - **`trajectory_i_applied_strain.npy`**: The macroscopic Green-Lagrange strain $\bar{\mathbf{E}}$ imposed on the RVE boundaries.
+  - **`trajectory_i_applied_strain.npy`**: The macroscopic Green-Lagrange strain ($\bar{\mathbf{E}}$) imposed on the RVE boundaries.
   - **`trajectory_i_strain.npy`**: The macroscopic Green-Lagrange strain computed from the RVE (matches applied strain).
-  - **`trajectory_i_stress.npy`**: The macroscopic (volume-averaged) Second Piola-Kirchhoff stress $\bar{\mathbf{S}}$ resulting from the homogenization of the RVE.
+  - **`trajectory_i_stress.npy`**: The macroscopic (volume-averaged) Second Piola-Kirchhoff stress ($\bar{\mathbf{S}}$) resulting from the homogenization of the RVE.
 
 ### 1.3 Boundary Lifting Setup
 Macro strain is prescribed as:
@@ -36,11 +36,13 @@ Macro strain is prescribed as:
 \mathbf{E} = [E_{xx}, E_{yy}, G_{xy}]^T,\quad G_{xy}=2E_{12}
 \]
 
-Finite-deformation boundary lifting uses:
+To apply this as a boundary displacement condition on the RVE nodes, we compute the Deformation Gradient ($\mathbf{F}$):
 \[
 \mathbf{C}=2\mathbf{E}+\mathbf{I},\quad \mathbf{F}=\sqrt{\mathbf{C}},\quad
 \mathbf{u}_{\text{aff}}=(\mathbf{F}-\mathbf{I})(\mathbf{X}-\mathbf{X}_c)
 \]
+
+**ML Note (Why $\mathbf{F} = \sqrt{\mathbf{C}}$?):** While the ML datasets track $\mathbf{E}$, finite-element solvers apply spatial displacements via $\mathbf{F}$. By defining $\mathbf{F}$ as the square root of the right Cauchy-Green tensor ($\mathbf{C}$), we enforce $\mathbf{F} = \mathbf{U}$ (the pure stretch tensor from the polar decomposition $\mathbf{F}=\mathbf{RU}$). This artificially strips away any rigid body rotations ($\mathbf{R} = \mathbf{I}$). Eliminating rigid body rotations is crucial for ML training because rotations generate zero stress/strain energy. Removing them ensures a strictly unique, one-to-one mapping between the kinematics and the constitutive response.
 
 The total displacement is decomposed as:
 \[
