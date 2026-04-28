@@ -24,7 +24,7 @@ This section is vital for ML integration (e.g., KANs) to understand the input/ou
 
 ### 1.2 Data Array Shapes (`.npy` files)
 The FOM Stage 1 generates trajectories (e.g., `trajectory_1`) containing `.npy` arrays over $N$ time steps:
-- **`trajectory_i_U.npy`**: Shape `(N_steps, N_DoFs)` (e.g., `16802 x 4244`). Contains the full nodal displacement field (affine + fluctuation, $\mathbf{u} = \mathbf{u}_{\text{aff}} + \mathbf{w}$) over time. The variable $N_{DoFs}$ is the total number of free degrees of freedom in the mesh.
+- **`trajectory_i_U.npy`**: Shape `(N_steps, N_DoFs)` (e.g., `16802 x 4244`). Contains the full nodal displacement field (affine + fluctuation, $\mathbf{u} = \mathbf{u}_{\text{aff}} + \mathbf{w}$ ) over time. The variable $N_{DoFs}$ is the total number of free degrees of freedom in the mesh.
 - **Homogenized Tensors**: Shape `(N_steps, 3)`. The `3` columns correspond to the 2D Voigt notation `[XX, YY, XY]`. Keep in mind the shear component is engineering shear ($\gamma_{xy} = 2 E_{xy}$).
   - **`trajectory_i_applied_strain.npy`**: The macroscopic Green-Lagrange strain ($\bar{\mathbf{E}}$) imposed on the RVE boundaries.
   - **`trajectory_i_strain.npy`**: The macroscopic Green-Lagrange strain computed from the RVE (matches applied strain).
@@ -32,23 +32,23 @@ The FOM Stage 1 generates trajectories (e.g., `trajectory_1`) containing `.npy` 
 
 ### 1.3 Boundary Lifting Setup
 Macro strain is prescribed as:
-\[
+$$
 \mathbf{E} = [E_{xx}, E_{yy}, G_{xy}]^T,\quad G_{xy}=2E_{12}
-\]
+$$
 
 To apply this as a boundary displacement condition on the RVE nodes, we compute the Deformation Gradient ($\mathbf{F}$):
-\[
+$$
 \mathbf{C}=2\mathbf{E}+\mathbf{I},\quad \mathbf{F}=\sqrt{\mathbf{C}},\quad
 \mathbf{u}_{\text{aff}}=(\mathbf{F}-\mathbf{I})(\mathbf{X}-\mathbf{X}_c)
-\]
+$$
 
 **ML Note (Why $\mathbf{F} = \sqrt{\mathbf{C}}$?):** While the ML datasets track $\mathbf{E}$, finite-element solvers apply spatial displacements via $\mathbf{F}$. By defining $\mathbf{F}$ as the square root of the right Cauchy-Green tensor ($\mathbf{C}$), we enforce $\mathbf{F} = \mathbf{U}$ (the pure stretch tensor from the polar decomposition $\mathbf{F}=\mathbf{RU}$). This artificially strips away any rigid body rotations ($\mathbf{R} = \mathbf{I}$). Eliminating rigid body rotations is crucial for ML training because rotations generate zero stress/strain energy. Removing them ensures a strictly unique, one-to-one mapping between the kinematics and the constitutive response.
 
 The total displacement is decomposed as:
-\[
+$$
 \mathbf{u} = \mathbf{u}_{\text{aff}} + \mathbf{w},\quad \mathbf{w}_D = 0
-\]
-where \(\mathbf{w}\) is the fluctuation field used for reduction.
+$$
+where $\mathbf{w}$ is the fluctuation field used for reduction.
 
 ## 2) Stage Dependency Graph
 
@@ -79,103 +79,103 @@ It can run:
 
 ### 3.1 Linear PROM (Galerkin)
 
-With POD basis \(\Phi_f \in \mathbb{R}^{n_f \times r}\):
-\[
+With POD basis $\Phi_f \in \mathbb{R}^{n_f \times r}$:
+$$
 \mathbf{w}_f \approx \Phi_f \mathbf{q}
-\]
-\[
+$$
+$$
 \mathbf{r}_r = \Phi_f^T \mathbf{r}_f,\quad
 \mathbf{K}_r = \Phi_f^T \mathbf{K}_{ff}\Phi_f,\quad
 \mathbf{K}_r \Delta\mathbf{q} = \mathbf{r}_r
-\]
+$$
 
 Note: in this codebase, the assembled `rhs` sign convention is such that the Newton update is written with `+rhs` (equivalent to the usual `-R` form).
 
 ### 3.2 HPROM (ECM)
 
 Element contributions are weighted by ECM cubature weights:
-\[
+$$
 \sum_{e\in\mathcal{Z}} \omega_e \, \mathbf{r}_e,\quad
 \sum_{e\in\mathcal{Z}} \omega_e \, \mathbf{K}_e
-\]
+$$
 then projected to reduced coordinates as in PROM.
 
 ### 3.3 PROM-ANN (Galerkin on nonlinear manifold)
 
 Split POD basis:
-\[
+$$
 \Phi_f = [\Phi_p \ \Phi_s],\quad \dim(\mathbf{q}_p)=3,\ \dim(\mathbf{q}_s)=6
-\]
+$$
 Train ANN:
-\[
+$$
 \mathbf{q}_s = \mathcal{N}(\mathbf{q}_p)
-\]
+$$
 Use shifted manifold to pass through origin:
-\[
+$$
 \hat{\mathcal{N}}(\mathbf{q}_p)=\mathcal{N}(\mathbf{q}_p)-\mathcal{N}(\mathbf{0})
-\]
+$$
 Decoder:
-\[
+$$
 \mathbf{w}_f(\mathbf{q}_p)=\Phi_p\mathbf{q}_p+\Phi_s\hat{\mathcal{N}}(\mathbf{q}_p)
-\]
+$$
 Manifold Jacobian:
-\[
+$$
 \mathbf{J}_m = \frac{\partial \mathbf{w}_f}{\partial \mathbf{q}_p}
 = \Phi_p + \Phi_s \frac{\partial \hat{\mathcal{N}}}{\partial \mathbf{q}_p}
-\]
+$$
 Reduced equations:
-\[
+$$
 \mathbf{r}_r = \mathbf{J}_m^T\mathbf{r}_f,\quad
 \mathbf{K}_r \approx \mathbf{J}_m^T\mathbf{K}_{ff}\mathbf{J}_m,\quad
 \mathbf{K}_r\Delta\mathbf{q}_p=\mathbf{r}_r
-\]
+$$
 
 ### 3.4 PROM-RBF (Galerkin on nonlinear manifold)
 
 Use the same split:
-\[
+$$
 \Phi_f = [\Phi_p \ \Phi_s],\quad \mathbf{q}_s=\mathcal{R}(\mathbf{q}_p[, \mathbf{E}])
-\]
-where \(\mathcal{R}\) is a compact-center RBF map trained in Stage 7b-RBF.
+$$
+where $\mathcal{R}$ is a compact-center RBF map trained in Stage 7b-RBF.
 As with PROM-ANN, the shifted map is used online:
-\[
+$$
 \hat{\mathcal{R}}(\mathbf{q}_p)=\mathcal{R}(\mathbf{q}_p)-\mathcal{R}(\mathbf{0})
-\]
-or \(\mathcal{R}([\mathbf{q}_p,\mathbf{E}])-\mathcal{R}([\mathbf{0},\mathbf{E}])\) if macro strain is part of the input.
+$$
+or $\mathcal{R}([\mathbf{q}_p,\mathbf{E}])-\mathcal{R}([\mathbf{0},\mathbf{E}])$ if macro strain is part of the input.
 The reduced solve uses:
-\[
+$$
 \mathbf{r}_r = \mathbf{J}_m^T\mathbf{r}_f,\quad
 \mathbf{K}_r \approx \mathbf{J}_m^T\mathbf{K}_{ff}\mathbf{J}_m
-\]
-with \(\mathbf{J}_m=\Phi_p+\Phi_s\frac{\partial \hat{\mathcal{R}}}{\partial \mathbf{q}_p}\).
+$$
+with $\mathbf{J}_m=\Phi_p+\Phi_s\frac{\partial \hat{\mathcal{R}}}{\partial \mathbf{q}_p}$.
 
 ### 3.5 PROM-POD-DL / POD-AE (Galerkin on latent manifold)
 
 Train an autoencoder in POD space:
-\[
+$$
 \hat{\mathbf{q}} = \mathcal{D}(\mathcal{E}(\mathbf{q}))
-\]
+$$
 with scaling embedded inside the network (part of the model layers).
 
-Online manifold in latent space \(\mathbf{z}\):
-\[
+Online manifold in latent space $\mathbf{z}$:
+$$
 \mathbf{q}(\mathbf{z}) = \mathcal{D}(\mathbf{z}) - \mathbf{q}_{\text{ref}}, \qquad
 \mathbf{w}_f(\mathbf{z}) = \Phi_q \mathbf{q}(\mathbf{z})
-\]
-where \(\mathbf{q}_{\text{ref}}=\mathcal{D}(\mathcal{E}(\mathbf{0}))\) enforces origin anchoring.
+$$
+where $\mathbf{q}_{\text{ref}}=\mathcal{D}(\mathcal{E}(\mathbf{0}))$ enforces origin anchoring.
 
 Manifold Jacobian:
-\[
+$$
 \mathbf{J}_m = \frac{\partial \mathbf{w}_f}{\partial \mathbf{z}}
 = \Phi_q \frac{\partial \mathbf{q}}{\partial \mathbf{z}}
-\]
+$$
 
 Reduced equations:
-\[
+$$
 \mathbf{r}_r = \mathbf{J}_m^T\mathbf{r}_f,\quad
 \mathbf{K}_r \approx \mathbf{J}_m^T\mathbf{K}_{ff}\mathbf{J}_m,\quad
 \mathbf{K}_r\Delta\mathbf{z}=\mathbf{r}_r
-\]
+$$
 
 ## 4) How to Run (Recommended Order)
 
@@ -461,7 +461,7 @@ Default Stage 8-POD-DL trajectory mode is already the Stage-6 dense waypoint pat
 ### Stage 9a - Build ECM dataset for HPROM-RBF
 
 Uses the same stratified snapshot sampling logic as Stage 5a, but projects
-element residuals with the RBF-manifold tangent \(J_m\) instead of linear POD basis.
+element residuals with the RBF-manifold tangent $J_m$ instead of linear POD basis.
 
 ```bash
 python3 stage9_build_ecm_dataset_rbf.py
