@@ -73,7 +73,11 @@ The main homogenized files are:
 \bar{\mathbf{E}}
 ```
 
-- **`trajectory_1_strain.npy`**: The macroscopic Green-Lagrange strain computed from the RVE. This is the computed volume average, which may drift slightly from the applied strain.
+- **`trajectory_1_strain.npy`**: The macroscopic Green-Lagrange strain computed from the RVE. This is the computed volume average, denoted here as $\hat{\mathbf{E}}$, which may drift slightly from the applied strain $\bar{\mathbf{E}}$ as discussed in the meetings.
+
+```math
+\hat{\mathbf{E}}
+```
 
 - **`trajectory_1_stress.npy`**: The macroscopic, volume-averaged Second Piola-Kirchhoff stress obtained from the RVE homogenization.
 
@@ -257,12 +261,12 @@ The POD basis is split into primary and secondary modes:
 with:
 
 ```math
-\dim(\mathbf{q}_p)=3,
+\dim(\mathbf{q}_p)=4,
 \qquad
-\dim(\mathbf{q}_s)=6
+\dim(\mathbf{q}_s)=17
 ```
 
-An ANN is trained to approximate the secondary coordinates from the primary coordinates:
+(for a total of 21 POD modes). An ANN is trained to approximate the secondary coordinates from the primary coordinates:
 
 ```math
 \mathbf{q}_s = \mathcal{N}(\mathbf{q}_p)
@@ -690,8 +694,8 @@ python3 stage7a_prepare_ann_rbf_dataset.py
 
 This stage projects fluctuation snapshots, after subtracting affine lifting, to:
 
-- inputs: `q_p`, using 3 modes
-- targets: `q_s`, using 6 modes
+- inputs: `q_p`, using 4 modes
+- targets: `q_s`, using 17 modes (for a total of 21 modes)
 
 ### Stage 7a-POD-DL: Build POD-DL Dataset
 
@@ -700,7 +704,7 @@ python3 stage7a_prepare_pod_dl_dataset.py \
   --fom-dir stage_1_training_set_fom \
   --basis-dir stage_2_pod_rve \
   --out-dir stage_7_pod_dl_data \
-  --q-dim 9
+  --q-dim 21
 ```
 
 Outputs in:
@@ -791,9 +795,9 @@ python3 stage7b_train_pod_dl_manifold.py \
   --fom-dir stage_1_training_set_fom \
   --basis-dir stage_2_pod_rve \
   --out-dir stage_7_pod_dl_data \
-  --q-dim 9 \
+  --q-dim 21 \
   --latent-dim 4 \
-  --latent-sweep 3,4,5,6
+  --latent-sweep 3,6,9,12
 ```
 
 Outputs in:
@@ -836,7 +840,7 @@ Outputs are stored in:
 stage_7c_reconstruction_results/<model>_traj_<idx>/
 ```
 
-Bounds comparison in one run, including POD-4, POD-9, ANN, RBF, and POD-DL:
+Bounds comparison in one run, including POD-4, POD-21, ANN, RBF, and POD-DL:
 
 ```bash
 python3 stage7c_compare_bounds.py \
