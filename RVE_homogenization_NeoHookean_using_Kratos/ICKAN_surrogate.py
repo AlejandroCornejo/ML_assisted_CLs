@@ -8,7 +8,6 @@ import torch.optim as optim
 import os
 import sys
 import random
-from sklearn.model_selection import train_test_split
 
 # import pykan.kan as KAN # now the repo is local, not pip
 
@@ -36,8 +35,8 @@ INPUT DATASET:
 Load strain and stress from FOM trajectories (10 trajectories from stage_1_training_set_fom folder).
 Data is loaded as [history, step, component] with shape [10, steps, 3].
 """
-n_epochs = 500
-learning_rate = 0.05
+n_epochs = 200
+learning_rate = 0.001
 
 # Path to FOM trajectories folder (relative to script location)
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -62,9 +61,21 @@ for i in range(1, 11):  # trajectory_1 to trajectory_10
 min_steps = min(t.shape[0] for t in strain_trajectories)
 print(f"\nMinimum number of steps across all trajectories: {min_steps}")
 
-# Truncate all trajectories to the same length (minimum steps)
-strain_trajectories_truncated = [t[:min_steps] for t in strain_trajectories]
-stress_trajectories_truncated = [t[:min_steps] for t in stress_trajectories]
+# Sample each trajectory at equally spaced intervals to cover the full path
+# For trajectories longer than min_steps, select min_steps points evenly spaced
+def sample_equally_spaced(data, n_samples):
+    """Sample data at equally spaced intervals."""
+    original_n = data.shape[0]
+    if original_n == n_samples:
+        return data  # No sampling needed
+    # Create indices that are equally spaced
+    indices = np.linspace(0, original_n - 1, n_samples, dtype=int)
+    return data[indices]
+
+strain_trajectories_truncated = [sample_equally_spaced(t, min_steps) for t in strain_trajectories]
+stress_trajectories_truncated = [sample_equally_spaced(t, min_steps) for t in stress_trajectories]
+
+print(f"Sampled trajectories to {min_steps} equally spaced points from original lengths: {[t.shape[0] for t in strain_trajectories]}")
 
 # Stack trajectories into [history, step, component] format
 ref_strain_database = torch.tensor(np.stack(strain_trajectories_truncated), dtype=torch.float32)  # [10, steps, 3]
@@ -73,22 +84,9 @@ ref_stress_database = torch.tensor(np.stack(stress_trajectories_truncated), dtyp
 # Convert stress to be base 1
 ref_stress_database /= 1.0e9
 
-# Compute strain rate (difference between consecutive steps)
-strain_rate = ref_strain_database[:, 1:, :] - ref_strain_database[:, :-1, :]
-
-# Split the dataset into training and testing datasets (use 80/20 split)
-all_indices = torch.arange(ref_strain_database.shape[0])  # [0, 1, ..., 9] for 10 trajectories
-train_indices_list, test_indices_list = train_test_split(
-    all_indices.numpy(), test_size=0.2, random_state=42
-)
-train_indices = torch.tensor(train_indices_list, dtype=torch.long)
-test_indices = torch.tensor(test_indices_list, dtype=torch.long)
-
-train_strain_database = ref_strain_database[train_indices]
-train_stress_database = ref_stress_database[train_indices]
-
-test_strain_database = ref_strain_database[test_indices]
-test_stress_database = ref_stress_database[test_indices]
+# Use all data for training (no train/test split)
+train_strain_database = ref_strain_database
+train_stress_database = ref_stress_database
 
 print("\nLaunching the training of a KAN...")
 print(f"Number of training trajectories: {train_strain_database.shape[0]}")
@@ -108,37 +106,38 @@ class KANStressPredictor(nn.Module):
 
         # EDIT:
         self.order_stretches = 1  # Number of orders (can be set to any value)
-        self.k = 2  # Degree of splines
-        self.grid = 3  # Number of knots
+        self.k = 3  # Degree of splines
+        self.grid = 10  # Number of knots
         # -------------------------------------
 
         self.input_size = 2 * self.order_stretches + 1  # Total inputs: 2 * reg_eigenvalues for each order + 1 * log(J)
 
         # KAN definition
         self.KAN_W = KAN.MultKAN(
-            width=[self.input_size, 1, 1],
+            width=[self.input_size, 1, 1], # output of size 1: W
             grid=self.grid,
             k=self.k
         )
 
         # Initialize some extra parameters
-        self.ki = nn.ParameterList([
-            nn.Parameter(torch.tensor(float(p + 1) + random.random())) for p in range(self.order_stretches + 1)
-            # nn.Parameter(torch.tensor(float(p + 1))) for p in range(self.order_stretches + 1)
-        ])
+        # self.ki = nn.ParameterList([
+        #     # nn.Parameter(torch.tensor(float(p + 1) + random.random())) for p in range(self.order_stretches + 1)
+        #     1.0 for p in range(self.order_stretches + 1)
+        # ])
 
         # The parameter multiplying the log(J) is initially set to 1.0
-        self.ki[-1] = nn.Parameter(torch.tensor(1.0))
+        # self.ki[-1] = nn.Parameter(torch.tensor(1.0))
+        # self.ki[-1] = 1.0
 
-    def ResetParameters(self):
+    # def ResetParameters(self):
         # Initialize some extra parameters
-        self.ki = nn.ParameterList([
-            nn.Parameter(torch.tensor(float(p + 1) + random.random())) for p in range(self.order_stretches + 1)
-            # nn.Parameter(torch.tensor(float(p + 1))) for p in range(self.order_stretches + 1)
-        ])
+        # self.ki = nn.ParameterList([
+        #     nn.Parameter(torch.tensor(float(p + 1) + random.random())) for p in range(self.order_stretches + 1)
+        #     # nn.Parameter(torch.tensor(float(p + 1))) for p in range(self.order_stretches + 1)
+        # ])
 
         # The parameter multiplying the log(J) is initially set to 1.0
-        self.ki[-1] = nn.Parameter(torch.tensor(1.0))
+        # self.ki[-1] = nn.Parameter(torch.tensor(1.0))
 
     # ==========================================================================================
     def CalculateWWithoutNormalization(self, strain):
@@ -160,7 +159,7 @@ class KANStressPredictor(nn.Module):
         C = 2.0 * E + torch.eye(2)
 
         J = torch.linalg.det(C) ** 0.5  # Determinant of C (Jacobian)
-        log_J = torch.log(J)  # Logarithm of J
+        log_J = torch.log(J + 1.0e-10)  # Logarithm of J
 
         square_eigenvalues = torch.linalg.eigvalsh(C)  # Eigenvalues: batch x steps x 2
         eigenvalues = torch.sqrt(square_eigenvalues)
@@ -182,7 +181,8 @@ class KANStressPredictor(nn.Module):
             kan_inputs.append(reg_eigenvalues_order)
 
         # Append log(J) multiplied by the last ki factor
-        log_J_scaled = log_J * self.ki[-1]  # Multiply log(J) by the last ki factor
+        # log_J_scaled = log_J * self.ki[-1]  # Multiply log(J) by the last ki factor
+        log_J_scaled = log_J
         log_J_expanded = log_J_scaled.unsqueeze(-1)  # Add an extra dimension for concatenation
         kan_inputs.append(log_J_expanded)
 
@@ -399,15 +399,15 @@ print("\n")
 
 
 # Initialize the optimizer
-optimizer = optim.Adam(
+optimizer = optim.LBFGS(
                 model.parameters(),
                 lr=learning_rate,
-                #max_iter=5,
-                #history_size=10
+                # max_iter=20,
+                # history_size=35
             )
 
 
-# Train the KAN model using mean stress difference loss
+# Train the KAN model using mean stress difference loss on all data
 TRAIN_KAN(
     model=model,
     optimizer=optimizer,
@@ -418,7 +418,7 @@ TRAIN_KAN(
 # for i, ki in enumerate(model.ki):
 #     print("self.ki[i]: ", ki.data)
 
-# Prune the KAN model
+# Prune the KAN model (optional)
 prune_KAN = False
 if prune_KAN:
     print("Pruning the KAN...")
@@ -473,36 +473,38 @@ output_folder = "ICKAN_predictions"
 os.makedirs(output_folder, exist_ok=True)
 torch.save(model.state_dict(), "ICKAN_predictions/KAN_model_weights.pth")
 
-# Generate predictions for the full database
+# Generate predictions for the full database (all data)
 prediction_KAN = model.forward(ref_strain_database)
 
-# Plot and save results for all testing batches
-for elem in test_indices:
-    plt.figure(figsize=(8, 6))  # Create a new figure for each batch
+# Plot and save results for all trajectories (all data)
+for elem in range(ref_strain_database.shape[0]):
+    plt.figure(figsize=(8, 6))  # Create a new figure for each trajectory
 
     for compo in [0, 1, 2]:
         strain_for_print = ref_strain_database[elem, :, compo]
         predicted_stress_ANN = prediction_KAN[elem, :, compo].detach().numpy()
 
-        plt.scatter(
+        plt.plot(
             strain_for_print,
             ref_stress_database[elem, :, compo],
             label=f"DATA_comp{compo}",
-            marker="o",
+            # marker="o",
             color=GetColor(compo),
-            s=50,
-            alpha=0.53
+            # s=50,
+            alpha=0.7,      # This should work...
+            # edgecolors='none' # Try adding this to see if the borders are the issue
+            linestyle="--"
         )
         plt.plot(
             strain_for_print,
             predicted_stress_ANN,
             label=f"ICKAN_comp{compo}",
             color=GetColor(compo),
-            linestyle="-",
+            linestyle="-"
         )
 
     # Add plot details
-    plt.title(f"Batch: {elem}" + f" KAN")
+    plt.title(f"Trajectory: {elem}" + f" KAN")
     plt.xlabel("Strain [-]")
     plt.ylabel("Stress [MPa]")
     plt.legend()
@@ -510,7 +512,7 @@ for elem in test_indices:
 
     # Save the plot in the output folder
     output_path = os.path.join(output_folder, f"batch_{elem}.png")
-    plt.savefig(output_path)
+    plt.savefig(output_path, dpi=600)
     plt.close()  # Close the figure to free memory
 print(f"Plots saved in the folder: {output_folder}")
 
