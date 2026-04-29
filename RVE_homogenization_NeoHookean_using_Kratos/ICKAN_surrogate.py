@@ -36,8 +36,8 @@ INPUT DATASET:
 Load strain and stress from FOM trajectories (10 trajectories from stage_1_training_set_fom folder).
 Data is loaded as [history, step, component] with shape [10, steps, 3].
 """
-n_epochs = 10
-learning_rate = 0.01
+n_epochs = 500
+learning_rate = 0.05
 
 # Path to FOM trajectories folder (relative to script location)
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -70,8 +70,8 @@ stress_trajectories_truncated = [t[:min_steps] for t in stress_trajectories]
 ref_strain_database = torch.tensor(np.stack(strain_trajectories_truncated), dtype=torch.float32)  # [10, steps, 3]
 ref_stress_database = torch.tensor(np.stack(stress_trajectories_truncated), dtype=torch.float32)  # [10, steps, 3]
 
-# Convert stress from Pa to MPa
-ref_stress_database /= 1.0e6
+# Convert stress to be base 1
+ref_stress_database /= 1.0e9
 
 # Compute strain rate (difference between consecutive steps)
 strain_rate = ref_strain_database[:, 1:, :] - ref_strain_database[:, :-1, :]
@@ -399,11 +399,11 @@ print("\n")
 
 
 # Initialize the optimizer
-optimizer = optim.LBFGS(
+optimizer = optim.Adam(
                 model.parameters(),
                 lr=learning_rate,
-                max_iter=5,
-                history_size=10
+                #max_iter=5,
+                #history_size=10
             )
 
 
@@ -483,20 +483,22 @@ for elem in test_indices:
     for compo in [0, 1, 2]:
         strain_for_print = ref_strain_database[elem, :, compo]
         predicted_stress_ANN = prediction_KAN[elem, :, compo].detach().numpy()
-        plt.plot(
-            strain_for_print,
-            predicted_stress_ANN,
-            label=f"KAN_comp{compo}",
-            color=GetColor(compo),
-            linestyle="-",
-        )
+
         plt.scatter(
             strain_for_print,
             ref_stress_database[elem, :, compo],
             label=f"DATA_comp{compo}",
             marker="o",
             color=GetColor(compo),
-            s=20,
+            s=50,
+            alpha=0.53
+        )
+        plt.plot(
+            strain_for_print,
+            predicted_stress_ANN,
+            label=f"ICKAN_comp{compo}",
+            color=GetColor(compo),
+            linestyle="-",
         )
 
     # Add plot details
