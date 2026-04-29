@@ -22,13 +22,16 @@ This section is vital for ML integration (e.g., KANs) to understand the input/ou
 - **Strain Measure**: Green-Lagrange Strain Tensor, $\mathbf{E} = \frac{1}{2}(\mathbf{C} - \mathbf{I})$.
 - **Stress Measure**: Second Piola-Kirchhoff (PK2) Stress Tensor, $\mathbf{S}$.
 
-### 1.2 Data Array Shapes (`.npy` files)
-The FOM Stage 1 generates trajectories (e.g., `trajectory_1`) containing `.npy` arrays over $N$ time steps:
-- **`trajectory_i_U.npy`**: Shape `(N_steps, N_DoFs)` (e.g., `16802 x 4244`). Contains the full nodal displacement field (affine + fluctuation, $\mathbf{u} = \mathbf{u}_{\text{aff}} + \mathbf{w}$ ) over time. The variable $N_{DoFs}$ is the total number of free degrees of freedom in the mesh.
-- **Homogenized Tensors**: Shape `(N_steps, 3)`. The `3` columns correspond to the 2D Voigt notation `[XX, YY, XY]`. Keep in mind the shear component is engineering shear ($\gamma_{xy} = 2 E_{xy}$).
-  - **`trajectory_i_applied_strain.npy`**: The macroscopic Green-Lagrange strain ($\bar{\mathbf{E}}$) imposed on the RVE boundaries.
-  - **`trajectory_i_strain.npy`**: The macroscopic Green-Lagrange strain computed from the RVE (matches applied strain).
-  - **`trajectory_i_stress.npy`**: The macroscopic (volume-averaged) Second Piola-Kirchhoff stress ($\bar{\mathbf{S}}$) resulting from the homogenization of the RVE.
+### 1.2 Note for Alejandro (KAN Data Extraction)
+For training the KAN, please locate the database inside the Kratos training output directory:  
+`stage_1_training_set_fom/trajectory_1/`
+
+Inside this folder, you will find several `.npy` arrays containing the data over $N$ time steps.
+- **`trajectory_1_U.npy`**: Shape `(16802, 4244)`. This is the massive full nodal displacement field (affine + fluctuation, $\mathbf{u} = \mathbf{u}_{\mathrm{aff}} + \mathbf{w}$) over time. $4244$ is the total number of free degrees of freedom in the RVE mesh. **(You can ignore this for the KAN)**.
+- **Homogenized Tensors**: Shape `(16802, 3)`. The `3` columns correspond to the 2D Voigt notation `[XX, YY, XY]`. Keep in mind the shear component is engineering shear ($\gamma_{xy} = 2 E_{xy}$).
+  - **`trajectory_1_applied_strain.npy`**: The macroscopic Green-Lagrange strain ($\bar{\mathbf{E}}$) imposed on the RVE boundaries.
+  - **`trajectory_1_strain.npy`**: The macroscopic Green-Lagrange strain computed from the RVE (matches applied strain).
+  - **`trajectory_1_stress.npy`**: The macroscopic (volume-averaged) Second Piola-Kirchhoff stress ($\bar{\mathbf{S}}$) resulting from the homogenization of the RVE.
 
 ### 1.3 Boundary Lifting Setup
 Macro strain is prescribed as:
@@ -39,14 +42,14 @@ $$
 To apply this as a boundary displacement condition on the RVE nodes, we compute the Deformation Gradient ($\mathbf{F}$):
 $$
 \mathbf{C}=2\mathbf{E}+\mathbf{I},\quad \mathbf{F}=\sqrt{\mathbf{C}},\quad
-\mathbf{u}_{\text{aff}}=(\mathbf{F}-\mathbf{I})(\mathbf{X}-\mathbf{X}_c)
+\mathbf{u}_{\mathrm{aff}}=(\mathbf{F}-\mathbf{I})(\mathbf{X}-\mathbf{X}_c)
 $$
 
 **ML Note (Why $\mathbf{F} = \sqrt{\mathbf{C}}$?):** While the ML datasets track $\mathbf{E}$, finite-element solvers apply spatial displacements via $\mathbf{F}$. By defining $\mathbf{F}$ as the square root of the right Cauchy-Green tensor ($\mathbf{C}$), we enforce $\mathbf{F} = \mathbf{U}$ (the pure stretch tensor from the polar decomposition $\mathbf{F}=\mathbf{RU}$). This artificially strips away any rigid body rotations ($\mathbf{R} = \mathbf{I}$). Eliminating rigid body rotations is crucial for ML training because rotations generate zero stress/strain energy. Removing them ensures a strictly unique, one-to-one mapping between the kinematics and the constitutive response.
 
 The total displacement is decomposed as:
 $$
-\mathbf{u} = \mathbf{u}_{\text{aff}} + \mathbf{w},\quad \mathbf{w}_D = 0
+\mathbf{u} = \mathbf{u}_{\mathrm{aff}} + \mathbf{w},\quad \mathbf{w}_D = 0
 $$
 where $\mathbf{w}$ is the fluctuation field used for reduction.
 
@@ -129,6 +132,7 @@ $$
 \mathbf{K}_r \approx \mathbf{J}_m^T\mathbf{K}_{ff}\mathbf{J}_m,\quad
 \mathbf{K}_r\Delta\mathbf{q}_p=\mathbf{r}_r
 $$
+*(where $\mathbf{r}_r$ is the reduced residual vector, $\mathbf{K}_r$ is the reduced tangent stiffness matrix, $\mathbf{J}_m$ is the manifold Jacobian, and $\Delta\mathbf{q}_p$ is the Newton-Raphson increment in the reduced latent space).*
 
 ### 3.4 PROM-RBF (Galerkin on nonlinear manifold)
 
