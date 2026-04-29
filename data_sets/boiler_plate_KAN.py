@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 
-import pykan.kan as KAN
+import kan as KAN
 
 # -----------------------------
 # Data
@@ -17,8 +17,8 @@ y_torch = torch.tensor(y, dtype=torch.float32).unsqueeze(1)  # (100,1)
 # Model
 # -----------------------------
 model = KAN.MultKAN( # x--[]-->y
-    width=[1, 1],
-    grid=6,
+    width=[1,2,1],
+    grid=4,
     k=3,
     grid_range=[0, 1]
 )
