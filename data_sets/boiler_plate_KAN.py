@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 
-import kan as KAN
+import kan as KAN # This assumes that the pykan and ickan repos are in the PATH
 
 # -----------------------------
 # Data
@@ -18,8 +18,8 @@ y_torch = torch.tensor(y, dtype=torch.float32).unsqueeze(1)  # (100,1)
 # -----------------------------
 model = KAN.MultKAN( # x--[]-->y
     width=[1,2,1],
-    grid=4,
-    k=3,
+    grid=3,
+    k=2,
     grid_range=[0, 1]
 )
 model.speed()
@@ -33,7 +33,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 # -----------------------------
 # Training loop (L2 minimization)
 # -----------------------------
-n_epochs = 4000
+n_epochs = 500
 
 for epoch in range(n_epochs):
     optimizer.zero_grad()
