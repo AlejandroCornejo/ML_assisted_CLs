@@ -37,8 +37,8 @@ INPUT DATASET:
 Load strain and stress from FOM trajectories (10 trajectories from stage_1_training_set_fom folder).
 Data is loaded as [history, step, component] with shape [10, steps, 3].
 """
-n_epochs = 800
-learning_rate = 0.01
+n_epochs = 1500
+learning_rate = 1.0
 
 # Path to FOM trajectories folder (relative to script location)
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -85,6 +85,7 @@ ref_stress_database = torch.tensor(np.stack(stress_trajectories_truncated), dtyp
 
 # Convert stress to be base 1
 ref_stress_database /= 1.0e9
+ref_strain_database /= 2.0
 
 # Use all data for training (no train/test split)
 train_strain_database = ref_strain_database
@@ -116,34 +117,34 @@ class KANStressPredictor(nn.Module):
 
         # KAN definition
         self.KAN_W = KAN.MultKAN(
-            width=[self.input_size, 1, 1], # output of size 1: W
+            width=[self.input_size, 5, 3, 1], # output of size 1: W
             grid=self.grid,
-            k=self.k
+            k=self.k,
+            # grid_range=[-100, 100.0]
         )
 
         # Initialize some extra parameters
         self.ki = nn.ParameterList([
-            nn.Parameter(torch.tensor(-(float(p + 1)))) for p in range(self.order_stretches + 1)
-            # 1.0 for p in range(self.order_stretches + 1)
+            # nn.Parameter(torch.tensor((float(p + 1)))) for p in range(self.order_stretches + 1)
+            nn.Parameter(torch.tensor(1.0)) for p in range(self.order_stretches + 1)
         ])
-        
 
         # The parameter multiplying the log(J) is initially set to 1.0
-        self.ki[-1] = nn.Parameter(torch.tensor(2.0))
+        self.ki[-1] = nn.Parameter(torch.tensor(1.0))
         # self.ki[-1] = 1.0
 
         for i, ki in enumerate(self.ki):
             print("self.ki[i]: ", ki.data)
 
-    # def ResetParameters(self):
+    def ResetParameters(self):
         # Initialize some extra parameters
-        # self.ki = nn.ParameterList([
-        #     nn.Parameter(torch.tensor(float(p + 1) + random.random())) for p in range(self.order_stretches + 1)
-        #     # nn.Parameter(torch.tensor(float(p + 1))) for p in range(self.order_stretches + 1)
-        # ])
+        self.ki = nn.ParameterList([
+            nn.Parameter(torch.tensor(float(p + 1) + random.random())) for p in range(self.order_stretches + 1)
+            # nn.Parameter(torch.tensor(float(p + 1))) for p in range(self.order_stretches + 1)
+        ])
 
         # The parameter multiplying the log(J) is initially set to 1.0
-        # self.ki[-1] = nn.Parameter(torch.tensor(1.0))
+        self.ki[-1] = nn.Parameter(torch.tensor(1.0))
 
     # ==========================================================================================
     def CalculateWWithoutNormalization(self, strain):
@@ -165,7 +166,7 @@ class KANStressPredictor(nn.Module):
         C = 2.0 * E + torch.eye(2)
 
         J = torch.linalg.det(C) ** 0.5  # Determinant of C (Jacobian)
-        log_J = torch.log(J + 1.0e-12)  # Logarithm of J
+        log_J = torch.log(J)  # Logarithm of J
 
         square_eigenvalues = torch.linalg.eigvalsh(C)  # Eigenvalues: batch x steps x 2
         eigenvalues = torch.sqrt(square_eigenvalues)
@@ -188,8 +189,6 @@ class KANStressPredictor(nn.Module):
 
         # Append log(J) multiplied by the last ki factor
         log_J_scaled = log_J * self.ki[-1]  # Multiply log(J) by the last ki factor
-        # log_J_scaled = log_J ** self.ki[-1]  # Multiply log(J) by the last ki factor
-        # log_J_scaled = log_J
         log_J_expanded = log_J_scaled.unsqueeze(-1)  # Add an extra dimension for concatenation
         kan_inputs.append(log_J_expanded)
 
@@ -406,12 +405,13 @@ print("\n")
 
 
 # Initialize the optimizer
-optimizer = optim.LBFGS( # LBFGS Adam
-                model.parameters(),
-                lr=learning_rate,
-                max_iter=150,
-                history_size=35
-            )
+optimizer = optim.Adam(
+    model.parameters(),
+    lr=learning_rate,
+    # max_iter=5,
+    # history_size=7,
+    # line_search_fn='strong_wolfe'
+)
 
 
 # Train the KAN model using mean stress difference loss on all data
