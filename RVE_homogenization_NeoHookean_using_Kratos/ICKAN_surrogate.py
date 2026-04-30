@@ -38,7 +38,7 @@ Load strain and stress from FOM trajectories (10 trajectories from stage_1_train
 Data is loaded as [history, step, component] with shape [10, steps, 3].
 """
 n_epochs = 1500
-learning_rate = 1.0
+learning_rate = 0.01
 
 # Path to FOM trajectories folder (relative to script location)
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -117,7 +117,7 @@ class KANStressPredictor(nn.Module):
 
         # KAN definition
         self.KAN_W = KAN.MultKAN(
-            width=[self.input_size, 5, 3, 1], # output of size 1: W
+            width=[self.input_size, 1, 1], # output of size 1: W
             grid=self.grid,
             k=self.k,
             # grid_range=[-100, 100.0]
@@ -405,13 +405,14 @@ print("\n")
 
 
 # Initialize the optimizer
-optimizer = optim.Adam(
-    model.parameters(),
-    lr=learning_rate,
-    # max_iter=5,
-    # history_size=7,
-    # line_search_fn='strong_wolfe'
-)
+# optimizer = optim.Adam(
+#     model.parameters(),
+#     lr=learning_rate,
+#     # max_iter=5,
+#     # history_size=7,
+#     # line_search_fn='strong_wolfe'
+# )
+optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
 
 
 # Train the KAN model using mean stress difference loss on all data
