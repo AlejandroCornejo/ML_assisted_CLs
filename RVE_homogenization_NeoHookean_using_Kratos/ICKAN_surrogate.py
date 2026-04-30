@@ -13,6 +13,7 @@ import random
 
 # NOW we use input convex KANs, so we import the KAN class from the ICKANs module instead of pykan
 sys.path.insert(0, r'C:\ICKANs')
+
 import ickan as KAN
 
 
@@ -35,8 +36,8 @@ INPUT DATASET:
 Load strain and stress from FOM trajectories (10 trajectories from stage_1_training_set_fom folder).
 Data is loaded as [history, step, component] with shape [10, steps, 3].
 """
-n_epochs = 200
-learning_rate = 0.001
+n_epochs = 500
+learning_rate = 0.1
 
 # Path to FOM trajectories folder (relative to script location)
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -106,8 +107,8 @@ class KANStressPredictor(nn.Module):
 
         # EDIT:
         self.order_stretches = 1  # Number of orders (can be set to any value)
-        self.k = 3  # Degree of splines
-        self.grid = 10  # Number of knots
+        self.k = 2  # Degree of splines
+        self.grid = 3  # Number of knots
         # -------------------------------------
 
         self.input_size = 2 * self.order_stretches + 1  # Total inputs: 2 * reg_eigenvalues for each order + 1 * log(J)
@@ -120,13 +121,13 @@ class KANStressPredictor(nn.Module):
         )
 
         # Initialize some extra parameters
-        # self.ki = nn.ParameterList([
-        #     # nn.Parameter(torch.tensor(float(p + 1) + random.random())) for p in range(self.order_stretches + 1)
-        #     1.0 for p in range(self.order_stretches + 1)
-        # ])
+        self.ki = nn.ParameterList([
+            nn.Parameter(torch.tensor(float(p + 1))) for p in range(self.order_stretches + 1)
+            # 1.0 for p in range(self.order_stretches + 1)
+        ])
 
         # The parameter multiplying the log(J) is initially set to 1.0
-        # self.ki[-1] = nn.Parameter(torch.tensor(1.0))
+        self.ki[-1] = nn.Parameter(torch.tensor(1.0))
         # self.ki[-1] = 1.0
 
     # def ResetParameters(self):
@@ -174,15 +175,15 @@ class KANStressPredictor(nn.Module):
 
         for index in range(self.order_stretches):
             # Compute reg_eigenvalues**order
-            # reg_eigenvalues_order = reg_eigenvalues ** self.ki[index] # TODO modified
-            reg_eigenvalues_order = reg_eigenvalues
+            reg_eigenvalues_order = reg_eigenvalues ** self.ki[index]
+            # reg_eigenvalues_order = reg_eigenvalues
 
             # Append the pair of stretches for this order
             kan_inputs.append(reg_eigenvalues_order)
 
         # Append log(J) multiplied by the last ki factor
-        # log_J_scaled = log_J * self.ki[-1]  # Multiply log(J) by the last ki factor
-        log_J_scaled = log_J
+        log_J_scaled = log_J * self.ki[-1]  # Multiply log(J) by the last ki factor
+        # log_J_scaled = log_J
         log_J_expanded = log_J_scaled.unsqueeze(-1)  # Add an extra dimension for concatenation
         kan_inputs.append(log_J_expanded)
 
@@ -399,7 +400,7 @@ print("\n")
 
 
 # Initialize the optimizer
-optimizer = optim.LBFGS(
+optimizer = optim.Adam( # LBFGS
                 model.parameters(),
                 lr=learning_rate,
                 # max_iter=20,
