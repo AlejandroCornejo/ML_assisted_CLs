@@ -302,7 +302,7 @@ def DetectMaterialSubModelParts(mdpa_path):
     if not mats:
         raise RuntimeError(
             f"No material* submodelparts found in mdpa: {mdpa_path}. "
-            f"Expected names like material, material_1, material_2."
+            "Expected names like material."
         )
     return mats
 
@@ -322,38 +322,11 @@ def ConfigureElementModelerForMaterialParts(parameters, material_parts):
     return KM.Parameters(json.dumps(params_dict))
 
 
-def WriteRuntimeMaterialsFile(
-    material_parts,
-    young_mpa,
-    poisson,
-    out_filename="StructuralMaterials.runtime.json",
-    density=7850.0,
-    thickness=0.05,
-):
-    young_pa = float(young_mpa) * 1.0e6
-    props = []
-    for i, name in enumerate(material_parts, start=1):
-        props.append(
-            {
-                "model_part_name": f"Structure.{name}",
-                "properties_id": i,
-                "Material": {
-                    "constitutive_law": {"name": "HyperElasticPlaneStrain2DLaw"},
-                    "Variables": {
-                        "DENSITY": float(density),
-                        "YOUNG_MODULUS": float(young_pa),
-                        "POISSON_RATIO": float(poisson),
-                        "THICKNESS": float(thickness),
-                    },
-                    "Tables": None,
-                },
-            }
-        )
-
-    with open(out_filename, "w") as f:
-        json.dump({"properties": props}, f, indent=4)
-
-    return out_filename
+def SetMaterialsFilename(parameters, materials_filename="StructuralMaterials.json"):
+    parameters["solver_settings"]["material_import_settings"]["materials_filename"].SetString(
+        str(materials_filename)
+    )
+    return parameters
 
 
 def SanitizeDirichletGeometriesInMdpa(mdpa_path):
@@ -866,13 +839,13 @@ def ParseArgs():
         "--young-mpa",
         type=float,
         default=None,
-        help="Young modulus in MPa for the runtime materials file (auto: paper value if --use-paper-trajectory, otherwise default value).",
+        help="Deprecated: runtime material generation is disabled; StructuralMaterials.json is used.",
     )
     parser.add_argument(
         "--poisson",
         type=float,
         default=None,
-        help="Poisson ratio for the runtime materials file (auto: paper value if --use-paper-trajectory, otherwise default value).",
+        help="Deprecated: runtime material generation is disabled; StructuralMaterials.json is used.",
     )
     parser.add_argument("--find-amax", action="store_true", help="Find largest stable amax instead of generating dataset.")
     parser.add_argument("--amax", type=float, default=0.10, help="amax for regular dataset generation.")
@@ -938,23 +911,13 @@ if __name__ == "__main__":
     material_parts = DetectMaterialSubModelParts(mdpa_path)
     parameters = ConfigureElementModelerForMaterialParts(parameters, material_parts)
 
-    young_mpa = args.young_mpa
-    if young_mpa is None:
-        young_mpa = PAPER_YOUNG_MPA if args.use_paper_trajectory else DEFAULT_YOUNG_MPA
-    poisson = args.poisson
-    if poisson is None:
-        poisson = PAPER_POISSON if args.use_paper_trajectory else DEFAULT_POISSON
-
-    runtime_materials = WriteRuntimeMaterialsFile(
-        material_parts=material_parts,
-        young_mpa=young_mpa,
-        poisson=poisson,
-    )
-    parameters["solver_settings"]["material_import_settings"]["materials_filename"].SetString(runtime_materials)
-    print(
-        "[INFO] Material setup: "
-        f"parts={material_parts}, E={young_mpa:.3f} MPa, nu={poisson:.4f}, file={runtime_materials}"
-    )
+    SetMaterialsFilename(parameters, "StructuralMaterials.json")
+    if args.young_mpa is not None or args.poisson is not None:
+        print(
+            "[INFO] --young-mpa / --poisson provided, but runtime material generation is disabled. "
+            "Using StructuralMaterials.json."
+        )
+    print(f"[INFO] Material setup: parts={material_parts}, file=StructuralMaterials.json")
 
     if args.find_amax:
         best_amax = FindBestStableAmax(

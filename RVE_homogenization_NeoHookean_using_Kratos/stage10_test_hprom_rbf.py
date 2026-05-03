@@ -23,6 +23,24 @@ from prom_rbf_solver_rve import LoadPromRbfModel, RunPromRbfBatchSimulation
 from hprom_rbf_solver_rve import LoadHpromRbfModel, RunHpromRbfBatchSimulation
 
 
+def _compute_equivalent_stress_strain(eps, sig):
+    eps = np.asarray(eps, dtype=float)
+    sig = np.asarray(sig, dtype=float)
+    if eps.ndim != 2 or sig.ndim != 2 or eps.shape[1] < 3 or sig.shape[1] < 3:
+        raise ValueError("Expected eps and sig arrays with shape [n_steps, >=3].")
+
+    exx = eps[:, 0]
+    eyy = eps[:, 1]
+    gxy = eps[:, 2]  # engineering shear strain
+    sxx = sig[:, 0]
+    syy = sig[:, 1]
+    sxy = sig[:, 2]
+
+    sigma_eq = np.sqrt(np.maximum(sxx * sxx - sxx * syy + syy * syy + 3.0 * sxy * sxy, 0.0))
+    eps_eq = (2.0 / 3.0) * np.sqrt(np.maximum(exx * exx + eyy * eyy - exx * eyy + 0.75 * gxy * gxy, 0.0))
+    return eps_eq, sigma_eq
+
+
 def plot_hprom_rbf_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir, timings=None):
     n = min(len(f_sig), len(p_sig), len(h_sig), len(f_eps), len(p_eps), len(h_eps))
 
@@ -53,6 +71,23 @@ def plot_hprom_rbf_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir,
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, f"hprom_rbf_comp_{suffix}.png"), dpi=150)
         plt.close()
+
+    f_eps_eq, f_sig_eq = _compute_equivalent_stress_strain(f_eps[:n], f_sig[:n])
+    p_eps_eq, p_sig_eq = _compute_equivalent_stress_strain(p_eps[:n], p_sig[:n])
+    h_eps_eq, h_sig_eq = _compute_equivalent_stress_strain(h_eps[:n], h_sig[:n])
+
+    plt.figure(figsize=(7, 6))
+    plt.plot(f_eps_eq, f_sig_eq, "k-", label="FOM", linewidth=2.0)
+    plt.plot(p_eps_eq, p_sig_eq, "r--", label="PROM-RBF", linewidth=1.5)
+    plt.plot(h_eps_eq, h_sig_eq, "b:", label="HPROM-RBF", linewidth=1.5)
+    plt.title(r"HPROM-RBF Benchmark: $\sigma_{eq}$ vs $\varepsilon_{eq}$")
+    plt.xlabel(r"$\varepsilon_{eq}$ [-]")
+    plt.ylabel(r"$\sigma_{eq}$ [Pa]")
+    plt.grid(True, linestyle="--", alpha=0.7)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "hprom_rbf_comp_sigma_eq.png"), dpi=150)
+    plt.close()
 
     fom_norm = np.linalg.norm(f_sig[:n], axis=1) + 1e-30
     err_prom_rbf = np.linalg.norm(f_sig[:n] - p_sig[:n], axis=1) / fom_norm

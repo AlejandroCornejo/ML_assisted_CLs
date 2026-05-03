@@ -19,7 +19,6 @@ from fom_solver_rve import (
     StripMdpaExtension,
     DetectMaterialSubModelParts,
     ConfigureElementModelerForMaterialParts,
-    WriteRuntimeMaterialsFile,
     SetInputMeshFilename,
     LoadStrainWaypointsFromFile,
     REFERENCE_STEPS_FOR_UNIT_AMPLITUDE
@@ -45,8 +44,9 @@ def run_verification(idx, mesh="rve_geometry", fom_dir="stage_1_training_set_fom
     mdpa_path = f"{StripMdpaExtension(mesh)}.mdpa"
     material_parts = DetectMaterialSubModelParts(mdpa_path)
     parameters = ConfigureElementModelerForMaterialParts(parameters, material_parts)
-    runtime_materials = WriteRuntimeMaterialsFile(material_parts, 1628.0, 0.4)
-    parameters["solver_settings"]["material_import_settings"]["materials_filename"].SetString(runtime_materials)
+    parameters["solver_settings"]["material_import_settings"]["materials_filename"].SetString(
+        "StructuralMaterials.json"
+    )
 
     # 3. Load Path
     strain_path, meta = LoadStrainWaypointsFromFile("stage_0_trajectory/stage_0_trajectories.npz", idx)

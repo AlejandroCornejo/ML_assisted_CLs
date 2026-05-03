@@ -23,6 +23,24 @@ from hprom_solver_rve import RunHpromBatchSimulation
 from prom_rbf_solver_rve import LoadPromRbfModel, RunPromRbfBatchSimulation
 
 
+def _compute_equivalent_stress_strain(eps, sig):
+    eps = np.asarray(eps, dtype=float)
+    sig = np.asarray(sig, dtype=float)
+    if eps.ndim != 2 or sig.ndim != 2 or eps.shape[1] < 3 or sig.shape[1] < 3:
+        raise ValueError("Expected eps and sig arrays with shape [n_steps, >=3].")
+
+    exx = eps[:, 0]
+    eyy = eps[:, 1]
+    gxy = eps[:, 2]  # engineering shear strain
+    sxx = sig[:, 0]
+    syy = sig[:, 1]
+    sxy = sig[:, 2]
+
+    sigma_eq = np.sqrt(np.maximum(sxx * sxx - sxx * syy + syy * syy + 3.0 * sxy * sxy, 0.0))
+    eps_eq = (2.0 / 3.0) * np.sqrt(np.maximum(exx * exx + eyy * eyy - exx * eyy + 0.75 * gxy * gxy, 0.0))
+    return eps_eq, sigma_eq
+
+
 
 
 def _load_rom_model(model_dir="stage_2_pod_rve"):
@@ -255,6 +273,23 @@ def run_stage8_rbf(
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, f"rbf_manifold_accuracy_{suffix}.png"), dpi=200)
         plt.close()
+
+    fom_eps_eq, fom_sig_eq = _compute_equivalent_stress_strain(fom_eps[:n], fom_sig[:n])
+    pr_eps_eq, pr_sig_eq = _compute_equivalent_stress_strain(eps_pr[:n], sig_pr[:n])
+    hprom_eps_eq, hprom_sig_eq = _compute_equivalent_stress_strain(hprom_eps[:n], hprom_sig[:n])
+
+    plt.figure(figsize=(7, 6))
+    plt.plot(fom_eps_eq, fom_sig_eq, "k-", label="FOM", linewidth=2.0)
+    plt.plot(pr_eps_eq, pr_sig_eq, "r--", label="PROM-RBF", linewidth=1.5)
+    plt.plot(hprom_eps_eq, hprom_sig_eq, "b:", label="HPROM", linewidth=1.5)
+    plt.title(r"Manifold Benchmark: $\sigma_{eq}$ vs $\varepsilon_{eq}$")
+    plt.xlabel(r"$\varepsilon_{eq}$ [-]")
+    plt.ylabel(r"$\sigma_{eq}$ [Pa]")
+    plt.grid(True, linestyle="--", alpha=0.7)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "rbf_manifold_accuracy_equivalent.png"), dpi=200)
+    plt.close()
 
     plt.figure(figsize=(7, 6))
     fom_norm = np.linalg.norm(fom_sig[:n], axis=1) + 1e-30

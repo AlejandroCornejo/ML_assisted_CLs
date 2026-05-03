@@ -32,7 +32,6 @@ from fom_solver_rve import (
     StripMdpaExtension,
     DetectMaterialSubModelParts,
     ConfigureElementModelerForMaterialParts,
-    WriteRuntimeMaterialsFile,
     RVEHomogenizationDatasetGenerator,
 )
 
@@ -108,14 +107,9 @@ def run_stage2_pod():
     if os.path.exists(mdpa_path):
         material_parts = DetectMaterialSubModelParts(mdpa_path)
         parameters = ConfigureElementModelerForMaterialParts(parameters, material_parts)
-        
-        # Ensure materials are linked correctly for the ReadMaterialsUtility
-        runtime_materials = WriteRuntimeMaterialsFile(
-            material_parts=material_parts,
-            young_mpa=1628.0, # Using standard values for reconstruction
-            poisson=0.4,
+        parameters["solver_settings"]["material_import_settings"]["materials_filename"].SetString(
+            "StructuralMaterials.json"
         )
-        parameters["solver_settings"]["material_import_settings"]["materials_filename"].SetString(runtime_materials)
     
     model = KM.Model()
     sim = RVEHomogenizationDatasetGenerator(model, parameters)

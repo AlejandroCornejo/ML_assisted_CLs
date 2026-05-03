@@ -26,7 +26,6 @@ from fom_solver_rve import (
     StripMdpaExtension, 
     DetectMaterialSubModelParts, 
     ConfigureElementModelerForMaterialParts, 
-    WriteRuntimeMaterialsFile,
     REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
     MIN_STEPS_PER_SEGMENT
 )
@@ -205,8 +204,9 @@ def run_stage4_test(mesh="rve_geometry", run_fom=False, plot_only=False):
     mdpa_path = f"{StripMdpaExtension(mesh)}.mdpa"
     material_parts = DetectMaterialSubModelParts(mdpa_path)
     parameters = ConfigureElementModelerForMaterialParts(parameters, material_parts)
-    runtime_materials = WriteRuntimeMaterialsFile(material_parts, 1628.0, 0.4)
-    parameters["solver_settings"]["material_import_settings"]["materials_filename"].SetString(runtime_materials)
+    parameters["solver_settings"]["material_import_settings"]["materials_filename"].SetString(
+        "StructuralMaterials.json"
+    )
 
     # 1. Run / Load FOM
     fom_sig_file = os.path.join(out_dir, "fom_stress_unseen.npy")

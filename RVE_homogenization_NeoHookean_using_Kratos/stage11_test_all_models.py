@@ -70,6 +70,24 @@ def _rel_l2_vs_ref(sig_ref, sig_pred):
     return num / den, n
 
 
+def _compute_equivalent_stress_strain(eps, sig):
+    eps = np.asarray(eps, dtype=float)
+    sig = np.asarray(sig, dtype=float)
+    if eps.ndim != 2 or sig.ndim != 2 or eps.shape[1] < 3 or sig.shape[1] < 3:
+        raise ValueError("Expected eps and sig arrays with shape [n_steps, >=3].")
+
+    exx = eps[:, 0]
+    eyy = eps[:, 1]
+    gxy = eps[:, 2]  # engineering shear strain
+    sxx = sig[:, 0]
+    syy = sig[:, 1]
+    sxy = sig[:, 2]
+
+    sigma_eq = np.sqrt(np.maximum(sxx * sxx - sxx * syy + syy * syy + 3.0 * sxy * sxy, 0.0))
+    eps_eq = (2.0 / 3.0) * np.sqrt(np.maximum(exx * exx + eyy * eyy - exx * eyy + 0.75 * gxy * gxy, 0.0))
+    return eps_eq, sigma_eq
+
+
 def _save_timing_cache(path, timings):
     if not timings:
         return
@@ -141,6 +159,27 @@ def _plot_stage11(all_eps, all_sig, out_dir, timings, reference_method):
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, f"stage11_comp_{suffix}.png"), dpi=150)
         plt.close()
+
+    plt.figure(figsize=(7.2, 6.0))
+    for m in methods_order:
+        ls, lw, color = styles.get(m, ("-", 1.4, None))
+        eps_eq, sig_eq = _compute_equivalent_stress_strain(all_eps[m][:n_common], all_sig[m][:n_common])
+        plt.plot(
+            eps_eq,
+            sig_eq,
+            linestyle=ls,
+            color=color,
+            linewidth=lw,
+            label=m,
+        )
+    plt.title(r"Stage 11 Benchmark: $\sigma_{eq}$ vs $\varepsilon_{eq}$")
+    plt.xlabel(r"$\varepsilon_{eq}$ [-]")
+    plt.ylabel(r"$\sigma_{eq}$ [Pa]")
+    plt.grid(True, linestyle="--", alpha=0.7)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "stage11_comp_sigma_eq.png"), dpi=150)
+    plt.close()
 
     if reference_method in all_sig and len(methods_order) > 1:
         ref_norm = np.linalg.norm(all_sig[reference_method][:n_common], axis=1) + 1e-30

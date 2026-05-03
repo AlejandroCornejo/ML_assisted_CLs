@@ -28,7 +28,6 @@ from fom_solver_rve import (
     CalculateHomogenizedStressAndStrainKratosReference,
     DetectMaterialSubModelParts,
     ConfigureElementModelerForMaterialParts,
-    WriteRuntimeMaterialsFile,
     StripMdpaExtension,
     BuildDynamicSegmentSteps,
     RVEHomogenizationDatasetGenerator,
@@ -380,8 +379,9 @@ if __name__ == "__main__":
     mdpa_path = f"{StripMdpaExtension('rve_geometry')}.mdpa"
     material_parts = DetectMaterialSubModelParts(mdpa_path)
     parameters = ConfigureElementModelerForMaterialParts(parameters, material_parts)
-    runtime_materials = WriteRuntimeMaterialsFile(material_parts, 1628.0, 0.4)
-    parameters["solver_settings"]["material_import_settings"]["materials_filename"].SetString(runtime_materials)
+    parameters["solver_settings"]["material_import_settings"]["materials_filename"].SetString(
+        "StructuralMaterials.json"
+    )
 
     strain_path, meta = LoadStrainWaypointsFromFile("stage_0_trajectory/stage_0_trajectories.npz", 1)
 

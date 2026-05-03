@@ -30,9 +30,6 @@ from fom_solver_rve import (
     EvaluateGaussPointData,
     SetInputMeshFilename,
     StripMdpaExtension,
-    DetectMaterialSubModelParts,
-    ConfigureElementModelerForMaterialParts,
-    WriteRuntimeMaterialsFile,
     setup_kratos_parameters,
 )
 from stage7b_train_ann_manifold import ManifoldANN

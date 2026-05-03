@@ -32,7 +32,6 @@ from fom_solver_rve import (
     StripMdpaExtension,
     DetectMaterialSubModelParts,
     ConfigureElementModelerForMaterialParts,
-    WriteRuntimeMaterialsFile,
 )
 from rbf_manifold_model import load_rbf_model, evaluate_rbf_map_and_jacobian_qp
 
@@ -174,10 +173,9 @@ def main():
     if os.path.exists(mdpa_path):
         material_parts = DetectMaterialSubModelParts(mdpa_path)
         parameters = ConfigureElementModelerForMaterialParts(parameters, material_parts)
-        runtime_materials = WriteRuntimeMaterialsFile(
-            material_parts=material_parts, young_mpa=1628.0, poisson=0.4
+        parameters["solver_settings"]["material_import_settings"]["materials_filename"].SetString(
+            "StructuralMaterials.json"
         )
-        parameters["solver_settings"]["material_import_settings"]["materials_filename"].SetString(runtime_materials)
         print(f"[Info] Material parts: {material_parts}")
 
     model = KM.Model()
@@ -322,4 +320,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

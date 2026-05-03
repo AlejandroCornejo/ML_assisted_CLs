@@ -802,35 +802,11 @@ def ConfigureElementModelerForMaterialParts(parameters, material_parts):
     return KM.Parameters(json.dumps(params_dict))
 
 
-def WriteRuntimeMaterialsFile(
-    material_parts,
-    young_mpa,
-    poisson,
-    out_filename="StructuralMaterials.runtime.json",
-    density=7850.0,
-    thickness=0.05,
-):
-    import json
-    young_pa = float(young_mpa) * 1.0e6
-    props = []
-    for i, name in enumerate(material_parts, start=1):
-        props.append({
-            "model_part_name": f"Structure.{name}",
-            "properties_id": i,
-            "Material": {
-                "constitutive_law": {"name": "HyperElasticPlaneStrain2DLaw"},
-                "Variables": {
-                    "DENSITY": float(density),
-                    "YOUNG_MODULUS": float(young_pa),
-                    "POISSON_RATIO": float(poisson),
-                    "THICKNESS": float(thickness),
-                },
-                "Tables": None,
-            },
-        })
-    with open(out_filename, "w") as f:
-        json.dump({"properties": props}, f, indent=4)
-    return out_filename
+def SetMaterialsFilename(parameters, materials_filename="StructuralMaterials.json"):
+    parameters["solver_settings"]["material_import_settings"]["materials_filename"].SetString(
+        str(materials_filename)
+    )
+    return parameters
 
 
 def setup_kratos_parameters(mesh="rve_geometry"):
@@ -839,12 +815,6 @@ def setup_kratos_parameters(mesh="rve_geometry"):
     """
     with open("ProjectParameters.json", "r") as f:
         parameters = KM.Parameters(f.read())
-
-    # Keep solver output quiet for performance and cleaner logs.
-    if parameters.Has("problem_data") and parameters["problem_data"].Has("echo_level"):
-        parameters["problem_data"]["echo_level"].SetInt(0)
-    if parameters.Has("solver_settings") and parameters["solver_settings"].Has("echo_level"):
-        parameters["solver_settings"]["echo_level"].SetInt(0)
     
     SetInputMeshFilename(parameters, mesh)
     mdpa_path = f"{StripMdpaExtension(mesh)}.mdpa"
@@ -852,9 +822,8 @@ def setup_kratos_parameters(mesh="rve_geometry"):
     if os.path.exists(mdpa_path):
         material_parts = DetectMaterialSubModelParts(mdpa_path)
         parameters = ConfigureElementModelerForMaterialParts(parameters, material_parts)
-        runtime_materials = WriteRuntimeMaterialsFile(material_parts, 1628.0, 0.4)
-        parameters["solver_settings"]["material_import_settings"]["materials_filename"].SetString(runtime_materials)
-    
+        SetMaterialsFilename(parameters, "StructuralMaterials.json")
+
     return parameters
 
 
@@ -1302,8 +1271,18 @@ def main():
         default=None,
         help="Override max nonlinear iterations (default: read ProjectParameters).",
     )
-    p.add_argument("--young-mpa", type=float, default=1628.0)
-    p.add_argument("--poisson", type=float, default=0.4)
+    p.add_argument(
+        "--young-mpa",
+        type=float,
+        default=None,
+        help="Deprecated: runtime material generation is disabled; StructuralMaterials.json is used.",
+    )
+    p.add_argument(
+        "--poisson",
+        type=float,
+        default=None,
+        help="Deprecated: runtime material generation is disabled; StructuralMaterials.json is used.",
+    )
     p.add_argument(
         "--convergence-criterion",
         type=str,
@@ -1361,6 +1340,11 @@ def main():
     )
     p.set_defaults(line_search=None, old_stiffness_first_it=None)
     args = p.parse_args()
+    if args.young_mpa is not None or args.poisson is not None:
+        print(
+            "[INFO] --young-mpa / --poisson provided, but runtime material generation is disabled. "
+            "Using StructuralMaterials.json."
+        )
 
     with open("ProjectParameters.json", "r") as f:
         parameters = KM.Parameters(f.read())
@@ -1375,15 +1359,9 @@ def main():
     if os.path.exists(mdpa_path):
         material_parts = DetectMaterialSubModelParts(mdpa_path)
         parameters = ConfigureElementModelerForMaterialParts(parameters, material_parts)
-        
-        runtime_materials = WriteRuntimeMaterialsFile(
-            material_parts=material_parts,
-            young_mpa=args.young_mpa,
-            poisson=args.poisson,
-        )
-        parameters["solver_settings"]["material_import_settings"]["materials_filename"].SetString(runtime_materials)
+        SetMaterialsFilename(parameters, "StructuralMaterials.json")
         print(f"[INFO] Auto-detected material parts: {material_parts}")
-        print(f"[INFO] Generated runtime materials file: {runtime_materials}")
+        print("[INFO] Using materials file: StructuralMaterials.json")
     # -----------------------------------------------------------------------
 
     strain_path = None

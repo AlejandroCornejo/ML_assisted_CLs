@@ -697,6 +697,29 @@ This stage projects fluctuation snapshots, after subtracting affine lifting, to:
 - inputs: `q_p`, using 4 modes
 - targets: `q_s`, using 17 modes (for a total of 21 modes)
 
+### Stage 7a-LS-RBF: Build Least-Squares RBF Dataset + Jacobian Diagnostics
+
+```bash
+python3 stage7a_prepare_rbf_dataset_ls.py \
+  --n-primary 3 \
+  --out-dir stage_7_ann_data_ls \
+  --plot-max-samples 110000 \
+  --jacobian-mesh-type delaunay \
+  --jacobian-mesh-max-points 6000 \
+  --jacobian-mesh-seed 42
+```
+
+Notes:
+
+- This command uses **no strain input** for RBF by default.
+- It computes and saves:
+  - domain comparison plots (`mu`, first-3 POD, first-3 LS-primary),
+  - Delaunay mesh figures in parameter and mapped LS-primary domains,
+  - parameter-mesh Jacobian diagnostics,
+  - macro deformation Jacobian check (`det(F)` from applied strain),
+  - a LaTeX summary note:
+    - `stage_7_ann_data_ls/ls_rbf_parameter_mesh_jacobian_note.tex`
+
 ### Stage 7a-POD-DL: Build POD-DL Dataset
 
 ```bash
