@@ -15,304 +15,8 @@ from KratosMultiphysics.StructuralMechanicsApplication import (
 import KratosMultiphysics.StructuralMechanicsApplication as SMApp  # noqa: F401
 import KratosMultiphysics.ConstitutiveLawsApplication as CLA  # noqa: F401
 
-from scipy.sparse import coo_matrix, csr_matrix
+from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
-
-
-# =============================================================================
-# Vectorized Constitutive Law (Neo-Hookean Plane Strain 2D)
-# Matches Kratos HyperElasticIsotropicNeoHookeanPlaneStrain2D exactly.
-# =============================================================================
-
-def _neo_hookean_pk2_2d_vectorized(E_voigt, young, poisson):
-    """
-    Vectorized PK2 stress and tangent for compressible Neo-Hookean plane strain.
-    E_voigt: (N, 3) with [E11, E22, 2*E12]
-    Returns: S_voigt (N, 3), C_voigt (N, 3, 3)
-    """
-    mu = young / (2.0 * (1.0 + poisson))
-    lmbda = young * poisson / ((1.0 + poisson) * (1.0 - 2.0 * poisson))
-
-    E11, E22, G12 = E_voigt[:, 0], E_voigt[:, 1], E_voigt[:, 2]
-    E12 = 0.5 * G12
-
-    C11 = 2.0 * E11 + 1.0
-    C22 = 2.0 * E22 + 1.0
-    C12 = 2.0 * E12
-
-    detC = C11 * C22 - C12 * C12
-    J = np.sqrt(np.maximum(detC, 1e-30))
-    lnJ = np.log(J)
-    invDetC = 1.0 / detC
-
-    # C^{-1} components
-    Ci11 = C22 * invDetC
-    Ci22 = C11 * invDetC
-    Ci12 = -C12 * invDetC
-
-    # S = lambda*ln(J)*C^{-1} + mu*(I - C^{-1})
-    N = E_voigt.shape[0]
-    S = np.empty((N, 3))
-    S[:, 0] = lmbda * lnJ * Ci11 + mu * (1.0 - Ci11)
-    S[:, 1] = lmbda * lnJ * Ci22 + mu * (1.0 - Ci22)
-    S[:, 2] = lmbda * lnJ * Ci12 + mu * (0.0 - Ci12)
-
-    # Tangent C_ijkl using Voigt map: 0->(0,0), 1->(1,1), 2->(0,1)
-    Ci = np.empty((N, 2, 2))
-    Ci[:, 0, 0] = Ci11; Ci[:, 1, 1] = Ci22
-    Ci[:, 0, 1] = Ci12; Ci[:, 1, 0] = Ci12
-
-    voigt2d = [(0, 0), (1, 1), (0, 1)]
-    CC = np.empty((N, 3, 3))
-    coeff = mu - lmbda * lnJ  # (N,)
-    for iv in range(3):
-        i0, i1 = voigt2d[iv]
-        for jv in range(3):
-            j0, j1 = voigt2d[jv]
-            CC[:, iv, jv] = (
-                lmbda * Ci[:, i0, i1] * Ci[:, j0, j1]
-                + coeff * (Ci[:, i0, j0] * Ci[:, i1, j1] + Ci[:, i0, j1] * Ci[:, i1, j0])
-            )
-
-    return S, CC
-
-
-# =============================================================================
-# Triangle2D6 shape function local gradients
-# =============================================================================
-
-def _tri6_DN_local(xi, eta):
-    DN = np.zeros((6, 2))
-    DN[0, 0] = 4*xi + 4*eta - 3;  DN[0, 1] = 4*xi + 4*eta - 3
-    DN[1, 0] = 4*xi - 1;          DN[1, 1] = 0.0
-    DN[2, 0] = 0.0;               DN[2, 1] = 4*eta - 1
-    DN[3, 0] = 4 - 8*xi - 4*eta;  DN[3, 1] = -4*xi
-    DN[4, 0] = 4*eta;             DN[4, 1] = 4*xi
-    DN[5, 0] = -4*eta;            DN[5, 1] = 4 - 4*xi - 8*eta
-    return DN
-
-
-# =============================================================================
-# Vectorized Assembler
-# =============================================================================
-
-class VectorizedAssembler:
-    """
-    Replaces per-element CalculateLocalSystem calls with bulk NumPy operations.
-    One-time init extracts connectivity, DN, weights from Kratos geometry objects.
-    Per-iteration Assemble() computes K and RHS via tensor contractions.
-    """
-
-    def __init__(self, mp, n_dof, eq_map):
-        self.n_dof = n_dof
-        self.eq_map = eq_map
-
-        elements = list(mp.Elements)
-        self.n_elems = len(elements)
-        if self.n_elems == 0:
-            return
-
-        self.n_nodes = len(elements[0].GetGeometry())
-        self.n_local_dof = self.n_nodes * 2
-
-        # --- Material properties per element ---
-        self.young = np.empty(self.n_elems)
-        self.poisson = np.empty(self.n_elems)
-        self.thickness = np.empty(self.n_elems)
-        for e, elem in enumerate(elements):
-            props = elem.Properties
-            self.young[e] = props[KM.YOUNG_MODULUS]
-            self.poisson[e] = props[KM.POISSON_RATIO]
-            self.thickness[e] = props[KM.THICKNESS] if props.Has(KM.THICKNESS) else 1.0
-
-        # Check if all elements share same material (common case → faster path)
-        self._uniform_material = (
-            np.all(self.young == self.young[0]) and
-            np.all(self.poisson == self.poisson[0])
-        )
-        if self._uniform_material:
-            self._young_scalar = float(self.young[0])
-            self._poisson_scalar = float(self.poisson[0])
-
-        # --- Connectivity: node_id → 0-based index ---
-        max_id = max(node.Id for node in mp.Nodes)
-        id_to_idx = np.zeros(max_id + 1, dtype=int)
-        for i, node in enumerate(mp.Nodes):
-            id_to_idx[node.Id] = i
-
-        self.connectivity = np.array(
-            [[id_to_idx[node.Id] for node in elem.GetGeometry()] for elem in elements]
-        )  # (n_elems, n_nodes)
-
-        # local equation IDs: (n_elems, n_local_dof)
-        # eq_map is (n_nodes_total, 2), connectivity indexes into it
-        self.local_eq_ids = eq_map[self.connectivity].reshape(self.n_elems, -1)
-
-        # --- Shape function derivatives and integration weights ---
-        self.n_gauss = elements[0].GetGeometry().IntegrationPointsNumber()
-        self.DN = np.zeros((self.n_elems, self.n_gauss, self.n_nodes, 2))
-        self.w_detJ = np.zeros((self.n_elems, self.n_gauss))
-
-        for e, elem in enumerate(elements):
-            geom = elem.GetGeometry()
-            coords = np.array([[geom[i].X0, geom[i].Y0] for i in range(self.n_nodes)])
-            ips = geom.IntegrationPoints()
-
-            for g in range(self.n_gauss):
-                xi, eta = ips[g][0], ips[g][1]
-                w = ips[g][3]
-                DN_local = _tri6_DN_local(xi, eta)
-                J = coords.T @ DN_local  # (2,2) — Kratos convention
-                detJ = np.linalg.det(J)
-                invJ = np.linalg.inv(J)
-                self.DN[e, g] = DN_local @ invJ
-                self.w_detJ[e, g] = w * detJ * self.thickness[e]
-
-        # --- Precompute COO indices for sparse assembly ---
-        self.rows_K = np.repeat(self.local_eq_ids, self.n_local_dof, axis=1).flatten()
-        self.cols_K = np.tile(self.local_eq_ids, (1, self.n_local_dof)).flatten()
-        self.rows_R = self.local_eq_ids.flatten()
-
-        # --- Workspace buffers reused on each Assemble() call ---
-        self._u_node = np.empty((self.n_elems, self.n_nodes, 2), dtype=float)
-        self._grad_u = np.empty((self.n_elems, self.n_gauss, 2, 2), dtype=float)
-        self._F = np.empty((self.n_elems, self.n_gauss, 2, 2), dtype=float)
-        self._FtF = np.empty((self.n_elems, self.n_gauss, 2, 2), dtype=float)
-        self._E_voigt = np.empty((self.n_elems, self.n_gauss, 3), dtype=float)
-        self._S_voigt = np.empty((self.n_elems, self.n_gauss, 3), dtype=float)
-        self._CC = np.empty((self.n_elems, self.n_gauss, 3, 3), dtype=float)
-        self._St = np.empty((self.n_elems, self.n_gauss, 2, 2), dtype=float)
-        self._P = np.empty((self.n_elems, self.n_gauss, 2, 2), dtype=float)
-        self._tmp_ag_ai = np.empty((self.n_elems, self.n_gauss, self.n_nodes, 2), dtype=float)
-        self._f_int = np.empty((self.n_elems, self.n_nodes, 2), dtype=float)
-        self._B = np.empty((self.n_elems, self.n_gauss, 3, self.n_local_dof), dtype=float)
-        self._CB = np.empty((self.n_elems, self.n_gauss, 3, self.n_local_dof), dtype=float)
-        self._K_gp = np.empty((self.n_elems, self.n_gauss, self.n_local_dof, self.n_local_dof), dtype=float)
-        self._K_mat = np.empty((self.n_elems, self.n_local_dof, self.n_local_dof), dtype=float)
-        self._DNSt = np.empty((self.n_elems, self.n_gauss, self.n_nodes, 2), dtype=float)
-        self._S_DN_DN_gp = np.empty((self.n_elems, self.n_gauss, self.n_nodes, self.n_nodes), dtype=float)
-        self._S_DN_DN = np.empty((self.n_elems, self.n_nodes, self.n_nodes), dtype=float)
-        self._K_geo = np.empty((self.n_elems, self.n_local_dof, self.n_local_dof), dtype=float)
-        self._K_total = np.empty((self.n_elems, self.n_local_dof, self.n_local_dof), dtype=float)
-        self._rhs = np.zeros(self.n_dof, dtype=float)
-
-        print(f"[VectorizedAssembler] {self.n_elems} elements, {self.n_gauss} GPs, "
-              f"total area={np.sum(self.w_detJ):.6e}")
-
-    def Assemble(self, u_global):
-        """Compute global K (sparse CSR) and RHS from current displacement vector."""
-        if self.n_elems == 0:
-            return csr_matrix((self.n_dof, self.n_dof)), np.zeros(self.n_dof)
-
-        ne, ng, nn = self.n_elems, self.n_gauss, self.n_nodes
-        ndl = self.n_local_dof
-
-        # 1. Gather nodal displacements -> (ne, nn, 2)
-        self._u_node[..., 0] = u_global[self.eq_map[:, 0]][self.connectivity]
-        self._u_node[..., 1] = u_global[self.eq_map[:, 1]][self.connectivity]
-
-        # 2. Kinematics
-        # grad_u[e,g,i,j] = sum_a u[e,a,i] * DN[e,g,a,j]
-        np.matmul(np.swapaxes(self._u_node[:, None, :, :], 2, 3), self.DN, out=self._grad_u)
-        self._F[:] = self._grad_u
-        self._F[..., 0, 0] += 1.0
-        self._F[..., 1, 1] += 1.0
-
-        # Green-Lagrange: E = 0.5*(F^T F - I)
-        np.matmul(np.swapaxes(self._F, 2, 3), self._F, out=self._FtF)
-        self._E_voigt[..., 0] = 0.5 * (self._FtF[..., 0, 0] - 1.0)
-        self._E_voigt[..., 1] = 0.5 * (self._FtF[..., 1, 1] - 1.0)
-        self._E_voigt[..., 2] = self._FtF[..., 0, 1]  # 2*E12
-        E_flat = self._E_voigt.reshape(-1, 3)
-
-        # 3. Constitutive law
-        if self._uniform_material:
-            S_flat, CC_flat = _neo_hookean_pk2_2d_vectorized(
-                E_flat, self._young_scalar, self._poisson_scalar)
-        else:
-            # Per-element material (rare but supported)
-            young_gp = np.repeat(self.young, ng)
-            poisson_gp = np.repeat(self.poisson, ng)
-            S_flat = np.empty_like(E_flat)
-            CC_flat = np.empty((E_flat.shape[0], 3, 3))
-            # Group by unique (E, nu) pairs for efficiency
-            for (y, p) in set(zip(self.young, self.poisson)):
-                mask = (young_gp == y) & (poisson_gp == p)
-                S_flat[mask], CC_flat[mask] = _neo_hookean_pk2_2d_vectorized(
-                    E_flat[mask], y, p)
-
-        self._S_voigt[:] = S_flat.reshape(ne, ng, 3)
-        self._CC[:] = CC_flat.reshape(ne, ng, 3, 3)
-
-        # S tensor (ne, ng, 2, 2)
-        self._St[..., 0, 0] = self._S_voigt[..., 0]
-        self._St[..., 1, 1] = self._S_voigt[..., 1]
-        self._St[..., 0, 1] = self._S_voigt[..., 2]
-        self._St[..., 1, 0] = self._S_voigt[..., 2]
-
-        # 4. Internal forces: f_int[e,a,i] = sum_g F_ij S_jk DN_ak * w
-        np.matmul(self._F, self._St, out=self._P)
-        np.matmul(self.DN, np.swapaxes(self._P, 2, 3), out=self._tmp_ag_ai)
-        np.multiply(self._tmp_ag_ai, self.w_detJ[..., None, None], out=self._tmp_ag_ai)
-        np.sum(self._tmp_ag_ai, axis=1, out=self._f_int)
-
-        # 5. Tangent stiffness
-        # B-matrix: B[e,g,v,(a*2+i)] for Voigt v, node a, dof i
-        B = self._B
-        B.fill(0.0)
-        F00 = self._F[..., 0, 0]
-        F01 = self._F[..., 0, 1]
-        F10 = self._F[..., 1, 0]
-        F11 = self._F[..., 1, 1]
-        for a in range(nn):
-            c0 = 2 * a
-            c1 = c0 + 1
-            dn0 = self.DN[..., a, 0]
-            dn1 = self.DN[..., a, 1]
-            B[..., 0, c0] = F00 * dn0
-            B[..., 0, c1] = F10 * dn0
-            B[..., 1, c0] = F01 * dn1
-            B[..., 1, c1] = F11 * dn1
-            B[..., 2, c0] = F00 * dn1 + F01 * dn0
-            B[..., 2, c1] = F10 * dn1 + F11 * dn0
-
-        # K_mat = sum_g B^T C B * w_detJ
-        np.matmul(self._CC, B, out=self._CB)
-        np.matmul(np.swapaxes(B, 2, 3), self._CB, out=self._K_gp)
-        np.multiply(self._K_gp, self.w_detJ[..., None, None], out=self._K_gp)
-        np.sum(self._K_gp, axis=1, out=self._K_mat)
-
-        # K_geo: K_geo[(a,i),(b,i)] += sum_g,k,l S_kl DN_ak DN_bl * w_detJ
-        np.matmul(self.DN, self._St, out=self._DNSt)
-        np.matmul(self._DNSt, np.swapaxes(self.DN, 2, 3), out=self._S_DN_DN_gp)
-        np.multiply(self._S_DN_DN_gp, self.w_detJ[..., None, None], out=self._S_DN_DN_gp)
-        np.sum(self._S_DN_DN_gp, axis=1, out=self._S_DN_DN)
-
-        self._K_geo.fill(0.0)
-        self._K_geo[:, 0::2, 0::2] = self._S_DN_DN
-        self._K_geo[:, 1::2, 1::2] = self._S_DN_DN
-
-        np.add(self._K_mat, self._K_geo, out=self._K_total)
-
-        # 6. Global assembly
-        self._rhs.fill(0.0)
-        np.add.at(self._rhs, self.rows_R, -self._f_int.reshape(ne, -1).ravel())
-
-        K = coo_matrix((self._K_total.ravel(), (self.rows_K, self.cols_K)),
-                        shape=(self.n_dof, self.n_dof)).tocsr()
-
-        return K, self._rhs
-
-    def CalculateHomogenizedStressAndStrainFromLastAssembly(self):
-        """Compute homogenized response from the most recent Assemble() state."""
-        volume = float(np.sum(self.w_detJ))
-        if volume <= 0.0:
-            return np.zeros(3, dtype=float), np.zeros(3, dtype=float)
-        w = self.w_detJ[..., None]
-        eps_h = np.sum(self._E_voigt * w, axis=(0, 1)) / volume
-        sig_h = np.sum(self._S_voigt * w, axis=(0, 1)) / volume
-        return eps_h, sig_h
-
 
 
 USE_OLD_STIFFNESS_IN_FIRST_ITERATION = True
@@ -321,9 +25,6 @@ NEWTON_TOL_ABS = 1e-6
 DISP_TOL_REL = 1e-8
 DISP_TOL_ABS = 1e-8
 CONVERGENCE_CRITERION = "displacement"  # "residual", "displacement", "both"
-# Keep Kratos reference post-processing by default to preserve bitwise consistency
-# with the baseline FOM solver. Set to True to trade a small accuracy drift for speed.
-USE_VECTORIZED_HOMOGENIZATION = False
 
 DEFAULT_OUTPUT_DIR = "stage_1_training_set_fom"
 
@@ -1122,7 +823,7 @@ def setup_kratos_parameters(mesh="rve_geometry"):
         material_parts = DetectMaterialSubModelParts(mdpa_path)
         parameters = ConfigureElementModelerForMaterialParts(parameters, material_parts)
         SetMaterialsFilename(parameters, "StructuralMaterials.json")
-    
+
     return parameters
 
 
@@ -1335,9 +1036,6 @@ def RunFomBatchSimulation(
     entities = list(mp.Elements) + list(mp.Conditions)
     n_dof, eq_map, ta_disp = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
 
-    # Initialize vectorized assembler (one-time cost)
-    assembler = VectorizedAssembler(mp, n_dof, eq_map)
-
     # Fast path precomputation: fixed/free partition and node reference coordinates
     # for analytical affine Dirichlet values from Green-Lagrange strain.
     if use_fast_dirichlet_bc:
@@ -1422,7 +1120,7 @@ def RunFomBatchSimulation(
             UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
 
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
-            K, rhs = assembler.Assemble(u)
+            K, rhs = AssembleGlobalSystem(mp, n_dof, entities)
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
             r_f = rhs[free_dofs]
@@ -1520,13 +1218,10 @@ def RunFomBatchSimulation(
         # NOTE: RHS-only evaluation may not update all stress/tangent-related
         # internal quantities for some elements.
         InitializeNonLinearIteration(entities, mp.ProcessInfo)
-        _, _ = assembler.Assemble(u)
+        _, _ = AssembleGlobalSystem(mp, n_dof, entities)
         FinalizeNonLinearIteration(entities, mp.ProcessInfo)
         u_n = u.copy()
-        if USE_VECTORIZED_HOMOGENIZATION:
-            eps_h, sig_h = assembler.CalculateHomogenizedStressAndStrainFromLastAssembly()
-        else:
-            eps_h, sig_h = CalculateHomogenizedStressAndStrainKratosReference(mp)
+        eps_h, sig_h = CalculateHomogenizedStressAndStrainKratosReference(mp)
 
         strain_hist.append(eps_h)
         stress_hist.append(sig_h)

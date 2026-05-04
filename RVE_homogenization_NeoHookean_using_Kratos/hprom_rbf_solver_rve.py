@@ -10,6 +10,7 @@ HPROM-RBF solver:
 import os
 import sys
 import numpy as np
+import time
 
 # Add Kratos path
 KRATOS_PATH = "/home/kratos/Kratos_Eigen_Check/bin/Release"
@@ -17,13 +18,13 @@ if KRATOS_PATH not in sys.path:
     sys.path.append(KRATOS_PATH)
 
 import KratosMultiphysics as KM
+from fom_solver_rve import VectorizedAssembler
 from fom_solver_rve import (
     DeformationGradientFromGreenLagrange2D,
     RVEHomogenizationDatasetGenerator,
     SetUpDofEquationIdsAndDisplacementAdaptor,
     SetDisplacementFromEquationVector,
     UpdateCurrentCoordinatesFromDisplacement,
-    AssembleGlobalSystem,
     InitializeNonLinearIteration,
     FinalizeNonLinearIteration,
     BuildDynamicSegmentSteps,
@@ -92,6 +93,8 @@ def RunHpromRbfBatchSimulation(
     verbose_iterations=False,
     use_fast_dirichlet_bc=True,
 ):
+    t_wall_total_start = time.perf_counter()
+
     os.makedirs(out_dir, exist_ok=True)
 
     free_dofs = np.asarray(free_dofs, dtype=np.int64)
@@ -126,6 +129,7 @@ def RunHpromRbfBatchSimulation(
     mp = sim._GetSolver().GetComputingModelPart()
 
     n_total_dof, eq_id_map, ta = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
+    vec_full_assembler = VectorizedAssembler(mp, n_total_dof, eq_id_map, log_label="HPROMRBFFullSyncAssembler")
     elements = list(mp.Elements)
     entities = list(mp.Elements) + list(mp.Conditions)
 
@@ -208,6 +212,7 @@ def RunHpromRbfBatchSimulation(
         disp_vec[free_dofs] = np.asarray(u_total_free, dtype=float).reshape(-1)
         SetDisplacementFromEquationVector(disp_vec, eq_id_map, ta)
         UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
+        return disp_vec
 
     def _build_rbf_input(qp_vec, e_vec):
         qp = np.asarray(qp_vec, dtype=float).reshape(-1)
@@ -237,6 +242,7 @@ def RunHpromRbfBatchSimulation(
 
     q_p = np.zeros(n_primary, dtype=float)
     Kr_old = None
+    J_full = np.zeros((n_total_dof, n_primary), dtype=float)
 
     if include_macro_strain_input:
         q0_const = None
@@ -248,6 +254,11 @@ def RunHpromRbfBatchSimulation(
         f"  [HPROM-RBF] ECM residual elements: {len(Z_res)} / {len(elements)} | "
         f"union elements: {len(Z_union)} / {len(elements)}"
     )
+    t_map = 0.0
+    t_assembly = 0.0
+    t_projection = 0.0
+    t_solve = 0.0
+    t_full_sync = 0.0
 
     for step in range(1, n_steps_total + 1):
         time_val = float(step) * float(dt)
@@ -296,7 +307,9 @@ def RunHpromRbfBatchSimulation(
 
         while it < max_its:
             mp.ProcessInfo[KM.NL_ITERATION_NUMBER] = it + 1
+            t0 = time.perf_counter()
             q_s_map, J_rbf = _evaluate_qs_and_jac(q_p, E)
+            t_map += time.perf_counter() - t0
             q_s = q_s_map - q0_step
 
             if verbose_step:
@@ -328,22 +341,28 @@ def RunHpromRbfBatchSimulation(
                 nonfinite_detected = True
                 break
 
-            _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
+            u_eq_curr = _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
 
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
-            K_hp, rhs_hp = AssembleHyperReducedSystem(mp, n_total_dof, elements, Z_res, w_res_selected)
+            t0 = time.perf_counter()
+            K_hp, rhs_hp = AssembleHyperReducedSystem(
+                mp, n_total_dof, elements, Z_res, w_res_selected, u_eq=u_eq_curr
+            )
+            t_assembly += time.perf_counter() - t0
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
-            r_full = rhs_hp[free_dofs]
-            K_free_sparse = K_hp[free_dofs][:, free_dofs]
-            if (not _is_finite(r_full)) or (not _is_finite(K_free_sparse.data)):
+            if (not _is_finite(rhs_hp)) or (not _is_finite(K_hp.data)):
                 print("  [HPROM-RBF] WARNING: non-finite full residual/stiffness detected.")
                 nonfinite_detected = True
                 break
 
-            KJ = K_free_sparse @ J_manifold
-            r_r = J_manifold.T @ r_full
-            K_r = J_manifold.T @ KJ
+            t0 = time.perf_counter()
+            J_full.fill(0.0)
+            J_full[free_dofs, :] = J_manifold
+            KJ = K_hp @ J_full
+            r_r = J_full.T @ rhs_hp
+            K_r = J_full.T @ KJ
+            t_projection += time.perf_counter() - t0
             Kr_last = K_r
             if (not _is_finite(r_r)) or (not _is_finite(K_r)):
                 print("  [HPROM-RBF] WARNING: non-finite reduced residual/stiffness detected.")
@@ -403,10 +422,12 @@ def RunHpromRbfBatchSimulation(
                 K_solve = Kr_old
                 used_old = True
 
+            t0 = time.perf_counter()
             dq_p = _solve_reduced_system(K_solve, r_r)
             if used_old and not _is_finite(dq_p):
                 dq_p = _solve_reduced_system(K_r, r_r)
                 used_old = False
+            t_solve += time.perf_counter() - t0
             if not _is_finite(dq_p):
                 print("  [HPROM-RBF] WARNING: non-finite reduced update detected.")
                 nonfinite_detected = True
@@ -476,9 +497,13 @@ def RunHpromRbfBatchSimulation(
         if not use_fast_dirichlet_bc:
             sim.ApplyBoundaryConditions()
             disp_base_step = _capture_current_displacement_vector()
-        _apply_total_free_displacement(u_aff_free + u_fluc_final, base_disp_vec=disp_base_step)
+        u_eq_final = _apply_total_free_displacement(
+            u_aff_free + u_fluc_final, base_disp_vec=disp_base_step
+        )
         InitializeNonLinearIteration(entities, mp.ProcessInfo)
-        _, _ = AssembleGlobalSystem(mp, n_total_dof, entities)
+        t0 = time.perf_counter()
+        _, _ = vec_full_assembler.Assemble(u_eq_final)
+        t_full_sync += time.perf_counter() - t0
         FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
         hom_eps, hom_sig = CalculateHomogenizedStressAndStrainKratosReference(mp)
@@ -489,6 +514,14 @@ def RunHpromRbfBatchSimulation(
         results_sig.append(hom_sig)
 
     sim.Finalize()
+    t_wall_total = time.perf_counter() - t_wall_total_start
+    t_accounted = t_map + t_assembly + t_projection + t_solve + t_full_sync
+    t_other = max(t_wall_total - t_accounted, 0.0)
+    print(
+        f"\n[HPROM-RBF] Timing: map={t_map:.3f}s, assembly={t_assembly:.3f}s, "
+        f"projection={t_projection:.3f}s, solve={t_solve:.3f}s, full_sync={t_full_sync:.3f}s, "
+        f"accounted={t_accounted:.3f}s, other={t_other:.3f}s, total={t_wall_total:.3f}s"
+    )
 
     tag = f"trajectory_{trajectory_index}" if trajectory_index is not None else "hprom_rbf_run"
     np.save(os.path.join(out_dir, f"{tag}_q_p.npy"), np.stack(q_hist))

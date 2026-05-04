@@ -2,14 +2,14 @@
 # -*- coding: utf-8 -*-
 
 """
-HPROM RVE Solver (Hyper-Reduced Projected Order Model)
-Only assembles over ECM-selected elements with cubature weights.
+PROM-only RVE solver (Finite Deformation BCs)
+Reduced Order Model using the POD basis for free fluctuations.
 """
 
 import os
 import sys
-import time
 import numpy as np
+import matplotlib.pyplot as plt
 
 # Add Kratos path
 KRATOS_PATH = "/home/kratos/Kratos_Eigen_Check/bin/Release"
@@ -22,6 +22,7 @@ from fom_solver_rve import (
     SetUpDofEquationIdsAndDisplacementAdaptor,
     SetDisplacementFromEquationVector,
     UpdateCurrentCoordinatesFromDisplacement,
+    AssembleGlobalSystem,
     InitializeNonLinearIteration,
     FinalizeNonLinearIteration,
     CalculateHomogenizedStressAndStrainKratosReference,
@@ -36,148 +37,19 @@ from fom_solver_rve import (
     NEWTON_TOL_ABS,
     DISP_TOL_ABS,
 )
-from fom_solver_rve import VectorizedAssembler
-from scipy.sparse import coo_matrix
 
 # =============================================================================
-# HPROM Assembly: Only selected elements, weighted
+# PROM Newton-Raphson Loop
 # =============================================================================
 
-USE_VECTORIZED_HPROM_ASSEMBLY = True
-
-
-def _BuildEqMapFromNodes(mp):
-    eq_map = np.empty((mp.NumberOfNodes(), 2), dtype=int)
-    for i, node in enumerate(mp.Nodes):
-        eq_map[i, 0] = node.GetDof(KM.DISPLACEMENT_X).EquationId
-        eq_map[i, 1] = node.GetDof(KM.DISPLACEMENT_Y).EquationId
-    return eq_map
-
-
-def _CaptureDisplacementFromNodes(mp, n_dof, eq_map):
-    u = np.zeros(n_dof, dtype=float)
-    for i, node in enumerate(mp.Nodes):
-        d = node.GetSolutionStepValue(KM.DISPLACEMENT)
-        idx_x = int(eq_map[i, 0])
-        idx_y = int(eq_map[i, 1])
-        if 0 <= idx_x < n_dof:
-            u[idx_x] = d[0]
-        if 0 <= idx_y < n_dof:
-            u[idx_y] = d[1]
-    return u
-
-
-def _AssembleHyperReducedSystemKratosLocal(mp, n_dof, elements, elem_indices, elem_weights):
-    pi = mp.ProcessInfo
-    rhs = np.zeros(n_dof, dtype=float)
-
-    total_entries = 0
-    valid_data = []
-    for idx, w_e in zip(elem_indices, elem_weights):
-        elem = elements[int(idx)]
-        ids = np.array(elem.EquationIdVector(pi), dtype=int)
-        mask = ids >= 0
-        n_m = int(np.sum(mask))
-        if n_m == 0:
-            continue
-        total_entries += n_m * n_m
-        valid_data.append((elem, ids, mask, float(w_e)))
-
-    rows = np.zeros(total_entries, dtype=int)
-    cols = np.zeros(total_entries, dtype=int)
-    vals = np.zeros(total_entries, dtype=float)
-
-    curr = 0
-    for elem, ids, mask, w_e in valid_data:
-        LHS = KM.Matrix()
-        RHS = KM.Vector()
-        elem.CalculateLocalSystem(LHS, RHS, pi)
-
-        ids_m = ids[mask]
-        rhs[ids_m] += w_e * np.array(RHS, dtype=float)[mask]
-
-        A = w_e * np.array(LHS, dtype=float)[np.ix_(mask, mask)]
-        n_m = ids_m.size
-        num = n_m * n_m
-
-        rows[curr:curr+num] = np.repeat(ids_m, n_m)
-        cols[curr:curr+num] = np.tile(ids_m, n_m)
-        vals[curr:curr+num] = A.reshape(-1)
-        curr += num
-
-    K = coo_matrix((vals, (rows, cols)), shape=(n_dof, n_dof)).tocsr()
-    return K, rhs
-
-def AssembleHyperReducedSystem(mp, n_dof, elements, elem_indices, elem_weights, u_eq=None):
-    """
-    Assemble K and rhs using ONLY the ECM-selected elements,
-    scaling each element's contribution by its cubature weight.
-    """
-    if not USE_VECTORIZED_HPROM_ASSEMBLY:
-        return _AssembleHyperReducedSystemKratosLocal(mp, n_dof, elements, elem_indices, elem_weights)
-
-    elem_idx_arr = np.asarray(elem_indices, dtype=np.int64).reshape(-1)
-    elem_w_arr = np.asarray(elem_weights, dtype=float).reshape(-1)
-    cache = getattr(AssembleHyperReducedSystem, "_vectorized_cache", {})
-    rec = cache.get(id(mp))
-
-    needs_rebuild = True
-    if rec is not None:
-        needs_rebuild = (
-            rec["n_dof"] != int(n_dof)
-            or rec["n_elem"] != int(len(elements))
-            or rec["idx"].shape != elem_idx_arr.shape
-            or rec["w"].shape != elem_w_arr.shape
-            or not np.array_equal(rec["idx"], elem_idx_arr)
-            or not np.allclose(rec["w"], elem_w_arr, rtol=0.0, atol=0.0)
-        )
-
-    if needs_rebuild:
-        eq_map = _BuildEqMapFromNodes(mp)
-        selected_elements = [elements[int(i)] for i in elem_idx_arr]
-        assembler = VectorizedAssembler(
-            mp,
-            int(n_dof),
-            eq_map,
-            elements=selected_elements,
-            element_scales=elem_w_arr,
-            log_label="HPROMVectorizedAssembler",
-        )
-        rec = {
-            "n_dof": int(n_dof),
-            "n_elem": int(len(elements)),
-            "idx": elem_idx_arr.copy(),
-            "w": elem_w_arr.copy(),
-            "eq_map": eq_map,
-            "assembler": assembler,
-        }
-        cache[id(mp)] = rec
-        setattr(AssembleHyperReducedSystem, "_vectorized_cache", cache)
-
-    try:
-        if u_eq is None:
-            u_curr = _CaptureDisplacementFromNodes(mp, int(n_dof), rec["eq_map"])
-        else:
-            u_curr = np.asarray(u_eq, dtype=float).reshape(-1)
-        return rec["assembler"].Assemble(u_curr)
-    except Exception as exc:
-        print(f"[HPROM] WARNING: vectorized hyper-reduced assembly failed, using Kratos local system. ({exc})")
-        return _AssembleHyperReducedSystemKratosLocal(mp, n_dof, elements, elem_indices, elem_weights)
-
-
-# =============================================================================
-# HPROM Solver
-# =============================================================================
-
-def RunHpromBatchSimulation(
+def RunPromBatchSimulation(
     parameters,
-    phi_f,        # (n_free, r)
+    phi_f,  # (n_free, r)
     free_dofs,
     dir_dofs,
     eq_map,
     Xc, Yc,
-    ecm_data,     # dict with Z_res, w_res_full, Z_union, w_sig_full, etc.
-    out_dir="hprom_results",
+    out_dir="prom_results",
     save_plot=True,
     strain_path=None,
     trajectory_index=None,
@@ -202,24 +74,13 @@ def RunHpromBatchSimulation(
     n_steps_total = int(step_offsets[-1])
     end_time = dt * float(n_steps_total)
 
-    # --- ECM data ---
-    Z_res = ecm_data["Z_res"]
-    w_res_full = ecm_data["w_res_full"]
-    # For homogenization we use the SIG weights on the union set
-    Z_union = ecm_data["Z_union"]
-    w_sig_full = ecm_data["w_sig_full"]
-
-    # Weights for selected residual elements only
-    w_res_selected = w_res_full[Z_res]
-
     model = KM.Model()
     sim = RVEHomogenizationDatasetGenerator(model, parameters)
     sim.Initialize()
     mp = sim._GetSolver().GetComputingModelPart()
     elements = list(mp.Elements)
-    all_entities = list(mp.Elements) + list(mp.Conditions)
+    entities = list(mp.Elements) + list(mp.Conditions)
     n_dof, eq_id_map, ta_disp = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
-    vec_full_assembler = VectorizedAssembler(mp, n_dof, eq_id_map, log_label="HPROMFullSyncAssembler")
 
     free_dofs = np.asarray(free_dofs, dtype=np.int64)
     free_mask = np.zeros(n_dof, dtype=bool)
@@ -283,32 +144,18 @@ def RunHpromBatchSimulation(
         disp_vec[free_dofs] = np.asarray(u_total_free, dtype=float).reshape(-1)
         SetDisplacementFromEquationVector(disp_vec, eq_id_map, ta_disp)
         UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
-        return disp_vec
 
-    n_elem = len(elements)
-    print(f"[HPROM] Full mesh: {n_elem} elements")
-    print(f"[HPROM] ECM residual elements: {Z_res.size} ({100.*Z_res.size/n_elem:.1f}%)")
-    print(f"[HPROM] ECM union elements:    {Z_union.size} ({100.*Z_union.size/n_elem:.1f}%)")
-
-    # HPROM Initialization
+    # PROM Initialization
     r = phi_f.shape[1]
-    q = np.zeros(r, dtype=float)
-    phi_full = np.zeros((n_dof, r), dtype=float)
-    phi_full[free_dofs, :] = phi_f
-    phi_full_T = phi_full.T
-
+    q = np.zeros(r, dtype=float)  # Reduced state
+    
     Q_hist, strain_hist, stress_hist = [], [], []
-
+    
     # Initial state
     Q_hist.append(q.copy())
     strain_hist.append(np.zeros(3))
     stress_hist.append(np.zeros(3))
     Kr_old = None
-
-    t_assembly = 0.0
-    t_solve = 0.0
-    t_project = 0.0
-    t_full_sync = 0.0
 
     for step in range(1, n_steps_total + 1):
         time_val = float(step) * float(dt)
@@ -320,12 +167,12 @@ def RunHpromBatchSimulation(
         sim.time, sim.step, sim.end_time = time_val, step, end_time
         sim.InitializeSolutionStep()
 
-        # Interpolate waypoint
+        # Interpolate Waypoint
         s = int(np.searchsorted(step_offsets, step, side="left") - 1)
         s = max(0, min(s, n_seg - 1))
         xi = float(step - step_offsets[s]) / float(max(seg_steps[s], 1))
         E_t = (1.0 - xi) * E_wp[s, :] + xi * E_wp[s + 1, :]
-
+        
         sim.batch_strain = E_t.copy()
         u_aff_free = _compute_affine_free_displacement(E_t)
         if use_fast_dirichlet_bc:
@@ -335,43 +182,33 @@ def RunHpromBatchSimulation(
             sim.ApplyBoundaryConditions()
             disp_base_step = _capture_current_displacement_vector()
 
-        print(f"\n[HPROM] Step {step:03d}/{n_steps_total} | t={time_val:.6f}")
-
+        print(f"\n[PROM] Step {step:03d} | t={time_val:.6f}")
+        
         converged = False
         Kr_last = None
         for it in range(max_newton_it):
             mp.ProcessInfo[KM.NL_ITERATION_NUMBER] = it + 1
-
+            
             # Reconstruction: u = u_aff + Phi_f * q
             u_free = u_aff_free + phi_f @ q
-            t0_proj = time.perf_counter()
-            u_eq_curr = _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
-            t_project += time.perf_counter() - t0_proj
+            _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
 
-            InitializeNonLinearIteration(all_entities, mp.ProcessInfo)
+            InitializeNonLinearIteration(entities, mp.ProcessInfo)
+            K, rhs = AssembleGlobalSystem(mp, n_dof, entities)
+            FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
-            # *** HYPER-REDUCED ASSEMBLY ***
-            t0 = time.perf_counter()
-            K_hp, rhs_hp = AssembleHyperReducedSystem(
-                mp, n_dof, elements, Z_res, w_res_selected, u_eq=u_eq_curr
-            )
-            t_assembly += time.perf_counter() - t0
-
-            FinalizeNonLinearIteration(all_entities, mp.ProcessInfo)
-
-            # Project to reduced space
-            Kf_phi = K_hp @ phi_full
-            Kr = phi_full_T @ Kf_phi
+            # Project to Reduced Space
+            # System: Phif^T * K * Phif * dq = Phif^T * rhs
+            Kf_phi = K[free_dofs, :][:, free_dofs] @ phi_f
+            Kr = phi_f.T @ Kf_phi
             Kr_last = Kr
-            rr = phi_full_T @ rhs_hp
-
+            rr = phi_f.T @ rhs[free_dofs]
+            
             nR = np.linalg.norm(rr)
             if it > 0 and nR < NEWTON_TOL_ABS:
                 print(f"  > It {it:02d}: ||r_r|| = {nR:.3e} (CONVERGED)")
-                converged = True
-                break
-
-            t0 = time.perf_counter()
+                converged = True; break
+            
             K_solve = Kr
             used_old = False
             if (
@@ -395,17 +232,14 @@ def RunHpromBatchSimulation(
                         used_old = False
                 else:
                     dq, *_ = np.linalg.lstsq(Kr, rr, rcond=None)
-            t_solve += time.perf_counter() - t0
             nq = np.linalg.norm(dq)
-
             solve_tag = " (K_old)" if used_old else ""
             print(f"  > It {it:02d}: ||r_r|| = {nR:.3e}, ||dq|| = {nq:.3e}{solve_tag}")
-
+            
             q += dq
             if nq < DISP_TOL_ABS:
                 print(f"  > It {it:02d}: ||dq|| = {nq:.3e} (CONVERGED)")
-                converged = True
-                break
+                converged = True; break
 
         if not converged:
             print(f" [WARNING] Step {step} did not converge.")
@@ -416,70 +250,109 @@ def RunHpromBatchSimulation(
         if not use_fast_dirichlet_bc:
             sim.ApplyBoundaryConditions()
             disp_base_step = _capture_current_displacement_vector()
-        u_eq_final = _apply_total_free_displacement(
-            u_aff_free + u_fluc_final, base_disp_vec=disp_base_step
-        )
+        _apply_total_free_displacement(u_aff_free + u_fluc_final, base_disp_vec=disp_base_step)
 
-        InitializeNonLinearIteration(all_entities, mp.ProcessInfo)
-        t0_sync = time.perf_counter()
-        _, _ = vec_full_assembler.Assemble(u_eq_final)
-        t_full_sync += time.perf_counter() - t0_sync
-        FinalizeNonLinearIteration(all_entities, mp.ProcessInfo)
+        InitializeNonLinearIteration(entities, mp.ProcessInfo)
+        _, _ = AssembleGlobalSystem(mp, n_dof, entities)
+        FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
         hom_eps, hom_sig = CalculateHomogenizedStressAndStrainKratosReference(mp)
         sim.FinalizeSolutionStep()
-
+        
         Q_hist.append(q.copy())
         strain_hist.append(hom_eps)
         stress_hist.append(hom_sig)
 
     sim.Finalize()
-
-    print(
-        f"\n[HPROM] Timing: assembly={t_assembly:.3f}s, solve={t_solve:.3f}s, "
-        f"project={t_project:.3f}s, full_sync={t_full_sync:.3f}s"
-    )
-
+    
     # Save Results
-    tag = f"trajectory_{trajectory_index}" if trajectory_index else "hprom_run"
+    tag = f"trajectory_{trajectory_index}" if trajectory_index else "prom_run"
     np.save(os.path.join(out_dir, f"{tag}_q.npy"), np.stack(Q_hist))
     np.save(os.path.join(out_dir, f"{tag}_strain.npy"), np.stack(strain_hist))
     np.save(os.path.join(out_dir, f"{tag}_stress.npy"), np.stack(stress_hist))
-
+    
+    if save_plot:
+        _plot_prom(np.stack(strain_hist), np.stack(stress_hist), out_dir, tag)
+    
     return np.stack(strain_hist), np.stack(stress_hist)
 
+def _plot_prom(strain_hist, stress_hist, out_dir, tag):
+    # Try to find FOM data for comparison
+    fom_dir = os.path.join("stage_1_training_set_fom", tag)
+    fom_sig_file = os.path.join(fom_dir, f"{tag}_stress.npy")
+    fom_eps_file = os.path.join(fom_dir, f"{tag}_strain.npy")
+    
+    fom_sig = np.load(fom_sig_file) if os.path.exists(fom_sig_file) else None
+    fom_eps = np.load(fom_eps_file) if os.path.exists(fom_eps_file) else None
+
+    plt.figure(figsize=(8, 6))
+    
+    # Plot PROM
+    plt.plot(strain_hist[:, 0], stress_hist[:, 0], 'r-', label="PROM sigma_xx")
+    plt.plot(strain_hist[:, 1], stress_hist[:, 1], 'g-', label="PROM sigma_yy")
+    plt.plot(strain_hist[:, 2], stress_hist[:, 2], 'b-', label="PROM sigma_xy")
+    
+    # Plot FOM if available
+    if fom_sig is not None and fom_eps is not None:
+        plt.plot(fom_eps[:, 0], fom_sig[:, 0], 'k--', alpha=0.6, label="FOM sigma_xx")
+        plt.plot(fom_eps[:, 1], fom_sig[:, 1], 'k:',  alpha=0.6, label="FOM sigma_yy")
+        plt.plot(fom_eps[:, 2], fom_sig[:, 2], 'k-.', alpha=0.6, label="FOM sigma_xy")
+
+    plt.xlabel("Strain [-]")
+    plt.ylabel("Stress [Pa]")
+    plt.grid(True)
+    plt.legend()
+    plt.title(f"Results Comparison: {tag}")
+    plt.savefig(os.path.join(out_dir, f"{tag}_prom_plots.png"))
+    plt.close()
 
 if __name__ == "__main__":
+    import argparse
     from fom_solver_rve import SetInputMeshFilename, LoadStrainWaypointsFromFile
+    
+    p = argparse.ArgumentParser(description="PROM Solver for RVE")
+    p.add_argument("--trajectory-index", type=int, default=1)
+    p.add_argument("--mesh", type=str, default="rve_geometry")
+    p.add_argument("--model-dir", type=str, default="pod_rbf_model")
+    p.add_argument("--out-dir", type=str, default="prom_results")
+    p.add_argument("--emax", type=float, default=0.10)
+    p.add_argument("--young-mpa", type=float, default=1628.0)
+    p.add_argument("--poisson", type=float, default=0.4)
+    p.add_argument(
+        "--no-old-stiffness-first-it",
+        action="store_true",
+        help="Disable reuse of previous-step reduced stiffness in Newton iteration 0.",
+    )
+    args = p.parse_args()
 
-    model_dir = "pod_rbf_model"
-    hprom_dir = "hprom_data"
-
-    phi_f = np.load(os.path.join(model_dir, "pod_basis_free.npy"))
-    free_dofs = np.load(os.path.join(model_dir, "free_dofs.npy"))
-    dir_dofs = np.load(os.path.join(model_dir, "dirichlet_dofs.npy"))
-    eq_map = np.load(os.path.join(model_dir, "eq_map.npy"))
-    Xc, Yc = np.load(os.path.join(model_dir, "domain_center.npy"))
-
-    ecm = np.load(os.path.join(hprom_dir, "ecm_weights_all.npz"))
-    ecm_data = {k: ecm[k] for k in ecm.files}
+    # Load Model Metadata
+    phi_f = np.load(os.path.join(args.model_dir, "pod_basis_free.npy"))
+    free_dofs = np.load(os.path.join(args.model_dir, "free_dofs.npy"))
+    dir_dofs = np.load(os.path.join(args.model_dir, "dirichlet_dofs.npy"))
+    eq_map = np.load(os.path.join(args.model_dir, "eq_map.npy"))
+    Xc, Yc = np.load(os.path.join(args.model_dir, "domain_center.npy"))
 
     with open("ProjectParameters.json", "r") as f:
         parameters = KM.Parameters(f.read())
-    SetInputMeshFilename(parameters, "rve_geometry")
-    mdpa_path = f"{StripMdpaExtension('rve_geometry')}.mdpa"
+    SetInputMeshFilename(parameters, args.mesh)
+    
+    # Material Setup (Mirrors FOM)
+    mdpa_path = f"{StripMdpaExtension(args.mesh)}.mdpa"
     material_parts = DetectMaterialSubModelParts(mdpa_path)
     parameters = ConfigureElementModelerForMaterialParts(parameters, material_parts)
     parameters["solver_settings"]["material_import_settings"]["materials_filename"].SetString(
         "StructuralMaterials.json"
     )
 
-    strain_path, meta = LoadStrainWaypointsFromFile("stage_0_trajectory/stage_0_trajectories.npz", 1)
-
-    RunHpromBatchSimulation(
+    # Load Path
+    strain_path, meta = LoadStrainWaypointsFromFile("stage_0_trajectory/stage_0_trajectories.npz", args.trajectory_index)
+    
+    RunPromBatchSimulation(
         parameters, phi_f, free_dofs, dir_dofs, eq_map, Xc, Yc,
-        ecm_data=ecm_data,
+        out_dir=args.out_dir,
         strain_path=strain_path,
-        trajectory_index=1,
-        reference_amplitude=meta.get("reference_amplitude", 0.10),
+        trajectory_index=args.trajectory_index,
+        reference_amplitude=meta.get("reference_amplitude", args.emax),
+        reference_steps=meta.get("ref_steps", REFERENCE_STEPS_FOR_UNIT_AMPLITUDE),
+        use_old_stiffness_in_first_iteration=not args.no_old_stiffness_first_it,
     )

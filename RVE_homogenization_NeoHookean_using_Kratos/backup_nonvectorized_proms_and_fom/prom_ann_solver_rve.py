@@ -1,16 +1,7 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-HPROM-ANN solver:
-  - Hyper-reduced assembly on ECM-selected elements
-  - Nonlinear ANN manifold projection with tangent Jacobian
-"""
-
 import os
 import sys
-import numpy as np
 import torch
+import numpy as np
 
 # Add Kratos path
 KRATOS_PATH = "/home/kratos/Kratos_Eigen_Check/bin/Release"
@@ -18,7 +9,6 @@ if KRATOS_PATH not in sys.path:
     sys.path.append(KRATOS_PATH)
 
 import KratosMultiphysics as KM
-from fom_solver_rve import VectorizedAssembler
 from fom_solver_rve import (
     DeformationGradientFromGreenLagrange2D,
     RVEHomogenizationDatasetGenerator,
@@ -34,47 +24,73 @@ from fom_solver_rve import (
     MIN_STEPS_PER_SEGMENT,
     USE_OLD_STIFFNESS_IN_FIRST_ITERATION,
     NEWTON_TOL_ABS,
+    DISP_TOL_ABS,
 )
-from hprom_solver_rve import AssembleHyperReducedSystem
-from prom_ann_solver_rve import LoadPromAnnModel
+from stage7b_train_ann_manifold import ManifoldANN
 
+def LoadPromAnnModel(basis_dir="stage_2_pod_rve", ann_data_dir="stage_7_ann_data"):
+    # Load Basis
+    phi_p = np.load(os.path.join(ann_data_dir, "phi_p.npy"))
+    phi_s = np.load(os.path.join(ann_data_dir, "phi_s.npy"))
+    free_dofs = np.load(os.path.join(basis_dir, "free_dofs.npy"))
+    dir_dofs = np.load(os.path.join(basis_dir, "dirichlet_dofs.npy"))
+    eq_map = np.load(os.path.join(basis_dir, "eq_map.npy"))
+    
+    # Load Metadata & ANN
+    meta = np.load(os.path.join(ann_data_dir, "manifold_ann_metadata.npz"))
+    dataset_meta_path = os.path.join(ann_data_dir, "ann_dataset_metadata.npz")
+    dataset_meta = np.load(dataset_meta_path) if os.path.exists(dataset_meta_path) else None
+    n_p = int(phi_p.shape[1])
+    n_s = int(phi_s.shape[1])
 
-def LoadHpromAnnModel(
-    basis_dir="stage_2_pod_rve",
-    ann_data_dir="stage_7_ann_data",
-    hprom_ann_dir="stage_9_hprom_ann_data",
-):
-    phi_p, phi_s, free_dofs, dir_dofs, eq_map, ann_model, device, include_macro = LoadPromAnnModel(
-        basis_dir=basis_dir,
-        ann_data_dir=ann_data_dir,
-    )
-    ecm = np.load(os.path.join(hprom_ann_dir, "ecm_weights_all.npz"))
-    ecm_data = {k: ecm[k] for k in ecm.files}
+    if "input_dim" in meta:
+        input_dim = int(np.ravel(meta["input_dim"])[0])
+    elif dataset_meta is not None and "input_dim" in dataset_meta:
+        input_dim = int(np.ravel(dataset_meta["input_dim"])[0])
+    else:
+        input_dim = int(meta["x_mean"].shape[0])
 
-    return (
-        phi_p,
-        phi_s,
-        free_dofs,
-        dir_dofs,
-        eq_map,
-        ann_model,
-        device,
-        ecm_data,
-        include_macro,
-    )
+    include_macro_strain_input = False
+    if "include_macro_strain_input" in meta:
+        include_macro_strain_input = bool(int(np.ravel(meta["include_macro_strain_input"])[0]))
+    elif dataset_meta is not None and "include_macro_strain_input" in dataset_meta:
+        include_macro_strain_input = bool(int(np.ravel(dataset_meta["include_macro_strain_input"])[0]))
+    elif input_dim == (n_p + 3):
+        include_macro_strain_input = True
 
+    if include_macro_strain_input and input_dim != (n_p + 3):
+        raise ValueError(
+            f"ANN input_dim={input_dim} incompatible with n_primary={n_p} and macro-strain inputs."
+        )
+    if (not include_macro_strain_input) and input_dim != n_p:
+        raise ValueError(
+            f"ANN input_dim={input_dim} incompatible with n_primary={n_p}."
+        )
 
-def RunHpromAnnBatchSimulation(
+    if meta["x_mean"].shape[0] != input_dim or meta["y_mean"].shape[0] != n_s:
+        raise ValueError(
+            "ANN metadata dimensions do not match phi_p/phi_s partition "
+            f"(x={meta['x_mean'].shape[0]}, expected_input={input_dim}, "
+            f"y={meta['y_mean'].shape[0]}, n_s={n_s})."
+        )
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = ManifoldANN(
+        meta["x_mean"], meta["x_std"], meta["y_mean"], meta["y_std"],
+        in_dim=input_dim, out_dim=n_s
+    ).to(device)
+    model.load_state_dict(torch.load(os.path.join(ann_data_dir, "manifold_ann.pt"), map_location=device))
+    model.eval()
+    
+    return phi_p, phi_s, free_dofs, dir_dofs, eq_map, model, device, include_macro_strain_input
+
+def RunPromAnnBatchSimulation(
     parameters,
     phi_p,
     phi_s,
     free_dofs,
     ann_model,
     device,
-    ecm_data,
-    out_dir="stage_10_hprom_ann_results",
-    strain_path=None,
-    trajectory_index=None,
+    strain_path,
     relnorm_cutoff=1e-5,
     max_its=25,
     abs_res_cutoff=NEWTON_TOL_ABS,
@@ -86,14 +102,11 @@ def RunHpromAnnBatchSimulation(
     old_stiffness_residual_cutoff=1.0e5,
     regularization=1.0e-10,
     include_macro_strain_input=False,
+    use_fast_dirichlet_bc=True,
     reference_amplitude=None,
     reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
     use_old_stiffness_in_first_iteration=USE_OLD_STIFFNESS_IN_FIRST_ITERATION,
-    verbose_iterations=False,
-    use_fast_dirichlet_bc=True,
 ):
-    os.makedirs(out_dir, exist_ok=True)
-
     free_dofs = np.asarray(free_dofs, dtype=np.int64)
     if phi_p.shape[0] != phi_s.shape[0]:
         raise ValueError("phi_p and phi_s must have the same number of rows (n_free).")
@@ -114,27 +127,16 @@ def RunHpromAnnBatchSimulation(
     n_steps_total = int(step_offsets[-1])
     end_time = dt * float(n_steps_total)
 
-    Z_res = np.asarray(ecm_data["Z_res"], dtype=np.int64).reshape(-1)
-    Z_union = np.asarray(ecm_data["Z_union"], dtype=np.int64).reshape(-1)
-    w_res_full = np.asarray(ecm_data["w_res_full"], dtype=float).reshape(-1)
-    w_sig_full = np.asarray(ecm_data["w_sig_full"], dtype=float).reshape(-1)
-    w_res_selected = w_res_full[Z_res]
-
     model_kratos = KM.Model()
     sim = RVEHomogenizationDatasetGenerator(model_kratos, parameters)
     sim.Initialize()
     mp = sim._GetSolver().GetComputingModelPart()
-
+    
     n_total_dof, eq_id_map, ta = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
-    vec_full_assembler = VectorizedAssembler(mp, n_total_dof, eq_id_map, log_label="HPROMANNFullSyncAssembler")
     elements = list(mp.Elements)
     entities = list(mp.Elements) + list(mp.Conditions)
 
-    if np.max(Z_res, initial=-1) >= len(elements) or np.max(Z_union, initial=-1) >= len(elements):
-        raise RuntimeError("ECM element index out of range for current model mesh.")
-    if len(w_res_full) != len(elements) or len(w_sig_full) != len(elements):
-        raise RuntimeError("ECM weights length does not match number of elements.")
-
+    # Affine lifting helper for free DOFs: u_aff = (F-I)(X-Xc)
     sim._InitializeDomainCenterIfNeeded(mp)
     x0c, y0c = float(sim._x0c), float(sim._y0c)
     dof_x = np.zeros(n_total_dof, dtype=float)
@@ -162,11 +164,14 @@ def RunHpromAnnBatchSimulation(
     x_dir = dof_x[dir_dofs]
     y_dir = dof_y[dir_dofs]
     is_x_dir = is_x_dof[dir_dofs]
+    
+    # Pre-process Basis
+    Vp = torch.from_numpy(phi_p.astype(np.float32)).to(device)
+    Vs = torch.from_numpy(phi_s.astype(np.float32)).to(device)
 
     results_eps = [np.zeros(3, dtype=float)]
     results_sig = [np.zeros(3, dtype=float)]
-    q_hist = [np.zeros(n_primary, dtype=float)]
-
+    
     ann_input_dim = int(ann_model.input_scaler.mean.numel())
     expected_input_dim = int(n_primary + (3 if include_macro_strain_input else 0))
     if ann_input_dim != expected_input_dim:
@@ -174,6 +179,29 @@ def RunHpromAnnBatchSimulation(
             f"ANN input size mismatch: model expects {ann_input_dim}, "
             f"but solver was configured for {expected_input_dim}."
         )
+
+    def _build_ann_input(qp_tensor, e_tensor):
+        if include_macro_strain_input:
+            return torch.cat([qp_tensor, e_tensor], dim=1)
+        return qp_tensor
+
+    # Enforce manifold origin in reduced coordinates.
+    with torch.no_grad():
+        if include_macro_strain_input:
+            N0_const = None
+        else:
+            N0_const = ann_model(torch.zeros((1, n_primary), device=device))
+
+    def compute_manifold_jacobian(qp_val, e_tensor):
+        with torch.enable_grad():
+            qp_in = qp_val.clone().detach().requires_grad_(True)
+
+            def ann_from_q(q_local):
+                return ann_model(_build_ann_input(q_local, e_tensor))
+
+            jac_ann = torch.autograd.functional.jacobian(ann_from_q, qp_in)
+            jac_ann = jac_ann.reshape(n_secondary, n_primary)
+        return jac_ann
 
     def _is_finite(arr):
         return bool(np.all(np.isfinite(np.asarray(arr))))
@@ -210,34 +238,6 @@ def RunHpromAnnBatchSimulation(
         SetDisplacementFromEquationVector(disp_vec, eq_id_map, ta)
         UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
 
-    def _build_ann_input(q_tensor, e_tensor):
-        if include_macro_strain_input:
-            return torch.cat([q_tensor, e_tensor], dim=1)
-        return q_tensor
-
-    def _evaluate_qs_and_jac(qp_vec, e_vec):
-        qp_arr = np.asarray(qp_vec, dtype=float).reshape(-1)
-        e_arr = np.asarray(e_vec, dtype=float).reshape(3)
-
-        qp_tensor = torch.from_numpy(qp_arr.astype(np.float32)).unsqueeze(0).to(device)
-        e_tensor = torch.from_numpy(e_arr.astype(np.float32)).unsqueeze(0).to(device)
-
-        with torch.no_grad():
-            q_s_map_tensor = ann_model(_build_ann_input(qp_tensor, e_tensor))
-
-        with torch.enable_grad():
-            qp_in = qp_tensor.clone().detach().requires_grad_(True)
-
-            def ann_from_q(q_local):
-                return ann_model(_build_ann_input(q_local, e_tensor))
-
-            jac_ann = torch.autograd.functional.jacobian(ann_from_q, qp_in)
-            jac_ann = jac_ann.reshape(n_secondary, n_primary)
-
-        q_s_map = q_s_map_tensor.detach().cpu().numpy().reshape(-1)
-        jac_np = jac_ann.detach().cpu().numpy()
-        return q_s_map, jac_np
-
     def _solve_reduced_system(K_sys, rhs):
         try:
             dq_loc = np.linalg.solve(K_sys, rhs)
@@ -253,20 +253,11 @@ def RunHpromAnnBatchSimulation(
             dq_loc, *_ = np.linalg.lstsq(K_reg, rhs, rcond=None)
         return dq_loc
 
-    q_p = np.zeros(n_primary, dtype=float)
+    q_p_torch = torch.zeros((1, n_primary), device=device)
     Kr_old = None
-
-    if include_macro_strain_input:
-        q0_const = None
-    else:
-        q0_const, _ = _evaluate_qs_and_jac(np.zeros(n_primary, dtype=float), np.zeros(3, dtype=float))
-
-    print(f"  [HPROM-ANN] Solving for {n_steps_total} dynamic increments...")
-    print(
-        f"  [HPROM-ANN] ECM residual elements: {len(Z_res)} / {len(elements)} | "
-        f"union elements: {len(Z_union)} / {len(elements)}"
-    )
-
+    
+    print(f"  [PROM-ANN] Solving for {n_steps_total} dynamic increments...")
+    
     for step in range(1, n_steps_total + 1):
         time_val = float(step) * float(dt)
         mp.CloneTimeStep(time_val)
@@ -281,9 +272,10 @@ def RunHpromAnnBatchSimulation(
         s = max(0, min(s, n_seg - 1))
         xi = float(step - step_offsets[s]) / float(max(seg_steps[s], 1))
         E = (1.0 - xi) * E_wp[s, :] + xi * E_wp[s + 1, :]
+        E_torch = torch.from_numpy(E.astype(np.float32)).unsqueeze(0).to(device)
         u_aff_free = _compute_affine_free_displacement(E)
-        sim.batch_strain = E.copy()
 
+        sim.batch_strain = E.copy()
         if use_fast_dirichlet_bc:
             disp_base_step = np.zeros(n_total_dof, dtype=float)
             disp_base_step[dir_dofs] = _compute_affine_dirichlet_displacement(E)
@@ -291,15 +283,17 @@ def RunHpromAnnBatchSimulation(
             sim.ApplyBoundaryConditions()
             disp_base_step = _capture_current_displacement_vector()
 
-        if include_macro_strain_input:
-            q0_step, _ = _evaluate_qs_and_jac(np.zeros(n_primary, dtype=float), E)
-        else:
-            q0_step = q0_const
-
+        with torch.no_grad():
+            if include_macro_strain_input:
+                q0 = torch.zeros((1, n_primary), device=device)
+                N0_step = ann_model(_build_ann_input(q0, E_torch))
+            else:
+                N0_step = N0_const
+        
         if step == 1 or step % 100 == 0 or step == n_steps_total:
-            print(f"\n[HPROM-ANN] Step {step:04d}/{n_steps_total} | E={E}")
-        verbose_step = bool(verbose_iterations)
-
+            print(f"\n[PROM-ANN] Step {step:04d}/{n_steps_total} | E={E}")
+        
+        # Reduced Newton
         it = 0
         res_norm_0 = None
         converged = False
@@ -307,70 +301,88 @@ def RunHpromAnnBatchSimulation(
         Kr_last = None
         dq_norm_prev = None
         prev_res_norm = None
-        q_step_start = q_p.copy()
-        best_q = q_step_start.copy()
+        prev_q_eval = None
+        prev_qs_eval = None
+        plateau_count = 0
+        q_step_start = q_p_torch.detach().clone()
+        best_q = q_step_start.detach().clone()
         best_res = np.inf
         best_rel = np.inf
-
+        
         while it < max_its:
             mp.ProcessInfo[KM.NL_ITERATION_NUMBER] = it + 1
-            q_s_map, J_ann = _evaluate_qs_and_jac(q_p, E)
-            q_s = q_s_map - q0_step
-
-            if verbose_step:
-                print(f"    > q_p norm: {np.linalg.norm(q_p):.3e} | q_s norm: {np.linalg.norm(q_s):.3e}")
-            if (not _is_finite(q_p)) or (not _is_finite(q_s)):
-                print("  [HPROM-ANN] WARNING: non-finite reduced state detected.")
+            # 1. Neural Manifold Enrichment & Jacobian
+            with torch.no_grad():
+                q_s = ann_model(_build_ann_input(q_p_torch, E_torch)) - N0_step
+            
+            qp_np = q_p_torch.detach().cpu().numpy().flatten()
+            qs_np = q_s.detach().cpu().numpy().flatten()
+            print(f"    > q_p norm: {np.linalg.norm(qp_np):.3e} | q_s norm: {np.linalg.norm(qs_np):.3e}")
+            if (not _is_finite(qp_np)) or (not _is_finite(qs_np)):
+                print("  [PROM-ANN] WARNING: non-finite reduced state detected.")
                 nonfinite_detected = True
                 break
-
+            q_eval_delta = np.inf
+            if prev_q_eval is not None and prev_q_eval.shape == qp_np.shape:
+                q_eval_delta = float(np.linalg.norm(qp_np - prev_q_eval))
+            prev_q_eval = qp_np.copy()
+            q_s_delta = np.inf
+            if prev_qs_eval is not None and prev_qs_eval.shape == qs_np.shape:
+                q_s_delta = float(np.linalg.norm(qs_np - prev_qs_eval))
+            prev_qs_eval = qs_np.copy()
+            
+            # Displacement reconstruction
+            u_fluc_torch = q_p_torch @ Vp.T + q_s @ Vs.T
+            u_fluc = u_fluc_torch.detach().cpu().numpy().flatten()
+            if not _is_finite(u_fluc):
+                print("  [PROM-ANN] WARNING: non-finite reconstructed displacement detected.")
+                nonfinite_detected = True
+                break
+            u_free = u_aff_free + u_fluc
+            
+            # Jacobian: J = Vp + Vs * (dq_s/dq_p)
+            J_ann = compute_manifold_jacobian(q_p_torch, E_torch).cpu().numpy()
             if J_ann.shape != (n_secondary, n_primary):
                 raise RuntimeError(
                     f"Invalid ANN Jacobian shape {J_ann.shape}; expected ({n_secondary}, {n_primary})."
                 )
             if not _is_finite(J_ann):
-                print("  [HPROM-ANN] WARNING: non-finite ANN Jacobian detected.")
+                print("  [PROM-ANN] WARNING: non-finite ANN Jacobian detected.")
                 nonfinite_detected = True
                 break
-
-            u_fluc = phi_p @ q_p + phi_s @ q_s
-            if not _is_finite(u_fluc):
-                print("  [HPROM-ANN] WARNING: non-finite reconstructed displacement detected.")
-                nonfinite_detected = True
-                break
-            u_free = u_aff_free + u_fluc
-
             J_manifold = phi_p + phi_s @ J_ann
             if not _is_finite(J_manifold):
-                print("  [HPROM-ANN] WARNING: non-finite manifold Jacobian detected.")
+                print("  [PROM-ANN] WARNING: non-finite manifold Jacobian detected.")
                 nonfinite_detected = True
                 break
-
+            
+            # 2. Update Kratos
             _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
-
+            
+            # 3. Assemble
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
-            K_hp, rhs_hp = AssembleHyperReducedSystem(mp, n_total_dof, elements, Z_res, w_res_selected)
+            K_sparse, rhs_vec = AssembleGlobalSystem(mp, n_total_dof, entities)
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
-
-            r_full = rhs_hp[free_dofs]
-            K_free_sparse = K_hp[free_dofs][:, free_dofs]
-            if (not _is_finite(r_full)) or (not _is_finite(K_free_sparse.data)):
-                print("  [HPROM-ANN] WARNING: non-finite full residual/stiffness detected.")
+            
+            r_full = rhs_vec[free_dofs]
+            K_full = K_sparse[free_dofs][:, free_dofs].toarray()
+            if (not _is_finite(r_full)) or (not _is_finite(K_full)):
+                print("  [PROM-ANN] WARNING: non-finite full residual/stiffness detected.")
                 nonfinite_detected = True
                 break
-
-            KJ = K_free_sparse @ J_manifold
+            
+            # 4. Galerkin Projection
             r_r = J_manifold.T @ r_full
-            K_r = J_manifold.T @ KJ
+            K_r = J_manifold.T @ K_full @ J_manifold
             Kr_last = K_r
             if (not _is_finite(r_r)) or (not _is_finite(K_r)):
-                print("  [HPROM-ANN] WARNING: non-finite reduced residual/stiffness detected.")
+                print("  [PROM-ANN] WARNING: non-finite reduced residual/stiffness detected.")
                 nonfinite_detected = True
                 break
-
-            res_norm = float(np.linalg.norm(r_r))
+            
+            res_norm = np.linalg.norm(r_r)
             if not np.isfinite(res_norm):
-                print("  [HPROM-ANN] WARNING: non-finite reduced residual norm detected.")
+                print("  [PROM-ANN] WARNING: non-finite reduced residual norm detected.")
                 nonfinite_detected = True
                 break
             if res_norm_0 is None:
@@ -378,10 +390,10 @@ def RunHpromAnnBatchSimulation(
             rel_res = res_norm / (res_norm_0 + 1e-12)
             if res_norm < best_res:
                 best_res = float(res_norm)
-                best_q = q_p.copy()
+                best_q = q_p_torch.detach().clone()
                 best_rel = float(rel_res)
             print(f"  > It {it:02d}: ||R_r|| = {res_norm:.3e}, rel = {rel_res:.3e}")
-
+            
             if res_norm < float(abs_res_cutoff):
                 print(f"  > Converged in {it} iterations.")
                 converged = True
@@ -397,18 +409,55 @@ def RunHpromAnnBatchSimulation(
                 break
             if prev_res_norm is not None:
                 rel_drop = abs(prev_res_norm - res_norm) / max(prev_res_norm, 1e-30)
+                q_tol = 20.0 * float(dq_abs_cutoff)
+                q_is_flat = (
+                    np.isfinite(q_eval_delta)
+                    and np.isfinite(q_s_delta)
+                    and (q_eval_delta < q_tol)
+                    and (q_s_delta < q_tol)
+                )
+                if (
+                    it >= 2
+                    and q_is_flat
+                    and rel_res < max(float(relnorm_cutoff), 0.5 * float(stagnation_relnorm_gate))
+                ):
+                    print(
+                        f"  > Converged in {it} iterations (frozen q-state: "
+                        f"q_p_delta={q_eval_delta:.3e}, q_s_delta={q_s_delta:.3e}, rel={rel_res:.3e})."
+                    )
+                    converged = True
+                    break
+                if rel_drop < float(min_rel_drop_stop) and q_is_flat:
+                    plateau_count += 1
+                else:
+                    plateau_count = 0
                 if (
                     rel_drop < float(min_rel_drop_stop)
                     and rel_res < float(stagnation_relnorm_gate)
                     and res_norm < float(max_res_for_rel_convergence)
                 ):
                     print(
-                        f"  > Converged in {it} iterations (stagnation criterion: rel_drop={rel_drop:.3e})."
+                        f"  > Converged in {it} iterations (stagnation criterion: "
+                        f"rel_drop={rel_drop:.3e})."
+                    )
+                    converged = True
+                    break
+                # Flat reduced residual and essentially unchanged q-state:
+                # accept as stalled fixed-point even when absolute reduced residual gate is not met.
+                if (
+                    plateau_count >= 3
+                    and rel_res < max(3.0 * float(relnorm_cutoff), float(stagnation_relnorm_gate))
+                    and (dq_norm_prev is None or dq_norm_prev < 5.0 * float(dq_abs_cutoff))
+                ):
+                    print(
+                        f"  > Converged in {it} iterations (flat residual plateau: "
+                        f"rel_drop={rel_drop:.3e}, q_p_delta={q_eval_delta:.3e}, q_s_delta={q_s_delta:.3e})."
                     )
                     converged = True
                     break
             prev_res_norm = float(res_norm)
-
+                
+            # 5. Solve (with small dampening if res high)
             K_solve = K_r
             used_old = False
             if (
@@ -426,24 +475,29 @@ def RunHpromAnnBatchSimulation(
                 dq_p = _solve_reduced_system(K_r, r_r)
                 used_old = False
             if not _is_finite(dq_p):
-                print("  [HPROM-ANN] WARNING: non-finite reduced update detected.")
+                print("  [PROM-ANN] WARNING: non-finite reduced update detected.")
                 nonfinite_detected = True
                 break
-
             dq_norm = float(np.linalg.norm(dq_p))
             if dq_norm > float(max_dq_norm) and dq_norm > 0.0:
                 scale = float(max_dq_norm) / dq_norm
                 dq_p *= scale
                 dq_norm = float(np.linalg.norm(dq_p))
                 print(f"    > large reduced update clipped with scale={scale:.3e}")
-
-            alpha = 1.0 if it <= 10 else 0.5
-            q_trial = q_p + alpha * dq_p
-            if not _is_finite(q_trial):
-                print("  [HPROM-ANN] WARNING: non-finite reduced state update detected.")
-                nonfinite_detected = True
-                break
-            q_p = q_trial
+            
+            # Backtracking (Simple)
+            alpha = 1.0
+            if it > 10:
+                alpha = 0.5
+            
+            with torch.no_grad():
+                dq_torch = torch.from_numpy(dq_p.astype(np.float32)).unsqueeze(0).to(device)
+                q_trial = q_p_torch + alpha * dq_torch
+                if not _is_finite(q_trial.detach().cpu().numpy()):
+                    print("  [PROM-ANN] WARNING: non-finite reduced state update detected.")
+                    nonfinite_detected = True
+                    break
+                q_p_torch = q_trial
             dq_norm_prev = abs(alpha) * dq_norm
             if used_old:
                 print("    > using previous reduced stiffness (K_old) at first iteration")
@@ -456,62 +510,67 @@ def RunHpromAnnBatchSimulation(
                 and (best_rel < float(relnorm_cutoff))
                 and (best_res < float(max_res_for_rel_convergence))
             )
-            if quasi_converged:
-                q_p = best_q.copy()
+            plateau_quasi = (
+                np.isfinite(best_res)
+                and np.isfinite(best_rel)
+                and plateau_count >= 3
+                and (best_rel < max(3.0 * float(relnorm_cutoff), float(stagnation_relnorm_gate)))
+            )
+            if quasi_converged or plateau_quasi:
+                q_p_torch = best_q.detach().clone()
                 converged = True
-                print(
-                    "  [HPROM-ANN] Step accepted as quasi-converged: "
-                    f"best ||R_r||={best_res:.3e}, rel={best_rel:.3e}."
-                )
+                if quasi_converged:
+                    print(
+                        "  [PROM-ANN] Step accepted as quasi-converged: "
+                        f"best ||R_r||={best_res:.3e}, rel={best_rel:.3e}."
+                    )
+                else:
+                    print(
+                        "  [PROM-ANN] Step accepted as plateau-converged: "
+                        f"best ||R_r||={best_res:.3e}, rel={best_rel:.3e}, "
+                        f"plateau_count={plateau_count}."
+                    )
                 Kr_old = None
             else:
-                print(f"  [HPROM-ANN] WARNING: step {step} did not converge in {max_its} iterations.")
+                print(f"  [PROM-ANN] WARNING: step {step} did not converge in {max_its} iterations.")
                 if nonfinite_detected:
-                    print("  [HPROM-ANN] WARNING: non-finite state encountered; rolling back to best finite iterate.")
+                    print("  [PROM-ANN] WARNING: non-finite state encountered; rolling back to best finite iterate.")
                 if np.isfinite(best_res):
-                    q_p = best_q.copy()
-                    print(f"  [HPROM-ANN] Using best finite iterate with ||R_r||={best_res:.3e}.")
+                    q_p_torch = best_q.detach().clone()
+                    print(f"  [PROM-ANN] Using best finite iterate with ||R_r||={best_res:.3e}.")
                 else:
-                    q_p = q_step_start.copy()
-                    print("  [HPROM-ANN] Reverting to previous-step reduced state.")
+                    q_p_torch = q_step_start.detach().clone()
+                    print("  [PROM-ANN] Reverting to previous-step reduced state.")
                 Kr_old = None
         elif Kr_last is not None and _is_finite(Kr_last):
             Kr_old = Kr_last.copy()
         else:
             Kr_old = None
 
-        q_s_final_map, _ = _evaluate_qs_and_jac(q_p, E)
-        q_s_final = q_s_final_map - q0_step
-        u_fluc_final = phi_p @ q_p + phi_s @ q_s_final
+        # Ensure the accepted reduced state is explicitly pushed to Kratos.
+        with torch.no_grad():
+            q_s_final = ann_model(_build_ann_input(q_p_torch, E_torch)) - N0_step
+            u_fluc_final = (q_p_torch @ Vp.T + q_s_final @ Vs.T).detach().cpu().numpy().reshape(-1)
         if not _is_finite(u_fluc_final):
-            q_p = q_step_start.copy()
-            q_s_final_map, _ = _evaluate_qs_and_jac(q_p, E)
-            q_s_final = q_s_final_map - q0_step
-            u_fluc_final = phi_p @ q_p + phi_s @ q_s_final
+            q_p_torch = q_step_start.detach().clone()
+            with torch.no_grad():
+                q_s_final = ann_model(_build_ann_input(q_p_torch, E_torch)) - N0_step
+                u_fluc_final = (q_p_torch @ Vp.T + q_s_final @ Vs.T).detach().cpu().numpy().reshape(-1)
         if not _is_finite(u_fluc_final):
-            raise RuntimeError("HPROM-ANN accepted state is non-finite after rollback.")
-
+            raise RuntimeError("PROM-ANN accepted state is non-finite after rollback.")
         if not use_fast_dirichlet_bc:
             sim.ApplyBoundaryConditions()
             disp_base_step = _capture_current_displacement_vector()
         _apply_total_free_displacement(u_aff_free + u_fluc_final, base_disp_vec=disp_base_step)
-        InitializeNonLinearIteration(entities, mp.ProcessInfo)
-        u_curr = _capture_current_displacement_vector()
-        _, _ = vec_full_assembler.Assemble(u_curr)
-        FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
-        hom_eps, hom_sig = CalculateHomogenizedStressAndStrainKratosReference(mp)
+        InitializeNonLinearIteration(entities, mp.ProcessInfo)
+        _, _ = AssembleGlobalSystem(mp, n_total_dof, entities)
+        FinalizeNonLinearIteration(entities, mp.ProcessInfo)
+        eps_h, sig_h = CalculateHomogenizedStressAndStrainKratosReference(mp)
         sim.FinalizeSolutionStep()
 
-        q_hist.append(q_p.copy())
-        results_eps.append(hom_eps)
-        results_sig.append(hom_sig)
+        results_eps.append(eps_h)
+        results_sig.append(sig_h)
 
     sim.Finalize()
-
-    tag = f"trajectory_{trajectory_index}" if trajectory_index is not None else "hprom_ann_run"
-    np.save(os.path.join(out_dir, f"{tag}_q_p.npy"), np.stack(q_hist))
-    np.save(os.path.join(out_dir, f"{tag}_strain.npy"), np.stack(results_eps))
-    np.save(os.path.join(out_dir, f"{tag}_stress.npy"), np.stack(results_sig))
-
     return np.array(results_eps), np.array(results_sig)

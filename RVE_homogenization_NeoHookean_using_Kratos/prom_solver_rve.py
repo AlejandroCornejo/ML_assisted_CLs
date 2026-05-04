@@ -17,12 +17,12 @@ if KRATOS_PATH not in sys.path:
     sys.path.append(KRATOS_PATH)
 
 import KratosMultiphysics as KM
+from fom_solver_rve import VectorizedAssembler
 from fom_solver_rve import (
     DeformationGradientFromGreenLagrange2D,
     SetUpDofEquationIdsAndDisplacementAdaptor,
     SetDisplacementFromEquationVector,
     UpdateCurrentCoordinatesFromDisplacement,
-    AssembleGlobalSystem,
     InitializeNonLinearIteration,
     FinalizeNonLinearIteration,
     CalculateHomogenizedStressAndStrainKratosReference,
@@ -81,6 +81,7 @@ def RunPromBatchSimulation(
     elements = list(mp.Elements)
     entities = list(mp.Elements) + list(mp.Conditions)
     n_dof, eq_id_map, ta_disp = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
+    vec_assembler = VectorizedAssembler(mp, n_dof, eq_id_map)
 
     free_dofs = np.asarray(free_dofs, dtype=np.int64)
     free_mask = np.zeros(n_dof, dtype=bool)
@@ -144,10 +145,14 @@ def RunPromBatchSimulation(
         disp_vec[free_dofs] = np.asarray(u_total_free, dtype=float).reshape(-1)
         SetDisplacementFromEquationVector(disp_vec, eq_id_map, ta_disp)
         UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
+        return disp_vec
 
     # PROM Initialization
     r = phi_f.shape[1]
     q = np.zeros(r, dtype=float)  # Reduced state
+    phi_full = np.zeros((n_dof, r), dtype=float)
+    phi_full[free_dofs, :] = phi_f
+    phi_full_T = phi_full.T
     
     Q_hist, strain_hist, stress_hist = [], [], []
     
@@ -191,18 +196,18 @@ def RunPromBatchSimulation(
             
             # Reconstruction: u = u_aff + Phi_f * q
             u_free = u_aff_free + phi_f @ q
-            _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
+            u_eq_curr = _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
 
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
-            K, rhs = AssembleGlobalSystem(mp, n_dof, entities)
+            K, rhs = vec_assembler.Assemble(u_eq_curr)
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
             # Project to Reduced Space
-            # System: Phif^T * K * Phif * dq = Phif^T * rhs
-            Kf_phi = K[free_dofs, :][:, free_dofs] @ phi_f
-            Kr = phi_f.T @ Kf_phi
+            # System: Phi^T * K * Phi * dq = Phi^T * rhs, with Phi embedded in full DOF space.
+            Kf_phi = K @ phi_full
+            Kr = phi_full_T @ Kf_phi
             Kr_last = Kr
-            rr = phi_f.T @ rhs[free_dofs]
+            rr = phi_full_T @ rhs
             
             nR = np.linalg.norm(rr)
             if it > 0 and nR < NEWTON_TOL_ABS:
@@ -250,10 +255,12 @@ def RunPromBatchSimulation(
         if not use_fast_dirichlet_bc:
             sim.ApplyBoundaryConditions()
             disp_base_step = _capture_current_displacement_vector()
-        _apply_total_free_displacement(u_aff_free + u_fluc_final, base_disp_vec=disp_base_step)
+        u_eq_final = _apply_total_free_displacement(
+            u_aff_free + u_fluc_final, base_disp_vec=disp_base_step
+        )
 
         InitializeNonLinearIteration(entities, mp.ProcessInfo)
-        _, _ = AssembleGlobalSystem(mp, n_dof, entities)
+        _, _ = vec_assembler.Assemble(u_eq_final)
         FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
         hom_eps, hom_sig = CalculateHomogenizedStressAndStrainKratosReference(mp)

@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import numpy as np
 
 # Add Kratos path
@@ -8,13 +9,13 @@ if KRATOS_PATH not in sys.path:
     sys.path.append(KRATOS_PATH)
 
 import KratosMultiphysics as KM
+from fom_solver_rve import VectorizedAssembler
 from fom_solver_rve import (
     DeformationGradientFromGreenLagrange2D,
     RVEHomogenizationDatasetGenerator,
     SetUpDofEquationIdsAndDisplacementAdaptor,
     SetDisplacementFromEquationVector,
     UpdateCurrentCoordinatesFromDisplacement,
-    AssembleGlobalSystem,
     InitializeNonLinearIteration,
     FinalizeNonLinearIteration,
     BuildDynamicSegmentSteps,
@@ -97,6 +98,8 @@ def RunPromRbfBatchSimulation(
     use_old_stiffness_in_first_iteration=USE_OLD_STIFFNESS_IN_FIRST_ITERATION,
     verbose_iterations=False,
 ):
+    t_wall_total_start = time.perf_counter()
+
     free_dofs = np.asarray(free_dofs, dtype=np.int64)
     if phi_p.shape[0] != phi_s.shape[0]:
         raise ValueError("phi_p and phi_s must have the same number of rows (n_free).")
@@ -123,6 +126,7 @@ def RunPromRbfBatchSimulation(
     mp = sim._GetSolver().GetComputingModelPart()
 
     n_total_dof, eq_id_map, ta = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
+    vec_assembler = VectorizedAssembler(mp, n_total_dof, eq_id_map)
     elements = list(mp.Elements)
     entities = list(mp.Elements) + list(mp.Conditions)
 
@@ -200,6 +204,7 @@ def RunPromRbfBatchSimulation(
         disp_vec[free_dofs] = np.asarray(u_total_free, dtype=float).reshape(-1)
         SetDisplacementFromEquationVector(disp_vec, eq_id_map, ta)
         UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
+        return disp_vec
 
     def _build_rbf_input(qp_vec, e_vec):
         qp = np.asarray(qp_vec, dtype=float).reshape(-1)
@@ -229,6 +234,7 @@ def RunPromRbfBatchSimulation(
 
     q_p = np.zeros(n_primary, dtype=float)
     Kr_old = None
+    J_full = np.zeros((n_total_dof, n_primary), dtype=float)
 
     if include_macro_strain_input:
         q0_const = None
@@ -236,6 +242,12 @@ def RunPromRbfBatchSimulation(
         q0_const, _ = _evaluate_qs_and_jac(np.zeros(n_primary, dtype=float), np.zeros(3, dtype=float))
 
     print(f"  [PROM-RBF] Solving for {n_steps_total} dynamic increments...")
+    print(f"  [PROM-RBF] Full elements assembled each Newton step: {len(elements)} / {len(elements)}")
+    t_map = 0.0
+    t_assembly = 0.0
+    t_projection = 0.0
+    t_solve = 0.0
+    t_full_sync = 0.0
 
     for step in range(1, n_steps_total + 1):
         time_val = float(step) * float(dt)
@@ -284,7 +296,9 @@ def RunPromRbfBatchSimulation(
 
         while it < max_its:
             mp.ProcessInfo[KM.NL_ITERATION_NUMBER] = it + 1
+            t0 = time.perf_counter()
             q_s_map, J_rbf = _evaluate_qs_and_jac(q_p, E)
+            t_map += time.perf_counter() - t0
             q_s = q_s_map - q0_step
 
             if verbose_step:
@@ -319,22 +333,26 @@ def RunPromRbfBatchSimulation(
                 nonfinite_detected = True
                 break
 
-            _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
+            u_eq_curr = _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
 
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
-            K_sparse, rhs_vec = AssembleGlobalSystem(mp, n_total_dof, entities)
+            t0 = time.perf_counter()
+            K_sparse, rhs_vec = vec_assembler.Assemble(u_eq_curr)
+            t_assembly += time.perf_counter() - t0
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
-            r_full = rhs_vec[free_dofs]
-            K_free_sparse = K_sparse[free_dofs][:, free_dofs]
-            if (not _is_finite(r_full)) or (not _is_finite(K_free_sparse.data)):
+            if (not _is_finite(rhs_vec)) or (not _is_finite(K_sparse.data)):
                 print("  [PROM-RBF] WARNING: non-finite full residual/stiffness detected.")
                 nonfinite_detected = True
                 break
 
-            r_r = J_manifold.T @ r_full
-            KJ = K_free_sparse @ J_manifold
-            K_r = J_manifold.T @ KJ
+            t0 = time.perf_counter()
+            J_full.fill(0.0)
+            J_full[free_dofs, :] = J_manifold
+            KJ = K_sparse @ J_full
+            r_r = J_full.T @ rhs_vec
+            K_r = J_full.T @ KJ
+            t_projection += time.perf_counter() - t0
             Kr_last = K_r
             if (not _is_finite(r_r)) or (not _is_finite(K_r)):
                 print("  [PROM-RBF] WARNING: non-finite reduced residual/stiffness detected.")
@@ -396,10 +414,12 @@ def RunPromRbfBatchSimulation(
                 K_solve = Kr_old
                 used_old = True
 
+            t0 = time.perf_counter()
             dq_p = _solve_reduced_system(K_solve, r_r)
             if used_old and not _is_finite(dq_p):
                 dq_p = _solve_reduced_system(K_r, r_r)
                 used_old = False
+            t_solve += time.perf_counter() - t0
             if not _is_finite(dq_p):
                 print("  [PROM-RBF] WARNING: non-finite reduced update detected.")
                 nonfinite_detected = True
@@ -469,10 +489,14 @@ def RunPromRbfBatchSimulation(
         if not use_fast_dirichlet_bc:
             sim.ApplyBoundaryConditions()
             disp_base_step = _capture_current_displacement_vector()
-        _apply_total_free_displacement(u_aff_free + u_fluc_final, base_disp_vec=disp_base_step)
+        u_eq_final = _apply_total_free_displacement(
+            u_aff_free + u_fluc_final, base_disp_vec=disp_base_step
+        )
 
         InitializeNonLinearIteration(entities, mp.ProcessInfo)
-        _, _ = AssembleGlobalSystem(mp, n_total_dof, entities)
+        t0 = time.perf_counter()
+        _, _ = vec_assembler.Assemble(u_eq_final)
+        t_full_sync += time.perf_counter() - t0
         FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
         eps_h, sig_h = CalculateHomogenizedStressAndStrainKratosReference(mp)
@@ -481,4 +505,12 @@ def RunPromRbfBatchSimulation(
         results_sig.append(sig_h)
 
     sim.Finalize()
+    t_wall_total = time.perf_counter() - t_wall_total_start
+    t_accounted = t_map + t_assembly + t_projection + t_solve + t_full_sync
+    t_other = max(t_wall_total - t_accounted, 0.0)
+    print(
+        f"\n[PROM-RBF] Timing: map={t_map:.3f}s, assembly={t_assembly:.3f}s, "
+        f"projection={t_projection:.3f}s, solve={t_solve:.3f}s, full_sync={t_full_sync:.3f}s, "
+        f"accounted={t_accounted:.3f}s, other={t_other:.3f}s, total={t_wall_total:.3f}s"
+    )
     return np.array(results_eps), np.array(results_sig)

@@ -2,15 +2,14 @@
 # -*- coding: utf-8 -*-
 
 """
-HPROM-ANN solver:
+HPROM-RBF solver:
   - Hyper-reduced assembly on ECM-selected elements
-  - Nonlinear ANN manifold projection with tangent Jacobian
+  - Nonlinear RBF manifold projection with tangent Jacobian
 """
 
 import os
 import sys
 import numpy as np
-import torch
 
 # Add Kratos path
 KRATOS_PATH = "/home/kratos/Kratos_Eigen_Check/bin/Release"
@@ -18,7 +17,6 @@ if KRATOS_PATH not in sys.path:
     sys.path.append(KRATOS_PATH)
 
 import KratosMultiphysics as KM
-from fom_solver_rve import VectorizedAssembler
 from fom_solver_rve import (
     DeformationGradientFromGreenLagrange2D,
     RVEHomogenizationDatasetGenerator,
@@ -36,19 +34,21 @@ from fom_solver_rve import (
     NEWTON_TOL_ABS,
 )
 from hprom_solver_rve import AssembleHyperReducedSystem
-from prom_ann_solver_rve import LoadPromAnnModel
+from prom_rbf_solver_rve import LoadPromRbfModel
+from rbf_manifold_model import evaluate_rbf_map_and_jacobian_qp
 
 
-def LoadHpromAnnModel(
+def LoadHpromRbfModel(
     basis_dir="stage_2_pod_rve",
-    ann_data_dir="stage_7_ann_data",
-    hprom_ann_dir="stage_9_hprom_ann_data",
+    rbf_data_dir="stage_7_rbf_data",
+    hprom_rbf_dir="stage_9_hprom_rbf_data",
 ):
-    phi_p, phi_s, free_dofs, dir_dofs, eq_map, ann_model, device, include_macro = LoadPromAnnModel(
-        basis_dir=basis_dir,
-        ann_data_dir=ann_data_dir,
+    phi_p, phi_s, free_dofs, dir_dofs, eq_map, rbf_model, include_macro = LoadPromRbfModel(
+        basis_dir=basis_dir, rbf_data_dir=rbf_data_dir
     )
-    ecm = np.load(os.path.join(hprom_ann_dir, "ecm_weights_all.npz"))
+    Xc, Yc = np.load(os.path.join(basis_dir, "domain_center.npy"))
+
+    ecm = np.load(os.path.join(hprom_rbf_dir, "ecm_weights_all.npz"))
     ecm_data = {k: ecm[k] for k in ecm.files}
 
     return (
@@ -57,22 +57,22 @@ def LoadHpromAnnModel(
         free_dofs,
         dir_dofs,
         eq_map,
-        ann_model,
-        device,
+        Xc,
+        Yc,
+        rbf_model,
         ecm_data,
         include_macro,
     )
 
 
-def RunHpromAnnBatchSimulation(
+def RunHpromRbfBatchSimulation(
     parameters,
     phi_p,
     phi_s,
     free_dofs,
-    ann_model,
-    device,
+    rbf_model,
     ecm_data,
-    out_dir="stage_10_hprom_ann_results",
+    out_dir="stage_10_hprom_rbf_results",
     strain_path=None,
     trajectory_index=None,
     relnorm_cutoff=1e-5,
@@ -126,7 +126,6 @@ def RunHpromAnnBatchSimulation(
     mp = sim._GetSolver().GetComputingModelPart()
 
     n_total_dof, eq_id_map, ta = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
-    vec_full_assembler = VectorizedAssembler(mp, n_total_dof, eq_id_map, log_label="HPROMANNFullSyncAssembler")
     elements = list(mp.Elements)
     entities = list(mp.Elements) + list(mp.Conditions)
 
@@ -167,11 +166,11 @@ def RunHpromAnnBatchSimulation(
     results_sig = [np.zeros(3, dtype=float)]
     q_hist = [np.zeros(n_primary, dtype=float)]
 
-    ann_input_dim = int(ann_model.input_scaler.mean.numel())
+    rbf_input_dim = int(rbf_model["input_dim"])
     expected_input_dim = int(n_primary + (3 if include_macro_strain_input else 0))
-    if ann_input_dim != expected_input_dim:
+    if rbf_input_dim != expected_input_dim:
         raise ValueError(
-            f"ANN input size mismatch: model expects {ann_input_dim}, "
+            f"RBF input size mismatch: model expects {rbf_input_dim}, "
             f"but solver was configured for {expected_input_dim}."
         )
 
@@ -210,33 +209,16 @@ def RunHpromAnnBatchSimulation(
         SetDisplacementFromEquationVector(disp_vec, eq_id_map, ta)
         UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
 
-    def _build_ann_input(q_tensor, e_tensor):
+    def _build_rbf_input(qp_vec, e_vec):
+        qp = np.asarray(qp_vec, dtype=float).reshape(-1)
         if include_macro_strain_input:
-            return torch.cat([q_tensor, e_tensor], dim=1)
-        return q_tensor
+            return np.concatenate([qp, np.asarray(e_vec, dtype=float).reshape(3)])
+        return qp
 
     def _evaluate_qs_and_jac(qp_vec, e_vec):
-        qp_arr = np.asarray(qp_vec, dtype=float).reshape(-1)
-        e_arr = np.asarray(e_vec, dtype=float).reshape(3)
-
-        qp_tensor = torch.from_numpy(qp_arr.astype(np.float32)).unsqueeze(0).to(device)
-        e_tensor = torch.from_numpy(e_arr.astype(np.float32)).unsqueeze(0).to(device)
-
-        with torch.no_grad():
-            q_s_map_tensor = ann_model(_build_ann_input(qp_tensor, e_tensor))
-
-        with torch.enable_grad():
-            qp_in = qp_tensor.clone().detach().requires_grad_(True)
-
-            def ann_from_q(q_local):
-                return ann_model(_build_ann_input(q_local, e_tensor))
-
-            jac_ann = torch.autograd.functional.jacobian(ann_from_q, qp_in)
-            jac_ann = jac_ann.reshape(n_secondary, n_primary)
-
-        q_s_map = q_s_map_tensor.detach().cpu().numpy().reshape(-1)
-        jac_np = jac_ann.detach().cpu().numpy()
-        return q_s_map, jac_np
+        x_in = _build_rbf_input(qp_vec, e_vec)
+        q_s_map, j_qs_qp = evaluate_rbf_map_and_jacobian_qp(x_in, rbf_model, n_primary)
+        return np.asarray(q_s_map, dtype=float).reshape(-1), np.asarray(j_qs_qp, dtype=float)
 
     def _solve_reduced_system(K_sys, rhs):
         try:
@@ -261,9 +243,9 @@ def RunHpromAnnBatchSimulation(
     else:
         q0_const, _ = _evaluate_qs_and_jac(np.zeros(n_primary, dtype=float), np.zeros(3, dtype=float))
 
-    print(f"  [HPROM-ANN] Solving for {n_steps_total} dynamic increments...")
+    print(f"  [HPROM-RBF] Solving for {n_steps_total} dynamic increments...")
     print(
-        f"  [HPROM-ANN] ECM residual elements: {len(Z_res)} / {len(elements)} | "
+        f"  [HPROM-RBF] ECM residual elements: {len(Z_res)} / {len(elements)} | "
         f"union elements: {len(Z_union)} / {len(elements)}"
     )
 
@@ -297,7 +279,7 @@ def RunHpromAnnBatchSimulation(
             q0_step = q0_const
 
         if step == 1 or step % 100 == 0 or step == n_steps_total:
-            print(f"\n[HPROM-ANN] Step {step:04d}/{n_steps_total} | E={E}")
+            print(f"\n[HPROM-RBF] Step {step:04d}/{n_steps_total} | E={E}")
         verbose_step = bool(verbose_iterations)
 
         it = 0
@@ -314,35 +296,35 @@ def RunHpromAnnBatchSimulation(
 
         while it < max_its:
             mp.ProcessInfo[KM.NL_ITERATION_NUMBER] = it + 1
-            q_s_map, J_ann = _evaluate_qs_and_jac(q_p, E)
+            q_s_map, J_rbf = _evaluate_qs_and_jac(q_p, E)
             q_s = q_s_map - q0_step
 
             if verbose_step:
                 print(f"    > q_p norm: {np.linalg.norm(q_p):.3e} | q_s norm: {np.linalg.norm(q_s):.3e}")
             if (not _is_finite(q_p)) or (not _is_finite(q_s)):
-                print("  [HPROM-ANN] WARNING: non-finite reduced state detected.")
+                print("  [HPROM-RBF] WARNING: non-finite reduced state detected.")
                 nonfinite_detected = True
                 break
 
-            if J_ann.shape != (n_secondary, n_primary):
+            if J_rbf.shape != (n_secondary, n_primary):
                 raise RuntimeError(
-                    f"Invalid ANN Jacobian shape {J_ann.shape}; expected ({n_secondary}, {n_primary})."
+                    f"Invalid RBF Jacobian shape {J_rbf.shape}; expected ({n_secondary}, {n_primary})."
                 )
-            if not _is_finite(J_ann):
-                print("  [HPROM-ANN] WARNING: non-finite ANN Jacobian detected.")
+            if not _is_finite(J_rbf):
+                print("  [HPROM-RBF] WARNING: non-finite RBF Jacobian detected.")
                 nonfinite_detected = True
                 break
 
             u_fluc = phi_p @ q_p + phi_s @ q_s
             if not _is_finite(u_fluc):
-                print("  [HPROM-ANN] WARNING: non-finite reconstructed displacement detected.")
+                print("  [HPROM-RBF] WARNING: non-finite reconstructed displacement detected.")
                 nonfinite_detected = True
                 break
             u_free = u_aff_free + u_fluc
 
-            J_manifold = phi_p + phi_s @ J_ann
+            J_manifold = phi_p + phi_s @ J_rbf
             if not _is_finite(J_manifold):
-                print("  [HPROM-ANN] WARNING: non-finite manifold Jacobian detected.")
+                print("  [HPROM-RBF] WARNING: non-finite manifold Jacobian detected.")
                 nonfinite_detected = True
                 break
 
@@ -355,7 +337,7 @@ def RunHpromAnnBatchSimulation(
             r_full = rhs_hp[free_dofs]
             K_free_sparse = K_hp[free_dofs][:, free_dofs]
             if (not _is_finite(r_full)) or (not _is_finite(K_free_sparse.data)):
-                print("  [HPROM-ANN] WARNING: non-finite full residual/stiffness detected.")
+                print("  [HPROM-RBF] WARNING: non-finite full residual/stiffness detected.")
                 nonfinite_detected = True
                 break
 
@@ -364,13 +346,13 @@ def RunHpromAnnBatchSimulation(
             K_r = J_manifold.T @ KJ
             Kr_last = K_r
             if (not _is_finite(r_r)) or (not _is_finite(K_r)):
-                print("  [HPROM-ANN] WARNING: non-finite reduced residual/stiffness detected.")
+                print("  [HPROM-RBF] WARNING: non-finite reduced residual/stiffness detected.")
                 nonfinite_detected = True
                 break
 
             res_norm = float(np.linalg.norm(r_r))
             if not np.isfinite(res_norm):
-                print("  [HPROM-ANN] WARNING: non-finite reduced residual norm detected.")
+                print("  [HPROM-RBF] WARNING: non-finite reduced residual norm detected.")
                 nonfinite_detected = True
                 break
             if res_norm_0 is None:
@@ -426,7 +408,7 @@ def RunHpromAnnBatchSimulation(
                 dq_p = _solve_reduced_system(K_r, r_r)
                 used_old = False
             if not _is_finite(dq_p):
-                print("  [HPROM-ANN] WARNING: non-finite reduced update detected.")
+                print("  [HPROM-RBF] WARNING: non-finite reduced update detected.")
                 nonfinite_detected = True
                 break
 
@@ -440,7 +422,7 @@ def RunHpromAnnBatchSimulation(
             alpha = 1.0 if it <= 10 else 0.5
             q_trial = q_p + alpha * dq_p
             if not _is_finite(q_trial):
-                print("  [HPROM-ANN] WARNING: non-finite reduced state update detected.")
+                print("  [HPROM-RBF] WARNING: non-finite reduced state update detected.")
                 nonfinite_detected = True
                 break
             q_p = q_trial
@@ -460,20 +442,20 @@ def RunHpromAnnBatchSimulation(
                 q_p = best_q.copy()
                 converged = True
                 print(
-                    "  [HPROM-ANN] Step accepted as quasi-converged: "
+                    "  [HPROM-RBF] Step accepted as quasi-converged: "
                     f"best ||R_r||={best_res:.3e}, rel={best_rel:.3e}."
                 )
                 Kr_old = None
             else:
-                print(f"  [HPROM-ANN] WARNING: step {step} did not converge in {max_its} iterations.")
+                print(f"  [HPROM-RBF] WARNING: step {step} did not converge in {max_its} iterations.")
                 if nonfinite_detected:
-                    print("  [HPROM-ANN] WARNING: non-finite state encountered; rolling back to best finite iterate.")
+                    print("  [HPROM-RBF] WARNING: non-finite state encountered; rolling back to best finite iterate.")
                 if np.isfinite(best_res):
                     q_p = best_q.copy()
-                    print(f"  [HPROM-ANN] Using best finite iterate with ||R_r||={best_res:.3e}.")
+                    print(f"  [HPROM-RBF] Using best finite iterate with ||R_r||={best_res:.3e}.")
                 else:
                     q_p = q_step_start.copy()
-                    print("  [HPROM-ANN] Reverting to previous-step reduced state.")
+                    print("  [HPROM-RBF] Reverting to previous-step reduced state.")
                 Kr_old = None
         elif Kr_last is not None and _is_finite(Kr_last):
             Kr_old = Kr_last.copy()
@@ -489,15 +471,14 @@ def RunHpromAnnBatchSimulation(
             q_s_final = q_s_final_map - q0_step
             u_fluc_final = phi_p @ q_p + phi_s @ q_s_final
         if not _is_finite(u_fluc_final):
-            raise RuntimeError("HPROM-ANN accepted state is non-finite after rollback.")
+            raise RuntimeError("HPROM-RBF accepted state is non-finite after rollback.")
 
         if not use_fast_dirichlet_bc:
             sim.ApplyBoundaryConditions()
             disp_base_step = _capture_current_displacement_vector()
         _apply_total_free_displacement(u_aff_free + u_fluc_final, base_disp_vec=disp_base_step)
         InitializeNonLinearIteration(entities, mp.ProcessInfo)
-        u_curr = _capture_current_displacement_vector()
-        _, _ = vec_full_assembler.Assemble(u_curr)
+        _, _ = AssembleGlobalSystem(mp, n_total_dof, entities)
         FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
         hom_eps, hom_sig = CalculateHomogenizedStressAndStrainKratosReference(mp)
@@ -509,7 +490,7 @@ def RunHpromAnnBatchSimulation(
 
     sim.Finalize()
 
-    tag = f"trajectory_{trajectory_index}" if trajectory_index is not None else "hprom_ann_run"
+    tag = f"trajectory_{trajectory_index}" if trajectory_index is not None else "hprom_rbf_run"
     np.save(os.path.join(out_dir, f"{tag}_q_p.npy"), np.stack(q_hist))
     np.save(os.path.join(out_dir, f"{tag}_strain.npy"), np.stack(results_eps))
     np.save(os.path.join(out_dir, f"{tag}_stress.npy"), np.stack(results_sig))

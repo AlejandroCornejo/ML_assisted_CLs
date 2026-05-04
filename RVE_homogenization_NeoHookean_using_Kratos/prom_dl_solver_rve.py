@@ -12,6 +12,7 @@ if KRATOS_PATH not in sys.path:
     sys.path.append(KRATOS_PATH)
 
 import KratosMultiphysics as KM
+from fom_solver_rve import VectorizedAssembler
 from fom_solver_rve import (
     DeformationGradientFromGreenLagrange2D,
     RVEHomogenizationDatasetGenerator,
@@ -137,6 +138,7 @@ def RunPromDlBatchSimulation(
     mp = sim._GetSolver().GetComputingModelPart()
 
     n_total_dof, eq_id_map, ta = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
+    vec_assembler = VectorizedAssembler(mp, n_total_dof, eq_id_map)
     elements = list(mp.Elements)
     entities = list(mp.Elements) + list(mp.Conditions)
     w_all, area_all = PrecomputeElementIntegrationWeights(elements)
@@ -304,7 +306,8 @@ def RunPromDlBatchSimulation(
             _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
 
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
-            K_sparse, rhs_vec = AssembleGlobalSystem(mp, n_total_dof, entities)
+            u_curr = _capture_current_displacement_vector()
+            K_sparse, rhs_vec = vec_assembler.Assemble(u_curr)
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
             r_full = rhs_vec[free_dofs]
             K_full = K_sparse[free_dofs][:, free_dofs].toarray()

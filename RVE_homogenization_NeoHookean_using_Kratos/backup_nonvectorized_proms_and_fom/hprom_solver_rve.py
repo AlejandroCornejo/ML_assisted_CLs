@@ -22,6 +22,7 @@ from fom_solver_rve import (
     SetUpDofEquationIdsAndDisplacementAdaptor,
     SetDisplacementFromEquationVector,
     UpdateCurrentCoordinatesFromDisplacement,
+    AssembleGlobalSystem,
     InitializeNonLinearIteration,
     FinalizeNonLinearIteration,
     CalculateHomogenizedStressAndStrainKratosReference,
@@ -36,52 +37,32 @@ from fom_solver_rve import (
     NEWTON_TOL_ABS,
     DISP_TOL_ABS,
 )
-from fom_solver_rve import VectorizedAssembler
 from scipy.sparse import coo_matrix
 
 # =============================================================================
 # HPROM Assembly: Only selected elements, weighted
 # =============================================================================
 
-USE_VECTORIZED_HPROM_ASSEMBLY = True
-
-
-def _BuildEqMapFromNodes(mp):
-    eq_map = np.empty((mp.NumberOfNodes(), 2), dtype=int)
-    for i, node in enumerate(mp.Nodes):
-        eq_map[i, 0] = node.GetDof(KM.DISPLACEMENT_X).EquationId
-        eq_map[i, 1] = node.GetDof(KM.DISPLACEMENT_Y).EquationId
-    return eq_map
-
-
-def _CaptureDisplacementFromNodes(mp, n_dof, eq_map):
-    u = np.zeros(n_dof, dtype=float)
-    for i, node in enumerate(mp.Nodes):
-        d = node.GetSolutionStepValue(KM.DISPLACEMENT)
-        idx_x = int(eq_map[i, 0])
-        idx_y = int(eq_map[i, 1])
-        if 0 <= idx_x < n_dof:
-            u[idx_x] = d[0]
-        if 0 <= idx_y < n_dof:
-            u[idx_y] = d[1]
-    return u
-
-
-def _AssembleHyperReducedSystemKratosLocal(mp, n_dof, elements, elem_indices, elem_weights):
+def AssembleHyperReducedSystem(mp, n_dof, elements, elem_indices, elem_weights):
+    """
+    Assemble K and rhs using ONLY the ECM-selected elements,
+    scaling each element's contribution by its cubature weight.
+    """
     pi = mp.ProcessInfo
     rhs = np.zeros(n_dof, dtype=float)
 
+    # Pre-count entries
     total_entries = 0
     valid_data = []
     for idx, w_e in zip(elem_indices, elem_weights):
-        elem = elements[int(idx)]
+        elem = elements[idx]
         ids = np.array(elem.EquationIdVector(pi), dtype=int)
         mask = ids >= 0
         n_m = int(np.sum(mask))
         if n_m == 0:
             continue
         total_entries += n_m * n_m
-        valid_data.append((elem, ids, mask, float(w_e)))
+        valid_data.append((elem, ids, mask, w_e))
 
     rows = np.zeros(total_entries, dtype=int)
     cols = np.zeros(total_entries, dtype=int)
@@ -107,62 +88,6 @@ def _AssembleHyperReducedSystemKratosLocal(mp, n_dof, elements, elem_indices, el
 
     K = coo_matrix((vals, (rows, cols)), shape=(n_dof, n_dof)).tocsr()
     return K, rhs
-
-def AssembleHyperReducedSystem(mp, n_dof, elements, elem_indices, elem_weights, u_eq=None):
-    """
-    Assemble K and rhs using ONLY the ECM-selected elements,
-    scaling each element's contribution by its cubature weight.
-    """
-    if not USE_VECTORIZED_HPROM_ASSEMBLY:
-        return _AssembleHyperReducedSystemKratosLocal(mp, n_dof, elements, elem_indices, elem_weights)
-
-    elem_idx_arr = np.asarray(elem_indices, dtype=np.int64).reshape(-1)
-    elem_w_arr = np.asarray(elem_weights, dtype=float).reshape(-1)
-    cache = getattr(AssembleHyperReducedSystem, "_vectorized_cache", {})
-    rec = cache.get(id(mp))
-
-    needs_rebuild = True
-    if rec is not None:
-        needs_rebuild = (
-            rec["n_dof"] != int(n_dof)
-            or rec["n_elem"] != int(len(elements))
-            or rec["idx"].shape != elem_idx_arr.shape
-            or rec["w"].shape != elem_w_arr.shape
-            or not np.array_equal(rec["idx"], elem_idx_arr)
-            or not np.allclose(rec["w"], elem_w_arr, rtol=0.0, atol=0.0)
-        )
-
-    if needs_rebuild:
-        eq_map = _BuildEqMapFromNodes(mp)
-        selected_elements = [elements[int(i)] for i in elem_idx_arr]
-        assembler = VectorizedAssembler(
-            mp,
-            int(n_dof),
-            eq_map,
-            elements=selected_elements,
-            element_scales=elem_w_arr,
-            log_label="HPROMVectorizedAssembler",
-        )
-        rec = {
-            "n_dof": int(n_dof),
-            "n_elem": int(len(elements)),
-            "idx": elem_idx_arr.copy(),
-            "w": elem_w_arr.copy(),
-            "eq_map": eq_map,
-            "assembler": assembler,
-        }
-        cache[id(mp)] = rec
-        setattr(AssembleHyperReducedSystem, "_vectorized_cache", cache)
-
-    try:
-        if u_eq is None:
-            u_curr = _CaptureDisplacementFromNodes(mp, int(n_dof), rec["eq_map"])
-        else:
-            u_curr = np.asarray(u_eq, dtype=float).reshape(-1)
-        return rec["assembler"].Assemble(u_curr)
-    except Exception as exc:
-        print(f"[HPROM] WARNING: vectorized hyper-reduced assembly failed, using Kratos local system. ({exc})")
-        return _AssembleHyperReducedSystemKratosLocal(mp, n_dof, elements, elem_indices, elem_weights)
 
 
 # =============================================================================
@@ -219,7 +144,6 @@ def RunHpromBatchSimulation(
     elements = list(mp.Elements)
     all_entities = list(mp.Elements) + list(mp.Conditions)
     n_dof, eq_id_map, ta_disp = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
-    vec_full_assembler = VectorizedAssembler(mp, n_dof, eq_id_map, log_label="HPROMFullSyncAssembler")
 
     free_dofs = np.asarray(free_dofs, dtype=np.int64)
     free_mask = np.zeros(n_dof, dtype=bool)
@@ -283,7 +207,6 @@ def RunHpromBatchSimulation(
         disp_vec[free_dofs] = np.asarray(u_total_free, dtype=float).reshape(-1)
         SetDisplacementFromEquationVector(disp_vec, eq_id_map, ta_disp)
         UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
-        return disp_vec
 
     n_elem = len(elements)
     print(f"[HPROM] Full mesh: {n_elem} elements")
@@ -293,9 +216,6 @@ def RunHpromBatchSimulation(
     # HPROM Initialization
     r = phi_f.shape[1]
     q = np.zeros(r, dtype=float)
-    phi_full = np.zeros((n_dof, r), dtype=float)
-    phi_full[free_dofs, :] = phi_f
-    phi_full_T = phi_full.T
 
     Q_hist, strain_hist, stress_hist = [], [], []
 
@@ -307,8 +227,6 @@ def RunHpromBatchSimulation(
 
     t_assembly = 0.0
     t_solve = 0.0
-    t_project = 0.0
-    t_full_sync = 0.0
 
     for step in range(1, n_steps_total + 1):
         time_val = float(step) * float(dt)
@@ -344,26 +262,24 @@ def RunHpromBatchSimulation(
 
             # Reconstruction: u = u_aff + Phi_f * q
             u_free = u_aff_free + phi_f @ q
-            t0_proj = time.perf_counter()
-            u_eq_curr = _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
-            t_project += time.perf_counter() - t0_proj
+            _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
 
             InitializeNonLinearIteration(all_entities, mp.ProcessInfo)
 
             # *** HYPER-REDUCED ASSEMBLY ***
             t0 = time.perf_counter()
             K_hp, rhs_hp = AssembleHyperReducedSystem(
-                mp, n_dof, elements, Z_res, w_res_selected, u_eq=u_eq_curr
+                mp, n_dof, elements, Z_res, w_res_selected
             )
             t_assembly += time.perf_counter() - t0
 
             FinalizeNonLinearIteration(all_entities, mp.ProcessInfo)
 
             # Project to reduced space
-            Kf_phi = K_hp @ phi_full
-            Kr = phi_full_T @ Kf_phi
+            Kf_phi = K_hp[free_dofs, :][:, free_dofs] @ phi_f
+            Kr = phi_f.T @ Kf_phi
             Kr_last = Kr
-            rr = phi_full_T @ rhs_hp
+            rr = phi_f.T @ rhs_hp[free_dofs]
 
             nR = np.linalg.norm(rr)
             if it > 0 and nR < NEWTON_TOL_ABS:
@@ -416,14 +332,10 @@ def RunHpromBatchSimulation(
         if not use_fast_dirichlet_bc:
             sim.ApplyBoundaryConditions()
             disp_base_step = _capture_current_displacement_vector()
-        u_eq_final = _apply_total_free_displacement(
-            u_aff_free + u_fluc_final, base_disp_vec=disp_base_step
-        )
+        _apply_total_free_displacement(u_aff_free + u_fluc_final, base_disp_vec=disp_base_step)
 
         InitializeNonLinearIteration(all_entities, mp.ProcessInfo)
-        t0_sync = time.perf_counter()
-        _, _ = vec_full_assembler.Assemble(u_eq_final)
-        t_full_sync += time.perf_counter() - t0_sync
+        _, _ = AssembleGlobalSystem(mp, n_dof, all_entities)
         FinalizeNonLinearIteration(all_entities, mp.ProcessInfo)
 
         hom_eps, hom_sig = CalculateHomogenizedStressAndStrainKratosReference(mp)
@@ -435,10 +347,7 @@ def RunHpromBatchSimulation(
 
     sim.Finalize()
 
-    print(
-        f"\n[HPROM] Timing: assembly={t_assembly:.3f}s, solve={t_solve:.3f}s, "
-        f"project={t_project:.3f}s, full_sync={t_full_sync:.3f}s"
-    )
+    print(f"\n[HPROM] Timing: assembly={t_assembly:.3f}s, solve={t_solve:.3f}s")
 
     # Save Results
     tag = f"trajectory_{trajectory_index}" if trajectory_index else "hprom_run"

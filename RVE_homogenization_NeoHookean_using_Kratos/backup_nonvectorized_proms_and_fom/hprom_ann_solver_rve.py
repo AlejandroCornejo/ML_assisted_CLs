@@ -18,7 +18,6 @@ if KRATOS_PATH not in sys.path:
     sys.path.append(KRATOS_PATH)
 
 import KratosMultiphysics as KM
-from fom_solver_rve import VectorizedAssembler
 from fom_solver_rve import (
     DeformationGradientFromGreenLagrange2D,
     RVEHomogenizationDatasetGenerator,
@@ -126,7 +125,6 @@ def RunHpromAnnBatchSimulation(
     mp = sim._GetSolver().GetComputingModelPart()
 
     n_total_dof, eq_id_map, ta = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
-    vec_full_assembler = VectorizedAssembler(mp, n_total_dof, eq_id_map, log_label="HPROMANNFullSyncAssembler")
     elements = list(mp.Elements)
     entities = list(mp.Elements) + list(mp.Conditions)
 
@@ -496,8 +494,7 @@ def RunHpromAnnBatchSimulation(
             disp_base_step = _capture_current_displacement_vector()
         _apply_total_free_displacement(u_aff_free + u_fluc_final, base_disp_vec=disp_base_step)
         InitializeNonLinearIteration(entities, mp.ProcessInfo)
-        u_curr = _capture_current_displacement_vector()
-        _, _ = vec_full_assembler.Assemble(u_curr)
+        _, _ = AssembleGlobalSystem(mp, n_total_dof, entities)
         FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
         hom_eps, hom_sig = CalculateHomogenizedStressAndStrainKratosReference(mp)
