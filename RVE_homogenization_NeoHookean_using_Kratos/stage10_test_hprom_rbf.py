@@ -231,10 +231,10 @@ def run_stage10(run_fom=False, run_prom_rbf=False, run_hprom_rbf=False):
             phi_p_h,
             phi_s_h,
             free_dofs_h,
-            _,
-            _,
-            _,
-            _,
+            _dir_dofs_h,
+            eq_map_h,
+            Xc_h,
+            Yc_h,
             rbf_model_h,
             ecm_data_h,
             include_macro_h,
@@ -257,6 +257,9 @@ def run_stage10(run_fom=False, run_prom_rbf=False, run_hprom_rbf=False):
             include_macro_strain_input=include_macro_h,
             reference_amplitude=emax,
             reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
+            eq_map_full=eq_map_h,
+            Xc=Xc_h,
+            Yc=Yc_h,
         )
         timings["HPROM-RBF"] = time.perf_counter() - t0
         h_eps = np.asarray(h_eps, dtype=float)

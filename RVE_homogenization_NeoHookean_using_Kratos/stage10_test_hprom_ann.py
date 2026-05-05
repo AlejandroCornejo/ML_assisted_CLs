@@ -233,8 +233,10 @@ def run_stage10(run_fom=False, run_prom_ann=False, run_hprom_ann=False):
             phi_p_h,
             phi_s_h,
             free_dofs_h,
-            _,
-            _,
+            _dir_dofs_h,
+            eq_map_h,
+            Xc_h,
+            Yc_h,
             ann_model_h,
             device_h,
             ecm_data_h,
@@ -259,6 +261,9 @@ def run_stage10(run_fom=False, run_prom_ann=False, run_hprom_ann=False):
             include_macro_strain_input=include_macro_h,
             reference_amplitude=emax,
             reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
+            eq_map_full=eq_map_h,
+            Xc=Xc_h,
+            Yc=Yc_h,
         )
         timings["HPROM-ANN"] = time.perf_counter() - t0
         h_eps = np.asarray(h_eps, dtype=float)

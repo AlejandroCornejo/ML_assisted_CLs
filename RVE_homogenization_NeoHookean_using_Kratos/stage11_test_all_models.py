@@ -63,6 +63,16 @@ def _load_linear_hprom_data(hprom_dir="stage_5_hprom_data"):
     return {k: ecm[k] for k in ecm.files}
 
 
+def _load_hrom_mesh_base_from_ecm_dir(hprom_dir):
+    ecm_file = os.path.join(hprom_dir, "ecm_weights_all.npz")
+    if not os.path.exists(ecm_file):
+        return None
+    data = np.load(ecm_file)
+    if "hrom_mesh_base" not in data.files:
+        return None
+    return str(np.ravel(data["hrom_mesh_base"])[0])
+
+
 def _rel_l2_vs_ref(sig_ref, sig_pred):
     n = min(len(sig_ref), len(sig_pred))
     num = np.linalg.norm(sig_ref[:n] - sig_pred[:n])
@@ -260,6 +270,11 @@ def run_stage11(
     run_hprom_ann=False,
     run_prom_rbf=False,
     run_hprom_rbf=False,
+    mesh_base="rve_geometry",
+    use_hrom_mesh=False,
+    hprom_mesh=None,
+    hprom_ann_mesh=None,
+    hprom_rbf_mesh=None,
     step_reference_amplitude=None,
     use_bundle_reference_amplitude=False,
     strict=False,
@@ -329,7 +344,35 @@ def run_stage11(
     print(f"  Step-control reference amplitude (used): {reference_amplitude}")
     print(f"  Segments: {seg_steps}")
 
-    parameters = setup_kratos_parameters("rve_geometry")
+    mesh_hprom = str(hprom_mesh) if hprom_mesh else str(mesh_base)
+    mesh_hprom_ann = str(hprom_ann_mesh) if hprom_ann_mesh else str(mesh_base)
+    mesh_hprom_rbf = str(hprom_rbf_mesh) if hprom_rbf_mesh else str(mesh_base)
+    if use_hrom_mesh:
+        if hprom_mesh is None:
+            auto_mesh = _load_hrom_mesh_base_from_ecm_dir("stage_5_hprom_data")
+            if auto_mesh:
+                mesh_hprom = auto_mesh
+        if hprom_ann_mesh is None:
+            auto_mesh = _load_hrom_mesh_base_from_ecm_dir("stage_9_hprom_ann_data")
+            if auto_mesh:
+                mesh_hprom_ann = auto_mesh
+        if hprom_rbf_mesh is None:
+            auto_mesh = _load_hrom_mesh_base_from_ecm_dir("stage_9_hprom_rbf_data")
+            if auto_mesh:
+                mesh_hprom_rbf = auto_mesh
+
+    print(f"  Base mesh (KRATOS/FOM/PROM): {mesh_base}")
+    print(f"  HPROM mesh:                  {mesh_hprom}")
+    print(f"  HPROM-ANN mesh:              {mesh_hprom_ann}")
+    print(f"  HPROM-RBF mesh:              {mesh_hprom_rbf}")
+
+    _parameters_cache = {}
+
+    def _get_parameters(mesh_name):
+        mesh_key = str(mesh_name)
+        if mesh_key not in _parameters_cache:
+            _parameters_cache[mesh_key] = setup_kratos_parameters(mesh_key)
+        return _parameters_cache[mesh_key]
 
     # Cache files
     cache = {
@@ -412,7 +455,7 @@ def run_stage11(
             print("\n[Stage 11] Running KRATOS...")
             t0 = time.perf_counter()
             eps, sig, _, _ = RunKratosBatchSimulation(
-                parameters,
+                _get_parameters(mesh_base),
                 out_dir=out_dir,
                 save_plot=False,
                 save_data=False,
@@ -430,7 +473,7 @@ def run_stage11(
             print("\n[Stage 11] Running FOM...")
             t0 = time.perf_counter()
             eps, sig = RunFomBatchSimulation(
-                parameters,
+                _get_parameters(mesh_base),
                 out_dir=out_dir,
                 strain_path=strain_path,
                 trajectory_index=None,
@@ -448,7 +491,7 @@ def run_stage11(
             phi_f, free_dofs, dir_dofs, eq_map, Xc, Yc = _load_linear_rom_model("stage_2_pod_rve")
             t0 = time.perf_counter()
             eps, sig = RunPromBatchSimulation(
-                parameters,
+                _get_parameters(mesh_base),
                 phi_f,
                 free_dofs,
                 dir_dofs,
@@ -473,7 +516,7 @@ def run_stage11(
             ecm_data = _load_linear_hprom_data("stage_5_hprom_data")
             t0 = time.perf_counter()
             eps, sig = RunHpromBatchSimulation(
-                parameters,
+                _get_parameters(mesh_hprom),
                 phi_f,
                 free_dofs,
                 dir_dofs,
@@ -501,7 +544,7 @@ def run_stage11(
             )
             t0 = time.perf_counter()
             eps, sig = RunPromDlBatchSimulation(
-                parameters,
+                _get_parameters(mesh_base),
                 phi_q,
                 free_dofs,
                 pod_dl_model,
@@ -523,7 +566,7 @@ def run_stage11(
             )
             t0 = time.perf_counter()
             eps, sig = RunPromAnnBatchSimulation(
-                parameters,
+                _get_parameters(mesh_base),
                 phi_p,
                 phi_s,
                 free_dofs,
@@ -545,8 +588,10 @@ def run_stage11(
                 phi_p,
                 phi_s,
                 free_dofs,
-                _,
-                _,
+                _dir_dofs,
+                eq_map_full,
+                Xc,
+                Yc,
                 ann_model,
                 device,
                 ecm_data,
@@ -558,7 +603,7 @@ def run_stage11(
             )
             t0 = time.perf_counter()
             eps, sig = RunHpromAnnBatchSimulation(
-                parameters,
+                _get_parameters(mesh_hprom_ann),
                 phi_p,
                 phi_s,
                 free_dofs,
@@ -571,6 +616,9 @@ def run_stage11(
                 include_macro_strain_input=include_macro,
                 reference_amplitude=reference_amplitude,
                 reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
+                eq_map_full=eq_map_full,
+                Xc=Xc,
+                Yc=Yc,
             )
             return np.asarray(eps, dtype=float), np.asarray(sig, dtype=float), time.perf_counter() - t0
 
@@ -585,7 +633,7 @@ def run_stage11(
             )
             t0 = time.perf_counter()
             eps, sig = RunPromRbfBatchSimulation(
-                parameters,
+                _get_parameters(mesh_base),
                 phi_p,
                 phi_s,
                 free_dofs,
@@ -606,10 +654,10 @@ def run_stage11(
                 phi_p,
                 phi_s,
                 free_dofs,
-                _,
-                _,
-                _,
-                _,
+                _dir_dofs,
+                eq_map_full,
+                Xc,
+                Yc,
                 rbf_model,
                 ecm_data,
                 include_macro,
@@ -620,7 +668,7 @@ def run_stage11(
             )
             t0 = time.perf_counter()
             eps, sig = RunHpromRbfBatchSimulation(
-                parameters,
+                _get_parameters(mesh_hprom_rbf),
                 phi_p,
                 phi_s,
                 free_dofs,
@@ -632,6 +680,9 @@ def run_stage11(
                 include_macro_strain_input=include_macro,
                 reference_amplitude=reference_amplitude,
                 reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
+                eq_map_full=eq_map_full,
+                Xc=Xc,
+                Yc=Yc,
             )
             return np.asarray(eps, dtype=float), np.asarray(sig, dtype=float), time.perf_counter() - t0
 
@@ -715,6 +766,15 @@ if __name__ == "__main__":
     p.add_argument("--run-hprom-ann", action="store_true", help="Force recomputation of HPROM-ANN.")
     p.add_argument("--run-prom-rbf", action="store_true", help="Force recomputation of PROM-RBF.")
     p.add_argument("--run-hprom-rbf", action="store_true", help="Force recomputation of HPROM-RBF.")
+    p.add_argument("--mesh-base", default="rve_geometry", help="Base mesh for KRATOS/FOM/PROM/PROM-ANN/PROM-RBF.")
+    p.add_argument(
+        "--use-hrom-mesh",
+        action="store_true",
+        help="Use HROM reduced meshes for HPROM variants when available in ECM files.",
+    )
+    p.add_argument("--hprom-mesh", default=None, help="Override mesh base for HPROM.")
+    p.add_argument("--hprom-ann-mesh", default=None, help="Override mesh base for HPROM-ANN.")
+    p.add_argument("--hprom-rbf-mesh", default=None, help="Override mesh base for HPROM-RBF.")
     p.add_argument("--strict", action="store_true", help="Fail fast if any selected solver errors.")
     args = p.parse_args()
 
@@ -749,5 +809,10 @@ if __name__ == "__main__":
         run_hprom_ann=args.run_hprom_ann,
         run_prom_rbf=args.run_prom_rbf,
         run_hprom_rbf=args.run_hprom_rbf,
+        mesh_base=args.mesh_base,
+        use_hrom_mesh=args.use_hrom_mesh,
+        hprom_mesh=args.hprom_mesh,
+        hprom_ann_mesh=args.hprom_ann_mesh,
+        hprom_rbf_mesh=args.hprom_rbf_mesh,
         strict=args.strict,
     )

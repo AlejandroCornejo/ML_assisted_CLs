@@ -19,6 +19,7 @@ if KRATOS_PATH not in sys.path:
 import KratosMultiphysics as KM
 from fom_solver_rve import (
     DeformationGradientFromGreenLagrange2D,
+    setup_kratos_parameters,
     SetUpDofEquationIdsAndDisplacementAdaptor,
     SetDisplacementFromEquationVector,
     UpdateCurrentCoordinatesFromDisplacement,
@@ -44,6 +45,7 @@ from scipy.sparse import coo_matrix
 # =============================================================================
 
 USE_VECTORIZED_HPROM_ASSEMBLY = True
+WEIGHT_ZERO_TOL = 1.0e-14
 
 
 def _BuildEqMapFromNodes(mp):
@@ -165,6 +167,273 @@ def AssembleHyperReducedSystem(mp, n_dof, elements, elem_indices, elem_weights, 
         return _AssembleHyperReducedSystemKratosLocal(mp, n_dof, elements, elem_indices, elem_weights)
 
 
+def _LoadNodeIdsFromMeshBase(mesh_base):
+    cache = getattr(_LoadNodeIdsFromMeshBase, "_cache", {})
+    key = str(mesh_base)
+    if key in cache:
+        return cache[key]
+
+    mdl = KM.Model()
+    mp = mdl.CreateModelPart("tmp")
+    KM.ModelPartIO(str(mesh_base)).ReadModelPart(mp)
+    node_ids = np.array([int(node.Id) for node in mp.Nodes], dtype=np.int64)
+    cache[key] = node_ids
+    setattr(_LoadNodeIdsFromMeshBase, "_cache", cache)
+    return node_ids
+
+
+def _BuildFullNodeComponentToBasisRowMap(
+    free_dofs_reference,
+    eq_map_reference,
+    full_mesh_base="rve_geometry",
+):
+    key = (str(full_mesh_base), int(eq_map_reference.shape[0]), int(len(free_dofs_reference)))
+    cache = getattr(_BuildFullNodeComponentToBasisRowMap, "_cache", {})
+    if key in cache:
+        return cache[key]
+
+    node_ids = _LoadNodeIdsFromMeshBase(full_mesh_base)
+    if node_ids.size != int(eq_map_reference.shape[0]):
+        # Conservative fallback if mesh-reader order differs from stored basis map
+        node_ids = np.arange(1, int(eq_map_reference.shape[0]) + 1, dtype=np.int64)
+
+    eq_to_row = {int(eq): i for i, eq in enumerate(np.asarray(free_dofs_reference, dtype=np.int64).reshape(-1))}
+    out = {}
+    eq_map_ref = np.asarray(eq_map_reference, dtype=np.int64)
+    for i, node_id in enumerate(node_ids):
+        eq_x = int(eq_map_ref[i, 0])
+        eq_y = int(eq_map_ref[i, 1])
+        if eq_x in eq_to_row:
+            out[(int(node_id), 0)] = int(eq_to_row[eq_x])
+        if eq_y in eq_to_row:
+            out[(int(node_id), 1)] = int(eq_to_row[eq_y])
+
+    cache[key] = out
+    setattr(_BuildFullNodeComponentToBasisRowMap, "_cache", cache)
+    return out
+
+
+def ResolveResidualHyperReductionSelection(ecm_data, n_current_elements, solver_label="HPROM"):
+    """
+    Resolve element indices and cubature weights for residual assembly.
+    Supports both:
+      - full-mesh ECM arrays (Z_res + w_res_full), and
+      - reduced HROM mesh arrays (w_res_hrom aligned with current mesh order).
+    """
+    n_cur = int(n_current_elements)
+    if "w_res_hrom" in ecm_data:
+        w_res_hrom = np.asarray(ecm_data["w_res_hrom"], dtype=float).reshape(-1)
+        if w_res_hrom.size == n_cur:
+            nz = np.flatnonzero(np.abs(w_res_hrom) > WEIGHT_ZERO_TOL)
+            if nz.size == 0:
+                raise RuntimeError(f"[{solver_label}] w_res_hrom has no nonzero entries.")
+            return nz.astype(np.int64), w_res_hrom[nz], True
+        print(
+            f"[{solver_label}] WARNING: w_res_hrom has size {w_res_hrom.size}, "
+            f"but current mesh has {n_cur} elements. Falling back to Z_res/w_res_full."
+        )
+
+    z_res = np.asarray(ecm_data["Z_res"], dtype=np.int64).reshape(-1)
+    w_res_full = np.asarray(ecm_data["w_res_full"], dtype=float).reshape(-1)
+    if np.max(z_res, initial=-1) >= n_cur:
+        raise RuntimeError(
+            f"[{solver_label}] ECM element index out of range: max(Z_res)={int(np.max(z_res))} "
+            f"for mesh with {n_cur} elements."
+        )
+    if w_res_full.size != n_cur:
+        raise RuntimeError(
+            f"[{solver_label}] w_res_full length {w_res_full.size} does not match mesh elements {n_cur}."
+        )
+    w_sel = w_res_full[z_res]
+    nz = np.flatnonzero(np.abs(w_sel) > WEIGHT_ZERO_TOL)
+    if nz.size == 0:
+        raise RuntimeError(f"[{solver_label}] w_res_full[Z_res] has no nonzero entries.")
+    if nz.size != z_res.size:
+        print(
+            f"[{solver_label}] WARNING: {z_res.size - nz.size} zero-weight residual elements detected in Z_res; "
+            "they will be skipped."
+        )
+    return z_res[nz], w_sel[nz], False
+
+
+def GetReferenceIntegrationMeasureFromMesh(full_mesh_base):
+    """
+    Compute reference full-mesh measure for Kratos-reference homogenization:
+      A_ref = sum_e Area_e
+    Cached per mesh base.
+    """
+    key = str(full_mesh_base)
+    cache = getattr(GetReferenceIntegrationMeasureFromMesh, "_cache", {})
+    if key in cache:
+        return float(cache[key])
+
+    params = setup_kratos_parameters(key)
+    model = KM.Model()
+    sim = RVEHomogenizationDatasetGenerator(model, params)
+    sim.Initialize()
+    mp = sim._GetSolver().GetComputingModelPart()
+    ref_measure = float(np.sum([float(elem.GetGeometry().Area()) for elem in mp.Elements]))
+    sim.Finalize()
+
+    cache[key] = ref_measure
+    setattr(GetReferenceIntegrationMeasureFromMesh, "_cache", cache)
+    return ref_measure
+
+
+def ResolveHomogenizationWeightSelection(ecm_data, n_current_elements, solver_label="HPROM"):
+    """
+    Resolve element weights for fast homogenized output on the current mesh order.
+    Priority:
+      1) projected reduced-mesh weights: w_eps_hrom / w_sig_hrom
+      2) full-mesh weights (only if current mesh == full mesh): w_eps_full / w_sig_full
+    Returns:
+      (w_eps_or_none, w_sig_or_none, using_weighted_hom)
+    """
+    n_cur = int(n_current_elements)
+
+    def _pick(key_hrom, key_full):
+        if key_hrom in ecm_data:
+            w = np.asarray(ecm_data[key_hrom], dtype=float).reshape(-1)
+            if w.size == n_cur:
+                return w
+            print(
+                f"[{solver_label}] WARNING: {key_hrom} has size {w.size}, "
+                f"but current mesh has {n_cur} elements."
+            )
+        if key_full in ecm_data:
+            w = np.asarray(ecm_data[key_full], dtype=float).reshape(-1)
+            if w.size == n_cur:
+                return w
+        return None
+
+    w_eps = _pick("w_eps_hrom", "w_eps_full")
+    w_sig = _pick("w_sig_hrom", "w_sig_full")
+    using = (w_eps is not None) and (w_sig is not None)
+    return w_eps, w_sig, using
+
+
+def CalculateHomogenizedFromAssemblerWithElementWeights(assembler, w_eps=None, w_sig=None, reference_measure=None):
+    """
+    Compute homogenized strain/stress from the most recent VectorizedAssembler state.
+    Uses the same Kratos-reference operator as CalculateHomogenizedStressAndStrainKratosReference:
+      value_hom = (sum_e A_e * mean_gp(value_gp,e)) / A_ref
+    If element weights are provided, they are applied to per-element contributions.
+    """
+    if getattr(assembler, "n_elems", 0) == 0:
+        return np.zeros(3, dtype=float), np.zeros(3, dtype=float)
+
+    if hasattr(assembler, "area_e"):
+        area_e = np.asarray(assembler.area_e, dtype=float).reshape(-1)
+    else:
+        # Fallback for safety on legacy assembler objects.
+        area_e = np.sum(np.asarray(assembler.w_detJ, dtype=float), axis=1)
+
+    eps_mean_e = np.mean(assembler._E_voigt, axis=1)  # (n_elem, 3)
+    sig_mean_e = np.mean(assembler._S_voigt, axis=1)  # (n_elem, 3)
+
+    def _avg(mean_e, w):
+        if w is None:
+            den = float(np.sum(area_e))
+            num = np.einsum("e,ej->j", area_e, mean_e)
+        else:
+            ww = np.asarray(w, dtype=float).reshape(-1)
+            if ww.size != mean_e.shape[0]:
+                raise RuntimeError(
+                    f"Homogenization weight size {ww.size} does not match active elements {mean_e.shape[0]}."
+                )
+            nz = np.flatnonzero(np.abs(ww) > WEIGHT_ZERO_TOL)
+            if nz.size == 0:
+                return np.zeros(mean_e.shape[1], dtype=float)
+            ww_nz = ww[nz]
+            area_nz = area_e[nz]
+            mean_nz = mean_e[nz]
+            if reference_measure is None:
+                den = float(np.dot(ww_nz, area_nz))
+            else:
+                den = float(reference_measure)
+            num = np.einsum("e,ej->j", ww_nz * area_nz, mean_nz)
+        if abs(den) <= 1e-30:
+            return np.asarray(num, dtype=float)
+        return np.asarray(num, dtype=float) / den
+
+    hom_eps = _avg(eps_mean_e, w_eps)
+    hom_sig = _avg(sig_mean_e, w_sig)
+    return hom_eps, hom_sig
+
+
+def ResolveActiveFreeDofsAndBasisRows(
+    mp,
+    n_dof,
+    eq_id_map_active,
+    free_dofs_reference,
+    eq_map_reference=None,
+    full_mesh_base="rve_geometry",
+    solver_label="HPROM",
+):
+    """
+    Build active free/dirichlet DOF partitions from the current model part and
+    map each active free DOF to its corresponding row in a basis defined on the
+    reference full mesh free DOFs.
+    """
+    n_dof = int(n_dof)
+    eq_map_act = np.asarray(eq_id_map_active, dtype=np.int64)
+    free_ref = np.asarray(free_dofs_reference, dtype=np.int64).reshape(-1)
+
+    dof_node_id = np.full(n_dof, -1, dtype=np.int64)
+    dof_comp = np.full(n_dof, -1, dtype=np.int8)  # 0 -> X, 1 -> Y
+    free_mask = np.ones(n_dof, dtype=bool)
+
+    for i, node in enumerate(mp.Nodes):
+        idx_x = int(eq_map_act[i, 0])
+        idx_y = int(eq_map_act[i, 1])
+        if 0 <= idx_x < n_dof:
+            dof_node_id[idx_x] = int(node.Id)
+            dof_comp[idx_x] = 0
+            if node.GetDof(KM.DISPLACEMENT_X).IsFixed():
+                free_mask[idx_x] = False
+        if 0 <= idx_y < n_dof:
+            dof_node_id[idx_y] = int(node.Id)
+            dof_comp[idx_y] = 1
+            if node.GetDof(KM.DISPLACEMENT_Y).IsFixed():
+                free_mask[idx_y] = False
+
+    free_dofs_active = np.nonzero(free_mask)[0].astype(np.int64)
+    dir_dofs_active = np.nonzero(~free_mask)[0].astype(np.int64)
+
+    if eq_map_reference is None:
+        eq_to_row = {int(eq): i for i, eq in enumerate(free_ref)}
+        missing = [int(eq) for eq in free_dofs_active if int(eq) not in eq_to_row]
+        if missing:
+            raise RuntimeError(
+                f"[{solver_label}] Could not map {len(missing)} active free DOFs to basis rows. "
+                "Provide eq_map_reference when using reduced HROM meshes."
+            )
+        basis_rows = np.array([eq_to_row[int(eq)] for eq in free_dofs_active], dtype=np.int64)
+        return free_dofs_active, dir_dofs_active, basis_rows
+
+    nodecomp_to_row = _BuildFullNodeComponentToBasisRowMap(
+        free_ref,
+        np.asarray(eq_map_reference, dtype=np.int64),
+        full_mesh_base=full_mesh_base,
+    )
+    basis_rows = np.empty(free_dofs_active.size, dtype=np.int64)
+    missing = []
+    for i, eq in enumerate(free_dofs_active):
+        key = (int(dof_node_id[int(eq)]), int(dof_comp[int(eq)]))
+        row = nodecomp_to_row.get(key)
+        if row is None:
+            missing.append(key)
+        else:
+            basis_rows[i] = int(row)
+    if missing:
+        preview = ", ".join([f"(node={nid},comp={'X' if c==0 else 'Y'})" for nid, c in missing[:8]])
+        raise RuntimeError(
+            f"[{solver_label}] Missing basis-row mapping for {len(missing)} active DOFs. "
+            f"First missing keys: {preview}"
+        )
+    return free_dofs_active, dir_dofs_active, basis_rows
+
+
 # =============================================================================
 # HPROM Solver
 # =============================================================================
@@ -188,6 +457,14 @@ def RunHpromBatchSimulation(
     use_fast_dirichlet_bc=True,
 ):
     os.makedirs(out_dir, exist_ok=True)
+    phi_f_ref = np.asarray(phi_f, dtype=float)
+    free_dofs_ref = np.asarray(free_dofs, dtype=np.int64).reshape(-1)
+    if phi_f_ref.shape[0] != free_dofs_ref.size:
+        raise RuntimeError(
+            f"[HPROM] Basis/free_dofs mismatch: phi_f rows={phi_f_ref.shape[0]} "
+            f"!= len(free_dofs)={free_dofs_ref.size}."
+        )
+
     dt = parameters["solver_settings"]["time_stepping"]["time_step"].GetDouble()
     E_wp = np.array(strain_path, dtype=float)
     n_seg = len(E_wp) - 1
@@ -202,16 +479,6 @@ def RunHpromBatchSimulation(
     n_steps_total = int(step_offsets[-1])
     end_time = dt * float(n_steps_total)
 
-    # --- ECM data ---
-    Z_res = ecm_data["Z_res"]
-    w_res_full = ecm_data["w_res_full"]
-    # For homogenization we use the SIG weights on the union set
-    Z_union = ecm_data["Z_union"]
-    w_sig_full = ecm_data["w_sig_full"]
-
-    # Weights for selected residual elements only
-    w_res_selected = w_res_full[Z_res]
-
     model = KM.Model()
     sim = RVEHomogenizationDatasetGenerator(model, parameters)
     sim.Initialize()
@@ -221,10 +488,24 @@ def RunHpromBatchSimulation(
     n_dof, eq_id_map, ta_disp = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
     vec_full_assembler = VectorizedAssembler(mp, n_dof, eq_id_map, log_label="HPROMFullSyncAssembler")
 
-    free_dofs = np.asarray(free_dofs, dtype=np.int64)
-    free_mask = np.zeros(n_dof, dtype=bool)
-    free_mask[free_dofs] = True
-    dir_dofs_local = np.nonzero(~free_mask)[0].astype(np.int64)
+    full_mesh_base = str(np.ravel(ecm_data["hrom_full_mesh_base"])[0]) if "hrom_full_mesh_base" in ecm_data else "rve_geometry"
+    free_dofs, dir_dofs_local, basis_rows = ResolveActiveFreeDofsAndBasisRows(
+        mp,
+        n_dof,
+        eq_id_map,
+        free_dofs_reference=free_dofs_ref,
+        eq_map_reference=eq_map,
+        full_mesh_base=full_mesh_base,
+        solver_label="HPROM",
+    )
+    phi_f = phi_f_ref[basis_rows, :]
+    z_res_local, w_res_selected, using_hrom_mesh = ResolveResidualHyperReductionSelection(
+        ecm_data,
+        n_current_elements=len(elements),
+        solver_label="HPROM",
+    )
+    z_union_ref = np.asarray(ecm_data["Z_union"], dtype=np.int64).reshape(-1) if "Z_union" in ecm_data else z_res_local
+    n_elem_reference = int(np.ravel(ecm_data["n_elem"])[0]) if "n_elem" in ecm_data else len(elements)
 
     x0c = float(Xc)
     y0c = float(Yc)
@@ -286,9 +567,35 @@ def RunHpromBatchSimulation(
         return disp_vec
 
     n_elem = len(elements)
-    print(f"[HPROM] Full mesh: {n_elem} elements")
-    print(f"[HPROM] ECM residual elements: {Z_res.size} ({100.*Z_res.size/n_elem:.1f}%)")
-    print(f"[HPROM] ECM union elements:    {Z_union.size} ({100.*Z_union.size/n_elem:.1f}%)")
+    print(f"[HPROM] Active mesh elements: {n_elem} (reference full mesh: {n_elem_reference})")
+    print(
+        f"[HPROM] Residual assembly elements: {z_res_local.size} "
+        f"({100. * z_res_local.size / max(n_elem, 1):.1f}% of active mesh)"
+    )
+    if using_hrom_mesh:
+        print(f"[HPROM] Using reduced HROM mesh weights (w_res_hrom).")
+    else:
+        print(f"[HPROM] Using full-mesh ECM indices (Z_res).")
+    print(
+        f"[HPROM] ECM union reference size: {z_union_ref.size} "
+        f"({100. * z_union_ref.size / max(n_elem_reference, 1):.1f}% of full mesh)"
+    )
+
+    w_eps_hom, w_sig_hom, using_weighted_hom = ResolveHomogenizationWeightSelection(
+        ecm_data,
+        n_current_elements=len(elements),
+        solver_label="HPROM",
+    )
+    # Keep old/full-mesh behavior exact: weighted homogenization is only used on HROM meshes.
+    if using_weighted_hom and (not using_hrom_mesh):
+        using_weighted_hom = False
+    hom_reference_measure = None
+    if using_weighted_hom:
+        print("[HPROM] Using ECM-weighted homogenization (w_eps / w_sig).")
+        hom_reference_measure = GetReferenceIntegrationMeasureFromMesh(full_mesh_base)
+        print(f"[HPROM] Homogenization reference measure (full mesh): {hom_reference_measure:.6e}")
+    elif using_hrom_mesh:
+        print("[HPROM] WARNING: ECM homogenization weights not available; using direct reduced-mesh homogenization.")
 
     # HPROM Initialization
     r = phi_f.shape[1]
@@ -353,7 +660,7 @@ def RunHpromBatchSimulation(
             # *** HYPER-REDUCED ASSEMBLY ***
             t0 = time.perf_counter()
             K_hp, rhs_hp = AssembleHyperReducedSystem(
-                mp, n_dof, elements, Z_res, w_res_selected, u_eq=u_eq_curr
+                mp, n_dof, elements, z_res_local, w_res_selected, u_eq=u_eq_curr
             )
             t_assembly += time.perf_counter() - t0
 
@@ -426,7 +733,15 @@ def RunHpromBatchSimulation(
         t_full_sync += time.perf_counter() - t0_sync
         FinalizeNonLinearIteration(all_entities, mp.ProcessInfo)
 
-        hom_eps, hom_sig = CalculateHomogenizedStressAndStrainKratosReference(mp)
+        if using_weighted_hom:
+            hom_eps, hom_sig = CalculateHomogenizedFromAssemblerWithElementWeights(
+                vec_full_assembler,
+                w_eps=w_eps_hom,
+                w_sig=w_sig_hom,
+                reference_measure=hom_reference_measure,
+            )
+        else:
+            hom_eps, hom_sig = CalculateHomogenizedStressAndStrainKratosReference(mp)
         sim.FinalizeSolutionStep()
 
         Q_hist.append(q.copy())
@@ -434,7 +749,6 @@ def RunHpromBatchSimulation(
         stress_hist.append(hom_sig)
 
     sim.Finalize()
-
     print(
         f"\n[HPROM] Timing: assembly={t_assembly:.3f}s, solve={t_solve:.3f}s, "
         f"project={t_project:.3f}s, full_sync={t_full_sync:.3f}s"

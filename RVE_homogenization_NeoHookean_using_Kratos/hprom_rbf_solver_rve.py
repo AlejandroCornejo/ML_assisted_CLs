@@ -34,7 +34,14 @@ from fom_solver_rve import (
     USE_OLD_STIFFNESS_IN_FIRST_ITERATION,
     NEWTON_TOL_ABS,
 )
-from hprom_solver_rve import AssembleHyperReducedSystem
+from hprom_solver_rve import (
+    AssembleHyperReducedSystem,
+    ResolveResidualHyperReductionSelection,
+    ResolveActiveFreeDofsAndBasisRows,
+    ResolveHomogenizationWeightSelection,
+    CalculateHomogenizedFromAssemblerWithElementWeights,
+    GetReferenceIntegrationMeasureFromMesh,
+)
 from prom_rbf_solver_rve import LoadPromRbfModel
 from rbf_manifold_model import evaluate_rbf_map_and_jacobian_qp
 
@@ -92,17 +99,27 @@ def RunHpromRbfBatchSimulation(
     use_old_stiffness_in_first_iteration=USE_OLD_STIFFNESS_IN_FIRST_ITERATION,
     verbose_iterations=False,
     use_fast_dirichlet_bc=True,
+    eq_map_full=None,
+    Xc=None,
+    Yc=None,
 ):
     t_wall_total_start = time.perf_counter()
 
     os.makedirs(out_dir, exist_ok=True)
 
-    free_dofs = np.asarray(free_dofs, dtype=np.int64)
-    if phi_p.shape[0] != phi_s.shape[0]:
+    free_dofs_ref = np.asarray(free_dofs, dtype=np.int64).reshape(-1)
+    phi_p_ref = np.asarray(phi_p, dtype=float)
+    phi_s_ref = np.asarray(phi_s, dtype=float)
+    if phi_p_ref.shape[0] != phi_s_ref.shape[0]:
         raise ValueError("phi_p and phi_s must have the same number of rows (n_free).")
+    if phi_p_ref.shape[0] != free_dofs_ref.size:
+        raise RuntimeError(
+            f"[HPROM-RBF] Basis/free_dofs mismatch: phi rows={phi_p_ref.shape[0]} "
+            f"!= len(free_dofs)={free_dofs_ref.size}."
+        )
 
-    n_primary = int(phi_p.shape[1])
-    n_secondary = int(phi_s.shape[1])
+    n_primary = int(phi_p_ref.shape[1])
+    n_secondary = int(phi_s_ref.shape[1])
 
     dt = parameters["solver_settings"]["time_stepping"]["time_step"].GetDouble()
     E_wp = np.array(strain_path, dtype=float)
@@ -117,12 +134,6 @@ def RunHpromRbfBatchSimulation(
     n_steps_total = int(step_offsets[-1])
     end_time = dt * float(n_steps_total)
 
-    Z_res = np.asarray(ecm_data["Z_res"], dtype=np.int64).reshape(-1)
-    Z_union = np.asarray(ecm_data["Z_union"], dtype=np.int64).reshape(-1)
-    w_res_full = np.asarray(ecm_data["w_res_full"], dtype=float).reshape(-1)
-    w_sig_full = np.asarray(ecm_data["w_sig_full"], dtype=float).reshape(-1)
-    w_res_selected = w_res_full[Z_res]
-
     model_kratos = KM.Model()
     sim = RVEHomogenizationDatasetGenerator(model_kratos, parameters)
     sim.Initialize()
@@ -132,14 +143,48 @@ def RunHpromRbfBatchSimulation(
     vec_full_assembler = VectorizedAssembler(mp, n_total_dof, eq_id_map, log_label="HPROMRBFFullSyncAssembler")
     elements = list(mp.Elements)
     entities = list(mp.Elements) + list(mp.Conditions)
+    full_mesh_base = str(np.ravel(ecm_data["hrom_full_mesh_base"])[0]) if "hrom_full_mesh_base" in ecm_data else "rve_geometry"
+    free_dofs, dir_dofs, basis_rows = ResolveActiveFreeDofsAndBasisRows(
+        mp,
+        n_total_dof,
+        eq_id_map,
+        free_dofs_reference=free_dofs_ref,
+        eq_map_reference=eq_map_full,
+        full_mesh_base=full_mesh_base,
+        solver_label="HPROM-RBF",
+    )
+    phi_p = phi_p_ref[basis_rows, :]
+    phi_s = phi_s_ref[basis_rows, :]
+    Z_res, w_res_selected, using_hrom_mesh = ResolveResidualHyperReductionSelection(
+        ecm_data,
+        n_current_elements=len(elements),
+        solver_label="HPROM-RBF",
+    )
+    Z_union = np.asarray(ecm_data["Z_union"], dtype=np.int64).reshape(-1) if "Z_union" in ecm_data else Z_res
+    n_elem_reference = int(np.ravel(ecm_data["n_elem"])[0]) if "n_elem" in ecm_data else len(elements)
 
-    if np.max(Z_res, initial=-1) >= len(elements) or np.max(Z_union, initial=-1) >= len(elements):
-        raise RuntimeError("ECM element index out of range for current model mesh.")
-    if len(w_res_full) != len(elements) or len(w_sig_full) != len(elements):
-        raise RuntimeError("ECM weights length does not match number of elements.")
+    if Xc is None or Yc is None:
+        sim._InitializeDomainCenterIfNeeded(mp)
+        x0c, y0c = float(sim._x0c), float(sim._y0c)
+    else:
+        # Keep affine lifting center consistent with basis/training reference mesh.
+        x0c, y0c = float(Xc), float(Yc)
 
-    sim._InitializeDomainCenterIfNeeded(mp)
-    x0c, y0c = float(sim._x0c), float(sim._y0c)
+    w_eps_hom, w_sig_hom, using_weighted_hom = ResolveHomogenizationWeightSelection(
+        ecm_data,
+        n_current_elements=len(elements),
+        solver_label="HPROM-RBF",
+    )
+    # Keep old/full-mesh behavior exact: weighted homogenization is only used on HROM meshes.
+    if using_weighted_hom and (not using_hrom_mesh):
+        using_weighted_hom = False
+    hom_reference_measure = None
+    if using_weighted_hom:
+        print("  [HPROM-RBF] Using ECM-weighted homogenization (w_eps / w_sig).")
+        hom_reference_measure = GetReferenceIntegrationMeasureFromMesh(full_mesh_base)
+        print(f"  [HPROM-RBF] Homogenization reference measure (full mesh): {hom_reference_measure:.6e}")
+    elif using_hrom_mesh:
+        print("  [HPROM-RBF] WARNING: ECM homogenization weights not available; using direct reduced-mesh homogenization.")
     dof_x = np.zeros(n_total_dof, dtype=float)
     dof_y = np.zeros(n_total_dof, dtype=float)
     is_x_dof = np.zeros(n_total_dof, dtype=bool)
@@ -159,9 +204,6 @@ def RunHpromRbfBatchSimulation(
     x_free = dof_x[free_dofs]
     y_free = dof_y[free_dofs]
     is_x_free = is_x_dof[free_dofs]
-    free_mask = np.zeros(n_total_dof, dtype=bool)
-    free_mask[free_dofs] = True
-    dir_dofs = np.nonzero(~free_mask)[0].astype(np.int64)
     x_dir = dof_x[dir_dofs]
     y_dir = dof_y[dir_dofs]
     is_x_dir = is_x_dof[dir_dofs]
@@ -250,10 +292,13 @@ def RunHpromRbfBatchSimulation(
         q0_const, _ = _evaluate_qs_and_jac(np.zeros(n_primary, dtype=float), np.zeros(3, dtype=float))
 
     print(f"  [HPROM-RBF] Solving for {n_steps_total} dynamic increments...")
+    print(f"  [HPROM-RBF] Active mesh elements: {len(elements)} (reference full mesh: {n_elem_reference})")
     print(
         f"  [HPROM-RBF] ECM residual elements: {len(Z_res)} / {len(elements)} | "
-        f"union elements: {len(Z_union)} / {len(elements)}"
+        f"union reference size: {len(Z_union)} / {n_elem_reference}"
     )
+    if using_hrom_mesh:
+        print("  [HPROM-RBF] Using reduced HROM mesh residual weights (w_res_hrom).")
     t_map = 0.0
     t_assembly = 0.0
     t_projection = 0.0
@@ -506,7 +551,15 @@ def RunHpromRbfBatchSimulation(
         t_full_sync += time.perf_counter() - t0
         FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
-        hom_eps, hom_sig = CalculateHomogenizedStressAndStrainKratosReference(mp)
+        if using_weighted_hom:
+            hom_eps, hom_sig = CalculateHomogenizedFromAssemblerWithElementWeights(
+                vec_full_assembler,
+                w_eps=w_eps_hom,
+                w_sig=w_sig_hom,
+                reference_measure=hom_reference_measure,
+            )
+        else:
+            hom_eps, hom_sig = CalculateHomogenizedStressAndStrainKratosReference(mp)
         sim.FinalizeSolutionStep()
 
         q_hist.append(q_p.copy())

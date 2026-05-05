@@ -1,0 +1,102 @@
+HPROM-RBF Homogenization Note (Current Status)
+Date: 2026-05-05
+
+1) What Stage 5/Stage 9 ECM is approximating
+---------------------------------------------
+
+For each snapshot s and each element e:
+
+  Residual contribution in reduced coordinates:
+    q_e^(s) = Phi_e^T * r_e^(s)
+
+where:
+  - r_e^(s) is the elemental residual vector (free-DOF part),
+  - Phi_e are basis rows restricted to the element DOFs.
+
+Stacking all element columns gives:
+  Q in R^((n_q * N_s) x n_elem)
+  b_res = Q * 1 = sum_e q_e^(s)
+
+ECM computes sparse residual weights w_res such that:
+  Q * w_res ~= b_res
+
+
+For homogenization (strain/stress), per element:
+
+  c_{y,e}^(s) = A_e * ybar_e^(s)
+  ybar_e^(s) = (1 / n_gp) * sum_g y_{e,g}^(s)
+
+with y in {eps, sig}, A_e = element area.
+
+So the full target vector is:
+  b_y = sum_e c_{y,e}^(s)
+
+and ECM solves independently:
+  C_eps * w_eps ~= b_eps
+  C_sig * w_sig ~= b_sig
+
+
+2) Runtime formulas in HPROM/HPROM-RBF
+--------------------------------------
+
+Reference (direct Kratos-like homogenization on full mesh):
+
+  ybar_direct = (1 / A_ref) * sum_{e in full_mesh} A_e * ybar_e
+  A_ref = sum_{e in full_mesh} A_e
+
+Weighted homogenization (ECM):
+
+  epsbar_ecm = (1 / A_ref) * sum_e (w_eps,e * A_e * epsbar_e)
+  sigbar_ecm = (1 / A_ref) * sum_e (w_sig,e * A_e * sigbar_e)
+
+In HROM mesh runs, w_*_hrom are projected from full weights:
+  w_*_hrom = w_*_full[hrom_element_full_indices]
+
+
+3) What was checked and confirmed
+---------------------------------
+
+- No residual/strain/stress mixing bug:
+  - residual assembly uses only (Z_res, w_res)
+  - strain homogenization uses only w_eps
+  - stress homogenization uses only w_sig
+  - Z_union is used for mesh support, not as one shared physical weight.
+
+- NPZ consistency checks passed:
+  - nonzero(w_res_full) == Z_res
+  - nonzero(w_eps_full) == Z_eps
+  - nonzero(w_sig_full) == Z_sig
+  - projected hrom weights equal indexed full weights exactly.
+
+- +1 indexing issue was checked: not the source.
+
+- Full-weighted vs HROM-weighted results match at machine precision.
+  Therefore HROM remap/projection is correct.
+
+
+4) Current observed discrepancy
+-------------------------------
+
+The mismatch appears between:
+  - full direct homogenization (Kratos-like), and
+  - ECM-weighted homogenization.
+
+Typical observed order in Stage-11 window checks:
+  - q relative error ~ 1e-14 (excellent match)
+  - stress/strain relative error ~ 1e-2 (percent level)
+
+Interpretation:
+  The reduced dynamics (q) are reproduced, but the homogenization cubature
+  for stress/strain is not exact on that path. This is a homogenization
+  approximation/generalization issue, not a mesh-remap or weight-routing bug.
+
+
+5) Small implementation hardening applied
+-----------------------------------------
+
+- Residual assembly now explicitly skips zero residual weights.
+- Weighted homogenization ignores zero-weight entries explicitly.
+
+This improves clarity/stability and avoids unnecessary work, but does not
+change the fundamental approximation behavior described above.
+

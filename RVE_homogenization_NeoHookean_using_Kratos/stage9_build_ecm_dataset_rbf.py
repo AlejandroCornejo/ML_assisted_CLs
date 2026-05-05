@@ -40,7 +40,7 @@ SNAPSHOTS_DIR = "stage_1_training_set_fom"
 BASIS_DIR = "stage_2_pod_rve"
 RBF_DIR = "stage_7_rbf_data"
 OUT_DIR = "stage_9_ecm_dataset_rbf"
-SNAPSHOT_PERCENT = 1.0
+SNAPSHOT_PERCENT = 2.0
 SEED = 42
 
 
@@ -281,8 +281,13 @@ def main():
                     q_block[:, i] = j_e.T @ r_e
 
             eps_gp, sig_gp, _ = EvaluateGaussPointData(elements, mp)
-            c_block[0:3, :] = np.sum(w_gp[..., None] * eps_gp, axis=1).T
-            c_block[3:6, :] = np.sum(w_gp[..., None] * sig_gp, axis=1).T
+            # Kratos-reference homogenization operator per element:
+            #   C_elem = A_e * mean_gp(value_gp)
+            # so that global homogenization is:
+            #   value_hom = (sum_e C_elem) / (sum_e A_e)
+            # This keeps Stage 9 ECM targets consistent with Stage 11/FOM reference.
+            c_block[0:3, :] = (area_e[:, None] * np.mean(eps_gp, axis=1)).T
+            c_block[3:6, :] = (area_e[:, None] * np.mean(sig_gp, axis=1)).T
 
             r0, r1 = n_primary * s_global, n_primary * (s_global + 1)
             Q_ecm[r0:r1, :] = q_block

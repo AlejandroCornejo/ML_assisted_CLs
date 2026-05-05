@@ -25,7 +25,7 @@ BH_FILE = os.path.join(DATA_DIR, "b_hom.dat")
 META_FILE = os.path.join(DATA_DIR, "meta.npz")
 
 # RSVD tolerance controls the rank of the basis used for ECM
-RSVD_TOL_RES = 1e-5
+RSVD_TOL_RES = 1e-6
 RSVD_TOL_EPS = 1e-6
 RSVD_TOL_SIG = 1e-6
 

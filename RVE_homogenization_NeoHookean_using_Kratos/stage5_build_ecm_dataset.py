@@ -36,7 +36,7 @@ from fom_solver_rve import (
 SNAPSHOTS_DIR = "stage_1_training_set_fom"
 MODEL_DIR = "stage_2_pod_rve"
 OUT_DIR = "stage_5_ecm_dataset"
-SNAPSHOT_PERCENT = 10.0 # Target 10% of total snapshots
+SNAPSHOT_PERCENT = 2.0 # Target 10% of total snapshots
 SEED = 42
 
 # ============================================================
@@ -208,9 +208,13 @@ def main():
             # We want Sum_e ( we * C_elem ) = Total Macro Stress/Strain
             # Here C_hom stores the per-element contribution.
             
-            # C_block(0:3) = eps_vol, C_block(3:6) = sig_vol
-            c_block[0:3, :] = np.sum(w_gp[..., None] * eps_gp, axis=1).T
-            c_block[3:6, :] = np.sum(w_gp[..., None] * sig_gp, axis=1).T
+            # Kratos-reference homogenization operator per element:
+            #   C_elem = A_e * mean_gp(value_gp)
+            # so that global homogenization is:
+            #   value_hom = (sum_e C_elem) / (sum_e A_e)
+            # This keeps Stage 5 ECM targets consistent with Stage 11/FOM reference.
+            c_block[0:3, :] = (area_e[:, None] * np.mean(eps_gp, axis=1)).T
+            c_block[3:6, :] = (area_e[:, None] * np.mean(sig_gp, axis=1)).T
 
             # Save to memmaps
             r0, r1 = nq * s_global, nq * (s_global + 1)

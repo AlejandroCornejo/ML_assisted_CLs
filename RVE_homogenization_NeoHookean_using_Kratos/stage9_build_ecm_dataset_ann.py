@@ -38,7 +38,7 @@ SNAPSHOTS_DIR = "stage_1_training_set_fom"
 BASIS_DIR = "stage_2_pod_rve"
 ANN_DIR = "stage_7_ann_data"
 OUT_DIR = "stage_9_ecm_dataset_ann"
-SNAPSHOT_PERCENT = 1.0
+SNAPSHOT_PERCENT = 2.0
 SEED = 42
 
 def _get_stratified_indices(n_total, n_pick, seed=SEED):
@@ -191,8 +191,12 @@ def main():
             
             eps_gp, sig_gp, _ = EvaluateGaussPointData(elements, mp)
             c_block = np.zeros((6, len(elements)))
-            c_block[0:3] = np.sum(w_gp[..., None] * eps_gp, axis=1).T
-            c_block[3:6] = np.sum(w_gp[..., None] * sig_gp, axis=1).T
+            # Kratos-reference homogenization operator per element:
+            #   C_elem = A_e * mean_gp(value_gp)
+            # so that global homogenization is:
+            #   value_hom = (sum_e C_elem) / (sum_e A_e)
+            c_block[0:3] = (area_e[:, None] * np.mean(eps_gp, axis=1)).T
+            c_block[3:6] = (area_e[:, None] * np.mean(sig_gp, axis=1)).T
             
             Q_ecm[n_primary*s_global : n_primary*(s_global+1), :] = q_block
             b_full[n_primary*s_global : n_primary*(s_global+1)] = np.sum(q_block, axis=1)

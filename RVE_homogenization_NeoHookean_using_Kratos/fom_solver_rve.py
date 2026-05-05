@@ -165,10 +165,12 @@ class VectorizedAssembler:
         self.n_gauss = elements[0].GetGeometry().IntegrationPointsNumber()
         self.DN = np.zeros((self.n_elems, self.n_gauss, self.n_nodes, 2))
         self.w_detJ = np.zeros((self.n_elems, self.n_gauss))
+        self.area_e = np.zeros(self.n_elems, dtype=float)
 
         for e, elem in enumerate(elements):
             geom = elem.GetGeometry()
             coords = np.array([[geom[i].X0, geom[i].Y0] for i in range(self.n_nodes)])
+            self.area_e[e] = float(geom.Area())
             ips = geom.IntegrationPoints()
 
             for g in range(self.n_gauss):
@@ -1075,11 +1077,34 @@ def FindSubModelPartNamesInMdpa(mdpa_path):
     with open(mdpa_path, "r") as f:
         for line in f:
             s = line.strip()
-            if s.startswith("Begin SubModelPart "):
-                parts = s.split()
-                if len(parts) >= 3:
-                    names.append(parts[2])
+            # Accept arbitrary whitespace (spaces/tabs) after "Begin" and "SubModelPart".
+            parts = s.split()
+            if len(parts) >= 3 and parts[0] == "Begin" and parts[1] == "SubModelPart":
+                names.append(parts[2])
     return names
+
+
+def DetectMdpaSections(mdpa_path):
+    """
+    Detect whether an mdpa contains top-level Geometries and/or Elements sections.
+    """
+    has_geometries = False
+    has_elements = False
+    if not os.path.exists(mdpa_path):
+        return has_geometries, has_elements
+
+    with open(mdpa_path, "r") as f:
+        for line in f:
+            s = line.strip()
+            parts = s.split()
+            if len(parts) >= 2 and parts[0] == "Begin":
+                if parts[1] == "Geometries":
+                    has_geometries = True
+                elif parts[1] == "Elements":
+                    has_elements = True
+            if has_geometries and has_elements:
+                break
+    return has_geometries, has_elements
 
 
 def _MaterialPartSortKey(name):
@@ -1131,11 +1156,25 @@ def setup_kratos_parameters(mesh="rve_geometry"):
     
     SetInputMeshFilename(parameters, mesh)
     mdpa_path = f"{StripMdpaExtension(mesh)}.mdpa"
-    
+    has_geometries, has_elements = DetectMdpaSections(mdpa_path)
+
     if os.path.exists(mdpa_path):
         material_parts = DetectMaterialSubModelParts(mdpa_path)
         parameters = ConfigureElementModelerForMaterialParts(parameters, material_parts)
         SetMaterialsFilename(parameters, "StructuralMaterials.json")
+
+        # If the mesh already contains Elements (typical reduced/HROM mesh),
+        # disable CreateEntitiesFromGeometriesModeler to avoid deleting them.
+        if has_elements and not has_geometries:
+            import json
+            params_dict = json.loads(parameters.PrettyPrintJsonString())
+            modelers = params_dict.get("modelers", [])
+            filtered = [
+                m for m in modelers
+                if "CreateEntitiesFromGeometriesModeler" not in str(m.get("name", ""))
+            ]
+            params_dict["modelers"] = filtered
+            parameters = KM.Parameters(json.dumps(params_dict))
     
     return parameters
 
