@@ -23,9 +23,7 @@ from fom_solver_rve import (
     InitializeNonLinearIteration,
     FinalizeNonLinearIteration,
     BuildDynamicSegmentSteps,
-    PrecomputeElementIntegrationWeights,
-    EvaluateGaussPointData,
-    CalculateHomogenizedStressAndStrain,
+    CalculateHomogenizedFromAssemblerWithElementWeights,
     REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
     MIN_STEPS_PER_SEGMENT,
     USE_OLD_STIFFNESS_IN_FIRST_ITERATION,
@@ -139,9 +137,11 @@ def RunPromDlBatchSimulation(
 
     n_total_dof, eq_id_map, ta = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
     vec_assembler = VectorizedAssembler(mp, n_total_dof, eq_id_map)
+    hom_reference_measure = float(np.sum(np.asarray(vec_assembler.area_e, dtype=float)))
+    with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
+        f.write(f"{hom_reference_measure:.16e}\n")
     elements = list(mp.Elements)
     entities = list(mp.Elements) + list(mp.Conditions)
-    w_all, area_all = PrecomputeElementIntegrationWeights(elements)
 
     # Affine lifting helper for free DOFs: u_aff = (F-I)(X-Xc)
     sim._InitializeDomainCenterIfNeeded(mp)
@@ -208,6 +208,7 @@ def RunPromDlBatchSimulation(
         disp_vec[free_dofs] = np.asarray(u_total_free, dtype=float).reshape(-1)
         SetDisplacementFromEquationVector(disp_vec, eq_id_map, ta)
         UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
+        return disp_vec
 
     # Anchor latent manifold at q=0 for consistency with fluctuation definition.
     with torch.no_grad():
@@ -452,12 +453,16 @@ def RunPromDlBatchSimulation(
         if not use_fast_dirichlet_bc:
             sim.ApplyBoundaryConditions()
             disp_base_step = _capture_current_displacement_vector()
-        _apply_total_free_displacement(u_aff_free + u_fluc_final, base_disp_vec=disp_base_step)
+        u_eq_final = _apply_total_free_displacement(u_aff_free + u_fluc_final, base_disp_vec=disp_base_step)
 
         sim.FinalizeSolutionStep()
-
-        eps_gp, sig_gp, _ = EvaluateGaussPointData(elements, mp)
-        eps_h, sig_h = CalculateHomogenizedStressAndStrain(w_all, area_all, eps_gp, sig_gp)
+        InitializeNonLinearIteration(entities, mp.ProcessInfo)
+        _, _ = vec_assembler.Assemble(u_eq_final)
+        FinalizeNonLinearIteration(entities, mp.ProcessInfo)
+        eps_h, sig_h = CalculateHomogenizedFromAssemblerWithElementWeights(
+            vec_assembler,
+            reference_measure=hom_reference_measure,
+        )
         results_eps.append(eps_h)
         results_sig.append(sig_h)
 

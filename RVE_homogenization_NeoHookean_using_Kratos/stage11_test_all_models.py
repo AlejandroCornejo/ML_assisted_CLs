@@ -275,6 +275,8 @@ def run_stage11(
     hprom_mesh=None,
     hprom_ann_mesh=None,
     hprom_rbf_mesh=None,
+    hprom_homogenization_method="ecm_weighted",
+    fom_homogenization_method="ecm_weighted_full",
     step_reference_amplitude=None,
     use_bundle_reference_amplitude=False,
     strict=False,
@@ -365,6 +367,40 @@ def run_stage11(
     print(f"  HPROM mesh:                  {mesh_hprom}")
     print(f"  HPROM-ANN mesh:              {mesh_hprom_ann}")
     print(f"  HPROM-RBF mesh:              {mesh_hprom_rbf}")
+    print(f"  HPROM homogenization method: {hprom_homogenization_method}")
+    print(f"  FOM homogenization method:   {fom_homogenization_method}")
+
+    fom_hom_mode = str(fom_homogenization_method).strip().lower()
+    if fom_hom_mode != "ecm_weighted_full":
+        raise RuntimeError(
+            "Only 'ecm_weighted_full' is supported for FOM homogenization in Stage 11."
+        )
+
+    w_fom_eps = None
+    w_fom_sig = None
+    a0_ref = None
+    if fom_hom_mode == "ecm_weighted_full":
+        ecm_path = os.path.join("stage_5_hprom_data", "ecm_weights_all.npz")
+        if not os.path.exists(ecm_path):
+            raise FileNotFoundError(
+                "FOM ecm_weighted_full mode requires stage_5_hprom_data/ecm_weights_all.npz"
+            )
+        ecm_meta = np.load(ecm_path, allow_pickle=True)
+        if "n_elem" not in ecm_meta.files:
+            raise RuntimeError("ECM file missing 'n_elem' for FOM weighted-full mode.")
+        n_elem_ref = int(np.ravel(ecm_meta["n_elem"])[0])
+        if n_elem_ref <= 0:
+            raise RuntimeError(f"Invalid n_elem in ECM file: {n_elem_ref}")
+        w_fom_eps = np.ones(n_elem_ref, dtype=float)
+        w_fom_sig = np.ones(n_elem_ref, dtype=float)
+        for k in ("A0_ref", "hom_reference_measure", "A_total"):
+            if k in ecm_meta.files:
+                val = float(np.ravel(ecm_meta[k])[0])
+                if np.isfinite(val) and val > 0.0:
+                    a0_ref = val
+                    break
+        if a0_ref is not None:
+            print(f"  Reference area A0: {a0_ref:.6e}")
 
     _parameters_cache = {}
 
@@ -375,14 +411,15 @@ def run_stage11(
         return _parameters_cache[mesh_key]
 
     # Cache files
+    fom_cache_tag = "fom_ecmfull" if fom_hom_mode == "ecm_weighted_full" else "fom"
     cache = {
         "KRATOS": (
             os.path.join(out_dir, "kratos_strain.npy"),
             os.path.join(out_dir, "kratos_stress.npy"),
         ),
         "FOM": (
-            os.path.join(out_dir, "fom_strain.npy"),
-            os.path.join(out_dir, "fom_stress.npy"),
+            os.path.join(out_dir, f"{fom_cache_tag}_strain.npy"),
+            os.path.join(out_dir, f"{fom_cache_tag}_stress.npy"),
         ),
         "PROM": (
             os.path.join(out_dir, "prom_strain.npy"),
@@ -480,6 +517,9 @@ def run_stage11(
                 save_plot=False,
                 reference_amplitude=reference_amplitude,
                 reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
+                hom_weights_eps_full=w_fom_eps,
+                hom_weights_sig_full=w_fom_sig,
+                hom_reference_measure=a0_ref,
             )
             return np.asarray(eps, dtype=float), np.asarray(sig, dtype=float), time.perf_counter() - t0
 
@@ -530,6 +570,7 @@ def run_stage11(
                 trajectory_index=None,
                 reference_amplitude=reference_amplitude,
                 reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
+                homogenization_method=hprom_homogenization_method,
             )
             return np.asarray(eps, dtype=float), np.asarray(sig, dtype=float), time.perf_counter() - t0
 
@@ -639,6 +680,7 @@ def run_stage11(
                 free_dofs,
                 rbf_model,
                 strain_path,
+                out_dir=out_dir,
                 include_macro_strain_input=include_macro,
                 reference_amplitude=reference_amplitude,
                 reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
@@ -731,6 +773,10 @@ def run_stage11(
         f.write(f"methods_available: {ordered}\n")
         f.write(f"steps_total: {total_steps}\n")
         f.write(f"entries_total: {total_steps + 1}\n")
+        f.write(f"hprom_homogenization_method: {hprom_homogenization_method}\n")
+        f.write(f"fom_homogenization_method: {fom_hom_mode}\n")
+        if a0_ref is not None:
+            f.write(f"reference_area_A0: {a0_ref:.16e}\n")
         for m in ordered:
             if m == reference_method:
                 continue
@@ -767,6 +813,18 @@ if __name__ == "__main__":
     p.add_argument("--run-prom-rbf", action="store_true", help="Force recomputation of PROM-RBF.")
     p.add_argument("--run-hprom-rbf", action="store_true", help="Force recomputation of HPROM-RBF.")
     p.add_argument("--mesh-base", default="rve_geometry", help="Base mesh for KRATOS/FOM/PROM/PROM-ANN/PROM-RBF.")
+    p.add_argument(
+        "--hprom-homogenization-method",
+        default="ecm_weighted",
+        choices=["ecm_weighted", "gappy_pod", "kratos_reference"],
+        help="Homogenization method for linear HPROM.",
+    )
+    p.add_argument(
+        "--fom-homogenization-method",
+        default="ecm_weighted_full",
+        choices=["ecm_weighted_full"],
+        help="Homogenization operator for FOM baseline in comparisons.",
+    )
     p.add_argument(
         "--use-hrom-mesh",
         action="store_true",
@@ -814,5 +872,7 @@ if __name__ == "__main__":
         hprom_mesh=args.hprom_mesh,
         hprom_ann_mesh=args.hprom_ann_mesh,
         hprom_rbf_mesh=args.hprom_rbf_mesh,
+        hprom_homogenization_method=args.hprom_homogenization_method,
+        fom_homogenization_method=args.fom_homogenization_method,
         strict=args.strict,
     )

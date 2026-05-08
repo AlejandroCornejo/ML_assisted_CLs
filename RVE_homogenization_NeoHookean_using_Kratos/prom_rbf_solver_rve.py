@@ -19,7 +19,7 @@ from fom_solver_rve import (
     InitializeNonLinearIteration,
     FinalizeNonLinearIteration,
     BuildDynamicSegmentSteps,
-    CalculateHomogenizedStressAndStrainKratosReference,
+    CalculateHomogenizedFromAssemblerWithElementWeights,
     REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
     MIN_STEPS_PER_SEGMENT,
     USE_OLD_STIFFNESS_IN_FIRST_ITERATION,
@@ -81,6 +81,7 @@ def RunPromRbfBatchSimulation(
     free_dofs,
     rbf_model,
     strain_path,
+    out_dir=None,
     relnorm_cutoff=1e-5,
     max_its=25,
     abs_res_cutoff=NEWTON_TOL_ABS,
@@ -127,6 +128,11 @@ def RunPromRbfBatchSimulation(
 
     n_total_dof, eq_id_map, ta = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
     vec_assembler = VectorizedAssembler(mp, n_total_dof, eq_id_map)
+    hom_reference_measure = float(np.sum(np.asarray(vec_assembler.area_e, dtype=float)))
+    if out_dir is not None:
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
+            f.write(f"{hom_reference_measure:.16e}\n")
     elements = list(mp.Elements)
     entities = list(mp.Elements) + list(mp.Conditions)
 
@@ -499,7 +505,10 @@ def RunPromRbfBatchSimulation(
         t_full_sync += time.perf_counter() - t0
         FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
-        eps_h, sig_h = CalculateHomogenizedStressAndStrainKratosReference(mp)
+        eps_h, sig_h = CalculateHomogenizedFromAssemblerWithElementWeights(
+            vec_assembler,
+            reference_measure=hom_reference_measure,
+        )
         sim.FinalizeSolutionStep()
         results_eps.append(eps_h)
         results_sig.append(sig_h)

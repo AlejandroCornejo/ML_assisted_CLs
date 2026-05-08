@@ -4,6 +4,8 @@ import numpy as np
 
 from rbf_manifold_model import _kernel_from_dist2, save_rbf_model
 
+MANDATORY_N_CENTERS = 4000
+
 
 def _load_dataset_config(data_dir):
     meta_path = os.path.join(data_dir, "ann_dataset_metadata.npz")
@@ -225,8 +227,9 @@ def _run_grid_search(
         raise RuntimeError("Empty ridge grid for RBF search.")
 
     n_samples = int(x_scaled.shape[0])
-    n_search = int(min(max(10, int(grid_max_samples)), n_samples))
-    idx = rng.choice(n_samples, size=n_search, replace=False)
+    # Policy: always use all available training data for RBF grid search.
+    n_search = int(n_samples)
+    idx = np.arange(n_samples, dtype=np.int64)
     x_s = x_scaled[idx, :]
     y_s = y_scaled[idx, :]
 
@@ -296,19 +299,19 @@ def _run_grid_search(
 def train_rbf(
     data_dir="stage_7_ann_data",
     out_dir="stage_7_rbf_data",
-    max_centers=1200,
+    max_centers=MANDATORY_N_CENTERS,
     kernel="inverse_multiquadric",
     epsilon=None,
     ridge=1e-8,
     block_size=2048,
     seed=42,
-    grid_search=False,
+    grid_search=True,
     grid_kernels=None,
     grid_eps_values=None,
     grid_eps_factors="0.25,0.5,1.0,2.0,4.0",
     grid_ridges=None,
     grid_folds=3,
-    grid_max_samples=12000,
+    grid_max_samples=0,
     grid_seed=42,
 ):
     os.makedirs(out_dir, exist_ok=True)
@@ -342,7 +345,24 @@ def train_rbf(
     x_scaled = (x - x_mean) / x_std
     y_scaled = (y - y_mean) / y_std
 
-    m = int(min(max_centers, n_samples))
+    if not bool(grid_search):
+        raise RuntimeError(
+            "Stage 7b-RBF policy: grid search is mandatory. "
+            "Training without grid search is not allowed."
+        )
+
+    if int(max_centers) != int(MANDATORY_N_CENTERS):
+        raise RuntimeError(
+            f"Stage 7b-RBF policy: max_centers must be exactly {MANDATORY_N_CENTERS}."
+        )
+
+    if int(n_samples) < int(MANDATORY_N_CENTERS):
+        raise RuntimeError(
+            f"Stage 7b-RBF policy requires at least {MANDATORY_N_CENTERS} samples "
+            f"to place {MANDATORY_N_CENTERS} centers, but dataset has {n_samples}."
+        )
+
+    m = int(MANDATORY_N_CENTERS)
     center_indices = rng.choice(n_samples, size=m, replace=False)
     centers_scaled = x_scaled[center_indices, :].copy()
 
@@ -358,25 +378,24 @@ def train_rbf(
     search_n_samples = 0
     search_n_folds = 0
 
-    if bool(grid_search):
-        best, grid_results, search_n_samples, search_n_folds = _run_grid_search(
-            x_scaled=x_scaled,
-            y_scaled=y_scaled,
-            centers_scaled=centers_scaled,
-            base_kernel=kernel_sel,
-            base_epsilon=eps_base,
-            base_ridge=ridge_sel,
-            grid_kernels=grid_kernels,
-            grid_eps_values=grid_eps_values,
-            grid_eps_factors=grid_eps_factors,
-            grid_ridges=grid_ridges,
-            grid_folds=grid_folds,
-            grid_max_samples=grid_max_samples,
-            grid_seed=grid_seed,
-        )
-        kernel_sel = _canonical_kernel_name(best["kernel"])
-        eps_sel = float(best["epsilon"])
-        ridge_sel = float(best["ridge"])
+    best, grid_results, search_n_samples, search_n_folds = _run_grid_search(
+        x_scaled=x_scaled,
+        y_scaled=y_scaled,
+        centers_scaled=centers_scaled,
+        base_kernel=kernel_sel,
+        base_epsilon=eps_base,
+        base_ridge=ridge_sel,
+        grid_kernels=grid_kernels,
+        grid_eps_values=grid_eps_values,
+        grid_eps_factors=grid_eps_factors,
+        grid_ridges=grid_ridges,
+        grid_folds=grid_folds,
+        grid_max_samples=grid_max_samples,
+        grid_seed=grid_seed,
+    )
+    kernel_sel = _canonical_kernel_name(best["kernel"])
+    eps_sel = float(best["epsilon"])
+    ridge_sel = float(best["ridge"])
 
     print("=" * 60)
     print("Stage 7b-RBF: Compact-center manifold training")
@@ -389,10 +408,9 @@ def train_rbf(
     print(
         f"Centers: {m} | Kernel: {kernel_sel} | epsilon={eps_sel:.6e} | ridge={ridge_sel:.3e}"
     )
-    if bool(grid_search):
-        print(
-            f"Grid-search selected hyperparameters from {search_n_samples} samples and {search_n_folds} folds."
-        )
+    print(
+        f"Grid-search selected hyperparameters from {search_n_samples} samples and {search_n_folds} folds."
+    )
 
     weights_scaled = _fit_full_dataset_weights(
         x_scaled=x_scaled,
@@ -453,14 +471,13 @@ def train_rbf(
         f.write(f"epsilon={eps_sel:.16e}\n")
         f.write(f"ridge={ridge_sel:.16e}\n")
         f.write(f"base_epsilon={eps_base:.16e}\n")
-        f.write(f"grid_search={int(bool(grid_search))}\n")
-        if bool(grid_search):
-            f.write(f"grid_search_samples={search_n_samples}\n")
-            f.write(f"grid_search_folds={search_n_folds}\n")
-            f.write(f"grid_candidates={len(grid_results)}\n")
+        f.write("grid_search=1\n")
+        f.write(f"grid_search_samples={search_n_samples}\n")
+        f.write(f"grid_search_folds={search_n_folds}\n")
+        f.write(f"grid_candidates={len(grid_results)}\n")
         f.write(f"scaled_train_rel_l2={rel_l2:.16e}\n")
 
-    if bool(grid_search) and grid_results:
+    if grid_results:
         grid_file = os.path.join(out_dir, "grid_search_results.csv")
         with open(grid_file, "w", encoding="utf-8") as f:
             f.write("kernel,epsilon,ridge,cv_rel_l2\n")
@@ -478,19 +495,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Stage 7b-RBF: train compact-center RBF manifold q_p -> q_s")
     parser.add_argument("--data-dir", type=str, default="stage_7_ann_data", help="Input dataset directory from Stage 7a.")
     parser.add_argument("--out-dir", type=str, default="stage_7_rbf_data", help="Output directory for trained RBF model.")
-    parser.add_argument("--max-centers", type=int, default=1200, help="Number of compact RBF centers.")
+    parser.add_argument("--max-centers", type=int, default=MANDATORY_N_CENTERS, help=f"Must be {MANDATORY_N_CENTERS}.")
     parser.add_argument("--kernel", type=str, default="inverse_multiquadric", choices=["inverse_multiquadric", "imq", "gaussian", "multiquadric", "mq", "gauss"], help="RBF kernel type.")
     parser.add_argument("--epsilon", type=float, default=0.0, help="Kernel epsilon; <=0 means auto.")
     parser.add_argument("--ridge", type=float, default=1e-8, help="Ridge regularization on normal equations.")
     parser.add_argument("--block-size", type=int, default=2048, help="Block size for streaming normal-equation assembly.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
-    parser.add_argument("--grid-search", action="store_true", help="Run Burgers-style K-fold grid search for kernel/epsilon/ridge.")
+    parser.add_argument("--grid-search", action="store_true", help="Deprecated flag; grid search is always enabled.")
     parser.add_argument("--grid-kernels", type=str, default="", help="Comma-separated kernel list (e.g. 'imq,gaussian,mq').")
     parser.add_argument("--grid-eps-values", type=str, default="", help="Comma-separated epsilon values (absolute).")
     parser.add_argument("--grid-eps-factors", type=str, default="0.25,0.5,1.0,2.0,4.0", help="Comma-separated factors applied to base epsilon when grid-eps-values is empty.")
     parser.add_argument("--grid-ridges", type=str, default="", help="Comma-separated ridge values.")
     parser.add_argument("--grid-folds", type=int, default=3, help="Number of K-fold splits for grid search.")
-    parser.add_argument("--grid-max-samples", type=int, default=12000, help="Max samples used in grid search subset.")
+    parser.add_argument("--grid-max-samples", type=int, default=0, help="Deprecated in policy mode; all samples are always used.")
     parser.add_argument("--grid-seed", type=int, default=42, help="Random seed for grid-search subset and folds.")
     args = parser.parse_args()
 
@@ -503,7 +520,7 @@ if __name__ == "__main__":
         ridge=args.ridge,
         block_size=args.block_size,
         seed=args.seed,
-        grid_search=args.grid_search,
+        grid_search=True,
         grid_kernels=args.grid_kernels if args.grid_kernels else None,
         grid_eps_values=args.grid_eps_values if args.grid_eps_values else None,
         grid_eps_factors=args.grid_eps_factors,

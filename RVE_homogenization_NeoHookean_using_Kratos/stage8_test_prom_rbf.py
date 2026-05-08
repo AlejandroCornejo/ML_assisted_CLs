@@ -157,9 +157,9 @@ def run_stage8_rbf(
         data = np.load(bundle_path, allow_pickle=True)
         rel6 = list(data["relative_boundary"])
         if "emax" in data:
-            emax = float(data["emax"])
+            emax = float(np.ravel(data["emax"])[0])
         else:
-            emax = float(data["reference_amplitude"])
+            emax = float(np.ravel(data["reference_amplitude"])[0])
         if "domain_type" in data:
             domain_type = str(data["domain_type"][0])
 
@@ -205,6 +205,7 @@ def run_stage8_rbf(
         free_dofs,
         rbf_model,
         strain_path,
+        out_dir=out_dir,
         reference_amplitude=emax,
         reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
         include_macro_strain_input=include_macro_strain_input,

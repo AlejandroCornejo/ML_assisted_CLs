@@ -337,9 +337,7 @@ NEWTON_TOL_ABS = 1e-6
 DISP_TOL_REL = 1e-8
 DISP_TOL_ABS = 1e-8
 CONVERGENCE_CRITERION = "displacement"  # "residual", "displacement", "both"
-# Keep Kratos reference post-processing by default to preserve bitwise consistency
-# with the baseline FOM solver. Set to True to trade a small accuracy drift for speed.
-USE_VECTORIZED_HOMOGENIZATION = False
+WEIGHT_ZERO_TOL = 1.0e-14
 
 DEFAULT_OUTPUT_DIR = "stage_1_training_set_fom"
 
@@ -693,10 +691,15 @@ def CalculateHomogenizedStressAndStrainKratosLike(area_e, eps_gp, sig_gp):
     return eps_h, sig_h
 
 
-def CalculateHomogenizedStressAndStrainKratosReference(mp):
+def CalculateHomogenizedStressAndStrainKratosReference(
+    mp,
+    reference_area_e=None,
+    reference_measure=None,
+):
     process_info = mp.ProcessInfo
 
-    first = next(iter(mp.Elements), None)
+    elements = list(mp.Elements)
+    first = elements[0] if elements else None
     if first is None:
         return np.zeros(3, dtype=float), np.zeros(3, dtype=float)
 
@@ -706,11 +709,22 @@ def CalculateHomogenizedStressAndStrainKratosReference(mp):
     )
     n_ip, voigt = dummy.shape
 
+    if reference_area_e is None:
+        raise RuntimeError(
+            "CalculateHomogenizedStressAndStrainKratosReference requires "
+            "reference_area_e from the undeformed mesh."
+        )
+    ref_area_e = np.asarray(reference_area_e, dtype=float).reshape(-1)
+    if ref_area_e.size != len(elements):
+        raise RuntimeError(
+            f"reference_area_e size {ref_area_e.size} does not match number of elements {len(elements)}."
+        )
+
     eps_h = np.zeros(voigt, dtype=float)
     sig_h = np.zeros(voigt, dtype=float)
-    area = 0.0
+    area = float(np.sum(ref_area_e)) if reference_measure is None else float(reference_measure)
 
-    for elem in mp.Elements:
+    for e, elem in enumerate(elements):
         eps = np.array(
             elem.CalculateOnIntegrationPoints(KM.GREEN_LAGRANGE_STRAIN_VECTOR, process_info),
             dtype=float,
@@ -720,14 +734,68 @@ def CalculateHomogenizedStressAndStrainKratosReference(mp):
             dtype=float,
         )
 
-        A = float(elem.GetGeometry().Area())
-        area += A
+        A = float(ref_area_e[e])
         eps_h += A * np.sum(eps, axis=0) / float(n_ip)
         sig_h += A * np.sum(sig, axis=0) / float(n_ip)
 
     if area <= 0.0:
         return eps_h, sig_h
     return eps_h / area, sig_h / area
+
+
+def CalculateHomogenizedFromAssemblerWithElementWeights(
+    assembler,
+    w_eps=None,
+    w_sig=None,
+    reference_measure=None,
+):
+    """
+    Compute homogenized strain/stress from the latest VectorizedAssembler state.
+    Uses the Kratos-like operator:
+      value_hom = (sum_e A_e * mean_gp(value_gp,e)) / A_ref
+    with optional per-element ECM weights.
+    The denominator is always the provided reference measure when available.
+    """
+    if getattr(assembler, "n_elems", 0) == 0:
+        return np.zeros(3, dtype=float), np.zeros(3, dtype=float)
+
+    if hasattr(assembler, "area_e"):
+        area_e = np.asarray(assembler.area_e, dtype=float).reshape(-1)
+    else:
+        area_e = np.sum(np.asarray(assembler.w_detJ, dtype=float), axis=1)
+
+    eps_mean_e = np.mean(assembler._E_voigt, axis=1)
+    sig_mean_e = np.mean(assembler._S_voigt, axis=1)
+
+    def _avg(mean_e, w):
+        if w is None:
+            den = float(np.sum(area_e)) if reference_measure is None else float(reference_measure)
+            num = np.einsum("e,ej->j", area_e, mean_e)
+        else:
+            ww = np.asarray(w, dtype=float).reshape(-1)
+            if ww.size != mean_e.shape[0]:
+                raise RuntimeError(
+                    f"Homogenization weight size {ww.size} does not match active elements {mean_e.shape[0]}."
+                )
+            nz = np.flatnonzero(np.abs(ww) > WEIGHT_ZERO_TOL)
+            if nz.size == 0:
+                return np.zeros(mean_e.shape[1], dtype=float)
+            ww_nz = ww[nz]
+            area_nz = area_e[nz]
+            mean_nz = mean_e[nz]
+            if reference_measure is None:
+                den = float(np.dot(ww_nz, area_nz))
+            else:
+                den = float(reference_measure)
+            num = np.einsum("e,ej->j", ww_nz * area_nz, mean_nz)
+
+        if abs(den) <= 1e-30:
+            return np.asarray(num, dtype=float)
+        return np.asarray(num, dtype=float) / den
+
+    hom_eps = _avg(eps_mean_e, w_eps)
+    hom_sig = _avg(sig_mean_e, w_sig)
+    return hom_eps, hom_sig
 
 
 def ComputeEquivalentStressStrain2D(strain_hist, stress_hist):
@@ -1332,6 +1400,9 @@ def RunFomBatchSimulation(
     displacement_relative_tolerance=None,
     displacement_absolute_tolerance=None,
     use_fast_dirichlet_bc=True,
+    hom_weights_eps_full=None,
+    hom_weights_sig_full=None,
+    hom_reference_measure=None,
 ):
     """Executes the RVE simulation for a given strain trajectory."""
     os.makedirs(out_dir, exist_ok=True)
@@ -1368,6 +1439,8 @@ def RunFomBatchSimulation(
         displacement_relative_tolerance=displacement_relative_tolerance,
         displacement_absolute_tolerance=displacement_absolute_tolerance,
     )
+    use_weighted_hom = (hom_weights_eps_full is not None) and (hom_weights_sig_full is not None)
+
     print(f"[FOM] Starting trajectory. Total steps: {n_steps_total}")
     print(
         "[FOM] Nonlinear controls: "
@@ -1378,7 +1451,6 @@ def RunFomBatchSimulation(
         f"disp_tol=(rel {controls['displacement_relative_tolerance']:.2e}, abs {controls['displacement_absolute_tolerance']:.2e}), "
         f"use_old_K0={controls['use_old_stiffness_in_first_iteration']}"
     )
-
     model = KM.Model()
     sim = RVEHomogenizationDatasetGenerator(model, parameters)
     sim.Initialize()
@@ -1390,6 +1462,16 @@ def RunFomBatchSimulation(
 
     # Initialize vectorized assembler (one-time cost)
     assembler = VectorizedAssembler(mp, n_dof, eq_map)
+    reference_area_e = np.asarray(assembler.area_e, dtype=float).reshape(-1)
+    if hom_reference_measure is None:
+        hom_reference_measure = float(np.sum(reference_area_e))
+    if use_weighted_hom:
+        print("[FOM] Homogenization mode: ECM-weighted numerator / reference-area denominator")
+    else:
+        print("[FOM] Homogenization mode: full-mesh numerator / reference-area denominator")
+    print(f"[FOM] Homogenization reference measure A0 = {float(hom_reference_measure):.6e}")
+    with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
+        f.write(f"{float(hom_reference_measure):.16e}\n")
 
     # Fast path precomputation: fixed/free partition and node reference coordinates
     # for analytical affine Dirichlet values from Green-Lagrange strain.
@@ -1576,10 +1658,12 @@ def RunFomBatchSimulation(
         _, _ = assembler.Assemble(u)
         FinalizeNonLinearIteration(entities, mp.ProcessInfo)
         u_n = u.copy()
-        if USE_VECTORIZED_HOMOGENIZATION:
-            eps_h, sig_h = assembler.CalculateHomogenizedStressAndStrainFromLastAssembly()
-        else:
-            eps_h, sig_h = CalculateHomogenizedStressAndStrainKratosReference(mp)
+        eps_h, sig_h = CalculateHomogenizedFromAssemblerWithElementWeights(
+            assembler,
+            w_eps=np.asarray(hom_weights_eps_full, dtype=float) if use_weighted_hom else None,
+            w_sig=np.asarray(hom_weights_sig_full, dtype=float) if use_weighted_hom else None,
+            reference_measure=hom_reference_measure,
+        )
 
         strain_hist.append(eps_h)
         stress_hist.append(sig_h)

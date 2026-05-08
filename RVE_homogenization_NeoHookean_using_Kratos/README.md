@@ -643,6 +643,22 @@ python3 stage4_test_rve.py
 python3 stage5_build_ecm_dataset.py
 ```
 
+New options (independent sampling for residual vs homogenization):
+
+```bash
+python3 stage5_build_ecm_dataset.py \
+  --snapshot-percent-res 2.0 \
+  --snapshot-percent-hom 100.0
+```
+
+Useful flags:
+
+- `--snapshot-percent-res`: percentage used for `Q_ecm`/`b_full` (residual ECM)
+- `--snapshot-percent-hom`: percentage used for `C_hom`/`b_hom` (strain/stress homogenization ECM)
+- `--sampling-mode {param_aware,stratified}`
+- `--seed`
+- `--param-aware-time-weight`
+
 Output folder:
 
 ```bash
@@ -658,6 +674,11 @@ C_hom.dat
 b_hom.dat
 meta.npz
 ```
+
+`meta.npz` now stores separate counters:
+
+- `N_s_res`: residual snapshot count
+- `N_s_hom`: homogenization snapshot count
 
 ### Stage 5b: Compute ECM Weights
 
@@ -765,6 +786,11 @@ manifold_ann_metadata.npz
 
 ### Stage 7b-RBF: Train Compact-Center RBF Manifold
 
+Policy:
+- grid search is always enabled (training without grid search is blocked),
+- the model uses exactly `4000` centers,
+- grid search uses all available training samples.
+
 ```bash
 python3 stage7b_train_rbf_manifold.py \
   --data-dir stage_7_ann_data \
@@ -772,7 +798,11 @@ python3 stage7b_train_rbf_manifold.py \
   --max-centers 4000 \
   --kernel gaussian \
   --epsilon 0.0 \
-  --ridge 1e-10
+  --ridge 1e-10 \
+  --grid-kernels gaussian \
+  --grid-eps-values 0.01,0.05,0.1,0.25,0.5,1.0,2.0,5.0 \
+  --grid-ridges 1e-10 \
+  --grid-folds 5
 ```
 
 Outputs in:
@@ -788,24 +818,6 @@ rbf_model.npz
 phi_p.npy
 phi_s.npy
 training_summary.txt
-```
-
-With K-fold grid search, gaussian-only and ridge fixed at `1e-10`:
-
-```bash
-python3 stage7b_train_rbf_manifold.py \
-  --data-dir stage_7_ann_data \
-  --out-dir stage_7_rbf_data \
-  --max-centers 4000 \
-  --kernel gaussian \
-  --epsilon 0.0 \
-  --ridge 1e-10 \
-  --grid-search \
-  --grid-kernels gaussian \
-  --grid-eps-values 0.01,0.05,0.1,0.25,0.5,1.0,2.0,5.0 \
-  --grid-ridges 1e-10 \
-  --grid-folds 5 \
-  --grid-max-samples 110000
 ```
 
 Important: keep comma-separated CLI values without spaces in bash.

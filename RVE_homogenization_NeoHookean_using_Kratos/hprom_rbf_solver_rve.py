@@ -175,16 +175,15 @@ def RunHpromRbfBatchSimulation(
         n_current_elements=len(elements),
         solver_label="HPROM-RBF",
     )
-    # Keep old/full-mesh behavior exact: weighted homogenization is only used on HROM meshes.
-    if using_weighted_hom and (not using_hrom_mesh):
-        using_weighted_hom = False
-    hom_reference_measure = None
-    if using_weighted_hom:
-        print("  [HPROM-RBF] Using ECM-weighted homogenization (w_eps / w_sig).")
-        hom_reference_measure = GetReferenceIntegrationMeasureFromMesh(full_mesh_base)
-        print(f"  [HPROM-RBF] Homogenization reference measure (full mesh): {hom_reference_measure:.6e}")
-    elif using_hrom_mesh:
-        print("  [HPROM-RBF] WARNING: ECM homogenization weights not available; using direct reduced-mesh homogenization.")
+    hom_reference_measure = GetReferenceIntegrationMeasureFromMesh(full_mesh_base)
+    print(f"  [HPROM-RBF] Homogenization reference measure A0 (full mesh): {hom_reference_measure:.6e}")
+    with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
+        f.write(f"{float(hom_reference_measure):.16e}\n")
+    if not using_weighted_hom:
+        raise RuntimeError(
+            "[HPROM-RBF] ECM homogenization weights are required (w_eps/w_sig not available)."
+        )
+    print("  [HPROM-RBF] Using ECM-weighted homogenization (w_eps / w_sig).")
     dof_x = np.zeros(n_total_dof, dtype=float)
     dof_y = np.zeros(n_total_dof, dtype=float)
     is_x_dof = np.zeros(n_total_dof, dtype=bool)
@@ -559,7 +558,11 @@ def RunHpromRbfBatchSimulation(
                 reference_measure=hom_reference_measure,
             )
         else:
-            hom_eps, hom_sig = CalculateHomogenizedStressAndStrainKratosReference(mp)
+            hom_eps, hom_sig = CalculateHomogenizedStressAndStrainKratosReference(
+                mp,
+                reference_area_e=np.asarray(vec_full_assembler.area_e, dtype=float),
+                reference_measure=hom_reference_measure,
+            )
         sim.FinalizeSolutionStep()
 
         q_hist.append(q_p.copy())

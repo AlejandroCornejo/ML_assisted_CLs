@@ -22,6 +22,7 @@ import KratosMultiphysics as KM
 from fom_solver_rve import (
     RunFomBatchSimulation,
     BuildDynamicSegmentSteps,
+    setup_kratos_parameters as setup_kratos_parameters_common,
     SetInputMeshFilename,
     StripMdpaExtension,
     DetectMaterialSubModelParts,
@@ -76,16 +77,7 @@ def generate_safe_test_path(emax, rel6, domain_type="box"):
 # ============================================================
 
 def setup_kratos_parameters(mesh="rve_geometry"):
-    with open("ProjectParameters.json", "r") as f:
-        parameters = KM.Parameters(f.read())
-    SetInputMeshFilename(parameters, mesh)
-    mdpa_path = f"{StripMdpaExtension(mesh)}.mdpa"
-    material_parts = DetectMaterialSubModelParts(mdpa_path)
-    parameters = ConfigureElementModelerForMaterialParts(parameters, material_parts)
-    parameters["solver_settings"]["material_import_settings"]["materials_filename"].SetString(
-        "StructuralMaterials.json"
-    )
-    return parameters
+    return setup_kratos_parameters_common(mesh)
 
 
 def load_rom_model(model_dir="stage_2_pod_rve"):
@@ -173,7 +165,17 @@ def plot_triple_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir, ti
 # MAIN
 # ============================================================
 
-def run_stage6(mesh="rve_geometry", run_fom=False, run_prom=False, run_hprom=True):
+def run_stage6(
+    mesh="rve_geometry",
+    ecm_file=os.path.join("stage_5_hprom_data", "ecm_weights_all.npz"),
+    use_hrom_mesh=False,
+    run_fom=False,
+    run_prom=False,
+    run_hprom=True,
+    hprom_homogenization_method="ecm_weighted",
+    fom_homogenization_method="ecm_weighted_full",
+    gappy_operator_file=None,
+):
     out_dir = "stage_6_hprom_results"
     os.makedirs(out_dir, exist_ok=True)
 
@@ -188,9 +190,9 @@ def run_stage6(mesh="rve_geometry", run_fom=False, run_prom=False, run_hprom=Tru
         data = np.load(bundle_path, allow_pickle=True)
         rel6 = list(data["relative_boundary"])
         if "emax" in data:
-            emax = float(data["emax"])
+            emax = float(np.ravel(data["emax"])[0])
         else:
-            emax = float(data["reference_amplitude"])
+            emax = float(np.ravel(data["reference_amplitude"])[0])
             print(f"[Warning] 'emax' not found in bundle, using reference_amplitude={emax}")
         if "domain_type" in data:
             domain_type = str(data["domain_type"][0])
@@ -216,6 +218,46 @@ def run_stage6(mesh="rve_geometry", run_fom=False, run_prom=False, run_hprom=Tru
     print(f"  Trajectory: Segmented Safe Path, {len(control_points)} waypoints")
     print(f"  Total steps: {total_steps}  (+1 initial = {total_steps+1} entries)")
     print(f"  Segments: {seg_steps}")
+    print(f"  HPROM homogenization method: {hprom_homogenization_method}")
+    print(f"  FOM homogenization method:   {fom_homogenization_method}")
+    if str(hprom_homogenization_method).strip().lower() == "gappy_pod" and gappy_operator_file is None:
+        print(
+            "[Stage 6][WARN] gappy_pod requested without --gappy-operator-file; "
+            "solver will fallback unless operator keys are embedded in ECM npz."
+        )
+
+    fom_hom_mode = str(fom_homogenization_method).strip().lower()
+    if fom_hom_mode != "ecm_weighted_full":
+        raise RuntimeError(
+            "Only 'ecm_weighted_full' is supported for FOM homogenization in Stage 6."
+        )
+
+    w_fom_eps = None
+    w_fom_sig = None
+    a0_ref = None
+    if fom_hom_mode == "ecm_weighted_full":
+        ecm_meta = np.load(ecm_file, allow_pickle=True)
+        if "n_elem" not in ecm_meta.files:
+            raise RuntimeError("ECM file missing 'n_elem'; required for ecm_weighted_full FOM mode.")
+        n_elem_ref = int(np.ravel(ecm_meta["n_elem"])[0])
+        if n_elem_ref <= 0:
+            raise RuntimeError(f"Invalid n_elem in ECM file: {n_elem_ref}")
+        w_fom_eps = np.ones(n_elem_ref, dtype=float)
+        w_fom_sig = np.ones(n_elem_ref, dtype=float)
+        for k in ("A0_ref", "hom_reference_measure", "A_total"):
+            if k in ecm_meta.files:
+                val = float(np.ravel(ecm_meta[k])[0])
+                if np.isfinite(val) and val > 0.0:
+                    a0_ref = val
+                    break
+        if a0_ref is not None:
+            print(f"  Reference area A0: {a0_ref:.6e}")
+        if not run_fom:
+            print(
+                "[Stage 6] Forcing fresh FOM run with ecm_weighted_full homogenization "
+                "(cached FOM may use a different operator)."
+            )
+            run_fom = True
 
     parameters = setup_kratos_parameters(mesh)
     timings = {}
@@ -236,6 +278,9 @@ def run_stage6(mesh="rve_geometry", run_fom=False, run_prom=False, run_hprom=Tru
             parameters, out_dir=out_dir, strain_path=waypoints,
             trajectory_index=None, save_plot=False,
             reference_amplitude=emax,
+            hom_weights_eps_full=w_fom_eps,
+            hom_weights_sig_full=w_fom_sig,
+            hom_reference_measure=a0_ref,
         )
         timings["FOM"] = time.perf_counter() - t0
         f_eps = np.array(f_eps) if not isinstance(f_eps, np.ndarray) else f_eps
@@ -254,6 +299,7 @@ def run_stage6(mesh="rve_geometry", run_fom=False, run_prom=False, run_hprom=Tru
     # -----------------------------------------------------------
     prom_sig_file = os.path.join(out_dir, "prom_stress.npy")
     prom_eps_file = os.path.join(out_dir, "prom_strain.npy")
+    prom_q_file = os.path.join(out_dir, "prom_run_q.npy")
 
     if run_prom or not os.path.exists(prom_sig_file):
         if not os.path.exists(prom_sig_file):
@@ -283,8 +329,14 @@ def run_stage6(mesh="rve_geometry", run_fom=False, run_prom=False, run_hprom=Tru
     # -----------------------------------------------------------
     # 3. HPROM
     # -----------------------------------------------------------
-    hprom_sig_file = os.path.join(out_dir, "hprom_stress.npy")
-    hprom_eps_file = os.path.join(out_dir, "hprom_strain.npy")
+    method_tag = str(hprom_homogenization_method).strip().lower()
+    if method_tag == "ecm_weighted":
+        hprom_tag = "hprom"
+    else:
+        hprom_tag = f"hprom_{method_tag}"
+    hprom_sig_file = os.path.join(out_dir, f"{hprom_tag}_stress.npy")
+    hprom_eps_file = os.path.join(out_dir, f"{hprom_tag}_strain.npy")
+    hprom_q_file = os.path.join(out_dir, "hprom_run_q.npy")
 
     if run_hprom or not os.path.exists(hprom_sig_file):
         if not os.path.exists(hprom_sig_file):
@@ -292,21 +344,46 @@ def run_stage6(mesh="rve_geometry", run_fom=False, run_prom=False, run_hprom=Tru
         else:
             print(f"\n[Stage 6] --run-hprom: Re-running HPROM...")
         phi_f, free_dofs, dir_dofs, eq_map, Xc, Yc = load_rom_model()
-        ecm = np.load(os.path.join("stage_5_hprom_data", "ecm_weights_all.npz"))
+        ecm = np.load(ecm_file, allow_pickle=True)
         ecm_data = {k: ecm[k] for k in ecm.files}
+        hprom_mesh = mesh
+        if use_hrom_mesh:
+            if "hrom_mesh_base" in ecm_data:
+                hprom_mesh = str(np.ravel(ecm_data["hrom_mesh_base"])[0])
+                print(f"[Stage 6] Using HROM mesh from ECM file: {hprom_mesh}")
+            else:
+                print("[Stage 6][WARN] --use-hrom-mesh requested but 'hrom_mesh_base' is missing in ECM file.")
+                print(f"[Stage 6][WARN] Falling back to mesh: {mesh}")
+        parameters_hprom = setup_kratos_parameters(hprom_mesh)
+        gappy_data = None
+        if gappy_operator_file is not None:
+            gappy_npz = np.load(gappy_operator_file, allow_pickle=True)
+            gappy_data = {k: gappy_npz[k] for k in gappy_npz.files}
+            if "hom_gappy_train_rel_error_total" in gappy_data:
+                print(
+                    "[Stage 6] Gappy operator offline train errors: "
+                    f"total={float(np.ravel(gappy_data['hom_gappy_train_rel_error_total'])[0]):.3e}, "
+                    f"eps={float(np.ravel(gappy_data['hom_gappy_train_rel_error_eps'])[0]):.3e}, "
+                    f"sig={float(np.ravel(gappy_data['hom_gappy_train_rel_error_sig'])[0]):.3e}"
+                )
 
         t0 = time.perf_counter()
         h_eps, h_sig = RunHpromBatchSimulation(
-            parameters, phi_f, free_dofs, dir_dofs, eq_map, Xc, Yc,
+            parameters_hprom, phi_f, free_dofs, dir_dofs, eq_map, Xc, Yc,
             ecm_data=ecm_data,
             out_dir=out_dir, strain_path=waypoints,
             trajectory_index=None, save_plot=False,
             reference_amplitude=emax,
+            homogenization_method=hprom_homogenization_method,
+            homogenization_gappy_data=gappy_data,
         )
         timings["HPROM"] = time.perf_counter() - t0
         np.save(hprom_sig_file, h_sig)
         np.save(hprom_eps_file, h_eps)
-        print(f"[Stage 6] HPROM done: {h_sig.shape[0]} entries in {timings['HPROM']:.1f}s")
+        print(
+            f"[Stage 6] HPROM ({hprom_homogenization_method}) done: "
+            f"{h_sig.shape[0]} entries in {timings['HPROM']:.1f}s"
+        )
     else:
         print(f"\n[Stage 6] Loading cached HPROM results.")
         h_sig = np.load(hprom_sig_file)
@@ -329,11 +406,36 @@ def run_stage6(mesh="rve_geometry", run_fom=False, run_prom=False, run_hprom=Tru
     err_prom = np.linalg.norm(f_sig[:n] - p_sig[:n]) / (np.linalg.norm(f_sig[:n]) + 1e-30)
     err_hprom = np.linalg.norm(f_sig[:n] - h_sig[:n]) / (np.linalg.norm(f_sig[:n]) + 1e-30)
 
+    q_err = None
+    q_err_mean = None
+    q_err_max = None
+    if os.path.exists(prom_q_file) and os.path.exists(hprom_q_file):
+        q_prom = np.load(prom_q_file)
+        q_hprom = np.load(hprom_q_file)
+        nq = min(len(q_prom), len(q_hprom))
+        if nq > 0:
+            q_err = np.linalg.norm(q_hprom[:nq] - q_prom[:nq]) / (np.linalg.norm(q_prom[:nq]) + 1e-30)
+            q_step_den = np.linalg.norm(q_prom[:nq], axis=1)
+            q_step_num = np.linalg.norm(q_hprom[:nq] - q_prom[:nq], axis=1)
+            valid = q_step_den > 1e-12
+            if np.any(valid):
+                q_step_err = q_step_num[valid] / q_step_den[valid]
+                q_err_mean = float(np.mean(q_step_err))
+                q_err_max = float(np.max(q_step_err))
+            else:
+                q_err_mean = 0.0
+                q_err_max = 0.0
+
     print("\n" + "=" * 60)
     print("  RESULTS SUMMARY")
     print("=" * 60)
     print(f"  PROM  vs FOM:  Rel. Stress Error = {err_prom:.4e}")
     print(f"  HPROM vs FOM:  Rel. Stress Error = {err_hprom:.4e}")
+    if q_err is not None:
+        print(f"  HPROM vs PROM: Rel. q Error      = {q_err:.4e}")
+        print(f"  q stepwise: mean={q_err_mean:.4e}, max={q_err_max:.4e}")
+    else:
+        print("  q error: unavailable (prom_run_q.npy or hprom_run_q.npy missing)")
     for method, t in timings.items():
         print(f"  {method} time: {t:.2f}s")
 
@@ -349,6 +451,46 @@ if __name__ == "__main__":
     p.add_argument("--run-fom", action="store_true", help="Run FOM fresh")
     p.add_argument("--run-prom", action="store_true", help="Run PROM fresh")
     p.add_argument("--skip-hprom", action="store_true", help="Skip HPROM (use cache)")
+    p.add_argument(
+        "--ecm-file",
+        type=str,
+        default=os.path.join("stage_5_hprom_data", "ecm_weights_all.npz"),
+        help="ECM npz file used by HPROM.",
+    )
+    p.add_argument(
+        "--use-hrom-mesh",
+        action="store_true",
+        help="Use HROM mesh stored in ECM file (hrom_mesh_base) for HPROM run.",
+    )
+    p.add_argument(
+        "--hprom-homogenization-method",
+        type=str,
+        default="ecm_weighted",
+        choices=["ecm_weighted", "gappy_pod", "kratos_reference"],
+        help="HPROM homogenization output method.",
+    )
+    p.add_argument(
+        "--fom-homogenization-method",
+        type=str,
+        default="ecm_weighted_full",
+        choices=["ecm_weighted_full"],
+        help="FOM homogenization operator used for comparison baseline.",
+    )
+    p.add_argument(
+        "--gappy-operator-file",
+        type=str,
+        default=None,
+        help="Optional Stage5c gappy operator npz (used with --hprom-homogenization-method gappy_pod).",
+    )
     args = p.parse_args()
 
-    run_stage6(run_fom=args.run_fom, run_prom=args.run_prom, run_hprom=not args.skip_hprom)
+    run_stage6(
+        ecm_file=args.ecm_file,
+        use_hrom_mesh=args.use_hrom_mesh,
+        run_fom=args.run_fom,
+        run_prom=args.run_prom,
+        run_hprom=not args.skip_hprom,
+        hprom_homogenization_method=args.hprom_homogenization_method,
+        fom_homogenization_method=args.fom_homogenization_method,
+        gappy_operator_file=args.gappy_operator_file,
+    )

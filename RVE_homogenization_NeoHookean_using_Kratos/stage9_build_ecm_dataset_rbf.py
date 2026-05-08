@@ -4,14 +4,17 @@
 """
 Stage 9a: Build ECM dataset for HPROM-RBF.
 
-This mirrors Stage 5a sampling/assembly flow, but the residual projection
-uses the RBF manifold tangent:
-  J_m = phi_p + phi_s * dN_rbf/dq_p
-instead of the fixed linear POD basis.
+Stage-5-style dataset builder with independent sampling for:
+  - residual projection (Q_ecm, b_full)
+  - homogenization targets (C_hom, b_hom)
+
+Residual projection uses the RBF-manifold tangent:
+  J_m = phi_p + phi_s * d(q_s)/d(q_p)
 """
 
 import os
 import sys
+import argparse
 import numpy as np
 
 # Add Kratos path
@@ -34,32 +37,18 @@ from fom_solver_rve import (
     ConfigureElementModelerForMaterialParts,
 )
 from rbf_manifold_model import load_rbf_model, evaluate_rbf_map_and_jacobian_qp
+from ecm_sampling_utils import get_stratified_indices, get_param_aware_indices
 
 
 SNAPSHOTS_DIR = "stage_1_training_set_fom"
 BASIS_DIR = "stage_2_pod_rve"
 RBF_DIR = "stage_7_rbf_data"
 OUT_DIR = "stage_9_ecm_dataset_rbf"
-SNAPSHOT_PERCENT = 2.0
+SNAPSHOT_PERCENT_RES = 5.0
+SNAPSHOT_PERCENT_HOM = 5.0
 SEED = 42
-
-
-def _get_stratified_indices(n_total, n_pick, seed=SEED):
-    if n_pick <= 0:
-        return np.array([], dtype=int)
-    if n_pick >= n_total:
-        return np.arange(n_total, dtype=int)
-
-    rng = np.random.default_rng(int(seed))
-    picks = np.zeros(n_pick, dtype=int)
-    edges = np.linspace(0, n_total, n_pick + 1, dtype=int)
-    for i in range(n_pick):
-        i0, i1 = int(edges[i]), int(edges[i + 1])
-        if i1 <= i0:
-            picks[i] = i0
-        else:
-            picks[i] = int(rng.integers(i0, i1))
-    return np.sort(np.unique(picks))
+SAMPLING_MODE = "param_aware"  # options: "param_aware", "stratified"
+PARAM_AWARE_TIME_WEIGHT = 0.20
 
 
 def _build_free_map(n_dof, free_dofs):
@@ -69,7 +58,7 @@ def _build_free_map(n_dof, free_dofs):
     return g2f
 
 
-def _allocate_memmaps(out_dir, nq, n_snapshots, n_elem):
+def _allocate_memmaps(out_dir, nq, ns_res, ns_hom, n_elem):
     os.makedirs(out_dir, exist_ok=True)
     q_path = os.path.join(out_dir, "Q_ecm.dat")
     b_path = os.path.join(out_dir, "b_full.dat")
@@ -80,34 +69,149 @@ def _allocate_memmaps(out_dir, nq, n_snapshots, n_elem):
         if os.path.exists(p):
             os.remove(p)
 
-    q_ecm = np.memmap(q_path, dtype="float64", mode="w+", shape=(int(nq) * int(n_snapshots), int(n_elem)))
-    b_full = np.memmap(b_path, dtype="float64", mode="w+", shape=(int(nq) * int(n_snapshots),))
-    c_hom = np.memmap(c_path, dtype="float64", mode="w+", shape=(6 * int(n_snapshots), int(n_elem)))
-    b_hom = np.memmap(bh_path, dtype="float64", mode="w+", shape=(6 * int(n_snapshots),))
+    q_ecm = np.memmap(q_path, dtype="float64", mode="w+", shape=(int(nq) * int(ns_res), int(n_elem)))
+    b_full = np.memmap(b_path, dtype="float64", mode="w+", shape=(int(nq) * int(ns_res),))
+    c_hom = np.memmap(c_path, dtype="float64", mode="w+", shape=(6 * int(ns_hom), int(n_elem)))
+    b_hom = np.memmap(bh_path, dtype="float64", mode="w+", shape=(6 * int(ns_hom),))
     return q_ecm, b_full, c_hom, b_hom
 
 
-def _extract_snapshot_u(U_all, step_idx, n_dof):
-    if U_all.ndim != 2:
-        raise ValueError(f"Invalid snapshot array shape {U_all.shape}. Expected 2D.")
-    if U_all.shape[1] == n_dof:
-        return np.asarray(U_all[step_idx, :], dtype=float)
-    if U_all.shape[0] == n_dof:
-        return np.asarray(U_all[:, step_idx], dtype=float)
+def _extract_snapshot_u(u_all, step_idx, n_dof):
+    if u_all.ndim != 2:
+        raise ValueError(f"Invalid snapshot array shape {u_all.shape}. Expected 2D.")
+    if u_all.shape[1] == n_dof:
+        return np.asarray(u_all[step_idx, :], dtype=float)
+    if u_all.shape[0] == n_dof:
+        return np.asarray(u_all[:, step_idx], dtype=float)
     raise ValueError(
-        f"Cannot infer displacement layout from shape {U_all.shape} with n_dof={n_dof}."
+        f"Cannot infer displacement layout from shape {u_all.shape} with n_dof={n_dof}."
     )
 
 
-def main():
-    print("--- Stage 9a: Building ECM Dataset for HPROM-RBF ---")
+def _infer_n_u_steps(u_meta, n_dof):
+    if u_meta.ndim != 2:
+        return 0
+    if u_meta.shape[1] == n_dof:
+        return int(u_meta.shape[0])
+    if u_meta.shape[0] == n_dof:
+        return int(u_meta.shape[1])
+    return 0
 
-    phi_p = np.asarray(np.load(os.path.join(RBF_DIR, "phi_p.npy")), dtype=float)
-    phi_s = np.asarray(np.load(os.path.join(RBF_DIR, "phi_s.npy")), dtype=float)
-    free_dofs = np.asarray(np.load(os.path.join(BASIS_DIR, "free_dofs.npy")), dtype=np.int64)
-    dir_dofs = np.asarray(np.load(os.path.join(BASIS_DIR, "dirichlet_dofs.npy")), dtype=np.int64)
-    eq_map_ref = np.asarray(np.load(os.path.join(BASIS_DIR, "eq_map.npy")), dtype=np.int64)
-    rbf_model = load_rbf_model(os.path.join(RBF_DIR, "rbf_model.npz"))
+
+def _pick_snapshot_indices(e_traj, n_steps, n_pick, mode, seed, time_weight):
+    n_pick = int(max(1, min(int(n_steps), int(n_pick))))
+    if str(mode).strip().lower() == "param_aware":
+        return get_param_aware_indices(
+            e_traj[:n_steps, :3],
+            n_pick,
+            seed=int(seed),
+            time_weight=float(time_weight),
+        )
+    return get_stratified_indices(int(n_steps), n_pick, seed=int(seed))
+
+
+def _parse_trajectory_indices(text):
+    if not str(text).strip():
+        return None
+    try:
+        vals = sorted(set(int(v.strip()) for v in str(text).split(",") if v.strip()))
+    except ValueError as exc:
+        raise ValueError("--trajectory-indices must be comma-separated integers.") from exc
+    if any(v <= 0 for v in vals):
+        raise ValueError("--trajectory-indices must be >= 1.")
+    return vals
+
+
+def _build_residual_projection_cache(elements, process_info, g2f):
+    cache = []
+    active = 0
+    for elem in elements:
+        ids = np.asarray(elem.EquationIdVector(process_info), dtype=int)
+        local_pos = np.flatnonzero(ids >= 0)
+        if local_pos.size == 0:
+            cache.append(None)
+            continue
+
+        local_dofs = ids[local_pos]
+        rows = g2f[local_dofs]
+        valid = rows >= 0
+        if not np.any(valid):
+            cache.append(None)
+            continue
+
+        rhs_pick = local_pos[valid].astype(int, copy=False)
+        rows_valid = np.asarray(rows[valid], dtype=int)
+        cache.append((rhs_pick, rows_valid))
+        active += 1
+    return cache, active
+
+
+def _fill_hom_block_from_kratos(elements, model_part, area_e, c_block):
+    eps_gp, sig_gp, _ = EvaluateGaussPointData(elements, model_part)
+    c_block[0:3, :] = (area_e[:, None] * np.mean(eps_gp, axis=1)).T
+    c_block[3:6, :] = (area_e[:, None] * np.mean(sig_gp, axis=1)).T
+
+
+def _parse_args():
+    p = argparse.ArgumentParser(
+        description="Stage 9a-RBF: build ECM dataset with separate residual/hom sampling."
+    )
+    p.add_argument("--snapshots-dir", type=str, default=SNAPSHOTS_DIR)
+    p.add_argument("--basis-dir", type=str, default=BASIS_DIR)
+    p.add_argument("--rbf-dir", type=str, default=RBF_DIR)
+    p.add_argument("--out-dir", type=str, default=OUT_DIR)
+    p.add_argument("--snapshot-percent-res", type=float, default=SNAPSHOT_PERCENT_RES)
+    p.add_argument("--snapshot-percent-hom", type=float, default=SNAPSHOT_PERCENT_HOM)
+    p.add_argument(
+        "--sampling-mode",
+        type=str,
+        default=SAMPLING_MODE,
+        choices=["param_aware", "stratified"],
+    )
+    p.add_argument("--seed", type=int, default=SEED)
+    p.add_argument("--param-aware-time-weight", type=float, default=PARAM_AWARE_TIME_WEIGHT)
+    p.add_argument(
+        "--trajectory-indices",
+        type=str,
+        default="",
+        help="Optional comma-separated trajectory indices (e.g. '2' or '1,2,5').",
+    )
+    p.add_argument(
+        "--first-n-steps",
+        type=int,
+        default=0,
+        help="If >0, only first N snapshots per selected trajectory are considered.",
+    )
+    return p.parse_args()
+
+
+def main():
+    args = _parse_args()
+    print("--- Stage 9a-RBF: Building ECM Dataset ---")
+
+    pct_res = float(args.snapshot_percent_res)
+    pct_hom = float(args.snapshot_percent_hom)
+    if pct_res <= 0.0 or pct_hom <= 0.0:
+        raise ValueError("snapshot percentages must be > 0.")
+    if pct_res > 100.0 or pct_hom > 100.0:
+        raise ValueError("snapshot percentages must be <= 100.")
+
+    snapshots_dir = str(args.snapshots_dir)
+    basis_dir = str(args.basis_dir)
+    rbf_dir = str(args.rbf_dir)
+    out_dir = str(args.out_dir)
+    first_n_steps = int(args.first_n_steps)
+    if first_n_steps < 0:
+        raise ValueError("--first-n-steps must be >= 0.")
+
+    selected_traj_ids = _parse_trajectory_indices(args.trajectory_indices)
+
+    phi_p = np.asarray(np.load(os.path.join(rbf_dir, "phi_p.npy")), dtype=float)
+    phi_s = np.asarray(np.load(os.path.join(rbf_dir, "phi_s.npy")), dtype=float)
+    free_dofs = np.asarray(np.load(os.path.join(basis_dir, "free_dofs.npy")), dtype=np.int64)
+    dir_dofs = np.asarray(np.load(os.path.join(basis_dir, "dirichlet_dofs.npy")), dtype=np.int64)
+    eq_map_ref = np.asarray(np.load(os.path.join(basis_dir, "eq_map.npy")), dtype=np.int64)
+    rbf_model = load_rbf_model(os.path.join(rbf_dir, "rbf_model.npz"))
 
     n_primary = int(phi_p.shape[1])
     n_secondary = int(phi_s.shape[1])
@@ -121,48 +225,88 @@ def main():
 
     include_macro = bool(rbf_model["include_macro_strain_input"])
     n_total_dofs_ref = int(len(free_dofs) + len(dir_dofs))
-    print(f"[Info] n_primary={n_primary}, n_secondary={n_secondary}, include_macro_strain_input={int(include_macro)}")
+    print(
+        f"[Info] n_primary={n_primary}, n_secondary={n_secondary}, "
+        f"include_macro_strain_input={int(include_macro)}"
+    )
 
-    trajectories = sorted([d for d in os.listdir(SNAPSHOTS_DIR) if d.startswith("trajectory_")])
+    trajectories = sorted([d for d in os.listdir(snapshots_dir) if d.startswith("trajectory_")])
+    if selected_traj_ids is not None:
+        selected_names = {f"trajectory_{i}" for i in selected_traj_ids}
+        trajectories = [t for t in trajectories if t in selected_names]
     if not trajectories:
-        raise FileNotFoundError(f"No trajectory folders found in {SNAPSHOTS_DIR}")
+        raise FileNotFoundError(
+            f"No trajectory folders found in {snapshots_dir} for selection={selected_traj_ids}."
+        )
 
-    pct = float(SNAPSHOT_PERCENT) / 100.0
-    total_snapshots = 0
+    total_snapshots_res = 0
+    total_snapshots_hom = 0
     all_tasks = []
+    frac_res = pct_res / 100.0
+    frac_hom = pct_hom / 100.0
 
     for traj in trajectories:
-        u_file = os.path.join(SNAPSHOTS_DIR, traj, f"{traj}_U.npy")
-        e_file = os.path.join(SNAPSHOTS_DIR, traj, f"{traj}_applied_strain.npy")
+        u_file = os.path.join(snapshots_dir, traj, f"{traj}_U.npy")
+        e_file = os.path.join(snapshots_dir, traj, f"{traj}_applied_strain.npy")
         if not (os.path.exists(u_file) and os.path.exists(e_file)):
+            print(f"  [Skip] {traj}: missing U or applied_strain file")
             continue
 
-        U_meta = np.load(u_file, mmap_mode="r")
-        E_meta = np.load(e_file, mmap_mode="r")
-        if U_meta.ndim != 2 or E_meta.ndim != 2 or E_meta.shape[1] != 3:
+        u_meta = np.load(u_file, mmap_mode="r")
+        e_meta = np.load(e_file, mmap_mode="r")
+        if e_meta.ndim != 2 or e_meta.shape[1] < 3:
+            print(f"  [Skip] {traj}: invalid applied_strain shape {e_meta.shape}")
             continue
 
-        if U_meta.shape[1] == n_total_dofs_ref:
-            n_u_steps = int(U_meta.shape[0])
-        elif U_meta.shape[0] == n_total_dofs_ref:
-            n_u_steps = int(U_meta.shape[1])
-        else:
+        n_u_steps = _infer_n_u_steps(u_meta, n_total_dofs_ref)
+        if n_u_steps <= 0:
+            print(f"  [Skip] {traj}: cannot infer U layout with n_dof={n_total_dofs_ref}")
             continue
 
-        n_steps = min(n_u_steps, int(E_meta.shape[0]))
+        n_steps = min(n_u_steps, int(e_meta.shape[0]))
+        if first_n_steps > 0:
+            n_steps = min(n_steps, first_n_steps)
         if n_steps <= 0:
+            print(f"  [Skip] {traj}: no snapshots after first-n-steps filter")
             continue
 
-        n_pick = int(np.ceil(pct * n_steps))
-        idx = _get_stratified_indices(n_steps, n_pick)
-        total_snapshots += int(len(idx))
-        all_tasks.append((traj, u_file, e_file, idx))
+        n_pick_res = int(np.ceil(frac_res * n_steps))
+        n_pick_hom = int(np.ceil(frac_hom * n_steps))
+        idx_res = _pick_snapshot_indices(
+            e_meta,
+            n_steps=n_steps,
+            n_pick=n_pick_res,
+            mode=args.sampling_mode,
+            seed=int(args.seed) + 2 * len(all_tasks),
+            time_weight=args.param_aware_time_weight,
+        )
+        idx_hom = _pick_snapshot_indices(
+            e_meta,
+            n_steps=n_steps,
+            n_pick=n_pick_hom,
+            mode=args.sampling_mode,
+            seed=int(args.seed) + 2 * len(all_tasks) + 1,
+            time_weight=args.param_aware_time_weight,
+        )
 
-    if total_snapshots <= 0 or not all_tasks:
-        raise RuntimeError("No valid snapshots selected for Stage 9a.")
+        total_snapshots_res += int(len(idx_res))
+        total_snapshots_hom += int(len(idx_hom))
+        all_tasks.append((traj, u_file, e_file, idx_res, idx_hom))
 
-    print(f"[Info] Target: {SNAPSHOT_PERCENT}% snapshots stratified across {len(all_tasks)} trajectories.")
-    print(f"[Info] Total snapshots to process: {total_snapshots}")
+    if total_snapshots_res <= 0:
+        raise RuntimeError("No residual snapshots selected.")
+    if total_snapshots_hom <= 0:
+        raise RuntimeError("No homogenization snapshots selected.")
+
+    print(f"[Info] Sampling mode: {args.sampling_mode}")
+    print(f"[Info] Target residual snapshots      : {pct_res}% across {len(all_tasks)} trajectories.")
+    print(f"[Info] Target homogenization snapshots: {pct_hom}% across {len(all_tasks)} trajectories.")
+    if selected_traj_ids is not None:
+        print(f"[Info] Selected trajectory indices: {selected_traj_ids}")
+    if first_n_steps > 0:
+        print(f"[Info] First-N filter per trajectory: {first_n_steps}")
+    print(f"[Info] Total residual snapshots      : {total_snapshots_res}")
+    print(f"[Info] Total homogenization snapshots: {total_snapshots_hom}")
 
     with open("ProjectParameters.json", "r", encoding="utf-8") as f:
         parameters = KM.Parameters(f.read())
@@ -186,14 +330,20 @@ def main():
 
     n_dof, eq_map, ta = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
     if int(n_dof) != n_total_dofs_ref:
-        raise RuntimeError(f"DOF mismatch: runtime={n_dof}, reference={n_total_dofs_ref}.")
+        raise RuntimeError(f"DOF mismatch: runtime={n_dof}, expected={n_total_dofs_ref}.")
     if eq_map.shape == eq_map_ref.shape and not np.array_equal(eq_map, eq_map_ref):
         raise RuntimeError("eq_map mismatch between Stage 2 metadata and runtime model.")
 
     elements = list(mp.Elements)
     n_elem = len(elements)
-    w_gp, area_e = PrecomputeElementIntegrationWeights(elements)
+    _, area_e = PrecomputeElementIntegrationWeights(elements)
     g2f = _build_free_map(n_dof, free_dofs)
+
+    residual_cache, n_active_elems = _build_residual_projection_cache(elements, pi, g2f)
+    rhs_vectors = [KM.Vector() for _ in range(n_elem)]
+    q_block = np.zeros((n_primary, n_elem), dtype=float)
+    c_block = np.zeros((6, n_elem), dtype=float)
+    print(f"[Info] Residual projection active on {n_active_elems}/{n_elem} elements.")
 
     sim._InitializeDomainCenterIfNeeded(mp)
     x0c, y0c = float(sim._x0c), float(sim._y0c)
@@ -224,103 +374,118 @@ def main():
         uy = F[1, 0] * x_free + (F[1, 1] - 1.0) * y_free
         return np.where(is_x_free, ux, uy)
 
-    elem_dofs = []
-    elem_masks = []
-    for elem in elements:
-        ids = np.array(elem.EquationIdVector(pi), dtype=int)
-        mask = ids >= 0
-        elem_dofs.append(ids[mask])
-        elem_masks.append(mask)
+    Q_ecm, b_full, C_hom, b_hom = _allocate_memmaps(
+        out_dir, n_primary, total_snapshots_res, total_snapshots_hom, n_elem
+    )
 
-    Q_ecm, b_full, C_hom, b_hom = _allocate_memmaps(OUT_DIR, n_primary, total_snapshots, n_elem)
+    s_res_global = 0
+    s_hom_global = 0
+    for traj_name, u_path, e_path, idx_res, idx_hom in all_tasks:
+        idx_res = np.unique(np.asarray(idx_res, dtype=int).reshape(-1))
+        idx_hom = np.unique(np.asarray(idx_hom, dtype=int).reshape(-1))
+        idx_union = np.union1d(idx_res, idx_hom)
+        set_res = set(int(v) for v in idx_res.tolist())
+        set_hom = set(int(v) for v in idx_hom.tolist())
 
-    s_global = 0
-    for traj_name, u_path, e_path, snapshot_indices in all_tasks:
-        print(f"  > Processing {traj_name} ({len(snapshot_indices)} sampled steps)...")
-        U_all = np.load(u_path)
-        E_all = np.load(e_path)
-        for k in snapshot_indices:
-            u_snap = _extract_snapshot_u(U_all, int(k), int(n_dof))
-            e_macro = np.asarray(E_all[int(k), :], dtype=float)
+        print(f"  > Processing {traj_name} (res={len(idx_res)} steps, hom={len(idx_hom)} steps)...")
+        u_all = np.load(u_path, mmap_mode="r")
+        e_all = np.load(e_path, mmap_mode="r")
+
+        for k in idx_union:
+            ks = int(k)
+            u_snap = _extract_snapshot_u(u_all, ks, int(n_dof))
+            e_macro = np.asarray(e_all[ks, :3], dtype=float)
 
             SetDisplacementFromEquationVector(u_snap, eq_map, ta)
             UpdateCurrentCoordinatesFromDisplacement(mp)
 
-            u_free = u_snap[free_dofs]
-            u_aff_free = _affine_free(e_macro)
-            w_free = u_free - u_aff_free
-            q_p = w_free @ phi_p
+            if ks in set_res:
+                u_free = u_snap[free_dofs]
+                u_aff_free = _affine_free(e_macro)
+                w_free = u_free - u_aff_free
+                q_p = w_free @ phi_p
 
-            if include_macro:
-                x_in = np.concatenate([q_p, e_macro], axis=0)
-            else:
-                x_in = q_p
-            _, j_qs_qp = evaluate_rbf_map_and_jacobian_qp(x_in, rbf_model, n_primary)
-            j_qs_qp = np.asarray(j_qs_qp, dtype=float)
-            if j_qs_qp.shape != (n_secondary, n_primary):
-                raise RuntimeError(
-                    f"Invalid RBF Jacobian shape {j_qs_qp.shape}, expected {(n_secondary, n_primary)}."
-                )
-            J_m = phi_p + phi_s @ j_qs_qp
+                if include_macro:
+                    x_in = np.concatenate([q_p, e_macro], axis=0)
+                else:
+                    x_in = q_p
+                _, j_qs_qp = evaluate_rbf_map_and_jacobian_qp(x_in, rbf_model, n_primary)
+                j_qs_qp = np.asarray(j_qs_qp, dtype=float)
+                if j_qs_qp.shape != (n_secondary, n_primary):
+                    raise RuntimeError(
+                        f"Invalid RBF Jacobian shape {j_qs_qp.shape}, expected {(n_secondary, n_primary)}."
+                    )
+                J_m = phi_p + phi_s @ j_qs_qp
 
-            q_block = np.zeros((n_primary, n_elem), dtype=float)
-            c_block = np.zeros((6, n_elem), dtype=float)
+                q_block.fill(0.0)
+                for i, elem in enumerate(elements):
+                    cached = residual_cache[i]
+                    if cached is None:
+                        continue
+                    rhs_pick, rows = cached
+                    rhs = rhs_vectors[i]
+                    elem.CalculateRightHandSide(rhs, pi)
+                    rhs_arr = np.asarray(rhs, dtype=float)
+                    q_block[:, i] = J_m[rows, :].T @ rhs_arr[rhs_pick]
 
-            for i, elem in enumerate(elements):
-                RHS = KM.Vector()
-                elem.CalculateRightHandSide(RHS, pi)
-                rhs_arr = np.array(RHS, dtype=float)
+                r0, r1 = n_primary * s_res_global, n_primary * (s_res_global + 1)
+                Q_ecm[r0:r1, :] = q_block
+                b_full[r0:r1] = np.sum(q_block, axis=1)
+                s_res_global += 1
 
-                local_mask = elem_masks[i]
-                local_dofs = elem_dofs[i]
-                rows = g2f[local_dofs]
-                valid = rows >= 0
-                if np.any(valid):
-                    j_e = J_m[rows[valid], :]
-                    r_e = rhs_arr[local_mask][valid]
-                    q_block[:, i] = j_e.T @ r_e
+            if ks in set_hom:
+                _fill_hom_block_from_kratos(elements, mp, area_e, c_block)
+                h0, h1 = 6 * s_hom_global, 6 * (s_hom_global + 1)
+                C_hom[h0:h1, :] = c_block
+                b_hom[h0:h1] = np.sum(c_block, axis=1)
+                s_hom_global += 1
 
-            eps_gp, sig_gp, _ = EvaluateGaussPointData(elements, mp)
-            # Kratos-reference homogenization operator per element:
-            #   C_elem = A_e * mean_gp(value_gp)
-            # so that global homogenization is:
-            #   value_hom = (sum_e C_elem) / (sum_e A_e)
-            # This keeps Stage 9 ECM targets consistent with Stage 11/FOM reference.
-            c_block[0:3, :] = (area_e[:, None] * np.mean(eps_gp, axis=1)).T
-            c_block[3:6, :] = (area_e[:, None] * np.mean(sig_gp, axis=1)).T
-
-            r0, r1 = n_primary * s_global, n_primary * (s_global + 1)
-            Q_ecm[r0:r1, :] = q_block
-            b_full[r0:r1] = np.sum(q_block, axis=1)
-
-            h0, h1 = 6 * s_global, 6 * (s_global + 1)
-            C_hom[h0:h1, :] = c_block
-            b_hom[h0:h1] = np.sum(c_block, axis=1)
-            s_global += 1
+    if s_res_global != total_snapshots_res:
+        raise RuntimeError(
+            f"Residual snapshot count mismatch: expected {total_snapshots_res}, got {s_res_global}"
+        )
+    if s_hom_global != total_snapshots_hom:
+        raise RuntimeError(
+            f"Homogenization snapshot count mismatch: expected {total_snapshots_hom}, got {s_hom_global}"
+        )
 
     Q_ecm.flush()
     b_full.flush()
     C_hom.flush()
     b_hom.flush()
 
+    a0_ref = float(np.sum(area_e))
     np.savez(
-        os.path.join(OUT_DIR, "meta.npz"),
+        os.path.join(out_dir, "meta.npz"),
         nq=n_primary,
-        N_s=total_snapshots,
-        n_elem=n_elem,
-        snapshot_percent=SNAPSHOT_PERCENT,
-        A_total=np.sum(area_e),
         n_primary=n_primary,
         n_secondary=n_secondary,
+        n_elem=n_elem,
+        N_s_res=total_snapshots_res,
+        N_s_hom=total_snapshots_hom,
+        snapshot_percent_res=pct_res,
+        snapshot_percent_hom=pct_hom,
+        sampling_mode=np.array([args.sampling_mode]),
+        param_aware_time_weight=np.array([args.param_aware_time_weight]),
+        snapshots_dir=np.array([snapshots_dir]),
+        basis_dir=np.array([basis_dir]),
+        rbf_data_dir=np.array([rbf_dir]),
+        first_n_steps=np.array([first_n_steps], dtype=np.int64),
+        trajectory_indices=np.array(selected_traj_ids if selected_traj_ids is not None else [], dtype=np.int64),
         include_macro_strain_input=np.array([1 if include_macro else 0], dtype=np.int64),
-        rbf_data_dir=np.array([RBF_DIR]),
+        A_total=a0_ref,
+        A0_ref=np.array([a0_ref], dtype=float),
+        hom_reference_measure=np.array([a0_ref], dtype=float),
     )
+    with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
+        f.write(f"{a0_ref:.16e}\\n")
 
     sim.Finalize()
 
-    print("\n[DONE] Stage 9a dataset generation complete.")
+    print("\\n[DONE] Dataset generation complete.")
     print(f"      - Q_ecm shape: {Q_ecm.shape}")
-    print(f"      - Datasets saved to: {OUT_DIR}")
+    print(f"      - C_hom shape: {C_hom.shape}")
+    print(f"      - Datasets saved to: {out_dir}")
 
 
 if __name__ == "__main__":

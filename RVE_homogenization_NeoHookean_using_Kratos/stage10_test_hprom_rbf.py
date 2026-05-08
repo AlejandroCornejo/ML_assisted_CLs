@@ -124,8 +124,14 @@ def plot_hprom_rbf_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir,
     print(f"Stage 10 plots saved to: {out_dir}")
 
 
-def run_stage10(run_fom=False, run_prom_rbf=False, run_hprom_rbf=False):
-    out_dir = "stage_10_hprom_rbf_results"
+def run_stage10(
+    run_fom=False,
+    run_prom_rbf=False,
+    run_hprom_rbf=False,
+    rbf_data_dir="stage_7_rbf_data",
+    hprom_rbf_dir="stage_9_hprom_rbf_data",
+    out_dir="stage_10_hprom_rbf_results",
+):
     os.makedirs(out_dir, exist_ok=True)
 
     # Load domain parameters from stage0 bundle
@@ -138,9 +144,9 @@ def run_stage10(run_fom=False, run_prom_rbf=False, run_hprom_rbf=False):
         data = np.load(bundle_path, allow_pickle=True)
         rel6 = list(data["relative_boundary"])
         if "emax" in data:
-            emax = float(data["emax"])
+            emax = float(np.ravel(data["emax"])[0])
         else:
-            emax = float(data["reference_amplitude"])
+            emax = float(np.ravel(data["reference_amplitude"])[0])
         if "domain_type" in data:
             domain_type = str(data["domain_type"][0])
 
@@ -166,6 +172,9 @@ def run_stage10(run_fom=False, run_prom_rbf=False, run_hprom_rbf=False):
     print(f"  Strain path points: {len(strain_path)}")
     print(f"  Dynamic steps: {total_steps} (+1 initial = {total_steps + 1})")
     print(f"  Segments: {seg_steps}")
+    print(f"  RBF data dir: {rbf_data_dir}")
+    print(f"  HPROM-RBF dir: {hprom_rbf_dir}")
+    print(f"  Output dir: {out_dir}")
 
     parameters = setup_kratos_parameters("rve_geometry")
     timings = {}
@@ -199,7 +208,7 @@ def run_stage10(run_fom=False, run_prom_rbf=False, run_hprom_rbf=False):
     if run_prom_rbf or not (os.path.exists(prom_eps_file) and os.path.exists(prom_sig_file)):
         print("\n[Stage 10] Running PROM-RBF...")
         phi_p, phi_s, free_dofs, _, _, rbf_model, include_macro = LoadPromRbfModel(
-            basis_dir="stage_2_pod_rve", rbf_data_dir="stage_7_rbf_data"
+            basis_dir="stage_2_pod_rve", rbf_data_dir=rbf_data_dir
         )
         t0 = time.perf_counter()
         p_eps, p_sig = RunPromRbfBatchSimulation(
@@ -209,6 +218,7 @@ def run_stage10(run_fom=False, run_prom_rbf=False, run_hprom_rbf=False):
             free_dofs,
             rbf_model,
             strain_path,
+            out_dir=out_dir,
             reference_amplitude=emax,
             reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
             include_macro_strain_input=include_macro,
@@ -240,8 +250,8 @@ def run_stage10(run_fom=False, run_prom_rbf=False, run_hprom_rbf=False):
             include_macro_h,
         ) = LoadHpromRbfModel(
             basis_dir="stage_2_pod_rve",
-            rbf_data_dir="stage_7_rbf_data",
-            hprom_rbf_dir="stage_9_hprom_rbf_data",
+            rbf_data_dir=rbf_data_dir,
+            hprom_rbf_dir=hprom_rbf_dir,
         )
         t0 = time.perf_counter()
         h_eps, h_sig = RunHpromRbfBatchSimulation(
@@ -293,10 +303,31 @@ if __name__ == "__main__":
     p.add_argument("--run-fom", action="store_true", help="Force FOM recompute.")
     p.add_argument("--run-prom-rbf", action="store_true", help="Force PROM-RBF recompute.")
     p.add_argument("--run-hprom-rbf", action="store_true", help="Force HPROM-RBF recompute.")
+    p.add_argument(
+        "--rbf-data-dir",
+        type=str,
+        default="stage_7_rbf_data",
+        help="Directory with RBF model files (rbf_model.npz, phi_p.npy, phi_s.npy).",
+    )
+    p.add_argument(
+        "--hprom-rbf-dir",
+        type=str,
+        default="stage_9_hprom_rbf_data",
+        help="Directory with HPROM-RBF ECM file (ecm_weights_all.npz).",
+    )
+    p.add_argument(
+        "--out-dir",
+        type=str,
+        default="stage_10_hprom_rbf_results",
+        help="Output directory for Stage 10 results.",
+    )
     args = p.parse_args()
 
     run_stage10(
         run_fom=args.run_fom,
         run_prom_rbf=args.run_prom_rbf,
         run_hprom_rbf=args.run_hprom_rbf,
+        rbf_data_dir=args.rbf_data_dir,
+        hprom_rbf_dir=args.hprom_rbf_dir,
+        out_dir=args.out_dir,
     )

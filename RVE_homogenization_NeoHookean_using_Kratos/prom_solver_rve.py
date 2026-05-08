@@ -25,7 +25,7 @@ from fom_solver_rve import (
     UpdateCurrentCoordinatesFromDisplacement,
     InitializeNonLinearIteration,
     FinalizeNonLinearIteration,
-    CalculateHomogenizedStressAndStrainKratosReference,
+    CalculateHomogenizedFromAssemblerWithElementWeights,
     DetectMaterialSubModelParts,
     ConfigureElementModelerForMaterialParts,
     StripMdpaExtension,
@@ -82,6 +82,9 @@ def RunPromBatchSimulation(
     entities = list(mp.Elements) + list(mp.Conditions)
     n_dof, eq_id_map, ta_disp = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
     vec_assembler = VectorizedAssembler(mp, n_dof, eq_id_map)
+    hom_reference_measure = float(np.sum(np.asarray(vec_assembler.area_e, dtype=float)))
+    with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
+        f.write(f"{hom_reference_measure:.16e}\n")
 
     free_dofs = np.asarray(free_dofs, dtype=np.int64)
     free_mask = np.zeros(n_dof, dtype=bool)
@@ -263,7 +266,10 @@ def RunPromBatchSimulation(
         _, _ = vec_assembler.Assemble(u_eq_final)
         FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
-        hom_eps, hom_sig = CalculateHomogenizedStressAndStrainKratosReference(mp)
+        hom_eps, hom_sig = CalculateHomogenizedFromAssemblerWithElementWeights(
+            vec_assembler,
+            reference_measure=hom_reference_measure,
+        )
         sim.FinalizeSolutionStep()
         
         Q_hist.append(q.copy())

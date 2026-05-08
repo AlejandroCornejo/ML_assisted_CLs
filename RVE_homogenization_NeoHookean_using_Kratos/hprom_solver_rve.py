@@ -39,6 +39,10 @@ from fom_solver_rve import (
 )
 from fom_solver_rve import VectorizedAssembler
 from scipy.sparse import coo_matrix
+from homogenization_gappy import (
+    extract_sampled_hom_vector_from_assembler,
+    evaluate_gappy_homogenization_from_sample,
+)
 
 # =============================================================================
 # HPROM Assembly: Only selected elements, weighted
@@ -361,6 +365,113 @@ def CalculateHomogenizedFromAssemblerWithElementWeights(assembler, w_eps=None, w
     return hom_eps, hom_sig
 
 
+def ResolveGappyHomogenizationOperator(
+    ecm_data,
+    gappy_data,
+    n_current_elements,
+    using_hrom_mesh=False,
+    solver_label="HPROM",
+):
+    """
+    Resolve an optional Gappy-POD homogenization operator on the current mesh.
+
+    Returns dict:
+      {
+        "M": (6, m) matrix,
+        "b": (6,) offset,
+        "sample_elements": (m/6,) local element indices in current mesh order,
+      }
+    or None when unavailable/incompatible.
+    """
+    src = gappy_data if gappy_data is not None else ecm_data
+    if src is None:
+        return None
+    if ("hom_gappy_matrix" not in src) or ("hom_gappy_offset" not in src):
+        return None
+
+    M = np.asarray(src["hom_gappy_matrix"], dtype=float)
+    b = np.asarray(src["hom_gappy_offset"], dtype=float).reshape(-1)
+    if M.ndim != 2 or M.shape[0] != 6 or b.size != 6:
+        print(f"[{solver_label}] WARNING: invalid gappy operator shape, ignoring.")
+        return None
+
+    if using_hrom_mesh:
+        if "hom_gappy_sample_elements_hrom" in src:
+            z = np.asarray(src["hom_gappy_sample_elements_hrom"], dtype=np.int64).reshape(-1)
+        elif (
+            ("hom_gappy_sample_elements" in src)
+            and ("hrom_element_full_indices" in ecm_data)
+        ):
+            z_full = np.asarray(src["hom_gappy_sample_elements"], dtype=np.int64).reshape(-1)
+            full_to_local = {
+                int(full_idx): i
+                for i, full_idx in enumerate(np.asarray(ecm_data["hrom_element_full_indices"], dtype=np.int64))
+            }
+            z_loc = []
+            missing = []
+            for full_idx in z_full:
+                loc = full_to_local.get(int(full_idx))
+                if loc is None:
+                    missing.append(int(full_idx))
+                else:
+                    z_loc.append(int(loc))
+            if missing:
+                print(
+                    f"[{solver_label}] WARNING: gappy operator missing {len(missing)} sampled elements "
+                    "in HROM mapping; ignoring gappy operator."
+                )
+                return None
+            z = np.asarray(z_loc, dtype=np.int64)
+        else:
+            print(
+                f"[{solver_label}] WARNING: gappy operator has no HROM sample mapping; "
+                "ignoring gappy operator on reduced mesh."
+            )
+            return None
+    else:
+        if "hom_gappy_sample_elements" not in src:
+            print(f"[{solver_label}] WARNING: gappy operator missing sample element list.")
+            return None
+        z = np.asarray(src["hom_gappy_sample_elements"], dtype=np.int64).reshape(-1)
+
+    n_cur = int(n_current_elements)
+    if z.size == 0:
+        print(f"[{solver_label}] WARNING: gappy operator sample set is empty.")
+        return None
+    if np.min(z) < 0 or np.max(z) >= n_cur:
+        print(
+            f"[{solver_label}] WARNING: gappy sample index out of range for current mesh "
+            f"(min={int(np.min(z))}, max={int(np.max(z))}, n_elem={n_cur})."
+        )
+        return None
+
+    expected_cols = 6 * int(z.size)
+    if M.shape[1] != expected_cols:
+        print(
+            f"[{solver_label}] WARNING: gappy matrix columns={M.shape[1]} "
+            f"do not match 6*|Z|={expected_cols}."
+        )
+        return None
+
+    output_is_average = False
+    if "hom_gappy_output_is_average" in src:
+        output_is_average = bool(int(np.ravel(src["hom_gappy_output_is_average"])[0]))
+
+    reference_measure = None
+    if "hom_gappy_reference_measure" in src:
+        val = float(np.ravel(src["hom_gappy_reference_measure"])[0])
+        if np.isfinite(val) and abs(val) > 1.0e-30:
+            reference_measure = val
+
+    return {
+        "M": M,
+        "b": b,
+        "sample_elements": z,
+        "output_is_average": output_is_average,
+        "reference_measure": reference_measure,
+    }
+
+
 def ResolveActiveFreeDofsAndBasisRows(
     mp,
     n_dof,
@@ -455,6 +566,8 @@ def RunHpromBatchSimulation(
     max_newton_it=20,
     use_old_stiffness_in_first_iteration=USE_OLD_STIFFNESS_IN_FIRST_ITERATION,
     use_fast_dirichlet_bc=True,
+    homogenization_method="ecm_weighted",
+    homogenization_gappy_data=None,
 ):
     os.makedirs(out_dir, exist_ok=True)
     phi_f_ref = np.asarray(phi_f, dtype=float)
@@ -586,16 +699,63 @@ def RunHpromBatchSimulation(
         n_current_elements=len(elements),
         solver_label="HPROM",
     )
-    # Keep old/full-mesh behavior exact: weighted homogenization is only used on HROM meshes.
-    if using_weighted_hom and (not using_hrom_mesh):
+    hom_reference_measure = GetReferenceIntegrationMeasureFromMesh(full_mesh_base)
+    print(f"[HPROM] Homogenization reference measure A0 (full mesh): {hom_reference_measure:.6e}")
+    with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
+        f.write(f"{float(hom_reference_measure):.16e}\n")
+
+    method = str(homogenization_method).strip().lower()
+    if method in ("default", "ecm", "ecm_weighted"):
+        method = "ecm_weighted"
+    elif method in ("gappy", "gappy_pod", "gappy_pod_residual_sampling"):
+        method = "gappy_pod"
+    elif method in ("kratos", "kratos_reference", "direct"):
+        method = "kratos_reference"
+    else:
+        raise RuntimeError(f"[HPROM] Unknown homogenization_method='{homogenization_method}'.")
+
+    gappy_op = ResolveGappyHomogenizationOperator(
+        ecm_data=ecm_data,
+        gappy_data=homogenization_gappy_data,
+        n_current_elements=len(elements),
+        using_hrom_mesh=using_hrom_mesh,
+        solver_label="HPROM",
+    )
+    use_gappy_hom = False
+    gappy_ref_measure = None
+    if method == "gappy_pod":
+        if gappy_op is not None:
+            use_gappy_hom = True
+            using_weighted_hom = False
+            print(
+                f"[HPROM] Using Gappy-POD homogenization on residual sample set "
+                f"(|Z|={int(gappy_op['sample_elements'].size)})."
+            )
+            if gappy_op.get("output_is_average", False):
+                print("[HPROM] Gappy operator outputs are already homogenized averages.")
+            else:
+                gappy_ref_measure = gappy_op.get("reference_measure")
+                if gappy_ref_measure is None:
+                    gappy_ref_measure = GetReferenceIntegrationMeasureFromMesh(full_mesh_base)
+                print(
+                    "[HPROM] Gappy operator outputs integrals; normalizing by "
+                    f"reference measure A_ref={float(gappy_ref_measure):.6e}."
+                )
+        else:
+            raise RuntimeError("[HPROM] Gappy homogenization requested but operator is unavailable.")
+    elif method == "kratos_reference":
         using_weighted_hom = False
-    hom_reference_measure = None
-    if using_weighted_hom:
+        use_gappy_hom = False
+        print("[HPROM] Using Kratos-reference homogenization.")
+
+    if method == "ecm_weighted":
+        if not using_weighted_hom:
+            raise RuntimeError(
+                "[HPROM] ECM homogenization selected but weights are unavailable on the current mesh."
+            )
         print("[HPROM] Using ECM-weighted homogenization (w_eps / w_sig).")
-        hom_reference_measure = GetReferenceIntegrationMeasureFromMesh(full_mesh_base)
-        print(f"[HPROM] Homogenization reference measure (full mesh): {hom_reference_measure:.6e}")
-    elif using_hrom_mesh:
-        print("[HPROM] WARNING: ECM homogenization weights not available; using direct reduced-mesh homogenization.")
+    elif method == "kratos_reference":
+        print("[HPROM] Using unweighted full/reduced numerator with reference-area denominator.")
 
     # HPROM Initialization
     r = phi_f.shape[1]
@@ -733,7 +893,18 @@ def RunHpromBatchSimulation(
         t_full_sync += time.perf_counter() - t0_sync
         FinalizeNonLinearIteration(all_entities, mp.ProcessInfo)
 
-        if using_weighted_hom:
+        if use_gappy_hom:
+            sampled_c = extract_sampled_hom_vector_from_assembler(
+                vec_full_assembler, gappy_op["sample_elements"]
+            )
+            hom_vec = evaluate_gappy_homogenization_from_sample(
+                sampled_c, gappy_op["M"], gappy_op["b"]
+            )
+            if not gappy_op.get("output_is_average", False):
+                hom_vec = np.asarray(hom_vec, dtype=float) / float(gappy_ref_measure)
+            hom_eps = np.asarray(hom_vec[0:3], dtype=float)
+            hom_sig = np.asarray(hom_vec[3:6], dtype=float)
+        elif using_weighted_hom:
             hom_eps, hom_sig = CalculateHomogenizedFromAssemblerWithElementWeights(
                 vec_full_assembler,
                 w_eps=w_eps_hom,
@@ -741,7 +912,11 @@ def RunHpromBatchSimulation(
                 reference_measure=hom_reference_measure,
             )
         else:
-            hom_eps, hom_sig = CalculateHomogenizedStressAndStrainKratosReference(mp)
+            hom_eps, hom_sig = CalculateHomogenizedStressAndStrainKratosReference(
+                mp,
+                reference_area_e=np.asarray(vec_full_assembler.area_e, dtype=float),
+                reference_measure=hom_reference_measure,
+            )
         sim.FinalizeSolutionStep()
 
         Q_hist.append(q.copy())

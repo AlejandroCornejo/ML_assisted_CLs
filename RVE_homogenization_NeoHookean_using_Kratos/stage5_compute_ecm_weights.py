@@ -8,6 +8,7 @@ a sparse set of elements and their integration weights for HPROM.
 """
 
 import os
+import argparse
 import numpy as np
 
 from empirical_cubature_method import EmpiricalCubatureMethod
@@ -111,14 +112,14 @@ def run_rsvd_on_transpose(M_T, rsvd_tol, label=""):
     return U, s, float(eSVD)
 
 
-def run_ecm(U_basis, n_elem, ecm_tol, init_candidates, label=""):
+def run_ecm(U_basis, n_elem, ecm_tol, init_candidates, label="", max_unsuccessful_it=ECM_MAX_UNSUCCESSFUL_IT):
     """Run the greedy ECM element selection."""
     print(f"\n[{label}] Running Empirical Cubature Method")
     ecm = EmpiricalCubatureMethod(
         ECM_tolerance=float(ecm_tol),
         Filter_tolerance=0.0,
         Plotting=False,
-        MaximumNumberUnsuccesfulIterations=int(ECM_MAX_UNSUCCESSFUL_IT),
+        MaximumNumberUnsuccesfulIterations=int(max_unsuccessful_it),
     )
 
     ecm.SetUp(
@@ -141,44 +142,85 @@ def run_ecm(U_basis, n_elem, ecm_tol, init_candidates, label=""):
     return Z, w_sel, w_full
 
 
+def parse_args():
+    p = argparse.ArgumentParser(description="Stage 5b: compute ECM weights from a Stage-5 dataset.")
+    p.add_argument("--data-dir", type=str, default=DATA_DIR, help="Input dataset directory (contains Q_ecm.dat, C_hom.dat, meta.npz).")
+    p.add_argument("--out-dir", type=str, default=OUT_DIR, help="Output directory for ECM weights npz.")
+    p.add_argument("--rsvd-tol-res", type=float, default=RSVD_TOL_RES)
+    p.add_argument("--rsvd-tol-eps", type=float, default=RSVD_TOL_EPS)
+    p.add_argument("--rsvd-tol-sig", type=float, default=RSVD_TOL_SIG)
+    p.add_argument("--ecm-tol-res", type=float, default=ECM_TOL_RES)
+    p.add_argument("--ecm-tol-eps", type=float, default=ECM_TOL_EPS)
+    p.add_argument("--ecm-tol-sig", type=float, default=ECM_TOL_SIG)
+    p.add_argument("--max-unsuccessful-it", type=int, default=ECM_MAX_UNSUCCESSFUL_IT)
+    p.add_argument(
+        "--ecm-coupling-mode",
+        type=str,
+        default="coupled",
+        choices=["coupled", "independent"],
+        help=(
+            "coupled: EPS starts from Z_res and SIG starts from Z_eps (legacy behavior). "
+            "independent: RES/EPS/SIG are selected independently from full candidates."
+        ),
+    )
+    return p.parse_args()
+
+
 # ============================================================
 # MAIN
 # ============================================================
 
 def main():
-    os.makedirs(OUT_DIR, exist_ok=True)
+    args = parse_args()
+    data_dir = str(args.data_dir)
+    out_dir = str(args.out_dir)
+    os.makedirs(out_dir, exist_ok=True)
+
+    q_file = os.path.join(data_dir, "Q_ecm.dat")
+    b_file = os.path.join(data_dir, "b_full.dat")
+    c_file = os.path.join(data_dir, "C_hom.dat")
+    bh_file = os.path.join(data_dir, "b_hom.dat")
+    meta_file = os.path.join(data_dir, "meta.npz")
 
     # --- Check files ---
-    for f in [Q_FILE, B_FILE, C_FILE, BH_FILE, META_FILE]:
+    for f in [q_file, b_file, c_file, bh_file, meta_file]:
         if not os.path.isfile(f):
             raise FileNotFoundError(f)
 
     # --- Load metadata ---
-    meta = np.load(META_FILE, allow_pickle=True)
-    nq     = int(meta["nq"])
-    Ns     = int(meta["N_s"])
-    n_elem = int(meta["n_elem"])
+    meta = np.load(meta_file, allow_pickle=True)
+    nq      = int(meta["nq"])
+    Ns_res  = int(meta["N_s_res"])
+    Ns_hom  = int(meta["N_s_hom"])
+    n_elem  = int(meta["n_elem"])
+    A0_ref = float(np.ravel(meta["A_total"])[0]) if "A_total" in meta else None
 
-    n_rows_res = nq * Ns
-    n_rows_hom = 6 * Ns
-    n_rows_eps = 3 * Ns
-    n_rows_sig = 3 * Ns
+    n_rows_res = nq * Ns_res
+    n_rows_hom = 6 * Ns_hom
+    n_rows_eps = 3 * Ns_hom
+    n_rows_sig = 3 * Ns_hom
 
     print("=" * 60)
     print("  Stage 5b: ECM Weight Computation")
     print("=" * 60)
     print(f"  nq (POD modes)  = {nq}")
-    print(f"  Ns (snapshots)  = {Ns}")
+    print(f"  Ns_res (snapshots for residual)      = {Ns_res}")
+    print(f"  Ns_hom (snapshots for homogenization)= {Ns_hom}")
     print(f"  n_elem          = {n_elem}")
     print(f"  Q_ecm rows      = {n_rows_res}")
     print(f"  C_hom rows      = {n_rows_hom}  (eps={n_rows_eps}, sig={n_rows_sig})")
+    print(f"  data_dir        = {data_dir}")
+    print(f"  out_dir         = {out_dir}")
+    print(f"  coupling mode   = {args.ecm_coupling_mode}")
+    if A0_ref is not None:
+        print(f"  reference area A0 = {A0_ref:.6e}")
 
     # --- Load memmaps ---
-    Q_res = np.memmap(Q_FILE, dtype=np.float64, mode="r", shape=(n_rows_res, n_elem))
-    b_res = np.memmap(B_FILE, dtype=np.float64, mode="r", shape=(n_rows_res,))
+    Q_res = np.memmap(q_file, dtype=np.float64, mode="r", shape=(n_rows_res, n_elem))
+    b_res = np.memmap(b_file, dtype=np.float64, mode="r", shape=(n_rows_res,))
 
-    C_hom = np.memmap(C_FILE, dtype=np.float64, mode="r", shape=(n_rows_hom, n_elem))
-    b_hom = np.memmap(BH_FILE, dtype=np.float64, mode="r", shape=(n_rows_hom,))
+    C_hom = np.memmap(c_file, dtype=np.float64, mode="r", shape=(n_rows_hom, n_elem))
+    b_hom = np.memmap(bh_file, dtype=np.float64, mode="r", shape=(n_rows_hom,))
 
     # --- Sanity checks ---
     print("\n[Sanity] Checking consistency: Q·1 ≈ b")
@@ -199,19 +241,20 @@ def main():
     print(f"  [HOM]  ||C·1 − b||         = {abs_b_hom:.3e}  (max |.| = {max_b_hom:.3e})")
     if err_b_hom > 1e-10:
         print("  [HOM][WARN] b_hom is NOT consistent with C_hom!")
-    print_snapshot_residual_stats(b_res, nq=nq, Ns=Ns)
+    print_snapshot_residual_stats(b_res, nq=nq, Ns=Ns_res)
 
     # =========================================================
     # 1. ECM for the RESIDUAL (projected internal forces)
     # =========================================================
-    U_res, s_res, eSVD_res = run_rsvd_on_transpose(Q_res.T, RSVD_TOL_RES, label="RES")
+    U_res, s_res, eSVD_res = run_rsvd_on_transpose(Q_res.T, args.rsvd_tol_res, label="RES")
 
     Z_res, w_res_sel, w_res_full = run_ecm(
         U_basis=U_res,
         n_elem=n_elem,
-        ecm_tol=ECM_TOL_RES,
+        ecm_tol=args.ecm_tol_res,
         init_candidates=None,
-        label="RES"
+        label="RES",
+        max_unsuccessful_it=args.max_unsuccessful_it,
     )
 
     b_hp_res = Q_res @ w_res_full
@@ -224,17 +267,27 @@ def main():
     # =========================================================
     # 2. ECM for STRAIN homogenization
     # =========================================================
-    C_eps = C_hom[0:n_rows_eps, :]
-    b_eps = b_hom[0:n_rows_eps]
+    # IMPORTANT:
+    # Stage 5a stores homogenization rows per snapshot as:
+    #   [eps_xx, eps_yy, eps_xy, sig_xx, sig_yy, sig_xy]
+    # Therefore EPS/SIG rows are interleaved in 6-row blocks and must be split
+    # by block, not by a single contiguous top/bottom cut.
+    C_blk = np.asarray(C_hom, dtype=float).reshape(Ns_hom, 6, n_elem)
+    b_blk = np.asarray(b_hom, dtype=float).reshape(Ns_hom, 6)
 
-    U_eps, s_eps, eSVD_eps = run_rsvd_on_transpose(C_eps.T, RSVD_TOL_EPS, label="EPS")
+    C_eps = C_blk[:, 0:3, :].reshape(n_rows_eps, n_elem)
+    b_eps = b_blk[:, 0:3].reshape(n_rows_eps)
 
+    U_eps, s_eps, eSVD_eps = run_rsvd_on_transpose(C_eps.T, args.rsvd_tol_eps, label="EPS")
+
+    eps_init = np.array(Z_res, dtype=int) if str(args.ecm_coupling_mode).lower() == "coupled" else None
     Z_eps, w_eps_sel, w_eps_full = run_ecm(
         U_basis=U_eps,
         n_elem=n_elem,
-        ecm_tol=ECM_TOL_EPS,
-        init_candidates=np.array(Z_res, dtype=int),
-        label="EPS"
+        ecm_tol=args.ecm_tol_eps,
+        init_candidates=eps_init,
+        label="EPS",
+        max_unsuccessful_it=args.max_unsuccessful_it,
     )
 
     b_hp_eps = C_eps @ w_eps_full
@@ -247,17 +300,19 @@ def main():
     # =========================================================
     # 3. ECM for STRESS homogenization
     # =========================================================
-    C_sig = C_hom[n_rows_eps:n_rows_eps + n_rows_sig, :]
-    b_sig = b_hom[n_rows_eps:n_rows_eps + n_rows_sig]
+    C_sig = C_blk[:, 3:6, :].reshape(n_rows_sig, n_elem)
+    b_sig = b_blk[:, 3:6].reshape(n_rows_sig)
 
-    U_sig, s_sig, eSVD_sig = run_rsvd_on_transpose(C_sig.T, RSVD_TOL_SIG, label="SIG")
+    U_sig, s_sig, eSVD_sig = run_rsvd_on_transpose(C_sig.T, args.rsvd_tol_sig, label="SIG")
 
+    sig_init = np.array(Z_eps, dtype=int) if str(args.ecm_coupling_mode).lower() == "coupled" else None
     Z_sig, w_sig_sel, w_sig_full = run_ecm(
         U_basis=U_sig,
         n_elem=n_elem,
-        ecm_tol=ECM_TOL_SIG,
-        init_candidates=np.array(Z_eps, dtype=int),
-        label="SIG"
+        ecm_tol=args.ecm_tol_sig,
+        init_candidates=sig_init,
+        label="SIG",
+        max_unsuccessful_it=args.max_unsuccessful_it,
     )
 
     b_hp_sig = C_sig @ w_sig_full
@@ -279,11 +334,15 @@ def main():
     print(f"  |Z_eps|   = {Z_eps.size:5d}  ({100.*Z_eps.size/n_elem:.1f}%)")
     print(f"  |Z_sig|   = {Z_sig.size:5d}  ({100.*Z_sig.size/n_elem:.1f}%)")
     print(f"  |Z_union| = {Z_union.size:5d}  ({100.*Z_union.size/n_elem:.1f}%)")
+    if str(args.ecm_coupling_mode).lower() == "coupled":
+        print("  coupling detail: EPS initialized with Z_res, SIG initialized with Z_eps")
+    else:
+        print("  coupling detail: EPS and SIG initialized independently (full candidate sets)")
 
     # =========================================================
     # 5. Save
     # =========================================================
-    out_file = os.path.join(OUT_DIR, "ecm_weights_all.npz")
+    out_file = os.path.join(out_dir, "ecm_weights_all.npz")
 
     np.savez(
         out_file,
@@ -294,12 +353,23 @@ def main():
         w_eps=w_eps_sel, w_eps_full=w_eps_full,
         w_sig=w_sig_sel, w_sig_full=w_sig_full,
         # Metadata
-        nq=nq, Ns=Ns, n_elem=n_elem,
+        nq=nq, Ns_res=Ns_res, Ns_hom=Ns_hom, n_elem=n_elem,
         # Tolerances and errors
-        RSVD_TOL_RES=RSVD_TOL_RES, eSVD_res=eSVD_res, rel_error_res=err_hp_res,
-        RSVD_TOL_EPS=RSVD_TOL_EPS, eSVD_eps=eSVD_eps, rel_error_eps=err_hp_eps,
-        RSVD_TOL_SIG=RSVD_TOL_SIG, eSVD_sig=eSVD_sig, rel_error_sig=err_hp_sig,
+        RSVD_TOL_RES=float(args.rsvd_tol_res), eSVD_res=eSVD_res, rel_error_res=err_hp_res,
+        RSVD_TOL_EPS=float(args.rsvd_tol_eps), eSVD_eps=eSVD_eps, rel_error_eps=err_hp_eps,
+        RSVD_TOL_SIG=float(args.rsvd_tol_sig), eSVD_sig=eSVD_sig, rel_error_sig=err_hp_sig,
+        ECM_TOL_RES=float(args.ecm_tol_res),
+        ECM_TOL_EPS=float(args.ecm_tol_eps),
+        ECM_TOL_SIG=float(args.ecm_tol_sig),
+        ECM_COUPLING_MODE=np.array([str(args.ecm_coupling_mode)]),
+        data_dir=np.array([data_dir]),
+        A0_ref=np.array([float(A0_ref if A0_ref is not None else np.nan)], dtype=float),
+        hom_reference_measure=np.array([float(A0_ref if A0_ref is not None else np.nan)], dtype=float),
     )
+
+    if A0_ref is not None:
+        with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
+            f.write(f"{A0_ref:.16e}\n")
 
     print(f"\n[DONE] Saved → {out_file}")
 

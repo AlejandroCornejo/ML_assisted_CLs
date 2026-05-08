@@ -20,7 +20,7 @@ from fom_solver_rve import (
     InitializeNonLinearIteration,
     FinalizeNonLinearIteration,
     BuildDynamicSegmentSteps,
-    CalculateHomogenizedStressAndStrainKratosReference,
+    CalculateHomogenizedFromAssemblerWithElementWeights,
     REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
     MIN_STEPS_PER_SEGMENT,
     USE_OLD_STIFFNESS_IN_FIRST_ITERATION,
@@ -135,6 +135,9 @@ def RunPromAnnBatchSimulation(
     
     n_total_dof, eq_id_map, ta = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
     vec_assembler = VectorizedAssembler(mp, n_total_dof, eq_id_map)
+    hom_reference_measure = float(np.sum(np.asarray(vec_assembler.area_e, dtype=float)))
+    with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
+        f.write(f"{hom_reference_measure:.16e}\n")
     elements = list(mp.Elements)
     entities = list(mp.Elements) + list(mp.Conditions)
 
@@ -570,7 +573,10 @@ def RunPromAnnBatchSimulation(
         u_curr = _capture_current_displacement_vector()
         _, _ = vec_assembler.Assemble(u_curr)
         FinalizeNonLinearIteration(entities, mp.ProcessInfo)
-        eps_h, sig_h = CalculateHomogenizedStressAndStrainKratosReference(mp)
+        eps_h, sig_h = CalculateHomogenizedFromAssemblerWithElementWeights(
+            vec_assembler,
+            reference_measure=hom_reference_measure,
+        )
         sim.FinalizeSolutionStep()
 
         results_eps.append(eps_h)

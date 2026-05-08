@@ -389,10 +389,15 @@ def ExtractEquationDisplacements(mp, n_dof, eq_map):
     return u_eq
 
 
-def CalculateHomogenizedStressAndStrain(mp):
+def CalculateHomogenizedStressAndStrain(
+    mp,
+    reference_area_e=None,
+    reference_measure=None,
+):
     process_info = mp.ProcessInfo
 
-    first = next(iter(mp.Elements), None)
+    elements = list(mp.Elements)
+    first = elements[0] if elements else None
     if first is None:
         return np.zeros(3, dtype=float), np.zeros(3, dtype=float)
 
@@ -402,11 +407,21 @@ def CalculateHomogenizedStressAndStrain(mp):
     )
     n_ip, voigt = dummy.shape
 
+    if reference_area_e is None:
+        raise RuntimeError(
+            "CalculateHomogenizedStressAndStrain requires reference_area_e from the undeformed mesh."
+        )
+    ref_area_e = np.asarray(reference_area_e, dtype=float).reshape(-1)
+    if ref_area_e.size != len(elements):
+        raise RuntimeError(
+            f"reference_area_e size {ref_area_e.size} does not match number of elements {len(elements)}."
+        )
+
     eps_h = np.zeros(voigt, dtype=float)
     sig_h = np.zeros(voigt, dtype=float)
-    area = 0.0
+    area = float(np.sum(ref_area_e)) if reference_measure is None else float(reference_measure)
 
-    for elem in mp.Elements:
+    for e, elem in enumerate(elements):
         eps = np.array(
             elem.CalculateOnIntegrationPoints(KM.GREEN_LAGRANGE_STRAIN_VECTOR, process_info),
             dtype=float,
@@ -416,8 +431,7 @@ def CalculateHomogenizedStressAndStrain(mp):
             dtype=float,
         )
 
-        A = float(elem.GetGeometry().Area())
-        area += A
+        A = float(ref_area_e[e])
         eps_h += A * np.sum(eps, axis=0) / float(n_ip)
         sig_h += A * np.sum(sig, axis=0) / float(n_ip)
 
@@ -541,6 +555,11 @@ def RunKratosBatchSimulation(
     sim = RVEKratosHomogenizationStage(model, params)
     sim.Initialize()
     mp = sim._GetSolver().GetComputingModelPart()
+    reference_area_e = np.array([float(elem.GetGeometry().Area()) for elem in mp.Elements], dtype=float)
+    reference_measure = float(np.sum(reference_area_e))
+    print(f"[KRATOS] Homogenization reference measure A0 = {reference_measure:.6e}")
+    with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
+        f.write(f"{reference_measure:.16e}\n")
 
     n_dof, eq_map = SetUpDofEquationIds(mp)
 
@@ -580,7 +599,11 @@ def RunKratosBatchSimulation(
 
         # Keep current coordinates synchronized with DISPLACEMENT before GP queries.
         UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
-        eps_h, sig_h = CalculateHomogenizedStressAndStrain(mp)
+        eps_h, sig_h = CalculateHomogenizedStressAndStrain(
+            mp,
+            reference_area_e=reference_area_e,
+            reference_measure=reference_measure,
+        )
         strain_hist.append(eps_h)
         stress_hist.append(sig_h)
         U_hist.append(ExtractEquationDisplacements(mp, n_dof, eq_map))
