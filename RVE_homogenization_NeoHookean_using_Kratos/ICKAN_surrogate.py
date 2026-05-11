@@ -120,7 +120,8 @@ class KANStressPredictor(nn.Module):
             width=[self.input_size, 1, 1], # output of size 1: W
             grid=self.grid,
             k=self.k,
-            # grid_range=[-100, 100.0]
+            grid_range_0=[[-1,1],[-1,1],[-1,1]],
+            grid_range=[[-1,1],[-1,1],[-1,1]]
         )
 
         # Initialize some extra parameters
