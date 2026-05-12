@@ -298,9 +298,9 @@ class KANStressPredictor(nn.Module):
             kan_input = self.ComputeKANInput(strain)
         
         # Compute W0 at zero strain (constant offset, no gradient needed)
-        zeros = torch.zeros_like(strain)
+        zeros = torch.zeros_like(kan_input)
         with torch.no_grad():
-            W0 = self.CalculateW(zeros)
+            W0 = self.CalculateWWithoutNormalizationFromInput(zeros, batches, steps)
         
         # Use the KAN input for W (forward pass)
         W = self.CalculateWWithoutNormalizationFromInput(kan_input, batches, steps)
