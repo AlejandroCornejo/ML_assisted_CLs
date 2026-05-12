@@ -37,7 +37,7 @@ INPUT DATASET:
 Load strain and stress from FOM trajectories (10 trajectories from stage_1_training_set_fom folder).
 Data is loaded as [history, step, component] with shape [10, steps, 3].
 """
-n_epochs = 10000
+n_epochs = 5000
 learning_rate = 0.05
 min_steps = 500  # We can set this to a fixed value if we want to truncate all trajectories to the same length (e.g., 150 steps)
 
@@ -111,18 +111,18 @@ class KANStressPredictor(nn.Module):
         # EDIT:
         self.order_stretches = 1  # Number of orders (can be set to any value)
         self.k = 2  # Degree of splines
-        self.grid = 4  # Number of knots
+        self.grid = 3  # Number of knots
         # -------------------------------------
 
         self.input_size = 2 * self.order_stretches + 1  # Total inputs: 2 * reg_eigenvalues for each order + 1 * log(J)
 
         # KAN definition
         self.KAN_W = KAN.MultKAN(
-            width=[self.input_size, self.input_size, self.input_size-1, 1, 1], # output of size 1: W
+            width=[self.input_size, self.input_size, self.input_size, 1], # output of size 1: W
             grid=self.grid,
             k=self.k,
-            grid_range_0=[[-1,1],[-1,1],[0,1]],
-            grid_range=[[-1,1],[-1,1],[0,1]]
+            grid_range_0=[[-1,2],[-1,2],[0,1]],
+            grid_range=[[-1,2],[-1,2],[0,1]]
         )
 
         # Initialize some extra parameters
@@ -149,9 +149,10 @@ class KANStressPredictor(nn.Module):
         self.ki[-1] = nn.Parameter(torch.tensor(1.0))
 
     # ==========================================================================================
-    def CalculateWWithoutNormalization(self, strain):
+    def ComputeKANInput(self, strain):
         """
-        Computes W for the given strain without normalization.
+        Computes the input for the KAN layer based on the given strain.
+        This method is separated from CalculateW to allow for more modularity and potential reuse.
         """
         batches = strain.shape[0]
         steps = strain.shape[1]
@@ -184,9 +185,6 @@ class KANStressPredictor(nn.Module):
         for index in range(self.order_stretches):
             # Compute reg_eigenvalues**order
             reg_eigenvalues_order = reg_eigenvalues ** self.ki[index]
-            # reg_eigenvalues_order = reg_eigenvalues
-
-            # Append the pair of stretches for this order
             kan_inputs.append(reg_eigenvalues_order)
 
         # Append log(J) multiplied by the last ki factor
@@ -197,8 +195,16 @@ class KANStressPredictor(nn.Module):
         # Concatenate all inputs along the last dimension
         KAN_input = torch.cat(kan_inputs, dim=-1)  # Shape: (batches, steps, 2 * self.order_stretches + 1)
 
-        # Flatten the input for KAN (KAN cannot read 3D tensors)
-        flat_KAN_input = KAN_input.view(-1, self.input_size)  # Shape: (batch x steps, input_size)
+        return KAN_input.view(-1, self.input_size)  # Reshape to (batches*steps, input_size)
+
+    def CalculateWWithoutNormalization(self, strain):
+        """
+        Computes W for the given strain without normalization.
+        """
+        batches = strain.shape[0]
+        steps = strain.shape[1]
+
+        flat_KAN_input = self.ComputeKANInput(strain)
 
         # Pass the input through the KAN layer
         W_flat = self.KAN_W.forward(flat_KAN_input)  # Shape: (batch x steps, 1)
@@ -401,6 +407,7 @@ def TRAIN_KAN(model, optimizer, train_strain_database, train_stress_database, n_
 
 # Initialize model, optimizer, and loss function
 model = KANStressPredictor()
+model.KAN_W.speed()
 
 # Count total parameters
 total_params = sum(p.numel() for p in model.parameters())
@@ -409,6 +416,9 @@ print(f"\n{'='*50}")
 print(f"Total model parameters: {total_params:,}")
 print(f"Trainable parameters: {trainable_params:,}")
 
+# We adapt the grids of the KAN to the input data before training, so that the splines are active from the beginning of training
+flat_KAN_input = model.ComputeKANInput(train_strain_database)
+model.KAN_W.update_grid(flat_KAN_input)
 
 
 print("\nNull strain KAN prediction initial CHECK: ", model.forward(torch.tensor([[[0.0, 0.0, 0.0]]]))) # for the order 1
@@ -423,22 +433,30 @@ print("\n")
 #     # history_size=7,
 #     # line_search_fn='strong_wolfe'
 # )
-optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-# optimizer = optim.LBFGS(
-#                     model.parameters(),
-#                     lr=learning_rate,
-#                     max_iter=20,
-#                     history_size=30
-#                 )
+optimizer_1 = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-3)
+optimizer_2 = optim.LBFGS(
+                    model.parameters(),
+                    lr=learning_rate,
+                    max_iter=50,
+                    history_size=50
+                )
 
 
 # Train the KAN model using mean stress difference loss on all data
 TRAIN_KAN(
     model=model,
-    optimizer=optimizer,
+    optimizer=optimizer_1,
     train_strain_database=train_strain_database,
     train_stress_database=train_stress_database,
     n_epochs=n_epochs)
+
+# fine tuning with LBFGS
+TRAIN_KAN(
+    model=model,
+    optimizer=optimizer_2,
+    train_strain_database=train_strain_database,
+    train_stress_database=train_stress_database,
+    n_epochs=500)
 
 for i, ki in enumerate(model.ki):
     print("self.ki[i]: ", ki.data)
