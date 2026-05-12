@@ -76,6 +76,133 @@ def _save_ecm(path, data):
     np.savez(path, **data)
 
 
+def _save_selected_elements_image_latex_style(
+    origin_mp,
+    selected_elem_ids_1based,
+    out_png,
+    model_label="HPROM",
+    selection_key="Z_union",
+    width=2200,
+    height=1400,
+    use_tex=False,
+):
+    """
+    Save a paper-style PNG showing ECM-selected elements using Matplotlib.
+    Uses a LaTeX-like paper style (Computer Modern family) with optional TeX rendering.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from plot_style_utils import apply_latex_plot_style
+    apply_latex_plot_style()
+    from matplotlib.collections import PolyCollection
+
+    fig_w = max(float(width) / 240.0, 7.0)
+    fig_h = max(float(height) / 240.0, 5.0)
+    # Scale typography with figure area so sizes are not hard-coded.
+    base_w, base_h = 12.0, 8.0
+    style_scale = np.sqrt((fig_w * fig_h) / (base_w * base_h))
+
+    plt.rcParams.update(
+        {
+            "text.usetex": bool(use_tex),
+            "font.family": "serif",
+            "font.serif": ["Computer Modern Roman"],
+            "mathtext.fontset": "cm",
+            "axes.titlesize": 22.0 * style_scale,
+            "axes.labelsize": 20.0 * style_scale,
+            "legend.fontsize": 15.0 * style_scale,
+            "xtick.labelsize": 16.0 * style_scale,
+            "ytick.labelsize": 16.0 * style_scale,
+            "lines.linewidth": 2.5,
+            "axes.linewidth": 1.2,
+            "grid.linewidth": 0.6,
+            "grid.alpha": 0.35,
+            "figure.figsize": (fig_w, fig_h),
+        }
+    )
+
+    selected_set = set(int(v) for v in selected_elem_ids_1based)
+    n_total = int(origin_mp.NumberOfElements())
+    n_sel = int(len(selected_set))
+    pct = 100.0 * float(n_sel) / max(float(n_total), 1.0)
+    pct_symbol = r"\%" if bool(use_tex) else "%"
+
+    tris_all = []
+    tris_sel = []
+    for elem in origin_mp.Elements:
+        geom = elem.GetGeometry()
+        if geom.PointsNumber() < 3:
+            continue
+        tri = np.array(
+            [
+                [float(geom[0].X0), float(geom[0].Y0)],
+                [float(geom[1].X0), float(geom[1].Y0)],
+                [float(geom[2].X0), float(geom[2].Y0)],
+            ],
+            dtype=float,
+        )
+        tris_all.append(tri)
+        if int(elem.Id) in selected_set:
+            tris_sel.append(tri)
+
+    if len(tris_sel) == 0:
+        raise RuntimeError("No selected elements found to render.")
+
+    tris_all = np.asarray(tris_all, dtype=float)
+    tris_sel = np.asarray(tris_sel, dtype=float)
+    out_png = str(out_png)
+    out_dir = os.path.dirname(out_png)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+
+    coll_all = PolyCollection(
+        tris_all,
+        facecolors=(0.97, 0.97, 0.97, 1.0),
+        edgecolors=(0.72, 0.72, 0.72, 0.45),
+        linewidths=0.18,
+    )
+    coll_sel = PolyCollection(
+        tris_sel,
+        facecolors=(0.83, 0.22, 0.22, 0.92),
+        edgecolors=(0.08, 0.08, 0.08, 0.9),
+        linewidths=0.22,
+    )
+    ax.add_collection(coll_all)
+    ax.add_collection(coll_sel)
+
+    xmin = float(np.min(tris_all[:, :, 0]))
+    xmax = float(np.max(tris_all[:, :, 0]))
+    ymin = float(np.min(tris_all[:, :, 1]))
+    ymax = float(np.max(tris_all[:, :, 1]))
+    dx = xmax - xmin
+    dy = ymax - ymin
+    ax.set_xlim(xmin - 0.02 * dx, xmax + 0.02 * dx)
+    ax.set_ylim(ymin - 0.02 * dy, ymax + 0.02 * dy)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel(r"$x$")
+    ax.set_ylabel(r"$y$")
+    ax.set_title(
+        f"{model_label} Reduced Mesh (ECM)\n"
+        f"{selection_key}: {n_sel}/{n_total} elements ({pct:.1f}{pct_symbol})"
+    )
+    ax.text(
+        0.015,
+        0.015,
+        f"Selected: {n_sel}/{n_total} ({pct:.1f}{pct_symbol})",
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        bbox=dict(boxstyle="round,pad=0.25", facecolor="white", edgecolor="0.7", alpha=0.95),
+    )
+
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _copy_top_level_submodelparts_by_intersection(origin_mp, reduced_mp):
     """
     Preserve top-level submodelparts (e.g. material, dirichlet) in the reduced mesh.
@@ -147,6 +274,41 @@ def main():
         default=None,
         help="Output ECM npz path when not using --inplace-ecm.",
     )
+    p.add_argument(
+        "--save-selection-image",
+        default=None,
+        help="Optional PNG path to save a paper-style image with selected elements.",
+    )
+    p.add_argument(
+        "--image-width",
+        type=int,
+        default=2200,
+        help="Image width in pixels for --save-selection-image.",
+    )
+    p.add_argument(
+        "--image-height",
+        type=int,
+        default=1400,
+        help="Image height in pixels for --save-selection-image.",
+    )
+    p.add_argument(
+        "--model-label",
+        default="HPROM",
+        help="Model label to include in the image title (e.g. HPROM-RBF, HPROM-ANN, HPROM-LS-RBF).",
+    )
+    p.add_argument(
+        "--use-tex",
+        dest="use_tex",
+        action="store_true",
+        help="Enable Matplotlib LaTeX rendering in the selection image (default: enabled).",
+    )
+    p.add_argument(
+        "--no-use-tex",
+        dest="use_tex",
+        action="store_false",
+        help="Disable Matplotlib LaTeX rendering in the selection image.",
+    )
+    p.set_defaults(use_tex=True)
     args = p.parse_args()
 
     base_mesh = _strip_mdpa_extension(args.base_mesh)
@@ -231,6 +393,20 @@ def main():
         out_ecm = str(args.output_ecm_file) if args.output_ecm_file else ecm_file.replace(".npz", "_with_hrom_mesh.npz")
     _save_ecm(out_ecm, data_out)
 
+    out_img = None
+    if args.save_selection_image:
+        out_img = str(args.save_selection_image)
+        _save_selected_elements_image_latex_style(
+            origin_mp=origin_mp,
+            selected_elem_ids_1based=selected_elem_ids_1,
+            out_png=out_img,
+            model_label=str(args.model_label),
+            selection_key=str(args.selection_key),
+            width=int(args.image_width),
+            height=int(args.image_height),
+            use_tex=bool(args.use_tex),
+        )
+
     print("=" * 72)
     print("HROM mesh build complete")
     print("=" * 72)
@@ -248,6 +424,9 @@ def main():
     else:
         print("Copied submodelparts: none")
     print(f"Updated ECM file    : {out_ecm}")
+    if out_img is not None:
+        print(f"Selection image     : {out_img}")
+        print(f"Selection image TeX : {bool(args.use_tex)}")
     sim.Finalize()
 
 

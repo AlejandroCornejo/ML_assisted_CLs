@@ -49,6 +49,11 @@ SNAPSHOT_PERCENT_HOM = 5.0
 SEED = 42
 SAMPLING_MODE = "param_aware"  # options: "param_aware", "stratified"
 PARAM_AWARE_TIME_WEIGHT = 0.20
+RESIDUAL_FIT_MODE = "none"  # options: none, gauss_newton
+FIT_MAX_ITERS = 8
+FIT_REL_TOL = 1e-6
+FIT_L2_REG = 1e-10
+FIT_STEP_TOL = 1e-12
 
 
 def _build_free_map(n_dof, free_dofs):
@@ -152,6 +157,69 @@ def _fill_hom_block_from_kratos(elements, model_part, area_e, c_block):
     c_block[3:6, :] = (area_e[:, None] * np.mean(sig_gp, axis=1)).T
 
 
+def _evaluate_rbf_qs_and_jac(q_p, rbf_model, n_primary):
+    q_s, j_qs_qp = evaluate_rbf_map_and_jacobian_qp(np.asarray(q_p, dtype=float), rbf_model, n_primary)
+    return np.asarray(q_s, dtype=float), np.asarray(j_qs_qp, dtype=float)
+
+
+def _fit_qp_gauss_newton(
+    q_init,
+    w_free,
+    phi_p,
+    phi_s,
+    rbf_model,
+    n_primary,
+    n_secondary,
+    max_iters,
+    rel_tol,
+    l2_reg,
+    step_tol,
+):
+    q = np.asarray(q_init, dtype=float).copy()
+    w_target = np.asarray(w_free, dtype=float).reshape(-1)
+    target_norm = max(np.linalg.norm(w_target), 1e-30)
+
+    q_s, j_qs_qp = _evaluate_rbf_qs_and_jac(q, rbf_model, n_primary)
+    if j_qs_qp.shape != (n_secondary, n_primary):
+        raise RuntimeError(
+            f"Invalid RBF Jacobian shape {j_qs_qp.shape}, expected {(n_secondary, n_primary)}."
+        )
+    w_rec = phi_p @ q + phi_s @ q_s
+    rel0 = float(np.linalg.norm(w_rec - w_target) / target_norm)
+    rel = rel0
+    n_it = 0
+
+    for it in range(int(max_iters)):
+        if rel <= float(rel_tol):
+            break
+        J_m = phi_p + phi_s @ j_qs_qp
+        res = w_rec - w_target
+        jtj = J_m.T @ J_m
+        if l2_reg > 0.0:
+            jtj = jtj + float(l2_reg) * np.eye(jtj.shape[0], dtype=float)
+        rhs = J_m.T @ res
+        try:
+            dq = np.linalg.solve(jtj, rhs)
+        except np.linalg.LinAlgError:
+            dq, *_ = np.linalg.lstsq(jtj, rhs, rcond=None)
+        q -= dq
+        n_it = it + 1
+        if np.linalg.norm(dq) <= float(step_tol) * max(np.linalg.norm(q), 1.0):
+            q_s, j_qs_qp = _evaluate_rbf_qs_and_jac(q, rbf_model, n_primary)
+            w_rec = phi_p @ q + phi_s @ q_s
+            rel = float(np.linalg.norm(w_rec - w_target) / target_norm)
+            break
+        q_s, j_qs_qp = _evaluate_rbf_qs_and_jac(q, rbf_model, n_primary)
+        if j_qs_qp.shape != (n_secondary, n_primary):
+            raise RuntimeError(
+                f"Invalid RBF Jacobian shape {j_qs_qp.shape}, expected {(n_secondary, n_primary)}."
+            )
+        w_rec = phi_p @ q + phi_s @ q_s
+        rel = float(np.linalg.norm(w_rec - w_target) / target_norm)
+
+    return q, q_s, j_qs_qp, rel0, rel, int(n_it)
+
+
 def _parse_args():
     p = argparse.ArgumentParser(
         description="Stage 9a-RBF: build ECM dataset with separate residual/hom sampling."
@@ -182,6 +250,17 @@ def _parse_args():
         default=0,
         help="If >0, only first N snapshots per selected trajectory are considered.",
     )
+    p.add_argument(
+        "--residual-fit-mode",
+        type=str,
+        default=RESIDUAL_FIT_MODE,
+        choices=["none", "gauss_newton"],
+        help="Optional manifold-consistent fit for residual snapshots before building Q_ecm.",
+    )
+    p.add_argument("--fit-max-iters", type=int, default=FIT_MAX_ITERS)
+    p.add_argument("--fit-rel-tol", type=float, default=FIT_REL_TOL)
+    p.add_argument("--fit-l2-reg", type=float, default=FIT_L2_REG)
+    p.add_argument("--fit-step-tol", type=float, default=FIT_STEP_TOL)
     return p.parse_args()
 
 
@@ -203,6 +282,19 @@ def main():
     first_n_steps = int(args.first_n_steps)
     if first_n_steps < 0:
         raise ValueError("--first-n-steps must be >= 0.")
+    fit_mode = str(args.residual_fit_mode).strip().lower()
+    fit_max_iters = int(args.fit_max_iters)
+    fit_rel_tol = float(args.fit_rel_tol)
+    fit_l2_reg = float(args.fit_l2_reg)
+    fit_step_tol = float(args.fit_step_tol)
+    if fit_max_iters < 0:
+        raise ValueError("--fit-max-iters must be >= 0.")
+    if fit_rel_tol < 0.0:
+        raise ValueError("--fit-rel-tol must be >= 0.")
+    if fit_l2_reg < 0.0:
+        raise ValueError("--fit-l2-reg must be >= 0.")
+    if fit_step_tol < 0.0:
+        raise ValueError("--fit-step-tol must be >= 0.")
 
     selected_traj_ids = _parse_trajectory_indices(args.trajectory_indices)
 
@@ -224,12 +316,20 @@ def main():
         raise ValueError("RBF model n_secondary does not match phi_s.")
 
     include_macro = bool(rbf_model["include_macro_strain_input"])
+    if include_macro:
+        raise RuntimeError(
+            "RBF model was trained with macro-strain manifold inputs (N(q,mu)), "
+            "which is no longer supported. Retrain Stage 7 without macro inputs."
+        )
     n_total_dofs_ref = int(len(free_dofs) + len(dir_dofs))
     print(
         f"[Info] n_primary={n_primary}, n_secondary={n_secondary}, "
         f"include_macro_strain_input={int(include_macro)}"
     )
-
+    print(
+        f"[Info] residual fit mode={fit_mode}, fit_max_iters={fit_max_iters}, "
+        f"fit_rel_tol={fit_rel_tol:.2e}, fit_l2_reg={fit_l2_reg:.2e}, fit_step_tol={fit_step_tol:.2e}"
+    )
     trajectories = sorted([d for d in os.listdir(snapshots_dir) if d.startswith("trajectory_")])
     if selected_traj_ids is not None:
         selected_names = {f"trajectory_{i}" for i in selected_traj_ids}
@@ -378,6 +478,9 @@ def main():
         out_dir, n_primary, total_snapshots_res, total_snapshots_hom, n_elem
     )
 
+    fit_rel_before = []
+    fit_rel_after = []
+    fit_iters = []
     s_res_global = 0
     s_hom_global = 0
     for traj_name, u_path, e_path, idx_res, idx_hom in all_tasks:
@@ -403,18 +506,31 @@ def main():
                 u_free = u_snap[free_dofs]
                 u_aff_free = _affine_free(e_macro)
                 w_free = u_free - u_aff_free
-                q_p = w_free @ phi_p
-
-                if include_macro:
-                    x_in = np.concatenate([q_p, e_macro], axis=0)
-                else:
-                    x_in = q_p
-                _, j_qs_qp = evaluate_rbf_map_and_jacobian_qp(x_in, rbf_model, n_primary)
-                j_qs_qp = np.asarray(j_qs_qp, dtype=float)
-                if j_qs_qp.shape != (n_secondary, n_primary):
-                    raise RuntimeError(
-                        f"Invalid RBF Jacobian shape {j_qs_qp.shape}, expected {(n_secondary, n_primary)}."
+                q_p_init = w_free @ phi_p
+                if fit_mode == "gauss_newton":
+                    q_p, _, j_qs_qp, rel0, relf, nit = _fit_qp_gauss_newton(
+                        q_init=q_p_init,
+                        w_free=w_free,
+                        phi_p=phi_p,
+                        phi_s=phi_s,
+                        rbf_model=rbf_model,
+                        n_primary=n_primary,
+                        n_secondary=n_secondary,
+                        max_iters=fit_max_iters,
+                        rel_tol=fit_rel_tol,
+                        l2_reg=fit_l2_reg,
+                        step_tol=fit_step_tol,
                     )
+                    fit_rel_before.append(float(rel0))
+                    fit_rel_after.append(float(relf))
+                    fit_iters.append(int(nit))
+                else:
+                    q_p = q_p_init
+                    _, j_qs_qp = _evaluate_rbf_qs_and_jac(q_p, rbf_model, n_primary)
+                    if j_qs_qp.shape != (n_secondary, n_primary):
+                        raise RuntimeError(
+                            f"Invalid RBF Jacobian shape {j_qs_qp.shape}, expected {(n_secondary, n_primary)}."
+                        )
                 J_m = phi_p + phi_s @ j_qs_qp
 
                 q_block.fill(0.0)
@@ -454,6 +570,16 @@ def main():
     C_hom.flush()
     b_hom.flush()
 
+    if fit_mode == "gauss_newton" and fit_rel_after:
+        rb = np.asarray(fit_rel_before, dtype=float)
+        ra = np.asarray(fit_rel_after, dtype=float)
+        it = np.asarray(fit_iters, dtype=float)
+        print(
+            "[Fit] relative reconstruction residual: "
+            f"before mean={np.mean(rb):.3e}, after mean={np.mean(ra):.3e}, "
+            f"after max={np.max(ra):.3e}, iters mean={np.mean(it):.2f}, iters max={np.max(it):.0f}"
+        )
+
     a0_ref = float(np.sum(area_e))
     np.savez(
         os.path.join(out_dir, "meta.npz"),
@@ -476,6 +602,17 @@ def main():
         A_total=a0_ref,
         A0_ref=np.array([a0_ref], dtype=float),
         hom_reference_measure=np.array([a0_ref], dtype=float),
+        residual_fit_mode=np.array([fit_mode]),
+        fit_max_iters=np.array([fit_max_iters], dtype=np.int64),
+        fit_rel_tol=np.array([fit_rel_tol], dtype=float),
+        fit_l2_reg=np.array([fit_l2_reg], dtype=float),
+        fit_step_tol=np.array([fit_step_tol], dtype=float),
+        fit_rel_before_mean=np.array([float(np.mean(fit_rel_before)) if fit_rel_before else np.nan], dtype=float),
+        fit_rel_after_mean=np.array([float(np.mean(fit_rel_after)) if fit_rel_after else np.nan], dtype=float),
+        fit_rel_after_max=np.array([float(np.max(fit_rel_after)) if fit_rel_after else np.nan], dtype=float),
+        fit_iters_mean=np.array([float(np.mean(fit_iters)) if fit_iters else np.nan], dtype=float),
+        fit_iters_max=np.array([float(np.max(fit_iters)) if fit_iters else np.nan], dtype=float),
+        manifold_origin_correction=np.array([0], dtype=np.int64),
     )
     with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
         f.write(f"{a0_ref:.16e}\\n")

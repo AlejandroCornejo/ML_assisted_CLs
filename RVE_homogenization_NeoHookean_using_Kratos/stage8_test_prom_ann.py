@@ -3,6 +3,8 @@ import sys
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+from plot_style_utils import apply_latex_plot_style
+apply_latex_plot_style()
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 # Add Kratos path
@@ -23,6 +25,21 @@ from hprom_solver_rve import RunHpromBatchSimulation
 from prom_ann_solver_rve import LoadPromAnnModel, RunPromAnnBatchSimulation
 
 
+def _load_hrom_mesh_base_from_ecm_file(ecm_file):
+    if not os.path.exists(ecm_file):
+        return None
+    try:
+        ecm = np.load(ecm_file, allow_pickle=True)
+    except Exception:
+        return None
+    if "hrom_mesh_base" not in ecm:
+        return None
+    try:
+        return str(np.ravel(ecm["hrom_mesh_base"])[0])
+    except Exception:
+        return None
+
+
 def _compute_equivalent_stress_strain(eps, sig):
     eps = np.asarray(eps, dtype=float)
     sig = np.asarray(sig, dtype=float)
@@ -39,6 +56,55 @@ def _compute_equivalent_stress_strain(eps, sig):
     sigma_eq = np.sqrt(np.maximum(sxx * sxx - sxx * syy + syy * syy + 3.0 * sxy * sxy, 0.0))
     eps_eq = (2.0 / 3.0) * np.sqrt(np.maximum(exx * exx + eyy * eyy - exx * eyy + 0.75 * gxy * gxy, 0.0))
     return eps_eq, sigma_eq
+
+
+def _plot_prom_ann_only(eps_pa, sig_pa, out_dir):
+    eps_pa = np.asarray(eps_pa, dtype=float)
+    sig_pa = np.asarray(sig_pa, dtype=float)
+    if eps_pa.ndim != 2 or sig_pa.ndim != 2:
+        return
+    if eps_pa.shape[0] < 1 or sig_pa.shape[0] < 1:
+        return
+    if eps_pa.shape[1] < 3 or sig_pa.shape[1] < 3:
+        return
+
+    n = min(len(eps_pa), len(sig_pa))
+    plt.rcParams.update(
+        {
+            "font.size": 12,
+            "mathtext.fontset": "stix",
+            "font.family": "STIXGeneral",
+        }
+    )
+
+    comp_labels = [
+        (0, r"$\sigma_{xx}$", r"$\varepsilon_{xx}$", "xx"),
+        (1, r"$\sigma_{yy}$", r"$\varepsilon_{yy}$", "yy"),
+        (2, r"$\sigma_{xy}$", r"$\gamma_{xy}$", "xy"),
+    ]
+    for i, label_sig, label_eps, suffix in comp_labels:
+        plt.figure(figsize=(7, 6))
+        plt.plot(eps_pa[:n, i], sig_pa[:n, i], "r--", label="PROM-ANN", linewidth=1.8)
+        plt.title(f"PROM-ANN Only: {label_sig}")
+        plt.xlabel(f"{label_eps} [-]")
+        plt.ylabel(f"{label_sig} [Pa]")
+        plt.grid(True, linestyle="--", alpha=0.7)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(out_dir, f"manifold_prom_only_{suffix}.png"), dpi=200)
+        plt.close()
+
+    pa_eps_eq, pa_sig_eq = _compute_equivalent_stress_strain(eps_pa[:n], sig_pa[:n])
+    plt.figure(figsize=(7, 6))
+    plt.plot(pa_eps_eq, pa_sig_eq, "r--", label="PROM-ANN", linewidth=1.8)
+    plt.title(r"PROM-ANN Only: $\sigma_{eq}$ vs $\varepsilon_{eq}$")
+    plt.xlabel(r"$\varepsilon_{eq}$ [-]")
+    plt.ylabel(r"$\sigma_{eq}$ [Pa]")
+    plt.grid(True, linestyle="--", alpha=0.7)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "manifold_prom_only_equivalent.png"), dpi=200)
+    plt.close()
 
 
 
@@ -94,6 +160,7 @@ def _run_or_load_hprom(
     out_dir,
     emax,
     reference_steps,
+    ecm_file,
     force_run=False,
     use_old_stiffness_in_first_iteration=True,
 ):
@@ -103,7 +170,7 @@ def _run_or_load_hprom(
     if force_run or not (os.path.exists(hprom_sig_file) and os.path.exists(hprom_eps_file)):
         print("  [Stage 8] Running local HPROM baseline...")
         phi_f, free_dofs, dir_dofs, eq_map, Xc, Yc = _load_rom_model("stage_2_pod_rve")
-        ecm = np.load(os.path.join("stage_5_hprom_data", "ecm_weights_all.npz"))
+        ecm = np.load(ecm_file, allow_pickle=True)
         ecm_data = {k: ecm[k] for k in ecm.files}
 
         eps, sig = RunHpromBatchSimulation(
@@ -141,9 +208,11 @@ def run_stage8(
     run_hprom=False,
     plot_only=False,
     use_old_stiffness_in_first_iteration=True,
+    ann_data_dir="stage_7_ann_data",
+    hprom_data_dir="stage_5_hprom_data",
+    out_dir="stage_8_prom_ann_results",
     use_stage6_waypoints=True,
 ):
-    out_dir = "stage_8_prom_ann_results"
     os.makedirs(out_dir, exist_ok=True)
 
     # Stage 4/6-aligned benchmark trajectory
@@ -157,9 +226,9 @@ def run_stage8(
         data = np.load(bundle_path, allow_pickle=True)
         rel6 = list(data["relative_boundary"])
         if "emax" in data:
-            emax = float(data["emax"])
+            emax = float(np.ravel(data["emax"])[0])
         else:
-            emax = float(data["reference_amplitude"])
+            emax = float(np.ravel(data["reference_amplitude"])[0])
         if "domain_type" in data:
             domain_type = str(data["domain_type"][0])
 
@@ -186,14 +255,30 @@ def run_stage8(
     print(f"  Dynamic steps: {total_steps} (+1 initial = {total_steps + 1})")
     print(f"  Reference increment level: {REFERENCE_STEPS_FOR_UNIT_AMPLITUDE}")
     print(f"  Segments: {seg_steps}")
+    print(f"  ANN data dir: {ann_data_dir}")
+    print(f"  HPROM data dir: {hprom_data_dir}")
+    print(f"  Output dir: {out_dir}")
 
     if plot_only:
         print("[Stage 8] --plot-only enabled. Skipping solves.")
         return
 
+    ecm_file = os.path.join(hprom_data_dir, "ecm_weights_all.npz")
+    mesh_fom_prom = "rve_geometry"
+    mesh_hprom = "rve_geometry"
+    auto_hrom_mesh = _load_hrom_mesh_base_from_ecm_file(ecm_file)
+    if auto_hrom_mesh:
+        mesh_hprom = str(auto_hrom_mesh)
+    print(f"  FOM/PROM mesh: {mesh_fom_prom}")
+    print(f"  HPROM mesh:    {mesh_hprom}")
+
     # PROM-ANN run
-    phi_p, phi_s, free_dofs, _, _, ann_model, device, include_macro_strain_input = LoadPromAnnModel()
-    parameters = setup_kratos_parameters("rve_geometry")
+    phi_p, phi_s, free_dofs, _, _, ann_model, device, _include_macro_strain_input = LoadPromAnnModel(
+        basis_dir="stage_2_pod_rve",
+        ann_data_dir=ann_data_dir,
+    )
+    parameters = setup_kratos_parameters(mesh_fom_prom)
+    parameters_hprom = setup_kratos_parameters(mesh_hprom)
 
     t0 = time.perf_counter()
     eps_pa, sig_pa = RunPromAnnBatchSimulation(
@@ -204,9 +289,9 @@ def run_stage8(
         ann_model,
         device,
         strain_path,
+        out_dir=out_dir,
         reference_amplitude=emax,
         reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
-        include_macro_strain_input=include_macro_strain_input,
         use_old_stiffness_in_first_iteration=use_old_stiffness_in_first_iteration,
     )
     t_pa = time.perf_counter() - t0
@@ -216,10 +301,16 @@ def run_stage8(
     print(f"  PROM-ANN done in {t_pa:.1f}s")
 
     if not compare_baselines:
+        _plot_prom_ann_only(eps_pa, sig_pa, out_dir)
         print("\n" + "=" * 40)
         print("  STAGE 8 COMPLETE (PROM-ANN ONLY)")
         print("=" * 40)
         print(f"  PROM-ANN Wall-time: {t_pa:.1f}s")
+        print(
+            "  PROM-only plots: manifold_prom_only_xx.png, "
+            "manifold_prom_only_yy.png, manifold_prom_only_xy.png, "
+            "manifold_prom_only_equivalent.png"
+        )
         print(f"  Check output directory: {out_dir}/")
         return
 
@@ -234,11 +325,12 @@ def run_stage8(
         use_old_stiffness_in_first_iteration=use_old_stiffness_in_first_iteration,
     )
     hprom_eps, hprom_sig = _run_or_load_hprom(
-        parameters,
+        parameters_hprom,
         strain_path,
         out_dir,
         emax,
         REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
+        ecm_file,
         force_run=run_hprom,
         use_old_stiffness_in_first_iteration=use_old_stiffness_in_first_iteration,
     )
@@ -333,6 +425,24 @@ if __name__ == "__main__":
         help="Disable reuse of previous-step reduced stiffness in Newton iteration 0.",
     )
     p.add_argument(
+        "--ann-data-dir",
+        type=str,
+        default="stage_7_ann_data",
+        help="Directory with ANN model/data files (phi_p.npy, phi_s.npy, manifold_ann.pt, metadata).",
+    )
+    p.add_argument(
+        "--hprom-data-dir",
+        type=str,
+        default="stage_5_hprom_data",
+        help="Directory with HPROM ECM file (ecm_weights_all.npz).",
+    )
+    p.add_argument(
+        "--out-dir",
+        type=str,
+        default="stage_8_prom_ann_results",
+        help="Output directory for Stage 8 ANN results.",
+    )
+    p.add_argument(
         "--control-points-only",
         action="store_true",
         help=argparse.SUPPRESS,
@@ -350,5 +460,8 @@ if __name__ == "__main__":
         run_hprom=args.run_hprom,
         plot_only=args.plot_only,
         use_old_stiffness_in_first_iteration=not args.no_old_stiffness_first_it,
+        ann_data_dir=args.ann_data_dir,
+        hprom_data_dir=args.hprom_data_dir,
+        out_dir=args.out_dir,
         use_stage6_waypoints=not args.control_points_only,
     )

@@ -20,6 +20,8 @@ import os
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+from plot_style_utils import apply_latex_plot_style
+apply_latex_plot_style()
 
 from stage6_test_hprom import generate_safe_test_path
 from stage4_test_rve import plot_path_in_domain

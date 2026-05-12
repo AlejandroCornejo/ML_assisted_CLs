@@ -1,0 +1,605 @@
+\chapter{Appendix}
+
+\section{Crank--Nicolson time discretization (inviscid with SUPG)}
+\label{appendix:cranknicolson}
+
+The Crank--Nicolson (CN) scheme is a second-order, A-stable, implicit method obtained by applying the trapezoidal rule in time.  When it is applied to the spatially discretised, inviscid Burgers’ equation, including any Streamline-Upwind/Petrov–Galerkin (SUPG) stabilisation, the fully discrete equation for each time step $n\to n+1$ reads
+%
+\begin{equation}
+\mathbf M \,\frac{\mathbf u^{n+1}-\mathbf u^{n}}{\Delta t}
+\;+\;
+\frac12\Bigl[
+   \mathbf C\!\bigl(\mathbf u^{n}\bigr)\,\mathbf u^{n}
+  +\mathbf C\!\bigl(\mathbf u^{n+1}\bigr)\,\mathbf u^{n+1}
+\Bigr]
+\;+\;
+\frac12\Bigl[
+   \mathbf S\!\bigl(\mathbf u^{n}\bigr)
+  +\mathbf S\!\bigl(\mathbf u^{n+1}\bigr)
+\Bigr]
+\;=\;
+\frac12\bigl(\mathbf F^{n}+\mathbf F^{n+1}\bigr),
+\label{eq:cn_supg}
+\end{equation}
+%
+where
+
+\begin{itemize}
+  \item $\mathbf M$ is the (constant) mass matrix,
+  \item $\mathbf C(\mathbf u)$ is the nonlinear convection \emph{operator} and
+        $\mathbf C(\mathbf u)\mathbf u$ its associated convective \emph{term},
+  \item $\mathbf S(\mathbf u)$ is the SUPG stabilisation term,
+  \item $\mathbf F^{n}$ is the external load vector at $t^{n}$,
+  \item $\Delta t$ is the time step,
+  \item $\mathbf u^{n}$, $\mathbf u^{n+1}$ are the nodal state vectors at
+        $t^{n}$ and $t^{n+1}$.
+\end{itemize}
+
+\paragraph{Remarks.}
+\begin{enumerate}
+  \item The arithmetic average 
+        $\tfrac12\!\left[\mathbf S(\mathbf u^{n})+\mathbf S(\mathbf u^{n+1})\right]$
+        is the trapezoidal (Crank–Nicolson) quadrature for the stabilisation term and
+        yields global second-order accuracy.  A common alternative that also achieves
+        second order is to evaluate $\mathbf S$ at a midpoint in time,
+        $\mathbf S(\mathbf u^{n+\frac12})$.  However,
+        $\tfrac12\!\left[\mathbf S(\mathbf u^{n})+\mathbf S(\mathbf u^{n+1})\right]
+        = \mathbf S\!\left(\tfrac{\mathbf u^{n}+\mathbf u^{n+1}}{2}\right)$
+        holds only if $\mathbf S$ is linear (affine) in $\mathbf u$.  For nonlinear
+        $\mathbf S$, the two forms are not algebraically identical (though both are
+        second-order accurate), and using the arithmetic state average
+        $\mathbf u^{n+\frac12}=\tfrac12(\mathbf u^{n}+\mathbf u^{n+1})$ does not in
+        general coincide with the true mid-time state.
+  \item CN is A-stable but not L-stable; in convection-dominated problems it may
+        exhibit weak, non-damping oscillations compared with backward Euler.
+        Consequently smaller $\Delta t$ or selective filtering may be required if
+        very sharp shocks are present.
+  \item Equation~\eqref{eq:cn_supg} is nonlinear because the convective and
+        stabilisation terms depend on the unknown $\mathbf u^{n+1}$.  Each time step
+        therefore requires the solution of a nonlinear system, typically by a Picard
+        (frozen-convection) or Newton iteration.
+\end{enumerate}
+
+
+\section{Finite volume discretization of the inviscid Burgers' equation with source term}
+\label{appendix:fvm_burgers}
+We consider the one-dimensional inviscid Burgers' equation augmented by a spatially varying source term:
+\begin{equation}
+\frac{\partial u(x,t)}{\partial t} + u(x,t)\,\frac{\partial u(x,t)}{\partial x} = s(x,t),
+\quad \forall x \in [0, L],\quad \forall t \in [0, T],
+\label{eq:burgers_strong}
+\end{equation}
+where \( u(x,t) \) is the unknown solution (e.g., a velocity field), and \( s(x,t) \) is a prescribed source term that may depend on space and time.%
+\footnote{In the finite element formulation, the source term is denoted \( f(x,t) \). Here \( s(x,t) \) is used instead to avoid conflict with the flux function notation \( f = \frac{1}{2} u^2 \) typically used in finite volume schemes.}
+This equation represents a nonlinear, first-order, time-dependent conservation law with a forcing term.
+
+\subsection{Spatial discretization and control volumes}
+
+To apply the finite volume method (FV), the spatial domain \( [0, L] \) is divided into \( N \) non-overlapping control volumes (cells), each of uniform width \( \Delta x \). The \( i \)-th cell is bounded by the interfaces \( x_{i-1/2} \) and \( x_{i+1/2} \), with center at \( x_i \). The solution is represented in terms of its \textit{cell average}:
+\begin{equation}
+\bar{u}_i(t) := \frac{1}{\Delta x} \int_{x_{i-1/2}}^{x_{i+1/2}} u(x,t)\,\mathrm{d}x.
+\label{eq:cell_average}
+\end{equation}
+The discrete vector of cell averages is defined as
+\begin{equation}
+\bar{\mathbf{u}}(t) := \begin{bmatrix} \bar{u}_1(t) & \bar{u}_2(t) & \cdots & \bar{u}_N(t) \end{bmatrix}^\top \in \mathbb{R}^N,
+\end{equation}
+in analogy with the nodal solution vector \( \mathbf{u}(t) \) used in the finite element formulation.
+
+\subsection{Integral form of the conservation law}
+
+To derive the finite volume formulation, the governing equation \eqref{eq:burgers_strong} is integrated over the spatial control volume \( [x_{i-1/2}, x_{i+1/2}] \):
+\begin{equation}
+\int_{x_{i-1/2}}^{x_{i+1/2}} 
+\left( \frac{\partial u}{\partial t} + u\,\frac{\partial u}{\partial x} \right)\,\mathrm{d}x 
+= \int_{x_{i-1/2}}^{x_{i+1/2}} s(x,t)\,\mathrm{d}x.
+\label{eq:fv_integral}
+\end{equation}
+
+Each term in \eqref{eq:fv_integral} is analyzed separately below.
+
+\subsubsection*{Time derivative term}
+
+Applying the definition of the cell average \eqref{eq:cell_average} yields:
+\begin{equation}
+\int_{x_{i-1/2}}^{x_{i+1/2}} \frac{\partial u}{\partial t}\,\mathrm{d}x 
+= \Delta x \cdot \frac{\mathrm{d} \bar{u}_i(t)}{\mathrm{d}t}.
+\end{equation}
+
+\subsubsection*{Convective term and conservative form}
+
+The convective term is nonlinear, but can be expressed in conservative form via the identity:
+\begin{equation}
+u \, \frac{\partial u}{\partial x} = \frac{\partial}{\partial x} \left( \frac{1}{2} u^2 \right),
+\end{equation}
+which follows directly from the chain rule. Substituting into the integral yields:
+\begin{equation}
+\int_{x_{i-1/2}}^{x_{i+1/2}} u\,\frac{\partial u}{\partial x}\,\mathrm{d}x 
+= \int_{x_{i-1/2}}^{x_{i+1/2}} \frac{\partial}{\partial x} \left( \frac{1}{2} u^2 \right)\,\mathrm{d}x.
+\end{equation}
+Applying the \textit{Fundamental Theorem of Calculus} gives:
+\begin{equation}
+\int_{x_{i-1/2}}^{x_{i+1/2}} \frac{\partial}{\partial x} \left( \frac{1}{2} u^2 \right)\,\mathrm{d}x 
+= \left. \frac{1}{2} u^2 \right|_{x_{i-1/2}}^{x_{i+1/2}} 
+= f_{i+1/2} - f_{i-1/2},
+\label{eq:fv_flux_difference}
+\end{equation}
+where the \textit{numerical fluxes} \( f_{i\pm1/2} \) across each interface are defined by:
+\begin{equation}
+f_{i+1/2} := \left. \frac{1}{2} u^2 \right|_{x_{i+1/2}}, \quad
+f_{i-1/2} := \left. \frac{1}{2} u^2 \right|_{x_{i-1/2}}.
+\end{equation}
+These fluxes will later be approximated using a suitable Riemann solver (e.g., Godunov flux).%
+\footnote{In contrast to the finite element method, where stabilization (e.g., SUPG) is introduced to handle convective dominance, the finite volume approach employs numerical fluxes (such as Godunov flux) that inherently stabilize the solution by capturing shocks and discontinuities.}
+
+\subsubsection*{Source term}
+
+The integral of the source term is approximated using the midpoint rule:
+\begin{equation}
+\int_{x_{i-1/2}}^{x_{i+1/2}} s(x,t)\,\mathrm{d}x 
+\;\approx\; 
+\Delta x \cdot \bar{s}_i(t),
+\end{equation}
+where \( \bar{s}_i(t) := s(x_i,t) \) denotes the source term evaluated at the cell center.
+
+\subsection{Semi-discrete finite volume formulation}
+
+Collecting the contributions of the time derivative, convective, and source terms, and dividing by \( \Delta x \), the semi-discrete finite volume formulation becomes:
+\begin{equation}
+\frac{\mathrm{d} \bar{u}_i(t)}{\mathrm{d}t}
+= - \frac{1}{\Delta x} \left( f_{i+1/2} - f_{i-1/2} \right) + \bar{s}_i(t),
+\label{eq:fv_semidiscrete}
+\end{equation}
+where:
+\begin{itemize}
+    \item \( \bar{u}_i(t) \) is the cell average of the solution,
+    \item \( f_{i\pm1/2} \) are the numerical fluxes at interfaces,
+    \item \( \bar{s}_i(t) \) is the cell-centered source term.
+\end{itemize}
+
+This equation represents the finite volume counterpart to the Galerkin semi-discrete FEM formulation and provides the basis for subsequent time discretization and nonlinear solver development.
+
+
+\subsection{Time discretization}
+
+To advance the semi-discrete system \eqref{eq:fv_semidiscrete} in time, a first-order accurate \textit{Backward Euler} method is employed.\footnote{The Backward Euler scheme is adopted for consistency with the time discretization used in the finite element formulation and due to its robustness in convection-dominated regimes.} Let \( \Delta t \) denote the time step, and let \( \bar{u}_i^n \) and \( \bar{u}_i^{n+1} \) represent the cell-averaged solutions at time levels \( t^n \) and \( t^{n+1} = t^n + \Delta t \), respectively. The time derivative is approximated as:
+\begin{equation}
+\frac{\mathrm{d} \bar{u}_i(t)}{\mathrm{d}t} 
+\;\approx\;
+\frac{\bar{u}_i^{n+1} - \bar{u}_i^n}{\Delta t}.
+\end{equation}
+
+Substituting this approximation into \eqref{eq:fv_semidiscrete} yields the fully discrete form:
+\begin{equation}
+\frac{\bar{u}_i^{n+1} - \bar{u}_i^n}{\Delta t}
+= - \frac{1}{\Delta x} \left( f_{i+1/2}^{n+1} - f_{i-1/2}^{n+1} \right) + \bar{s}_i^{n+1},
+\label{eq:fv_fully_discrete}
+\end{equation}
+or equivalently,
+\begin{equation}
+\bar{u}_i^{n+1} = \bar{u}_i^n - \frac{\Delta t}{\Delta x} \left( f_{i+1/2}^{n+1} - f_{i-1/2}^{n+1} \right) + \Delta t \cdot \bar{s}_i^{n+1}.
+\end{equation}
+
+This formulation is \textit{implicit}, as the numerical fluxes \( f_{i\pm1/2}^{n+1} \) depend on the unknown solution \( \bar{u}^{n+1} \). Therefore, a nonlinear system must be solved at each time step. To define this system explicitly, the \textit{residual function} is introduced:
+\begin{equation}
+R_i\left( \bar{u}^{n+1} \right) := 
+\bar{u}_i^{n+1} - \bar{u}_i^n 
++ \frac{\Delta t}{\Delta x} \left( f_{i+1/2}^{n+1} - f_{i-1/2}^{n+1} \right) 
+- \Delta t \cdot \bar{s}_i^{n+1},
+\label{eq:fv_residual}
+\end{equation}
+such that solving the finite volume system corresponds to finding \( \bar{\mathbf{u}}^{n+1} \in \mathbb{R}^N \) that satisfies:
+\begin{equation}
+\mathbf{R}(\bar{\mathbf{u}}^{n+1}) = \mathbf{0},
+\label{eq:residual_fv}
+\end{equation}
+
+\subsection{Numerical flux approximation via the Godunov method}
+
+To fully specify the residual \eqref{eq:fv_residual}, a numerical flux approximation must be provided for evaluating the convective terms \( f_{i+1/2}^{n+1} \) and \( f_{i-1/2}^{n+1} \). In the finite volume context, these fluxes depend on the values of the solution to the left and right of each interface. However, since only the cell-average \( \bar{u}_i \) is known in each control volume, interface values must be reconstructed from this cell-average data.
+
+\paragraph{Constant Reconstruction.} A \textit{constant reconstruction} is adopted, assuming that the solution within each control volume is constant and equal to the cell average:
+\[
+u(x,t) \approx \bar{u}_i(t), \quad \forall x \in [x_{i-1/2}, x_{i+1/2}].
+\]
+This approximation yields the left and right states at each interface \( x_{i+1/2} \) as:
+\[
+u_L = \bar{u}_i, \qquad u_R = \bar{u}_{i+1}.
+\]
+
+This approach eliminates the need for slope reconstruction and limiting strategies, making it particularly robust in the presence of shocks or discontinuities. It also aligns naturally with the derivation assumptions underlying the \textit{Godunov flux} described below.
+
+\paragraph{Riemann Problem.} The Godunov method computes numerical fluxes at interfaces by solving the following local Riemann problem:
+\begin{equation}
+\frac{\partial u}{\partial t} + \frac{\partial}{\partial x}\left( \frac{1}{2} u^2 \right) = 0,
+\qquad
+u(x,0) = 
+\begin{cases}
+u_L, & x < 0, \\
+u_R, & x > 0,
+\end{cases}
+\label{eq:burgers_riemann}
+\end{equation}
+where \( u_L = \bar{u}_i \) and \( u_R = \bar{u}_{i+1} \) represent the reconstructed solution values to the left and right of the interface \( x_{i+1/2} \).
+
+The solution \( u^\star \) to the Riemann problem at the interface (at \( x = 0 \), \( t > 0 \)) defines the Godunov numerical flux:
+\begin{equation}
+f^{\text{Godunov}}(u_L, u_R) := \frac{1}{2}(u^\star)^2.
+\end{equation}
+
+For the scalar Burgers' equation, the Riemann problem admits an exact solution that depends on the relationship between \( u_L \) and \( u_R \):
+
+\begin{itemize}
+    \item \textbf{Shock:} If \( u_L > u_R \), the solution forms a shock wave propagating with speed given by the \emph{Rankine--Hugoniot condition}:
+    \[
+    s = \frac{f(u_R) - f(u_L)}{u_R - u_L} 
+    = \frac{\frac{1}{2}u_R^2 - \frac{1}{2}u_L^2}{u_R - u_L}
+    = \frac{1}{2}(u_L + u_R).
+    \]
+    The state at the interface is:
+    \[
+    u^\star = 
+    \begin{cases}
+    u_L, & \text{if } s > 0, \\
+    u_R, & \text{if } s < 0.
+    \end{cases}
+    \]
+
+    \item \textbf{Rarefaction:} If \( u_L < u_R \), a centered rarefaction wave forms, with characteristics spreading between \( u_L \) and \( u_R \). The interface value is determined by the characteristic direction:
+    \[
+    u^\star = 
+    \begin{cases}
+    u_L, & \text{if } 0 < u_L, \\
+    u_R, & \text{if } 0 > u_R, \\
+    0,   & \text{if } u_L < 0 < u_R.
+    \end{cases}
+    \]
+\end{itemize}
+
+No flux splitting or directional notation (such as \( u^- \), \( u^+ \)) is required for this scalar problem since wave propagation behavior is completely determined by the Riemann solution. This is unlike systems of equations, where multiple characteristic fields and flux components may require directional decomposition.
+
+The explicit form of the Godunov flux thus becomes:
+\begin{equation}
+f^{\text{Godunov}}(u_L, u_R) =
+\begin{cases}
+\frac{1}{2} u_L^2, & u_L > u_R \text{ and } \frac{1}{2}(u_L + u_R) > 0, \\
+\frac{1}{2} u_R^2, & u_L > u_R \text{ and } \frac{1}{2}(u_L + u_R) < 0, \\
+\frac{1}{2} u_L^2, & u_L \le u_R \text{ and } 0 \le u_L, \\
+\frac{1}{2} u_R^2, & u_L \le u_R \text{ and } 0 \ge u_R, \\
+0,                & u_L \le u_R \text{ and } u_L < 0 < u_R.
+\end{cases}
+\label{eq:godunov_flux}
+\end{equation}
+
+This flux formulation accurately captures shock and rarefaction behavior without requiring artificial dissipation or flux limiters. It is directly utilized to evaluate the interface terms \( f_{i+1/2}^{n+1} \) and \( f_{i-1/2}^{n+1} \) in the residual \eqref{eq:fv_residual}, defining the nonlinear system solved at each time step.
+
+\subsection{Boundary conditions}
+
+To evaluate the numerical fluxes at domain boundaries, the finite volume method requires solution values at the "ghost cells" located beyond the physical domain. Let \( \bar{u}_0 \) and \( \bar{u}_{N+1} \) denote these ghost cell values adjacent to the first and last control volumes, respectively.
+
+A Dirichlet inflow condition at the left boundary is enforced as:
+\begin{equation}
+u(0,t) = u_{\text{left}}(t) = \mu_1,\end{equation}
+by setting the left ghost cell as:
+\begin{equation}\bar{u}_0^{n+1} := \mu_1(t^{n+1}).\end{equation}
+
+At the right boundary, where explicit boundary data are not specified, a \textit{zero-gradient} (Neumann-type) outflow condition is adopted:
+\begin{equation}\bar{u}_{N+1}^{n+1} := \bar{u}_N^{n+1}.\end{equation}
+
+These boundary values are utilized to compute numerical fluxes at the domain interfaces \( f_{1/2}^{n+1} \) and \( f_{N+1/2}^{n+1} \), ensuring that the residuals \( R_1 \) and \( R_N \) are properly defined\footnote{In finite volume methods, ghost cell values are required to compute boundary fluxes. In finite element methods, Neumann conditions arise only when diffusion is present; in pure advection, only Dirichlet conditions need to be enforced.}.
+
+\paragraph{Remark.} Alternative treatments, such as extrapolation or characteristic-based conditions, can be employed depending on problem specifics. The approach presented here prioritizes simplicity and consistency with standard finite volume implementations for scalar conservation laws.
+
+\subsection{Nonlinear system and Newton--Raphson method}
+
+Following the time discretization and flux approximations outlined in \eqref{eq:fv_fully_discrete}--\eqref{eq:fv_residual}, each time step \(n\) involves solving:
+\begin{equation}
+\mathbf{R}\bigl(\bar{\mathbf{u}}^{n+1}\bigr) = \mathbf{0},
+\quad \text{where} \quad
+R_i\bigl(\bar{u}^{n+1}\bigr)
+=
+\bar{u}_i^{n+1}
+-
+\bar{u}_i^n
++
+\frac{\Delta t}{\Delta x}\left(
+ f_{i+1/2}^{n+1} - f_{i-1/2}^{n+1}
+\right)
+-
+\Delta t\,\bar{s}_i^{n+1},
+\label{eq:fv_Ri_recall}
+\end{equation}
+and \(f_{i\pm1/2}^{n+1}=f^{\text{Godunov}}(\bar{u}_i^{n+1},\bar{u}_{i\pm1}^{n+1})\) are the nonlinear numerical fluxes evaluated at the unknown solution \(\bar{\mathbf{u}}^{n+1}\). Thus, \eqref{eq:fv_Ri_recall} forms a nonlinear algebraic system analogous to the nonlinear residual system in the finite element formulation (cf. Eq.~\eqref{eq:R_supg_inviscid}).
+
+\paragraph{Newton--Raphson linearization.}
+To efficiently solve \eqref{eq:fv_Ri_recall}, the Newton--Raphson method is applied. Let \(\bar{\mathbf{u}}^{(k)}\) represent the current iterate for solution \(\bar{\mathbf{u}}^{n+1}\). Expanding the residual around \(\bar{\mathbf{u}}^{(k)}\) yields:
+\begin{equation}
+\mathbf{R}\bigl(\bar{\mathbf{u}}^{(k+1)}\bigr)
+\approx
+\mathbf{R}\bigl(\bar{\mathbf{u}}^{(k)}\bigr)
++
+\mathbf{J}\bigl(\bar{\mathbf{u}}^{(k)}\bigr)\left(\bar{\mathbf{u}}^{(k+1)} - \bar{\mathbf{u}}^{(k)}\right),
+\end{equation}
+where \(\mathbf{J}(\bar{\mathbf{u}}^{(k)})=\frac{\partial\mathbf{R}}{\partial\bar{\mathbf{u}}}\bigl(\bar{\mathbf{u}}^{(k)}\bigr)\) is the Jacobian matrix. Setting \(\mathbf{R}\bigl(\bar{\mathbf{u}}^{(k+1)}\bigr)=\mathbf{0}\) results in the Newton iteration:
+\begin{equation}
+\mathbf{J}\bigl(\bar{\mathbf{u}}^{(k)}\bigr)\,\delta\bar{\mathbf{u}}^{(k)}
+=-\mathbf{R}\bigl(\bar{\mathbf{u}}^{(k)}\bigr),\quad\text{where}\quad
+\delta\bar{\mathbf{u}}^{(k)}=\bar{\mathbf{u}}^{(k+1)}-\bar{\mathbf{u}}^{(k)}.
+\label{eq:fv_newton_global}
+\end{equation}
+
+\paragraph{Jacobian assembly.}
+The residual \(R_i\) depends only on local cell averages \(\bar{u}_{i-1}, \bar{u}_i, \bar{u}_{i+1}\), resulting in a tridiagonal structure similar to that encountered in finite element discretizations. The Jacobian entries are explicitly derived from the Godunov flux definition \eqref{eq:godunov_flux}:
+\begin{align*}
+\frac{\partial R_i}{\partial \bar{u}_{i-1}} &=
+    -\frac{\Delta t}{\Delta x}
+    \frac{\partial f^{\text{Godunov}}}{\partial u_L}\bigg|_{i-1/2},
+\\[0.5em]
+\frac{\partial R_i}{\partial \bar{u}_i} &=
+    1 + \frac{\Delta t}{\Delta x} \left(
+    \frac{\partial f^{\text{Godunov}}}{\partial u_L}\bigg|_{i+1/2}
+    - \frac{\partial f^{\text{Godunov}}}{\partial u_R}\bigg|_{i-1/2}
+    \right),
+\\[0.5em]
+\frac{\partial R_i}{\partial \bar{u}_{i+1}} &=
+    \frac{\Delta t}{\Delta x}
+    \frac{\partial f^{\text{Godunov}}}{\partial u_R}\bigg|_{i+1/2}.
+\end{align*}
+
+
+\paragraph{Implementation remark.}
+Analytical differentiation of the Godunov flux ensures an accurate Jacobian matrix, which enhances Newton convergence compared to a numerical Jacobian obtained via finite differences, analogous to common practice in finite element implementations.
+
+\paragraph{Linear system solution and update.}
+The linear system \eqref{eq:fv_newton_global} is solved using standard sparse solvers. The iterate is updated as:
+\begin{equation}
+\bar{\mathbf{u}}^{(k+1)}
+=\bar{\mathbf{u}}^{(k)}+\delta\bar{\mathbf{u}}^{(k)},
+\end{equation}
+and iteration proceeds until a suitable convergence criterion, such as \(\|\mathbf{R}(\bar{\mathbf{u}}^{(k)})\|\leq\text{tolerance}\), is satisfied.
+
+\paragraph{Discussion and convergence.}
+Newton--Raphson typically exhibits quadratic convergence near the solution, provided a good initial guess (usually \(\bar{\mathbf{u}}^{(0)}=\bar{\mathbf{u}}^{n}\)). Although each iteration is computationally more demanding than a simpler fixed-point (Picard) iteration, the overall rapid convergence makes Newton--Raphson a robust and efficient choice for implicit finite volume discretizations of nonlinear conservation laws. This parallels the FEM practice discussed in Section~\ref{sec:fem_discretization}.
+
+\section{Finite difference discretization of the inviscid Burgers' equation with source term}
+\label{appendix:fd_burgers}
+
+This section presents a finite difference (FD) discretization for the inviscid one-dimensional Burgers' equation with a source term, employing second-order central differences, implicit (Backward Euler) time integration, artificial viscosity stabilization, and Newton--Raphson nonlinear solving. The formulation closely mirrors the previously presented finite element and finite volume methods.
+
+\subsection{Strong Form of the Governing Equation}
+
+We consider the following scalar conservation law:
+\begin{equation}
+\frac{\partial u(x,t)}{\partial t} + u(x,t)\frac{\partial u(x,t)}{\partial x} = s(x,t), \quad x \in [0, L],\quad t \in [0, T],
+\label{eq:fd_strongform}
+\end{equation}
+with the boundary and initial conditions:
+\begin{equation}
+u(0,t)=\mu_1,\quad u(x,0)=u_{\text{initial}}(x), \quad \forall x \in [0,L].\end{equation}
+The source term is explicitly defined as:
+\begin{equation}
+s(x,t) = 0.02\,e^{\mu_2\,x}.
+\end{equation}
+
+\subsection{Spatial discretization}
+
+The spatial domain \([0,L]\) is partitioned into \(N\) uniformly distributed nodes:
+\begin{equation}
+x_i = i\Delta x, \quad \Delta x = \frac{L}{N-1}, \quad i = 0,1,\dots,N-1,
+\end{equation}
+and we denote \(u_i(t)\approx u(x_i,t)\). \\
+The nodal values are gathered into the vector \(\mathbf{u}(t) = [u_0(t),u_1(t),\dots,u_{N-1}(t)]^\top\).
+
+\paragraph{Convection and Stabilization.} The spatial derivative of the convective flux \(\frac{1}{2}u^2\) is approximated using second-order central differences with an artificial viscosity term for stabilization:
+\begin{equation}
+\frac{\partial}{\partial x}\left(\frac{1}{2}u^2\right)\bigg|_{x_i}\approx \frac{\frac{1}{2}u_{i+1}^2-\frac{1}{2}u_{i-1}^2}{2\Delta x} - \nu_{\text{artificial}}\frac{u_{i+1}-2u_i+u_{i-1}}{\Delta x^2},
+\label{eq:fd_conv}
+\end{equation}
+where the artificial viscosity is chosen adaptively as:
+\begin{equation}
+\nu_{\text{artificial}} = 0.25\,\Delta x\,\max_{i}|u_i|.
+\end{equation}
+This term provides numerical stability by damping spurious oscillations common in convection-dominated problems.
+
+\subsection{Implicit time integration}
+
+To integrate in time, the implicit Backward Euler scheme is utilized:
+\begin{equation}
+\frac{u_i^{n+1}-u_i^n}{\Delta t}+\frac{\frac{1}{2}(u_{i+1}^{n+1})^2-\frac{1}{2}(u_{i-1}^{n+1})^2}{2\Delta x}-\nu_{\text{artificial}}\frac{u_{i+1}^{n+1}-2u_i^{n+1}+u_{i-1}^{n+1}}{\Delta x^2}=s_i^{n+1},
+\label{eq:fd_fully_discrete}
+\end{equation}
+where \(u_i^n\approx u_i(t^n)\) and \(s_i^{n+1}=s(x_i,t^{n+1})\). This formulation leads to a nonlinear algebraic system at each time step.
+
+\subsection{Nonlinear residual and Newton--Raphson method}
+
+Defining the residual at node \(i\):
+\begin{equation}
+R_i(\mathbf{u}^{n+1}) = \frac{u_i^{n+1}-u_i^n}{\Delta t}+\frac{\frac{1}{2}(u_{i+1}^{n+1})^2-\frac{1}{2}(u_{i-1}^{n+1})^2}{2\Delta x}-\nu_{\text{artificial}}\frac{u_{i+1}^{n+1}-2u_i^{n+1}+u_{i-1}^{n+1}}{\Delta x^2}-s_i^{n+1},
+\label{eq:residual_fd_component}
+\end{equation}
+
+this component-wise expression defines the global nonlinear residual vector:
+\begin{equation}
+\mathbf{R}(\mathbf{u}^{n+1}) = \mathbf{0}.
+\label{eq:residual_fd_vector}
+\end{equation}
+
+The Newton--Raphson iteration is then formulated as:
+\begin{equation}
+\mathbf{J}(\mathbf{u}^{(k)})\delta \mathbf{u}^{(k)} = -\mathbf{R}(\mathbf{u}^{(k)}),\quad \mathbf{u}^{(k+1)}=\mathbf{u}^{(k)}+\delta \mathbf{u}^{(k)},
+\label{eq:fd_newton_iteration}
+\end{equation}
+where \(\mathbf{J}\) is the analytical Jacobian with entries:
+\begin{align}
+\frac{\partial R_i}{\partial u_{i-1}}&=-\frac{u_{i-1}}{2\Delta x}-\frac{\nu_{\text{artificial}}}{\Delta x^2},\\[5pt]
+\frac{\partial R_i}{\partial u_{i}}&=\frac{1}{\Delta t}+\frac{2\nu_{\text{artificial}}}{\Delta x^2},\\[5pt]
+\frac{\partial R_i}{\partial u_{i+1}}&=\frac{u_{i+1}}{2\Delta x}-\frac{\nu_{\text{artificial}}}{\Delta x^2}.
+\end{align}
+
+Alternatively, a finite-difference approximation of the Jacobian can be employed for validation and debugging.
+
+
+\subsection{Boundary conditions}
+
+At the left boundary, a Dirichlet inflow condition is enforced:
+\begin{equation}
+u_0^{n+1}=\mu_1.\end{equation}
+At the right boundary, a zero-gradient (Neumann-type) outflow condition is applied:
+\begin{equation}
+u_{N-1}^{n+1}=u_{N-2}^{n+1}.\end{equation}
+These conditions match the implementation details in the finite element and finite volume formulations presented previously.
+
+\paragraph{Remark.} While the Backward Euler scheme introduces additional numerical dissipation, its use here prioritizes robustness and direct consistency with the FEM and FV schemes employed previously. Higher-order schemes could be adopted to reduce numerical diffusion if accuracy requirements demand it.
+
+%======================================================================
+\section{Derivation of the Gauss--Newton reduced system on a general manifold}
+\label{app:gauss_newton_manifold}
+%======================================================================
+
+This appendix collects, in a self-contained form, the detailed steps leading  
+from the minimum–residual statement on a general approximation manifold to the
+Gauss–Newton linear system that underpins the nonlinear PROM used in
+Chapter~\ref{chap:nonlinear_prom}.  All quantities initially retain their
+explicit dependence on time~\(t\), parameters~\(\boldsymbol{\mu}\), and the
+reduced state~\(\mathbf{q}\); these dependences are suppressed after the
+stationarity condition is derived, as indicated in the main text.
+
+%----------------------------------------------------------------------
+\subsection{Minimum–residual formulation}
+%----------------------------------------------------------------------
+Given the decoder \(D_u : \mathbb{R}^{n}\to\mathbb{R}^{N}\), the
+reduced coordinates \(\mathbf{q}(t,\boldsymbol{\mu})\in\mathbb{R}^{n}\) are
+defined by the weighted least–squares problem
+%
+\begin{equation}
+\min_{\mathbf q\in\mathbb{R}^{n}}
+\;\;
+\frac12\,
+\bigl\|
+  \mathbf R\bigl(D_u(\mathbf q);\,t,\boldsymbol\mu\bigr)
+\bigr\|_{\mathbf G}^{2},
+\qquad
+\|\mathbf v\|_{\mathbf G}^{2}:=\mathbf v^{T}\mathbf G\,\mathbf v,\;
+\mathbf G\succ0.
+\label{eq:A_minres}
+\end{equation}
+
+%----------------------------------------------------------------------
+\subsection{Stationarity condition}
+%----------------------------------------------------------------------
+Let
+\[
+\mathbf J
+\bigl(D_u(\mathbf q);\,t,\boldsymbol\mu\bigr)
+:=
+\frac{\partial\mathbf R}{\partial\mathbf u}
+\quad\text{and}\quad
+\frac{\partial D_u(\mathbf q)}{\partial\mathbf q}
+\in\mathbb{R}^{N\times n}.
+\]
+Applying the chain rule,
+\(
+\tfrac{\partial\mathbf R}{\partial\mathbf q}
+      =\mathbf J\,\tfrac{\partial D_u}{\partial\mathbf q}.
+\)
+The gradient of~\eqref{eq:A_minres} with respect to \(\mathbf q\) is therefore
+\(
+(\mathbf J\,\tfrac{\partial D_u}{\partial\mathbf q})^{T}
+\mathbf G\,
+\mathbf R,
+\)
+and the first-order optimality condition is
+%
+\begin{equation}
+\left(
+ \frac{\partial D_u}{\partial\mathbf q}
+\right)^{T}
+\mathbf J^{T}
+\mathbf G\,
+\mathbf R = \mathbf 0.
+\label{eq:A_stationarity}
+\end{equation}
+
+%----------------------------------------------------------------------
+\subsection{Reduced residual and its Jacobian}
+%----------------------------------------------------------------------
+Define the \emph{encoded residual}
+\begin{equation}
+E_r(\mathbf R):=
+\left(
+ \frac{\partial D_u}{\partial\mathbf q}
+\right)^{T}
+\mathbf J^{T}
+\mathbf G\,\mathbf R
+\quad\Longrightarrow\quad
+\mathbf r(\mathbf q):=
+E_r\bigl(\mathbf R(D_u(\mathbf q))\bigr)=\mathbf 0.
+\label{eq:A_encodedResidual}
+\end{equation}
+
+Differentiating~\eqref{eq:A_encodedResidual} with respect to \(\mathbf q\)
+gives the exact Jacobian
+%
+\begin{align}
+\frac{\partial\mathbf r}{\partial\mathbf q}
+&=
+\left(
+ \frac{\partial D_u}{\partial\mathbf q}
+\right)^{T}
+\mathbf J^{T}
+\mathbf G\,
+\mathbf J
+\left(
+ \frac{\partial D_u}{\partial\mathbf q}
+\right)
+\notag\\[4pt]
+&\quad
++
+\underbrace{
+\left(
+ \frac{\partial D_u}{\partial\mathbf q}
+\right)^{T}
+\Bigl(
+      \partial_{\mathbf u}(\mathbf J^{T}\mathbf G\mathbf R)
+ \Bigr)
+ \frac{\partial D_u}{\partial\mathbf q}
+}_{\text{variation of }\mathbf J}
+\;+\;
+\underbrace{
+\frac{\partial}{\partial\mathbf q}
+\Bigl(
+ \tfrac{\partial D_u}{\partial\mathbf q}
+\Bigr)^{T}
+\mathbf J^{T}\mathbf G\mathbf R
+}_{\text{curvature of }D_u}.
+\label{eq:A_fullJac}
+\end{align}
+
+%----------------------------------------------------------------------
+\subsection{Gauss–Newton approximation}
+%----------------------------------------------------------------------
+The last two terms in~\eqref{eq:A_fullJac} contain second-order derivatives of
+the residual and the decoder.  They are omitted under the common
+assumption that the residual is sufficiently small near the solution, yielding
+the \emph{Gauss–Newton} system
+%
+\begin{equation}
+\left(
+ \frac{\partial D_u}{\partial\mathbf q}
+\right)^{T}
+\mathbf J^{T}
+\mathbf G\,
+\mathbf J
+\left(
+ \frac{\partial D_u}{\partial\mathbf q}
+\right)
+\delta\mathbf q
+=
+-
+\left(
+ \frac{\partial D_u}{\partial\mathbf q}
+\right)^{T}
+\mathbf J^{T}
+\mathbf G\,\mathbf R.
+\label{eq:A_GNsystem}
+\end{equation}

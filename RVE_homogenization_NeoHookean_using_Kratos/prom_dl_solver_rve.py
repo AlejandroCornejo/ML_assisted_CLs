@@ -54,19 +54,52 @@ def _is_finite(arr):
     return bool(np.all(np.isfinite(np.asarray(arr))))
 
 
-def _solve_reduced_system(K_sys, rhs, regularization=1.0e-10):
-    try:
-        dz = np.linalg.solve(K_sys, rhs)
-    except np.linalg.LinAlgError:
-        dz, *_ = np.linalg.lstsq(K_sys, rhs, rcond=None)
-    if _is_finite(dz):
-        return dz
+def _solve_reduced_system(
+    K_sys,
+    rhs,
+    regularization=1.0e-10,
+    linear_solver_mode="auto",
+    lstsq_rcond=None,
+):
+    mode = str(linear_solver_mode).strip().lower()
+    if mode not in ("auto", "solve", "lstsq"):
+        raise ValueError(
+            f"Unsupported linear_solver_mode='{linear_solver_mode}'. "
+            "Use one of: auto, solve, lstsq."
+        )
+    rcond_val = None if lstsq_rcond is None else float(lstsq_rcond)
+
+    def _solve_direct(A, b):
+        return np.linalg.solve(A, b)
+
+    def _solve_lstsq(A, b):
+        x, *_ = np.linalg.lstsq(A, b, rcond=rcond_val)
+        return x
+
+    if mode == "lstsq":
+        dz = _solve_lstsq(K_sys, rhs)
+        if _is_finite(dz):
+            return dz
+    elif mode == "solve":
+        try:
+            dz = _solve_direct(K_sys, rhs)
+        except np.linalg.LinAlgError:
+            dz = _solve_lstsq(K_sys, rhs)
+        if _is_finite(dz):
+            return dz
+    else:
+        try:
+            dz = _solve_direct(K_sys, rhs)
+        except np.linalg.LinAlgError:
+            dz = _solve_lstsq(K_sys, rhs)
+        if _is_finite(dz):
+            return dz
 
     K_reg = K_sys + float(regularization) * np.eye(K_sys.shape[0], dtype=K_sys.dtype)
     try:
-        dz = np.linalg.solve(K_reg, rhs)
+        dz = _solve_direct(K_reg, rhs)
     except np.linalg.LinAlgError:
-        dz, *_ = np.linalg.lstsq(K_reg, rhs, rcond=None)
+        dz = _solve_lstsq(K_reg, rhs)
     return dz
 
 
@@ -96,6 +129,7 @@ def RunPromDlBatchSimulation(
     pod_dl_model,
     device,
     strain_path,
+    out_dir=None,
     relnorm_cutoff=1e-5,
     max_its=25,
     abs_res_cutoff=NEWTON_TOL_ABS,
@@ -106,6 +140,8 @@ def RunPromDlBatchSimulation(
     max_dz_norm=0.5,
     old_stiffness_residual_cutoff=1.0e5,
     regularization=1.0e-10,
+    linear_solver_mode="auto",
+    lstsq_rcond=None,
     use_fast_dirichlet_bc=True,
     reference_amplitude=None,
     reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
@@ -138,8 +174,10 @@ def RunPromDlBatchSimulation(
     n_total_dof, eq_id_map, ta = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
     vec_assembler = VectorizedAssembler(mp, n_total_dof, eq_id_map)
     hom_reference_measure = float(np.sum(np.asarray(vec_assembler.area_e, dtype=float)))
-    with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
-        f.write(f"{hom_reference_measure:.16e}\n")
+    if out_dir is not None:
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
+            f.write(f"{hom_reference_measure:.16e}\n")
     elements = list(mp.Elements)
     entities = list(mp.Elements) + list(mp.Conditions)
 
@@ -234,6 +272,12 @@ def RunPromDlBatchSimulation(
         f"min_rel_drop_stop={float(min_rel_drop_stop):.3e}, "
         f"stagnation_relnorm_gate={float(stagnation_relnorm_gate):.3e}, "
         f"max_dz_norm={float(max_dz_norm):.3e}"
+    )
+    print(
+        "  [PROM-DL] linear solve: "
+        f"mode={str(linear_solver_mode).strip().lower()}, "
+        f"regularization={float(regularization):.3e}, "
+        f"lstsq_rcond={'default' if lstsq_rcond is None else f'{float(lstsq_rcond):.3e}'}"
     )
 
     for step in range(1, n_steps_total + 1):
@@ -380,9 +424,21 @@ def RunPromDlBatchSimulation(
                 K_solve = Kr_old
                 used_old = True
 
-            dz = _solve_reduced_system(K_solve, r_r, regularization=regularization)
+            dz = _solve_reduced_system(
+                K_solve,
+                r_r,
+                regularization=regularization,
+                linear_solver_mode=linear_solver_mode,
+                lstsq_rcond=lstsq_rcond,
+            )
             if used_old and not _is_finite(dz):
-                dz = _solve_reduced_system(K_r, r_r, regularization=regularization)
+                dz = _solve_reduced_system(
+                    K_r,
+                    r_r,
+                    regularization=regularization,
+                    linear_solver_mode=linear_solver_mode,
+                    lstsq_rcond=lstsq_rcond,
+                )
                 used_old = False
             if not _is_finite(dz):
                 print("  [PROM-DL] WARNING: non-finite reduced update detected.")

@@ -93,7 +93,6 @@ def RunHpromRbfBatchSimulation(
     max_dq_norm=0.5,
     old_stiffness_residual_cutoff=1.0e5,
     regularization=1.0e-10,
-    include_macro_strain_input=False,
     reference_amplitude=None,
     reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
     use_old_stiffness_in_first_iteration=USE_OLD_STIFFNESS_IN_FIRST_ITERATION,
@@ -102,6 +101,7 @@ def RunHpromRbfBatchSimulation(
     eq_map_full=None,
     Xc=None,
     Yc=None,
+    return_stats=False,
 ):
     t_wall_total_start = time.perf_counter()
 
@@ -212,7 +212,7 @@ def RunHpromRbfBatchSimulation(
     q_hist = [np.zeros(n_primary, dtype=float)]
 
     rbf_input_dim = int(rbf_model["input_dim"])
-    expected_input_dim = int(n_primary + (3 if include_macro_strain_input else 0))
+    expected_input_dim = int(n_primary)
     if rbf_input_dim != expected_input_dim:
         raise ValueError(
             f"RBF input size mismatch: model expects {rbf_input_dim}, "
@@ -257,8 +257,6 @@ def RunHpromRbfBatchSimulation(
 
     def _build_rbf_input(qp_vec, e_vec):
         qp = np.asarray(qp_vec, dtype=float).reshape(-1)
-        if include_macro_strain_input:
-            return np.concatenate([qp, np.asarray(e_vec, dtype=float).reshape(3)])
         return qp
 
     def _evaluate_qs_and_jac(qp_vec, e_vec):
@@ -285,11 +283,6 @@ def RunHpromRbfBatchSimulation(
     Kr_old = None
     J_full = np.zeros((n_total_dof, n_primary), dtype=float)
 
-    if include_macro_strain_input:
-        q0_const = None
-    else:
-        q0_const, _ = _evaluate_qs_and_jac(np.zeros(n_primary, dtype=float), np.zeros(3, dtype=float))
-
     print(f"  [HPROM-RBF] Solving for {n_steps_total} dynamic increments...")
     print(f"  [HPROM-RBF] Active mesh elements: {len(elements)} (reference full mesh: {n_elem_reference})")
     print(
@@ -303,6 +296,7 @@ def RunHpromRbfBatchSimulation(
     t_projection = 0.0
     t_solve = 0.0
     t_full_sync = 0.0
+    step_iters = []
 
     for step in range(1, n_steps_total + 1):
         time_val = float(step) * float(dt)
@@ -328,11 +322,6 @@ def RunHpromRbfBatchSimulation(
             sim.ApplyBoundaryConditions()
             disp_base_step = _capture_current_displacement_vector()
 
-        if include_macro_strain_input:
-            q0_step, _ = _evaluate_qs_and_jac(np.zeros(n_primary, dtype=float), E)
-        else:
-            q0_step = q0_const
-
         if step == 1 or step % 100 == 0 or step == n_steps_total:
             print(f"\n[HPROM-RBF] Step {step:04d}/{n_steps_total} | E={E}")
         verbose_step = bool(verbose_iterations)
@@ -348,13 +337,15 @@ def RunHpromRbfBatchSimulation(
         best_q = q_step_start.copy()
         best_res = np.inf
         best_rel = np.inf
+        it_step_count = 0
 
         while it < max_its:
             mp.ProcessInfo[KM.NL_ITERATION_NUMBER] = it + 1
+            it_step_count += 1
             t0 = time.perf_counter()
             q_s_map, J_rbf = _evaluate_qs_and_jac(q_p, E)
             t_map += time.perf_counter() - t0
-            q_s = q_s_map - q0_step
+            q_s = q_s_map
 
             if verbose_step:
                 print(f"    > q_p norm: {np.linalg.norm(q_p):.3e} | q_s norm: {np.linalg.norm(q_s):.3e}")
@@ -528,12 +519,12 @@ def RunHpromRbfBatchSimulation(
             Kr_old = None
 
         q_s_final_map, _ = _evaluate_qs_and_jac(q_p, E)
-        q_s_final = q_s_final_map - q0_step
+        q_s_final = q_s_final_map
         u_fluc_final = phi_p @ q_p + phi_s @ q_s_final
         if not _is_finite(u_fluc_final):
             q_p = q_step_start.copy()
             q_s_final_map, _ = _evaluate_qs_and_jac(q_p, E)
-            q_s_final = q_s_final_map - q0_step
+            q_s_final = q_s_final_map
             u_fluc_final = phi_p @ q_p + phi_s @ q_s_final
         if not _is_finite(u_fluc_final):
             raise RuntimeError("HPROM-RBF accepted state is non-finite after rollback.")
@@ -564,6 +555,7 @@ def RunHpromRbfBatchSimulation(
                 reference_measure=hom_reference_measure,
             )
         sim.FinalizeSolutionStep()
+        step_iters.append(int(it_step_count))
 
         q_hist.append(q_p.copy())
         results_eps.append(hom_eps)
@@ -573,15 +565,48 @@ def RunHpromRbfBatchSimulation(
     t_wall_total = time.perf_counter() - t_wall_total_start
     t_accounted = t_map + t_assembly + t_projection + t_solve + t_full_sync
     t_other = max(t_wall_total - t_accounted, 0.0)
+    iters = np.asarray(step_iters, dtype=float)
+    timing_stats = {
+        "n_steps": int(len(step_iters)),
+        "newton_iters_total": int(np.sum(iters)) if iters.size else 0,
+        "newton_iters_mean_per_step": float(np.mean(iters)) if iters.size else 0.0,
+        "newton_iters_max_per_step": int(np.max(iters)) if iters.size else 0,
+        "map": float(t_map),
+        "assembly": float(t_assembly),
+        "projection": float(t_projection),
+        "solve": float(t_solve),
+        "full_sync": float(t_full_sync),
+        "accounted": float(t_accounted),
+        "other": float(t_other),
+        "total": float(t_wall_total),
+    }
+    if timing_stats["newton_iters_total"] > 0:
+        timing_stats["mean_time_per_newton_iter"] = float(
+            timing_stats["total"] / float(timing_stats["newton_iters_total"])
+        )
+        timing_stats["mean_map_time_per_newton_iter"] = float(
+            timing_stats["map"] / float(timing_stats["newton_iters_total"])
+        )
+    else:
+        timing_stats["mean_time_per_newton_iter"] = 0.0
+        timing_stats["mean_map_time_per_newton_iter"] = 0.0
     print(
         f"\n[HPROM-RBF] Timing: map={t_map:.3f}s, assembly={t_assembly:.3f}s, "
         f"projection={t_projection:.3f}s, solve={t_solve:.3f}s, full_sync={t_full_sync:.3f}s, "
         f"accounted={t_accounted:.3f}s, other={t_other:.3f}s, total={t_wall_total:.3f}s"
     )
+    np.savez(os.path.join(out_dir, "hprom_rbf_timing_stats.npz"), **{
+        k: np.array([v], dtype=float) for k, v in timing_stats.items()
+    })
+    with open(os.path.join(out_dir, "hprom_rbf_timing_stats.txt"), "w", encoding="utf-8") as f:
+        for k, v in timing_stats.items():
+            f.write(f"{k}={v}\n")
 
     tag = f"trajectory_{trajectory_index}" if trajectory_index is not None else "hprom_rbf_run"
     np.save(os.path.join(out_dir, f"{tag}_q_p.npy"), np.stack(q_hist))
     np.save(os.path.join(out_dir, f"{tag}_strain.npy"), np.stack(results_eps))
     np.save(os.path.join(out_dir, f"{tag}_stress.npy"), np.stack(results_sig))
 
+    if return_stats:
+        return np.array(results_eps), np.array(results_sig), timing_stats
     return np.array(results_eps), np.array(results_sig)

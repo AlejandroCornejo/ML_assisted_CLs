@@ -12,6 +12,8 @@ import sys
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+from plot_style_utils import apply_latex_plot_style
+apply_latex_plot_style()
 
 # Add Kratos path
 KRATOS_PATH = "/home/kratos/Kratos_Eigen_Check/bin/Release"
@@ -168,7 +170,7 @@ def plot_triple_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir, ti
 def run_stage6(
     mesh="rve_geometry",
     ecm_file=os.path.join("stage_5_hprom_data", "ecm_weights_all.npz"),
-    use_hrom_mesh=False,
+    use_hrom_mesh=True,
     run_fom=False,
     run_prom=False,
     run_hprom=True,
@@ -460,7 +462,13 @@ if __name__ == "__main__":
     p.add_argument(
         "--use-hrom-mesh",
         action="store_true",
-        help="Use HROM mesh stored in ECM file (hrom_mesh_base) for HPROM run.",
+        help="Use HROM mesh stored in ECM file (hrom_mesh_base) for HPROM run (default: enabled).",
+    )
+    p.add_argument(
+        "--no-use-hrom-mesh",
+        dest="use_hrom_mesh",
+        action="store_false",
+        help="Disable automatic HROM mesh usage and force the base mesh.",
     )
     p.add_argument(
         "--hprom-homogenization-method",
@@ -482,6 +490,7 @@ if __name__ == "__main__":
         default=None,
         help="Optional Stage5c gappy operator npz (used with --hprom-homogenization-method gappy_pod).",
     )
+    p.set_defaults(use_hrom_mesh=True)
     args = p.parse_args()
 
     run_stage6(

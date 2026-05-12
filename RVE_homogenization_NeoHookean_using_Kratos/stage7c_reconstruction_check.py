@@ -5,12 +5,14 @@ import os
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
+from plot_style_utils import apply_latex_plot_style
+apply_latex_plot_style()
 
 from stage7a_prepare_ann_rbf_dataset import (
     _build_affine_lifting_helpers,
     _compute_affine_free_displacement,
 )
-from rbf_manifold_model import evaluate_rbf_map
+from rbf_manifold_model import evaluate_rbf_map_and_jacobian_qp
 
 
 def _load_training_snapshot_pair(fom_dir, trajectory_index, n_total_dofs, free_dofs):
@@ -54,22 +56,10 @@ def _load_manifold_predictor(model_type, basis_dir, ann_data_dir, rbf_data_dir):
         )
         n_p = int(phi_p.shape[1])
 
-        if include_macro:
-            q0_const = None
-        else:
-            q0_const = evaluate_rbf_map(np.zeros(n_p, dtype=float), rbf_model)
-
         def predict_qs(qp_vec, e_vec):
             qp = np.asarray(qp_vec, dtype=float).reshape(-1)
-            e = np.asarray(e_vec, dtype=float).reshape(3)
-            if include_macro:
-                x = np.concatenate([qp, e])
-                q0 = evaluate_rbf_map(np.concatenate([np.zeros(n_p, dtype=float), e]), rbf_model)
-            else:
-                x = qp
-                q0 = q0_const
-            q_map = evaluate_rbf_map(x, rbf_model)
-            return np.asarray(q_map - q0, dtype=float).reshape(-1)
+            q_map, _ = evaluate_rbf_map_and_jacobian_qp(qp, rbf_model, n_p)
+            return np.asarray(q_map, dtype=float).reshape(-1)
 
         model_label = "PROM-RBF"
         return phi_p, phi_s, free_dofs, include_macro, predict_qs, model_label
@@ -83,28 +73,27 @@ def _load_manifold_predictor(model_type, basis_dir, ann_data_dir, rbf_data_dir):
         )
         n_p = int(phi_p.shape[1])
 
-        if include_macro:
-            q0_const = None
-        else:
-            with torch.no_grad():
-                q0_const = ann_model(torch.zeros((1, n_p), device=device)).cpu().numpy().reshape(-1)
+        def _eval_ann_raw_and_jac(qp_vec, e_vec):
+            qp = np.asarray(qp_vec, dtype=np.float32).reshape(-1)
+
+            q_in = torch.from_numpy(qp).unsqueeze(0).to(device)
+            with torch.enable_grad():
+                q_var = q_in.clone().detach().requires_grad_(True)
+
+                def _ann_wrap(q_loc):
+                    return ann_model(q_loc)
+
+                q_map = _ann_wrap(q_var)
+                jac = torch.autograd.functional.jacobian(_ann_wrap, q_var).reshape(-1, n_p)
+            return (
+                q_map.detach().cpu().numpy().reshape(-1).astype(float),
+                jac.detach().cpu().numpy().astype(float),
+            )
 
         def predict_qs(qp_vec, e_vec):
             qp = np.asarray(qp_vec, dtype=np.float32).reshape(-1)
-            e = np.asarray(e_vec, dtype=np.float32).reshape(3)
-
-            if include_macro:
-                x = np.concatenate([qp, e]).astype(np.float32)
-                x0 = np.concatenate([np.zeros(n_p, dtype=np.float32), e]).astype(np.float32)
-                with torch.no_grad():
-                    q0 = ann_model(torch.from_numpy(x0).unsqueeze(0).to(device)).cpu().numpy().reshape(-1)
-            else:
-                x = qp.astype(np.float32)
-                q0 = q0_const
-
-            with torch.no_grad():
-                q_map = ann_model(torch.from_numpy(x).unsqueeze(0).to(device)).cpu().numpy().reshape(-1)
-            return np.asarray(q_map - q0, dtype=float).reshape(-1)
+            q_map, _ = _eval_ann_raw_and_jac(qp.astype(np.float32), np.zeros(3, dtype=np.float32))
+            return np.asarray(q_map, dtype=float).reshape(-1)
 
         model_label = "PROM-ANN"
         return phi_p, phi_s, free_dofs, include_macro, predict_qs, model_label

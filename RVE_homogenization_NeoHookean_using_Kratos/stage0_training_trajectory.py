@@ -20,6 +20,8 @@ import argparse
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+from plot_style_utils import apply_latex_plot_style
+apply_latex_plot_style()
 from matplotlib import animation
 
 

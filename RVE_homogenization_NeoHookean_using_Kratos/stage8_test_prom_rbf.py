@@ -3,6 +3,8 @@ import sys
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+from plot_style_utils import apply_latex_plot_style
+apply_latex_plot_style()
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 # Add Kratos path
@@ -21,6 +23,21 @@ from fom_solver_rve import (
 )
 from hprom_solver_rve import RunHpromBatchSimulation
 from prom_rbf_solver_rve import LoadPromRbfModel, RunPromRbfBatchSimulation
+
+
+def _load_hrom_mesh_base_from_ecm_file(ecm_file):
+    if not os.path.exists(ecm_file):
+        return None
+    try:
+        ecm = np.load(ecm_file, allow_pickle=True)
+    except Exception:
+        return None
+    if "hrom_mesh_base" not in ecm:
+        return None
+    try:
+        return str(np.ravel(ecm["hrom_mesh_base"])[0])
+    except Exception:
+        return None
 
 
 def _compute_equivalent_stress_strain(eps, sig):
@@ -94,6 +111,7 @@ def _run_or_load_hprom(
     out_dir,
     emax,
     reference_steps,
+    ecm_file,
     force_run=False,
     use_old_stiffness_in_first_iteration=True,
 ):
@@ -103,7 +121,7 @@ def _run_or_load_hprom(
     if force_run or not (os.path.exists(hprom_sig_file) and os.path.exists(hprom_eps_file)):
         print("  [Stage 8-RBF] Running local HPROM baseline...")
         phi_f, free_dofs, dir_dofs, eq_map, Xc, Yc = _load_rom_model("stage_2_pod_rve")
-        ecm = np.load(os.path.join("stage_5_hprom_data", "ecm_weights_all.npz"))
+        ecm = np.load(ecm_file, allow_pickle=True)
         ecm_data = {k: ecm[k] for k in ecm.files}
 
         eps, sig = RunHpromBatchSimulation(
@@ -142,6 +160,7 @@ def run_stage8_rbf(
     plot_only=False,
     use_old_stiffness_in_first_iteration=True,
     rbf_data_dir="stage_7_rbf_data",
+    hprom_data_dir="stage_5_hprom_data",
     out_dir="stage_8_prom_rbf_results",
     use_stage6_waypoints=True,
 ):
@@ -187,15 +206,26 @@ def run_stage8_rbf(
     print(f"  Reference increment level: {REFERENCE_STEPS_FOR_UNIT_AMPLITUDE}")
     print(f"  Segments: {seg_steps}")
     print(f"  RBF data dir: {rbf_data_dir}")
+    print(f"  HPROM data dir: {hprom_data_dir}")
 
     if plot_only:
         print("[Stage 8-RBF] --plot-only enabled. Skipping solves.")
         return
 
-    phi_p, phi_s, free_dofs, _, _, rbf_model, include_macro_strain_input = LoadPromRbfModel(
+    ecm_file = os.path.join(hprom_data_dir, "ecm_weights_all.npz")
+    mesh_fom_prom = "rve_geometry"
+    mesh_hprom = "rve_geometry"
+    auto_hrom_mesh = _load_hrom_mesh_base_from_ecm_file(ecm_file)
+    if auto_hrom_mesh:
+        mesh_hprom = str(auto_hrom_mesh)
+    print(f"  FOM/PROM mesh: {mesh_fom_prom}")
+    print(f"  HPROM mesh:    {mesh_hprom}")
+
+    phi_p, phi_s, free_dofs, _, _, rbf_model, _include_macro_strain_input = LoadPromRbfModel(
         basis_dir="stage_2_pod_rve", rbf_data_dir=rbf_data_dir
     )
-    parameters = setup_kratos_parameters("rve_geometry")
+    parameters = setup_kratos_parameters(mesh_fom_prom)
+    parameters_hprom = setup_kratos_parameters(mesh_hprom)
 
     t0 = time.perf_counter()
     eps_pr, sig_pr = RunPromRbfBatchSimulation(
@@ -208,7 +238,6 @@ def run_stage8_rbf(
         out_dir=out_dir,
         reference_amplitude=emax,
         reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
-        include_macro_strain_input=include_macro_strain_input,
         use_old_stiffness_in_first_iteration=use_old_stiffness_in_first_iteration,
     )
     t_pr = time.perf_counter() - t0
@@ -235,11 +264,12 @@ def run_stage8_rbf(
         use_old_stiffness_in_first_iteration=use_old_stiffness_in_first_iteration,
     )
     hprom_eps, hprom_sig = _run_or_load_hprom(
-        parameters,
+        parameters_hprom,
         strain_path,
         out_dir,
         emax,
         REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
+        ecm_file,
         force_run=run_hprom,
         use_old_stiffness_in_first_iteration=use_old_stiffness_in_first_iteration,
     )
@@ -340,6 +370,12 @@ if __name__ == "__main__":
         help="Output directory for Stage 8 RBF results.",
     )
     p.add_argument(
+        "--hprom-data-dir",
+        type=str,
+        default="stage_5_hprom_data",
+        help="Directory with HPROM ECM file (ecm_weights_all.npz).",
+    )
+    p.add_argument(
         "--no-old-stiffness-first-it",
         action="store_true",
         help="Disable reuse of previous-step reduced stiffness in Newton iteration 0.",
@@ -363,6 +399,7 @@ if __name__ == "__main__":
         plot_only=args.plot_only,
         use_old_stiffness_in_first_iteration=not args.no_old_stiffness_first_it,
         rbf_data_dir=args.rbf_data_dir,
+        hprom_data_dir=args.hprom_data_dir,
         out_dir=args.out_dir,
         use_stage6_waypoints=not args.control_points_only,
     )

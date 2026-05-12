@@ -7,6 +7,8 @@ logger = logging.getLogger(__name__)
 
 try:
     from matplotlib import pyplot as plt
+    from plot_style_utils import apply_latex_plot_style
+    apply_latex_plot_style()
     missing_matplotlib = False
 except ImportError as e:
     missing_matplotlib = True

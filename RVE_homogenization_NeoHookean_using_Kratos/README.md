@@ -12,6 +12,19 @@ This folder contains a complete Reduced Order Modeling workflow for a 2D Neo-Hoo
 
 The goal of this README is handoff: someone new should be able to run the pipeline in order and understand what each stage does.
 
+## Plot Style (LaTeX by Default)
+
+All plotting scripts in this repository now apply a shared LaTeX-friendly Matplotlib setup via:
+
+- `plot_style_utils.apply_latex_plot_style()`
+
+Default behavior is `text.usetex=True` (paper-style plots).  
+If you need a fallback without TeX on a machine that does not have a LaTeX installation, run with:
+
+```bash
+RVE_PLOT_USE_TEX=0 python3 <script>.py
+```
+
 ## 1) Problem Setup and Data Formats
 
 This section is important for ML integration, for example KANs, because it defines the input/output pairs used in the workflow.
@@ -181,7 +194,7 @@ Stage1(FOM) + Stage2 -> Stage7a -> Stage7b-RBF -> Stage7c -> Stage8-RBF -> Stage
 POD-DL chain:
 
 ```text
-Stage1(FOM) + Stage2 -> Stage7a-POD-DL -> Stage7b-POD-DL -> Stage7c -> Stage8-POD-DL
+Stage1(FOM) + Stage2 -> Stage7a-POD-DL -> Stage7b-POD-DL -> Stage7c -> Stage8-POD-DL -> Stage9a-POD-DL -> Stage9b-POD-DL -> Stage10-POD-DL
 ```
 
 Final benchmark entrypoints:
@@ -191,6 +204,7 @@ Final benchmark entrypoints:
 - `Stage8-RBF`: PROM-RBF benchmark
 - `Stage8-POD-DL`: PROM-POD-DL benchmark
 - `Stage10`: FOM vs PROM-RBF vs HPROM-RBF
+- `Stage10-POD-DL`: FOM vs PROM-POD-DL vs HPROM-POD-DL
 
 ## 3) Main Reduced Models
 
@@ -272,16 +286,6 @@ with:
 \mathbf{q}_s = \mathcal{N}(\mathbf{q}_p)
 ```
 
-A shifted version of the ANN is used so that the nonlinear manifold passes through the origin:
-
-```math
-\hat{\mathcal{N}}(\mathbf{q}_p)
-=
-\mathcal{N}(\mathbf{q}_p)
--
-\mathcal{N}(\mathbf{0})
-```
-
 The decoder is:
 
 ```math
@@ -289,7 +293,7 @@ The decoder is:
 =
 \Phi_p\mathbf{q}_p
 +
-\Phi_s\hat{\mathcal{N}}(\mathbf{q}_p)
+\Phi_s\mathcal{N}(\mathbf{q}_p)
 ```
 
 The manifold Jacobian is:
@@ -302,7 +306,7 @@ The manifold Jacobian is:
 \Phi_p
 +
 \Phi_s
-\frac{\partial \hat{\mathcal{N}}}{\partial \mathbf{q}_p}
+\frac{\partial \mathcal{N}}{\partial \mathbf{q}_p}
 ```
 
 The reduced residual is:
@@ -351,43 +355,15 @@ The same POD split is used:
 \end{bmatrix}
 ```
 
-The RBF map can be trained with primary coordinates only:
+The RBF map is trained with primary coordinates only:
 
 ```math
 \mathbf{q}_s
 =
 \mathcal{R}(\mathbf{q}_p)
-```
-
-or with primary coordinates plus macro strain:
-
-```math
-\mathbf{q}_s
-=
-\mathcal{R}(\mathbf{q}_p,\mathbf{E})
 ```
 
 where `\mathcal{R}` is the compact-center RBF map trained in Stage 7b-RBF.
-
-If the RBF map depends only on `\mathbf{q}_p`, the shifted online map is:
-
-```math
-\hat{\mathcal{R}}(\mathbf{q}_p)
-=
-\mathcal{R}(\mathbf{q}_p)
--
-\mathcal{R}(\mathbf{0})
-```
-
-If macro strain is part of the input, the shifted online map is:
-
-```math
-\hat{\mathcal{R}}(\mathbf{q}_p,\mathbf{E})
-=
-\mathcal{R}(\mathbf{q}_p,\mathbf{E})
--
-\mathcal{R}(\mathbf{0},\mathbf{E})
-```
 
 The decoder is:
 
@@ -396,17 +372,7 @@ The decoder is:
 =
 \Phi_p\mathbf{q}_p
 +
-\Phi_s\hat{\mathcal{R}}(\mathbf{q}_p)
-```
-
-or, when macro strain is included:
-
-```math
-\mathbf{w}_f(\mathbf{q}_p,\mathbf{E})
-=
-\Phi_p\mathbf{q}_p
-+
-\Phi_s\hat{\mathcal{R}}(\mathbf{q}_p,\mathbf{E})
+\Phi_s\mathcal{R}(\mathbf{q}_p)
 ```
 
 The manifold Jacobian with respect to the reduced unknowns is:
@@ -417,10 +383,8 @@ The manifold Jacobian with respect to the reduced unknowns is:
 \Phi_p
 +
 \Phi_s
-\frac{\partial \hat{\mathcal{R}}}{\partial \mathbf{q}_p}
+\frac{\partial \mathcal{R}}{\partial \mathbf{q}_p}
 ```
-
-When `\mathbf{E}` is included as an input to the RBF, it is treated as a prescribed parameter during the reduced Newton solve. Therefore, the derivative above is still taken with respect to `\mathbf{q}_p`.
 
 The reduced residual is:
 
@@ -647,8 +611,8 @@ New options (independent sampling for residual vs homogenization):
 
 ```bash
 python3 stage5_build_ecm_dataset.py \
-  --snapshot-percent-res 2.0 \
-  --snapshot-percent-hom 100.0
+  --snapshot-percent-res 5.0 \
+  --snapshot-percent-hom 5.0
 ```
 
 Useful flags:
@@ -684,6 +648,26 @@ meta.npz
 
 ```bash
 python3 stage5_compute_ecm_weights.py
+```
+
+Coupling modes (`--ecm-coupling-mode`):
+
+- `independent`: three separate ECM solves (RES, EPS, SIG)
+- `cascade`: EPS initialized from RES and SIG initialized from EPS (legacy `coupled`)
+- `single`: one ECM solve shared by RES, EPS, and SIG, built from one aggregated matrix and one RSVD
+
+For `single`, block scaling before the aggregated RSVD is configurable with:
+
+- `--single-block-normalization fro` (default): equal Frobenius-energy weighting of RES/EPS/SIG
+- `--single-block-normalization row`: scales by `1/sqrt(n_rows)` per block
+- `--single-block-normalization none`: no scaling
+
+Optional: `--rsvd-tol-single` (if omitted or `<=0`, it uses `min(rsvd_tol_res, rsvd_tol_eps, rsvd_tol_sig)`).
+
+Example:
+
+```bash
+python3 stage5_compute_ecm_weights.py --ecm-coupling-mode single
 ```
 
 Output:
@@ -771,6 +755,10 @@ pod_dl_dataset_metadata.npz
 python3 stage7b_train_ann_manifold.py
 ```
 
+Current ANN activation is `ELU` (hidden stack: `Linear + BatchNorm1d + ELU`).
+The trainer supports architecture/hyperparameter tuning through CLI (e.g. `--hidden-layers`,
+`--dropout`, `--loss smoothl1`, `--lr`, `--batch-size`, `--epochs`, `--grad-clip-norm`).
+
 Outputs in:
 
 ```bash
@@ -797,7 +785,6 @@ python3 stage7b_train_rbf_manifold.py \
   --out-dir stage_7_rbf_data \
   --max-centers 4000 \
   --kernel gaussian \
-  --epsilon 0.0 \
   --ridge 1e-10 \
   --grid-kernels gaussian \
   --grid-eps-values 0.01,0.05,0.1,0.25,0.5,1.0,2.0,5.0 \
@@ -987,6 +974,24 @@ instead of the linear POD basis.
 python3 stage9_build_ecm_dataset_rbf.py
 ```
 
+Optional nonlinear manifold-consistency fit for residual snapshots (before building `Q_ecm`):
+
+- `--residual-fit-mode none` (default): use projected `q_p` directly
+- `--residual-fit-mode gauss_newton`: local Gauss-Newton fit of `q_p`
+- tuning flags: `--fit-max-iters`, `--fit-rel-tol`, `--fit-l2-reg`, `--fit-step-tol`
+
+Example:
+
+```bash
+python3 stage9_build_ecm_dataset_rbf.py \
+  --residual-fit-mode gauss_newton \
+  --fit-max-iters 8 \
+  --fit-rel-tol 1e-6
+```
+
+The ANN dataset builder (`stage9_build_ecm_dataset_ann.py`) supports the same residual-fit flags.
+The POD-DL dataset builder (`stage9_build_ecm_dataset_pod_dl.py`) supports the same residual-fit flags.
+
 Output folder:
 
 ```bash
@@ -1011,10 +1016,54 @@ This stage uses the same RSVD plus ECM workflow as Stage 5b, applied to Stage 9a
 python3 stage9_compute_ecm_weights_rbf.py
 ```
 
+Stage 9 ECM scripts (`stage9_compute_ecm_weights_rbf.py` and
+`stage9_compute_ecm_weights_ann.py` and `stage9_compute_ecm_weights_pod_dl.py`) support the same
+`--ecm-coupling-mode` values as Stage 5b:
+
+- `independent`
+- `cascade` (legacy alias: `coupled`)
+- `single`
+
+For `single`, they also support:
+
+- `--single-block-normalization {fro,row,none}`
+- `--rsvd-tol-single`
+
+Examples:
+
+```bash
+python3 stage9_compute_ecm_weights_rbf.py --ecm-coupling-mode single
+python3 stage9_compute_ecm_weights_ann.py --ecm-coupling-mode single
+python3 stage9_compute_ecm_weights_pod_dl.py --ecm-coupling-mode single
+```
+
 Output:
 
 ```bash
 stage_9_hprom_rbf_data/ecm_weights_all.npz
+```
+
+### Stage 9c: Build HROM Mesh from ECM + Paper-Style Selection Image
+
+```bash
+python3 build_hrom_mesh_from_ecm.py \
+  --base-mesh rve_geometry \
+  --ecm-file stage_9_hprom_rbf_data/ecm_weights_all.npz \
+  --selection-key Z_union \
+  --condition-mode all \
+  --output-mesh rve_geometry_stage_9_hprom_rbf_data_z_union_hrom \
+  --inplace-ecm \
+  --save-selection-image stage_9_hprom_rbf_data/Z_union_selected_elements_paper.png \
+  --model-label "HPROM-RBF"
+```
+
+Notes:
+
+- LaTeX text rendering for the selection image is **enabled by default**.
+- If your machine has no TeX installation, disable it with:
+
+```bash
+--no-use-tex
 ```
 
 ### Stage 10: FOM vs PROM-RBF vs HPROM-RBF Benchmark
@@ -1027,6 +1076,173 @@ Optional forced recompute:
 
 ```bash
 python3 stage10_test_hprom_rbf.py --run-fom --run-prom-rbf --run-hprom-rbf
+```
+
+### Stage 9a/9b + Stage 10 for HPROM-POD-DL
+
+Build POD-DL ECM dataset (same 5/5 default sampling style):
+
+```bash
+python3 stage9_build_ecm_dataset_pod_dl.py \
+  --snapshot-percent-res 5 \
+  --snapshot-percent-hom 5
+```
+
+Compute POD-DL ECM weights:
+
+```bash
+python3 stage9_compute_ecm_weights_pod_dl.py \
+  --ecm-coupling-mode cascade
+```
+
+Build HROM mesh from POD-DL ECM selection:
+
+```bash
+python3 build_hrom_mesh_from_ecm.py \
+  --base-mesh rve_geometry \
+  --ecm-file stage_9_hprom_pod_dl_data/ecm_weights_all.npz \
+  --selection-key Z_union \
+  --condition-mode all \
+  --output-mesh rve_geometry_stage_9_hprom_pod_dl_data_z_union_hrom \
+  --inplace-ecm \
+  --save-selection-image stage_9_hprom_pod_dl_data/Z_union_selected_elements_paper.png \
+  --model-label "HPROM-POD-DL (ECM)"
+```
+
+Run FOM vs PROM-POD-DL vs HPROM-POD-DL:
+
+```bash
+python3 stage10_test_hprom_dl.py
+```
+
+Optional forced recompute:
+
+```bash
+python3 stage10_test_hprom_dl.py --run-fom --run-prom-dl --run-hprom-dl
+```
+
+### ANN-LS Variant (Quick Cascade)
+
+ANN-LS uses the LS-coordinate dataset from Stage 7a-LS and trains the ANN on that LS dataset.
+
+1) Build ANN-LS dataset:
+
+```bash
+python3 stage7a_prepare_ann_dataset_ls.py \
+  --n-primary 3 \
+  --out-dir stage_7_ann_data_ls
+```
+
+2) Train ANN on LS dataset:
+
+```bash
+python3 stage7b_train_ann_manifold.py \
+  --data-dir stage_7_ann_data_ls
+```
+
+Recommended ANN-LS sweep (20 configurations, auto-select best):
+
+```bash
+python3 stage7b_sweep_ann_manifold.py \
+  --data-dir stage_7_ann_data_ls \
+  --out-dir stage_7_ann_ls_sweep \
+  --best-out-dir stage_7_ann_data_ls \
+  --n-trials 20 \
+  --epochs 2500 \
+  --seed 42
+```
+
+Progressive-width, fast-Jacobian oriented ANN-LS sweep (example family includes
+architectures like `5,10,15,20,23` and related progressive variants):
+
+```bash
+python3 stage7b_sweep_ann_manifold.py \
+  --data-dir stage_7_ann_data_ls \
+  --out-dir stage_7_ann_ls_sweep_progressive_fast \
+  --best-out-dir stage_7_ann_data_ls \
+  --n-trials 20 \
+  --epochs 2500 \
+  --seed 42 \
+  --config-mode progressive_fast
+```
+
+Latest best ANN-LS sweep result (May 10, 2026; `stage_7_ann_ls_sweep/sweep_summary.txt`):
+
+- `trial_20`
+- `hidden_layers=128,128,128`
+- `activation=gelu`
+- `dropout=0.0`
+- `use_batchnorm=0`
+- `loss=mse`
+- `lr=1.2e-3`
+- `weight_decay=5e-5`
+- `batch_size=3072`
+- `patience=80`
+- `lr_patience=35`
+- `lr_factor=0.5`
+- `grad_clip_norm=2.0`
+- `best_val_scaled_mse=3.5087393728538923e-07` at epoch `2487`
+
+To train directly with this fixed best configuration (without sweep):
+
+```bash
+python3 stage7b_train_ann_manifold.py \
+  --data-dir stage_7_ann_data_ls \
+  --hidden-layers 128,128,128 \
+  --activation gelu \
+  --dropout 0.0 \
+  --no-batchnorm \
+  --loss mse \
+  --lr 1.2e-3 \
+  --weight-decay 5e-5 \
+  --batch-size 3072 \
+  --epochs 2500 \
+  --patience 80 \
+  --lr-patience 35 \
+  --lr-factor 0.5 \
+  --grad-clip-norm 2.0 \
+  --seed 1020
+```
+
+3) Build ANN-LS ECM dataset (example with 5/5 sampling):
+
+```bash
+python3 stage9_build_ecm_dataset_ann_ls.py \
+  --snapshot-percent-res 5 \
+  --snapshot-percent-hom 5
+```
+
+4) Compute ANN-LS ECM weights:
+
+```bash
+python3 stage9_compute_ecm_weights_ann_ls.py \
+  --ecm-coupling-mode cascade
+```
+
+5) Build ANN-LS HROM mesh and update ECM file in place:
+
+```bash
+python3 build_hrom_mesh_from_ecm.py \
+  --base-mesh rve_geometry \
+  --ecm-file stage_9_hprom_ann_data_ls/ecm_weights_all.npz \
+  --selection-key Z_union \
+  --condition-mode all \
+  --output-mesh rve_geometry_stage_9_hprom_ann_data_ls_z_union_hrom \
+  --inplace-ecm \
+  --save-selection-image stage_9_hprom_ann_data_ls/Z_union_selected_elements_paper.png \
+  --model-label "HPROM-ANN-LS"
+```
+
+6) Run PROM-ANN-LS benchmark:
+
+```bash
+python3 stage8_test_prom_ann_ls.py --run-fom --run-hprom
+```
+
+7) Run HPROM-ANN-LS benchmark:
+
+```bash
+python3 stage10_test_hprom_ann_ls.py --run-fom --run-prom-ann --run-hprom-ann
 ```
 
 The file:

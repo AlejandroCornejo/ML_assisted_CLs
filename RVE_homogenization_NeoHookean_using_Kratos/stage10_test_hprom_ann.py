@@ -9,6 +9,8 @@ import os
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+from plot_style_utils import apply_latex_plot_style
+apply_latex_plot_style()
 
 from stage6_test_hprom import generate_safe_test_path
 from stage4_test_rve import plot_path_in_domain
@@ -21,6 +23,22 @@ from fom_solver_rve import (
 )
 from prom_ann_solver_rve import LoadPromAnnModel, RunPromAnnBatchSimulation
 from hprom_ann_solver_rve import LoadHpromAnnModel, RunHpromAnnBatchSimulation
+
+
+def _load_hrom_mesh_base_from_ecm_dir(hprom_ann_dir):
+    ecm_file = os.path.join(str(hprom_ann_dir), "ecm_weights_all.npz")
+    if not os.path.exists(ecm_file):
+        return None
+    try:
+        ecm = np.load(ecm_file, allow_pickle=True)
+    except Exception:
+        return None
+    if "hrom_mesh_base" not in ecm:
+        return None
+    try:
+        return str(np.ravel(ecm["hrom_mesh_base"])[0])
+    except Exception:
+        return None
 
 
 def _compute_equivalent_stress_strain(eps, sig):
@@ -124,8 +142,14 @@ def plot_hprom_ann_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir,
     print(f"Stage 10 plots saved to: {out_dir}")
 
 
-def run_stage10(run_fom=False, run_prom_ann=False, run_hprom_ann=False):
-    out_dir = "stage_10_hprom_ann_results"
+def run_stage10(
+    run_fom=False,
+    run_prom_ann=False,
+    run_hprom_ann=False,
+    ann_data_dir="stage_7_ann_data",
+    hprom_ann_dir="stage_9_hprom_ann_data",
+    out_dir="stage_10_hprom_ann_results",
+):
     os.makedirs(out_dir, exist_ok=True)
 
     # Load domain parameters from stage0 bundle
@@ -138,9 +162,9 @@ def run_stage10(run_fom=False, run_prom_ann=False, run_hprom_ann=False):
         data = np.load(bundle_path, allow_pickle=True)
         rel6 = list(data["relative_boundary"])
         if "emax" in data:
-            emax = float(data["emax"])
+            emax = float(np.ravel(data["emax"])[0])
         else:
-            emax = float(data["reference_amplitude"])
+            emax = float(np.ravel(data["reference_amplitude"])[0])
         if "domain_type" in data:
             domain_type = str(data["domain_type"][0])
 
@@ -166,8 +190,20 @@ def run_stage10(run_fom=False, run_prom_ann=False, run_hprom_ann=False):
     print(f"  Strain path points: {len(strain_path)}")
     print(f"  Dynamic steps: {total_steps} (+1 initial = {total_steps + 1})")
     print(f"  Segments: {seg_steps}")
+    print(f"  ANN data dir: {ann_data_dir}")
+    print(f"  HPROM-ANN dir: {hprom_ann_dir}")
+    print(f"  Output dir: {out_dir}")
 
-    parameters = setup_kratos_parameters("rve_geometry")
+    mesh_fom_prom = "rve_geometry"
+    mesh_hprom = "rve_geometry"
+    auto_hrom_mesh = _load_hrom_mesh_base_from_ecm_dir(hprom_ann_dir)
+    if auto_hrom_mesh:
+        mesh_hprom = str(auto_hrom_mesh)
+    print(f"  FOM/PROM mesh: {mesh_fom_prom}")
+    print(f"  HPROM mesh:    {mesh_hprom}")
+
+    parameters = setup_kratos_parameters(mesh_fom_prom)
+    parameters_hprom = setup_kratos_parameters(mesh_hprom)
     timings = {}
 
     fom_eps_file = os.path.join(out_dir, "fom_strain.npy")
@@ -198,9 +234,9 @@ def run_stage10(run_fom=False, run_prom_ann=False, run_hprom_ann=False):
     prom_sig_file = os.path.join(out_dir, "prom_ann_stress.npy")
     if run_prom_ann or not (os.path.exists(prom_eps_file) and os.path.exists(prom_sig_file)):
         print("\n[Stage 10] Running PROM-ANN...")
-        phi_p, phi_s, free_dofs, _, _, ann_model, device, include_macro = LoadPromAnnModel(
+        phi_p, phi_s, free_dofs, _, _, ann_model, device, _include_macro = LoadPromAnnModel(
             basis_dir="stage_2_pod_rve",
-            ann_data_dir="stage_7_ann_data",
+            ann_data_dir=ann_data_dir,
         )
         t0 = time.perf_counter()
         p_eps, p_sig = RunPromAnnBatchSimulation(
@@ -211,9 +247,9 @@ def run_stage10(run_fom=False, run_prom_ann=False, run_hprom_ann=False):
             ann_model,
             device,
             strain_path,
+            out_dir=out_dir,
             reference_amplitude=emax,
             reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
-            include_macro_strain_input=include_macro,
         )
         timings["PROM-ANN"] = time.perf_counter() - t0
         p_eps = np.asarray(p_eps, dtype=float)
@@ -240,15 +276,15 @@ def run_stage10(run_fom=False, run_prom_ann=False, run_hprom_ann=False):
             ann_model_h,
             device_h,
             ecm_data_h,
-            include_macro_h,
+            _include_macro_h,
         ) = LoadHpromAnnModel(
             basis_dir="stage_2_pod_rve",
-            ann_data_dir="stage_7_ann_data",
-            hprom_ann_dir="stage_9_hprom_ann_data",
+            ann_data_dir=ann_data_dir,
+            hprom_ann_dir=hprom_ann_dir,
         )
         t0 = time.perf_counter()
         h_eps, h_sig = RunHpromAnnBatchSimulation(
-            parameters,
+            parameters_hprom,
             phi_p_h,
             phi_s_h,
             free_dofs_h,
@@ -258,7 +294,6 @@ def run_stage10(run_fom=False, run_prom_ann=False, run_hprom_ann=False):
             out_dir=out_dir,
             strain_path=strain_path,
             trajectory_index=None,
-            include_macro_strain_input=include_macro_h,
             reference_amplitude=emax,
             reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
             eq_map_full=eq_map_h,
@@ -297,10 +332,31 @@ if __name__ == "__main__":
     p.add_argument("--run-fom", action="store_true", help="Force FOM recompute.")
     p.add_argument("--run-prom-ann", action="store_true", help="Force PROM-ANN recompute.")
     p.add_argument("--run-hprom-ann", action="store_true", help="Force HPROM-ANN recompute.")
+    p.add_argument(
+        "--ann-data-dir",
+        type=str,
+        default="stage_7_ann_data",
+        help="Directory with ANN data/model files for PROM/HPROM-ANN.",
+    )
+    p.add_argument(
+        "--hprom-ann-dir",
+        type=str,
+        default="stage_9_hprom_ann_data",
+        help="Directory with HPROM-ANN ECM file (ecm_weights_all.npz).",
+    )
+    p.add_argument(
+        "--out-dir",
+        type=str,
+        default="stage_10_hprom_ann_results",
+        help="Output directory for Stage 10 ANN benchmark.",
+    )
     args = p.parse_args()
 
     run_stage10(
         run_fom=args.run_fom,
         run_prom_ann=args.run_prom_ann,
         run_hprom_ann=args.run_hprom_ann,
+        ann_data_dir=args.ann_data_dir,
+        hprom_ann_dir=args.hprom_ann_dir,
+        out_dir=args.out_dir,
     )

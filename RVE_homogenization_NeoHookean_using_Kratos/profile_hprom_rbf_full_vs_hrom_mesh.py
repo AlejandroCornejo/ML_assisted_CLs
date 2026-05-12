@@ -14,6 +14,8 @@ import re
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+from plot_style_utils import apply_latex_plot_style
+apply_latex_plot_style()
 
 from stage6_test_hprom import generate_safe_test_path
 from fom_solver_rve import (
@@ -88,7 +90,6 @@ def _run_case(
             out_dir=run_out_dir,
             strain_path=strain_path,
             trajectory_index=None,
-            include_macro_strain_input=include_macro,
             reference_amplitude=ref_amp,
             reference_steps=ref_steps,
             max_its=max_its,

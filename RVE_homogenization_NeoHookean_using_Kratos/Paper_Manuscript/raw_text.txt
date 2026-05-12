@@ -1,0 +1,2133 @@
+Received: 10 April 2024
+
+Revised: 2 August 2024
+
+Accepted: 18 August 2024
+
+DOI: 10.1002/nme.7590
+
+RESEARCH ARTICLE
+
+A subspace-adaptive weights cubature method with
+application to the local hyperreduction of parameterized
+finite element models
+J. R. Bravo1,2
+
+J. A. Hernández2,3
+
+S. Ares de Parga1,2
+
+R. Rossi1,2
+
+1
+
+Department of Civil and Environmental
+Engineering (DECA), Universitat
+Politècnica de Catalunya, Barcelona, Spain
+2
+
+Abstract
+This article is concerned with quadrature/cubature rules able to deal with mul-
+
+Centre Internacional de Mètodes
+Numèrics en Enginyeria (CIMNE),
+Barcelona, Spain
+
+tiple subspaces of functions, in such a way that the integration points are
+common for all the subspaces, yet the (nonnegative) weights are tailored to
+
+3
+
+each specific subspace. These subspace-adaptive weights cubature rules can be
+
+E.S. d’Enginyeries Industrial,
+Aeroespacial i Audiovisual de Terrassa
+(ESEIAAT), Universitat Politècnica de
+Catalunya, Terrassa, Spain
+
+used to accelerate computational mechanics applications requiring efficiently
+evaluating spatial integrals whose integrand function dynamically switches
+between multiple pre-computed subspaces. One of such applications is local
+
+Correspondence
+J. R. Bravo, Department of Civil and
+Environmental Engineering (DECA),
+Universitat Politècnica de Catalunya,
+Barcelona, Spain.
+Email: jose.raul.bravo@upc.edu
+
+hyperreduced-order modeling (HROM), in which the solution manifold is
+approximately represented as a collection of basis matrices, each basis matrix
+
+Funding information
+Ministerio de Ciencia, Innovación y
+Universidades, Grant/Award Numbers:
+PCI2021-121944, PID2021-122518OB-I00;
+Departament de Recerca i Universitats de
+la Generalitat de Catalunya, Grant/Award
+Numbers: FI-SDUR 2020, FI SDUR-2021;
+European Union’s Horizon 2020,
+Grant/Award Number: 952966; European
+High Performance Computing Joint
+Undertaking, Grant/Award Number:
+955558
+
+ment mesh, and the target subspaces of functions are represented by orthogonal
+
+corresponding to a different region in parameter space. The proposed optimization framework is discrete in terms of the location of the integration points, in the
+sense that such points are selected among the Gauss points of a given finite elebasis matrices constructed from the values of the functions at such Gauss points,
+using the singular value decomposition (SVD). This discrete framework allows
+us to treat also problems in which the integrals are approximated as a weighted
+sum of the contribution of each finite element, as in the energy-conserving
+sampling and weighting method of C. Farhat and co-workers. Two distinct solution strategies are examined. The first one is a greedy strategy based on an
+enhanced version of the empirical cubature method (ECM) developed by the
+authors elsewhere (we call it the subspace-adaptive weights ECM, SAW-ECM
+for short), while the second method is based on a convexification of the cubature problem so that it can be addressed by linear programming algorithms.
+We show in a toy problem involving integration of polynomial functions that
+the SAW-ECM clearly outperforms the other method both in terms of computational cost and optimality. On the other hand, we illustrate the performance
+of the SAW-ECM in the construction of a local HROMs in a highly nonlinear
+equilibrium problem (large strains regime). We demonstrate that, provided that
+the subspace-transition errors are negligible, the error associated to hyperreduction using adaptive weights can be controlled by the truncation tolerances of the
+SVDs used for determining the basis matrices. We also show that the number
+of integration points decreases notably as the number of subspaces increases,
+
+Int J Numer Methods Eng. 2024;125:e7590.
+https://doi.org/10.1002/nme.7590
+
+wileyonlinelibrary.com/journal/nme
+
+© 2024 John Wiley & Sons Ltd.
+
+1 of 32
+
+and that, in the limiting case of using as many subspaces as snapshots, the
+SAW-ECM delivers rules with a number of integration points only dependent on
+the intrinsic dimensionality of the solution manifold and the degree of overlapping required to avoid subspace-transition errors. The Python source codes of the
+proposed SAW-ECM are openly accessible in the public repository https://github
+.com/Rbravo555/localECM.
+KEYWORDS
+empirical cubature method, energy-conserving sampling and weighting, hyperreduction, linear
+programming, local bases, singular value decomposition
+
+1
+1.1
+
+I N T RO DU CT ION
+Cubature rules for multiple subspaces
+
+The classical problem known in numerical analysis as quadrature (for one-dimensional domains) or cubature (for multidimensional domains) of functions pertaining to a given subspace of integrable functions on a domain Ω ⊂ Rd consists
+in finding the smallest set of points {x1 , x2 … xm } and associated (positive) scalar weights {w1 , w2 … wm } such that
+
+∫Ω
+
+f(x) dΩ =
+
+m
+∑
+f(xg )wg
+
+(1)
+
+g=1
+
+is satisfied for any f pertaining to that subspace. For instance, the optimal quadrature rule for the subspace of univariate
+polynomials
+up to degree 5 in Ω = [−1, 1] is the Gaussian rule with weights w1 = w3 = 5∕9, w2 = 8∕9 and positions x1 =
+√
+−x3 = 3∕5 and x2 = 0.1
+The present paper is concerned with quadrature/cubature problems, but of a distinct flavor from the classical one
+presented above: instead of considering a single subspace of integrable functions, our goal is to derive rules able to deal
+with multiple subspaces of integrable functions, in such a way that the locations of the integration points are common for
+all the subspaces, yet each subspace has a distinct set of weights associated to such positions. This generalized quadrature/cubature problem may be posed as follows: given P different subspaces of integrable functions on Ω, find the smallest
+set of points {x1 , x2 … xm } and the associated nonnegative weights for each subspace {w11 , w12 , … w1m }, {w21 , w22 , … w2m }
+… {wP1 , wP2 … wPm } such that
+
+∫Ω
+
+f j (x) dΩ =
+
+m
+∑
+j
+f j (xg )wg
+
+(2)
+
+g=1
+
+holds for any f j (j = 1, 2 … P); here f j denotes an arbitrary function of the jth subspace.
+Notice that a feasible solution of the above problem can be obtained by solving the standard cubature problem (1) for
+the sum of all the subspaces—we will refer hereafter to this sum of subspaces as the global subspace. However, this feasible
+solution is far from being optimal, because the number of required points scales with the dimension of the global subspace.
+To illustrate this point, let us return to the example put forward above for the integration of monomials up to degree 5 on
+Ω = [−1, 1]. We know that the aforementioned 3-point Gaussian rule is able to exactly integrate any linear combination
+of such monomials. But now consider the (toy) problem of deriving an integration rule for each monomial separately
+1
+(f j = 𝛼xj , j = 0, 1, 2 … 5, 𝛼 ∈ R ). Since ∫−1 𝛼xj dx = 𝛼(1 − (−1)j+1 )∕(1 + j), it follows that any one-point quadrature rule
+with position x ∈]0, 1] (the same for all the six monomials) and weights wj = 2∕(xj+1 (1 + j)), for j = 0, 2, 4, and wj = 0
+for j = 1, 3, 5, is an optimal solution of problem (2). Thus, by tailoring the weights for each of the six one-dimensional
+subspaces (the monomials), we arrive at a quadrature rule with just one point, two points less than if we consider a rule
+for the global subspace. It is easy to see that this conclusion can be extended to any polynomial degree, that is, the number
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+2 of 32
+
+3 of 32
+
+of points of the subspace-adaptive weights rule will be always equal to one, whereas the number of integration points
+when using the global Gaussian rule will scale linearly with the number of monomials (i.e., with the dimension of the
+global subspace).
+
+1.2
+
+Applications in hyperreduced-order modeling
+
+This apparent advantage of subspace-adaptive weights cubature rules (number of integration points independent of the
+dimension of the global subspace) can be leveraged in computational mechanics applications in which it is necessary to
+efficiently evaluate integrals whose integrand function dynamically switches between different pre-computed subspaces.
+One of such applications—actually the one that motivates the present work—is the construction of (projection-based)
+local hyperreduced-order models (HROMs) for parameterized finite element problems. The qualifier local here is used in
+the sense given in the work of Amsallem et al.,2 according to which a projection-based, reduced-order model is local when
+the solution manifold is approximately represented as the sum of the spans of multiple basis matrices, each basis matrix
+corresponding to a different region in parameter space. On the other hand, the term hyperreduction indicates that, aside
+from the inherent reduction in number of equations achieved by the projection onto low-dimensional subspaces, there
+is an additional step of dimensionality reduction; this steps consists in computing the nonlinear terms of the projected
+equations using only a relatively small subset of finite elements/Gauss points of the underlying finite element mesh.3,4
+It is precisely in this hyperreduction step where the usefulness of a subspace-adaptive weights cubature rule of the form
+Equation (2) becomes evident.
+Indeed, consider, for the sake of concreteness, the case of an HROM for a nonlinear structural finite element problem
+(using Galerkin projection) in which the only term requiring hyperreduction is the projected nodal internal forces. Let
+i
+us denote by 𝚽1 , 𝚽2 , … 𝚽P the reduced basis matrices (𝚽i ∈ RN×n , ni << N), obtained in the offline training stage from
+a set of representative solutions by means of, say, a combination of clustering algorithms such as k-means5 with the
+truncated singular value decomposition (SVD). Suppose that a given instant of the online analysis the nodal displacements
+i
+d ∈ RN lies in the subspace corresponding to the ith basis matrix, that is, d = 𝚽i qi , qi ∈ Rn being the reduced coordinates.
+Computing the reduced internal forces at this instant requires evaluating the following integral over the spatial domain Ω
+Fi =
+
+T
+
+∫Ω
+
+𝚽i f int (𝚽i qi ) dΩ,
+
+(3)
+
+where f int denotes the internal force per unit volume in its globally supported format. The key observation here is that
+T
+the subspace in which the integrand function fi = 𝚽i f int resides can be pre-computed in the offline stage for each i =
+1, 2 … P—in fact, this is the same observation upon which standard global HROMs are based,3,4 the only difference being
+that now we have to pre-compute P different subspaces. It follows then that, as asserted, the evaluation of the reduced
+internal forces Equation (3) in a local HROM falls within the category of cubature problems in which the integrand
+function changes between pre-computed subspaces, and consequently, cubature rules of the form (2) can be legitimately
+applied.
+Other hyperreduction problems that can benefit from using cubature rules with subspace-adaptive weights are
+those in which the residual is formed by the sum of more than one nonlinear term. This is the case of Least-Squares
+Petrov-Galerkin HROMs, in which the left basis matrix onto which the FE residual is projected changes at each iteration
+of the analysis, and therefore, all the terms of such a residual require hyperreduction.6 Rather than treating all the contributions with the same cubature rule, as done for example, in References 6–9, the cubature rules developed herein would
+allow the separate hyperreduction of each nonlinear term, using different weights yet the same set of points/elements. By
+the same logic exposed for the toy problem with polynomials, this set will be necessarily smaller than when approximating
+all the contributions with the same weights.
+
+1.3
+
+Methodology: Subspace-adaptive weights cubature
+
+The methodology employed here for deriving subspace-adaptive cubature rules draws on previous works by the authors
+on the approach termed the empirical cubature method (ECM). The ECM was originally proposed in Reference 4 for global
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+Galerkin HROMs (i.e., cubature problems of the form 1); improved algorithmically later on in Reference 10 by introducing rank-one updates in the iterative procedure; and extended to global HROMs based on least-squares Petrov-Galerkin
+projections in Reference 7, and to continuous cubature in Reference 11. The ECM in the first three works treats the cubature problem as a constrained best subset selection problem, which means that the reduced set of integration points is
+assumed to be a subset of the Gauss points of the underlying FE mesh. Thus, the particular form of the functions to be
+integrated is of no concern in this discrete ECM, the only required information being their values at the M Gauss points
+of the underlying mesh. More specifically, the target subspace of integrable functions is represented by an orthogonal
+basis matrix U ∈ RM×m , computed from the snapshots of the integrand using the truncated SVD (the truncation tolerance
+controls thus the integration error). The ECM returns a set of m indices  ⊂ {1, 2 … M} (i.e., as many indices as basis
+functions) and positive weights w ∈ Rm so that UT w = UT W; here U = U(, ∶) denotes the (square) block matrix of U
+formed by the rows with indices , W is the vector of (strictly positive) FE integration weights and, thus, UT W represents the integrals of the m basis functions. Note that this problem is ill-posed when UT W ≈ 0; to avoid this, in the ECM
+U is augmented with an extra column so that its span includes the vector space of constant functions while preserving
+orthogonality.11
+We will also adopt this discrete framework for solving the cubature problem with subspace-adaptive weights.
+Accordingly, the target subspaces appearing in problem 2 will be characterized by P distinct orthogonal basis matrices
+i
+U1 , U2 , … UP (Ui ∈ RM×m ), and the cubature problem will be rephrased as that of finding the smallest set of indices 
+T
+T
+and nonnegative weights vectors w1 , w2 … wP such that Ui  w i = Ui W holds for all i = 1, 2 … P. It should be noted
+that this discrete formulation can also accommodate the case in which the integral is approximated as a weighted sum of
+the contributions of a subset of the E finite elements of the mesh, that is:
+E
+∑
+
+∫ e
+e=1 Ω
+
+f j (x) dΩ =
+
+∑ j
+wg
+g∈
+
+∫Ωg
+
+f j (x) dΩ,
+
+j = 1, 2 … P
+
+(4)
+
+(one just needs to replace the vector of Gauss weights W by an all-ones vector, and construct the basis matrices Ui
+from the information of the element contributions). Thus, the proposed methodology may be viewed as well as a mesh
+sampling procedure, like the energy-conserving sampling and weighting (ECSW) procedure of Farthat and co-workers in
+Reference 3, but now able to cope with multiple subspaces—and since the weights in our formulation are forced to be
+nonnegative, our scheme will be also “energy-conserving,” in the sense defined in Reference 12.
+Two distinct methods for solving the best subset selection problem described above will be examined. The first method,
+that we will call the subspace-adaptive weights ECM (abbreviated SAW-ECM), is a greedy algorithm that involves sequentially applying an enhanced version of the standard ECM described in the foregoing to each basis matrix. At each step,
+this enhanced ECM attempts to solve the local cubature problem of a given basis matrix Ui using as candidate indices
+those obtained in previous steps. If it does not succeed, the algorithm proceeds by expanding the candidate set with the
+remaining indices, and repeats this operation until all local problems are solved.
+The second method may be regarded as the generalization of the linear program-based empirical quadrature proposed by Patera and co-workers in References 13 and 14. It capitalizes on the fact that, as it occurs with the standard
+cubature problem (see discussion in the introductory section of Reference 11), this multiple weights problem can be cast
+as a nonconvex sparsification problem in which the objective function is defined in terms of the 𝓁0 pseudo-norm15 ; this
+nonconvex problem can be in turn convexified by replacing this pseudo-norm by the 𝓁1 norm, resulting in an optimization problem which is linear in both the objective functions and the constraints and, therefore, amenable to be solved by
+standard linear programming.
+We will show in a quadrature problem of polynomial functions (Section 4.1) that the SAW-ECM largely outperforms
+the other approach based on linear programming, both in terms of computational efficiency and optimality with respect
+to the number of points. For this reason, the assessment of the methodology in the context of local HROMs (Section 4.3)
+will be carried out solely using this second approach. The goal of this assessment will be twofold. On the one hand, we
+will investigate whether, as it occurs with the standard ECM,4 the error introduced by the SAW-ECM can be controlled by
+the truncation tolerances of the SVDs used to construct the local basis matrices U1 , U2 … UP . On the other hand, we will
+analyze how the number of integration points decreases as the partition of the solution space becomes finer. Of special
+interest will be to examine what occurs in the limiting case in which the number of subspaces is (almost) equal to the
+number of snapshots used to construct the basis matrices, for it represents the scenario in which the number of integration
+points will be reduced the most in comparison with the global approach of using the same weights for all subspaces.
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+4 of 32
+
+1.4
+
+5 of 32
+
+Originality of this work
+
+The authors carried out in a recent paper11 a comprehensive review of cubature-based hyperreduction methods, from
+its inception in the computer graphic community with the seminal paper by An et al.,16 to its appearance (with the
+ECSW of Farhat and co-workers3 ) and subsequent expansion in computational engineering circles. A time-line summary of this review is shown in Figure 1. The pioneering paper by Amsallem et al. in 2012,2 which is the first work
+combining local subspaces and hyperreduction, and later refinements in this research strand,17 are not included in this
+time-line graph because Amsallem’s works do not employ for hyperreduction a cubature-based method, but rather an
+“approximate-then-project” approach (cubature methods are project-then-approximate methods, see classification given
+in Reference 18).
+The first paper in the survey summarized in Figure 1 that explicitly raises the question of how to efficiently deal with
+cubature-based methods (more specifically, the ECSW) in which there are several terms requiring hyperreduction (as in
+the alluded to earlier Least-Squares Petrov-Galerkin HROMs) or/and several local subspaces (as in local HROMs) is the
+work by Grimberg et al. in 2021.6 However, Grimberg et al. only consider two possible scenarios: a global cubature/mesh
+sampling method (they call it “grouped hyperreduction”), or “individual” hyperreduction—and by individual they mean
+each term/subspace having its own cubature rule, with different weights and different points. Thus, Grimberg et al.6
+do not contemplate the possibility of using different weights but shared points. A broader review of the literature on
+disciplines dealing with the efficient numerical evaluation of integrals (such as the field of generalized Gaussian rules, see
+for example, Reference 19 and references therein) has not revealed any approach dealing with the notion of integration
+rules for multiple subspaces of functions using subspace-adaptive weights and common points either. Thus, to the best
+of the authors’ knowledge, not only the idea of using subspace-adaptive weights cubature rules in hyperreduced-order
+models, but the formulation and solution of the problem itself are original contributions of the present work.
+Remark 1. The literature review presented in the foregoing is incomplete insofar as hyperreduction is concerned, for it only takes into consideration hyperreduced schemes based on cubature/energy-conserving mesh
+sampling procedures in which the solution manifold is approximated in a piecewise linear fashion—and
+thus ignores the numerous approaches published in recent years that use more advanced representations
+of the solution manifold, such as deep autoencoders, and alternative hyperreduction techniques, such
+
+F I G U R E 1 Summary of the state-of-the-art review on cubature rules/mesh sampling procedures presented in Reference 11. The
+references on the timeline are (1) An et al.,16 (2) Kim et al.,20 (3) Von Tycowiz et al.,21 (4) Pan et al.,22 (5) Farhat et al.,3 (6) Hernandez
+et al.,4 (7) Patera et al.,13 (8) Chapman et al.,23 (9) Hernandez,10 (10) Grimberg et al.,6 (11) Hernandez et al.11
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+as interpolation/least-squares fitting24,25 and collocation.26,27 The reader interested in the progress of this
+research front is urged to consult the literature surveys presented in these four references.
+
+2
+
+ENHANCED ECM WITH INITIAL C ANDIDATE POINTS
+
+As explained in the preceding introductory section, the core ingredient of the proposed cubature rule with
+subspace-specific weights is a enhanced version of the (discrete) ECM advocated by the authors in previous works.4,10,11
+This enhanced version should be able to use as input parameter a given set of candidate set of points. In this section, we
+first outline the basic features of the original ECM when applied to global cubature problems, and then elaborate on how
+to incorporate the proposed enhancement. Readers not interested on the details of the argumentation may jump directly
+to the final pseudo-code of this enhanced ECM, presented in Algorithm 1.
+
+2.1
+
+Global cubature problem
+
+We tackle the problem of empirically devising a reduced integration rule for a vector-valued 𝝁-parametric function
+a ∶ Ω ×  → Rn
+
+(5)
+
+(x, 𝝁) → (a1 , a2 , … , an ) ,
+
+defined over a domain Ω ⊂ Rd , with a parametric space  ⊂ Rp . That is, we aim to find a set of integration points
+{x1 , … , xm } with corresponding integration weights {𝜔1 , … , 𝜔m }, with m as small as possible, such that
+
+∫Ω
+
+a(x, 𝝁)dΩ ≈
+
+m
+∑
+
+a(xg , 𝝁)𝜔g .
+
+(6)
+
+g=1
+
+⋃Nel e
+Ω ; for simplicity of exposition, the eleTo this end, we consider a finite element partition of the domain Ω= e=1
+ments are assumed to be isoparametric and with the same number (r) of Gauss points. If one considers P samples of the
+parametric space:
+{𝝁i }Pi=1 =  h ⊂ ,
+
+(7)
+
+then, the integral of a over Ω for all the samples in  h is given by the elemental Gauss rule
+bk =
+
+Nel
+∑
+e=1
+
+∫Ωe
+
+ai (x; 𝝁j )dΩe =
+
+Nel r
+∑
+∑
+e
+ai (xg , 𝝁j )Wge k = (j − 1)n + i i = 1, 2, … , n j = 1, 2, … , P,
+
+(8)
+
+e=1 g=1
+
+e
+
+where xg ∈ Ωe is the position of the gth Gauss point of element Ωe , and Wge is the product of the corresponding Gauss point
+weight and the Jacobian of the isoparametric transformation. The above expression can be written in matrix form as
+1
+
+1
+
+⎡ b1 ⎤ ⎡ a1 (x1 ; 𝜇1 ) a1 (x2 ; 𝜇1 )
+⎢
+⎥ ⎢
+1
+1
+⎢ b2 ⎥ ⎢ a2 (x1 ; 𝜇1 ) a2 (x2 ; 𝜇1 )
+⎢
+⎥ ⎢
+⋮
+⋮
+⎢ ⋮ ⎥ ⎢
+⎢ bn ⎥ = ⎢ an (x11 ; 𝜇1 ) an (x12 ; 𝜇1 )
+⎢
+⎥ ⎢
+⎢bn+1 ⎥ ⎢ a1 (x11 ; 𝜇2 ) a1 (x12 ; 𝜇2 )
+⎢
+⎥ ⎢
+⋮
+⋮
+⎢ ⋮ ⎥ ⎢
+⎢
+⎥ ⎢
+1
+1
+⎣ bnP ⎦ ⎣an (x1 ; 𝜇P ) an (x2 ; 𝜇P )
+
+…
+
+a1 (xr ; 𝜇1 )
+
+1
+
+a1 (x1 ; 𝜇1 )
+
+…
+
+a2 (xr ; 𝜇1 )
+
+1
+
+a2 (x1 ; 𝜇1 )
+
+…
+
+⋱
+
+⋮
+
+⋮
+
+⋱
+
+…
+
+1
+an (xr ; 𝜇1 )
+1
+a1 (xr ; 𝜇2 )
+
+2
+an (x1 ; 𝜇1 )
+2
+a1 (x1 ; 𝜇2 )
+
+…
+
+⋱
+
+⋮
+
+⋮
+
+⋱
+
+…
+
+1
+an (xr ; 𝜇P )
+
+2
+an (x1 ; 𝜇P )
+
+…
+
+…
+
+2
+2
+
+…
+
+…
+
+N
+
+a1 (xr el ; 𝜇1 ) ⎤⎡ W11 ⎤
+⎥⎢
+⎥
+N
+a2 (xr el ; 𝜇1 ) ⎥⎢ W21 ⎥
+⎥⎢
+⎥
+⋮
+⎥⎢ ⋮ ⎥
+N
+an (xr el ; 𝜇1 ) ⎥⎢ Wr1 ⎥,
+⎥⎢
+⎥
+N
+a1 (xr el ; 𝜇2 ) ⎥⎢ W12 ⎥
+⎥⎢
+⎥
+⋮
+⎥⎢ ⋮ ⎥
+⎥⎢ N ⎥
+N
+an (xr el ; 𝜇P )⎦⎣Wr el ⎦
+
+(9)
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+6 of 32
+
+7 of 32
+
+or in compact form
+bFE = AT W,
+
+(10)
+
+where we will consider bFE ∈ RnP as the exact integral over the discrete spatial and parameter spaces; A ∈ RM×nP , on the
+other hand, is the matrix containing the function evaluations at every Gauss point for the P considered samples of the
+parameter space contained in  h (M is the total number of Gauss points); finally the vector of weights W ∈ RM contains
+the multiplication of the Gauss point weights and the Jacobians.
+The standard, global cubature problem11 consists in finding the smallest set of evaluation points, together with a
+set of weights, such that the exact integral is approximated to a desired level of accuracy. This is posed as the following
+optimization problem:
+min ||𝜻||0
+‖
+‖
+‖ ‖
+s.t. ‖AT 𝜻 − bFE ‖ ≤ 𝜖 ‖bFE ‖
+‖2
+‖
+‖ ‖2
+𝜻 ≻0,
+
+(11)
+
+where 𝜻 ∈ RM is a sparse vector, || ⋅ ||0 represents the so-called 𝓁0 pseudo norm (which counts the number of non-zero
+entries of its argument), 0 ≤ 𝜖 ≤ 1 is a user-defined tolerance, and the symbol 𝜻 ≻ 0 represents that 𝜁i ≥ 0 for all i =
+1, 2 … M.
+
+2.2
+
+Standard ECM
+
+Rather than operating directly over the matrix A ∈ RM×nP , the ECM operates on a basis matrix U ∈ RM×m whose columns
+are the discrete representation of the basis function for the integrand functions. This basis matrix is obtained as the left
+singular vectors of a truncated SVD*
+[U, 𝚺, V] ← SVD(A, 𝜖SVD ),
+
+(12)
+
+T‖
+U ∈ RM×m , 𝚺 ∈ Rm×m , V ∈ RnP×m , ‖
+‖A − U𝚺V ‖ ≤ 𝜖SVD ||A||.
+
+(13)
+
+where
+
+The authors demonstrated in Reference 11 that the truncation tolerance appearing in Equation (11) and the truncation
+tolerance for the SVD in Equation (12) are of the same order, and therefore, the integration error in the ECM may be controlled by the SVD truncation tolerance. Likewise, when the snapshot matrix is too large to fit into memory, the standard
+SVD can be replaced by the Sequential Randomized SVD developed by the authors in the appendix of Reference 11.
+Having at our disposal the discrete representation of the basis function of the integrand, we can, similarly to
+Equation (10), define
+b = UT W,
+
+(14)
+
+where b ∈ Rm is the vector containing the integral of the basis function, which for the empirical cubature problem will be
+considered the ground truth. Moreover, W ∈ RM is the same vector of weights appearing in Equation (10). The “global”
+optimization problem in terms of the basis matrix U consists in finding the smallest subset of points and weights that
+allow to exactly recover the exact or ground truth integral of the basis functions, that is,
+min ||𝜻||0
+s.t. UT 𝜻 − b = 0
+𝜻 ⪰0.
+
+(15)
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+It is well known that this optimization problem involving the pseudo-norm || ⋅ ||0 are computationally intractable
+(NP-hard) and therefore, recourse to either sub-optimal greedy heuristic or convexification is to be made.28 The ECM
+pertains to the category of greedy algorithm, and provides a non-optimal solution,† featuring as many points as columns
+in U. More specifically, as already pointed out in the introductory section, the discrete ECM gives a solution to the problem
+of finding a set of m rows  and positive weights 𝝎 such that
+UT 𝝎 = b,
+
+(16)
+
+where U = U(, ∶) ∈ Rm×m .
+
+2.3
+
+Candidate points as inputs
+
+In the standard ECM described in the foregoing, the algorithm searches for the reduced set of points within the entire set
+of M Gauss points of the mesh. However, as pointed out earlier, for purposes of constructing the desired local ECM for
+subspace-specific weights cubature rules, it is necessary to adapt this ECM so that it can cope with situations in which
+the candidate points are but a subset of all the Gauss points.
+The pseudo-code of the ECM adapted to this new scenario is outlined in Algorithm 1. The inputs of algorithm are,
+on the one hand, the basis matrix‡ U and the vector of full-order weights W, and, on the other hand, the new input
+y0 ⊆ {1, 2 … M}—the initial set of candidate indices. In what follows, we limit ourselves to describe the modifications
+in the algorithm related with this new input. The reader is referred to Reference 10, Appendix B, for thorough details on
+other ingredients of the algorithm—such as the one-rank updates of Lines 27 and 21.
+As noted in References 4 and 10, the distinguishing feature of the ECM with respect to other methods based of the
+original nonnegative least-squares algorithm by Lawson and Hanson29 (such as the ECSW3 ) is that, in working with a
+orthogonal coefficient matrix U, the condition of positive weights need not be enforced during the iterations. As a consequence, each iteration of the while loop in Line 12 is in general an effective iteration, in the sense that the unconstrained
+least-squares problem of Line 21 produces naturally a new cubature rule with an additional positive weight.
+Negative weights may appear during the iterations though, caused by two different factors. The first factor is the
+appearance of vanishingly small weights which bounce between negative and positive values. This factor was identified
+in the original proposal of Reference 10, and amended by introducing the conditional statement in Line 25, in which
+indices with negative weights are removed, and the weights are updated again by solving the unconstrained least-squares
+of Line 28.
+The second factor concerns the new input y0 . It can be readily demonstrated that, for the algorithm to find a solution
+within y0 , the vector of integrals b = UT W must pertain to the conical hull (see e.g., Reference 30) defined by
+cone(U(y0 , ∶)) ∶=
+
+{ n
+∑
+
+}
+𝛼j U(y0 (j), ∶) | 𝛼j ≥ 0
+
+(17)
+
+j=1
+
+(here n is the cardinality of y0 ). A direct corollary of this condition is that if y0 = {1, 2 … M} (i.e., y0 is the entire set
+of points), then the ECM will find invariably a solution, since b is a positive linear combination of the rows of U (recall
+that W is by hypothesis strictly positive). However, for an arbitrary subset, the iterative algorithm in its original form is
+not guaranteed to arrive at a feasible solution, the most obvious case being when the cardinality of y0 is smaller than the
+number of columns of U (n < m). Empirically, we have found that lack of solutions manifests itself in the appearance of
+multiple negative weights. Since negative weights and the associated indices are eliminated in Line 25, when there is no
+solution the algorithm ends up performing many ineffective iterations, and as a consequence the output  shrinks rather
+than expands as the algorithm progresses. Accordingly, to identify when the provided initial set does not contain any
+feasible solution, we have introduced a counter that tracks the number of ineffective or failed iterations (Line 34). When
+this number exceeds a user-prescribed threshold (we use 𝜆 = 10 in all the examples presented in the article), the initial
+set of candidate indices is enlarged to encompass the remaining indices (Line 14). With this simple heuristic—enlarging
+the set of candidate indices in case of convergence failure—, the ECM is always guaranteed to provide a solution to the
+problem: at best, it will find indices which are indeed a subset of the initial candidate set ( ⊆ y0 ); at worst, if there is no
+solution within y0 , it will try to maximize the elements of  that are in y0 .
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+8 of 32
+
+9 of 32
+
+Algorithm 1. Empirical cubature method (enhanced version of the algorithm in Reference 10 by incorporating
+an initial candidate set)
+1 Function [, 𝝎] = ECM(U, W, y0 )
+T
+M×m
+
+Data: U ∈ R
+: where U U = I; W ∈ RM
++ ; y0 ⊆ {1, 2 … M}: initial candidates; 𝜆 ← 10, threshold number
+of ineffective iterations
+Result:  ⊆ {1, 2, … , M};𝝎 ≻ 0 such that U(, ∶)T 𝝎 = U T W and card( ∩ y0 ) is maximum.
+
+2
+3
+4
+5
+
+if y0 = ∅ // no initial candidate set given
+then
+y ← {1, 2, … M}
+y ← y ⧵ h, where h = [h1 , h2 …] such that ‖U(hi , ∶)‖ ≤ 𝜖 // Remove low norm points on the candidate set
+(𝜖 ∼ 10−6 )
+
+6
+7
+8
+
+else
+y′ ← {1, 2, … M} ⧵ y0
+y′ ← y′ ⧵ h, where h = [h1 , h2 …] such that ‖U(hi , ∶)‖ ≤ 𝜖 // Remove low norm points on the complement
+set (𝜖 ∼ 10−6 )
+
+9
+10
+11
+12
+13
+14
+15
+16
+
+end
+ ← ∅; b ← U T W; r ← b; 𝝎 ← ∅; H ← ∅ // Initializations
+Θ ← 0 // Failed iterations counter
+while length()<p AND length (y)>0 do
+if Θ>𝜆 then
+y ← y ∪ y′ // Enlarge candidate set to include the complement set
+end
+i = argmaxi∈y gy r, where gj = U(j, ∶)∕ ‖U(j, ∶)‖ // Select the row most “positively” parallel to the
+residual
+
+17
+18
+19
+20
+21
+
+if  = ∅ then
+H ← (U(i, ∶)U(i, ∶)T )−1 // Inverse Hermitian matrix (first iteration)
+𝝎 ← HU(i, ∶)b // Weights computed through least-squares
+else
+[𝝎, H] ← LSTONER(𝝎, H, U(, ∶)T , U(i, ∶)T , b ) // Least-squares via rank-one update, see Algorithm
+8 in Reference bib4920
+
+22
+23
+24
+25
+26
+27
+
+end
+ ←  ∪ i ; y ← y ⧵ i; // Move index i from y to 
+n ← Indexes such that 𝝎(n) ≺ 0 // Identify negative weights
+if n ≠ ∅ then
+y ← y ∪ (n);  ←  ⧵ (n) ; // Remove indexes negative weights
+H ← UPHERM(H, n) // Update inverse Hermitian Matrix (via recursive, rank-one operations, see
+Algorithm 9 in Reference bib5020)
+
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+
+𝝎 = HU(, ∶)b // Recalculate weights
+end
+if successful iteration // the size of  has increased w.r.t. the prior iteration
+then
+Θ←0
+else
+Θ←Θ+1
+end
+r ← b − U(, ∶)T 𝝎 // Update the residual
+end
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+2.4
+
+Graphical interpretation
+
+The toy problem presented in Figure 2 may help to clarify how the enhanced ECM explained above actually √
+works.
+The problem
+√ consists in evaluating the integral on Ω = [−1, 1] of two orthogonal polynomial functions, u1 = 3∕2x
+and u2 = 1∕2, by using M = 6 Gauss points. The functions and locations of the points are represented in Figure 2A.
+The discrete quadrature problem with positive weights in this case(thus
+) boils
+( ) down to selecting m = 2 points out
+
+of M = 6 possible candidates, which implies that there is a total of M
+= 62 = 15 combinations of pairs that are
+m
+potential solutions of the problem. However, not all of them will yield positive weights. This can be appreciated in
+Figure 2B, where we represent the values of the functions at the six points in the u1 − u2 plane (note that U(i, j) = uj (xi ))
+√
+along with the vector of exact integrals b = [0, 2]T . It can be readily seen that {x1 , x2 } is not a feasible solution
+because, as stated previously, see Equation (17), b does not pertain to the conical hull of u(x1 ) and u(x2 )—or, in other
+words, it cannot be expressed as a positive linear combination of u(x1 ) and u(x2 ). By the same token, {x1 , x4 } and
+{x3 , x6 } are feasible solutions because b does belong to the cone positively spanned by {u(x1 ), u(x4 )} and {u(x3 ), u(x6 )},
+respectively.
+To understand the logic of why Algorithm 1 chooses one feasible solution or another depending on the initial set,
+let us consider first the case in which all points are included in the initial candidate set (y0 = {1, 2, … 6}). In the first
+iteration, we have that r = b, that is, the residual vector is equal to the vector of exact integrals b (Line 10). Then,
+in Line 16, the algorithm seeks the index i for which U(i, ∶) is more positively parallel to the current residual (which
+is b). As can be observed in Figure 2B, this vector is u(x4 ) = U(4, ∶), so for the first iteration we have that  = {4}
+(because of symmetry, the algorithm may have chosen  = {3} as well). Then the algorithm computes the weight for
+this point through least-squares (Line 19), and updates the residual in Line 36. Although not plotted in Figure 2B, it
+can be inferred that this updated residual will be most positively parallel to u(x4 ); thus, the final set of indices will be
+ = {4, 1}.
+Now suppose we remove index i = 1 from the initial set, that is, y0 = {2, 3, 4, 5, 6}; it follows, by the logic explained
+above, that the final solution will be  = {4, 2}; if index i = 2 is also removed, then  = {4, 3}. However if y0 = {4, 5, 6}, the
+most positively parallel vector in the second iteration will be u(x5 ), and b does not fall into the conic hull of {u(x4 ), u(x5 )}.
+Consequently, the least-squares projection will produce negative weights. After a number of iterations with negative
+weights greater than 𝜆, the algorithm will end up enlarging the set of candidates (Line 14), and returning a feasible
+solution—which in this particular case will be  = {4, 1}.
+
+(A)
+FIGURE 2
+
+Performance of the empirical cubature method (ECM) for the case of the u1 =
+Ω = [−1, 1] with M = 6 Gauss integration points. Note that u(xi ) = U(i, ∶).
+
+(B)
+√
+
+3∕2x and u2 =
+
+√
+1∕2 in the interval
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+10 of 32
+
+3
+
+11 of 32
+
+CUBAT URE PRO BLEM WITH MULTIPLE SUBSPAC ES
+
+Attention is confined now to the problem of deriving a subspace-adaptive weights cubature rule for a given collection of
+subspaces of integrable functions. Let us consider a set of k vector-valued 𝝁-parametric functions
+a(i) ∶ Ω ×  → Rni , (i = 1, 2, … k)
+(
+)
+(i)
+(i)
+(x, 𝝁) → a(i)
+,
+a
+…
+,
+a
+, (i = 1, 2, … k) .
+n
+1
+2
+i
+
+(18)
+
+Furthermore, for each of the functions a(i) , consider Pi samples of the parametric space such that
+P
+
+i
+{𝝁m }m=1
+= ih ,
+
+k
+⋃
+
+ih ⊂ .
+
+(19)
+
+i=1
+
+This allows to define k matrices containing the evaluations of the ith function for all Gauss points and for each point in
+the corresponding discrete parametric space ih as follows
+A(i) ∈ RM×ni Pi , (i = 1, 2, … k).
+
+(20)
+
+Moreover, for each function we can identify the vectors containing what we consider their exact integral as
+T
+
+b(i)
+= A(i) W, (i = 1, 2, … k).
+FE
+
+(21)
+
+We note that although we employ the superscript •(i) to refer to the distinct subspace of functions and their matrices
+of discrete evaluations, the weights vector W ∈ RM has no superscript. This is because the weights vector is exclusively
+associated with the discretization of the spatial domain and remains the same for all subspaces.
+Similarly to the case of the standard, global cubature problem of Section 2.2, we will cast the optimization problem
+with respect to a set of orthogonal basis matrices U(1) , U(2) … U(k) . These orthogonal basis matrices are obtained via a
+truncated SVD as in Equation (12):
+SVD
+
+RM×ni Pi ∋ A(i) −−→ U(i) ∈ RM×mi , (i = 1, 2, … k).
+
+(22)
+
+The cubature problem we wish to solve is thus the following: given U(1) , U(2) … U(k) and W, find the smallest set of m
+points  ⊆ {1, 2 … M} (the same set for all the subspaces) and the associated nonnegative weighs 𝝎(1) , 𝝎(2) … 𝝎(k) such
+that
+T
+
+T
+
+U(i)
+𝝎(i) = U(i) W,
+
+
+(23)
+
+= U(i) (, ∶).
+where U(i)
+
+
+3.1
+
+Subspace-adaptive weights ECM
+
+We will develop two distinct, novel solution strategies for the preceding cubature problem: one based on the enhanced
+ECM discussed in Section 2, and another one based on linear programming. We address here the strategy based on the
+ECM, which we will refer to as either the Subspace-Adaptive Weights ECM (SAW-ECM) or simply the Local ECM, and
+whose pseudo-code is described in Algorithm 2. The inputs of the method are the sample matrices A(1) , A(2) , … A(k) , the
+vector of weights W and the truncation tolerance for the SVDs (𝜖SVD ). The first part of the algorithm (Line 2) computes
+the basis matrices U(1) , U(2) … U(k) for the column space of the sample matrices (Ui ∈ RM×ni ). The loop in Line 8, on the
+other hand, recurrently exploits the enhancement introduced in the ECM of Algorithm 2, whereby the method accepts
+as input a set of candidate indices y0 , and returns a set of indices  (j) such that the cardinality of the intersection of y0
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+Algorithm 2. Subspace-adaptive weights ECM (SAW-ECM)
+1 Function [, {𝝎
+M×ni Pi
+
+2
+3
+4
+
+(i) k
+}i=1 ] ← SAW_ECM({A(i) }ki=1 , W, 𝜖SVD )
+∋ {A(i) }ki=1 : Set of k matrices containing the sampling, in the discrete spatial and parametric
+M
+
+Data: R
+spaces, of the function to integrate; R ∋ W: vector containing the multiplication of the Jacobian of the
+isoparametric transformations multiplied by its corresponding Gauss point weights (all positive);
+0 ≤ 𝜖SVD ≤ 1: truncation tolerance for the SVDs
+‖
+‖ ‖
+‖ T (i)
+Result:  : Set of Gauss point indices ; {𝝎(i) }ki=1 : k sets of weights such that ‖A(i)
+𝝎 − b(i) ‖ ∼ 𝜖SVD ‖b(i) ‖ ,
+‖ 
+‖2
+‖ ‖2
+(i)
+(i) T
+where b = A W, for (i = 1, 2, … k)
+for i=1 to k do
+[U (i) , 𝚺(i) , V (i) ] ← SVD(A(i) , 𝜖SVD ) // Truncated SVD of each sample matrix.
+U (i) ← augment_matrix(U (i) , W) // Augment matrix with an additional column to avoid
+ill-posedness, see Appendix 4
+
+5
+6
+7
+8
+9
+
+end
+indices ← sort_index({U (i) }ki=1 ) // Sort indices 1, 2 … k according to some specified criterion
+y0 ← ∅
+for j in indices do
+[ (j) , w(j) ] ← ECM(U (j) , W, y0 ) // This is the enhanced ECM described in Algorithm 1. It finds  (j) and
+T
+
+w(j) >0 such that U (j) ( (j) , ∶)T w(j) = U (j) W, and at the same time maximizes the number of elements in  (j)
+pertaining to y0
+10
+11
+12
+13
+14
+
+y0 ← y0 ∪  (j)
+end
+ ← y0
+for j = 1 to k do
+𝝎(j) ← assemb_weights(w(j) ,  (j) , ) // Initialize 𝝎j as an m-zeros vector and assign wj to the
+positions in 𝝎j occupied by  (j) within  (here m = length())
+
+15
+
+end
+
+and  (j) is maximum (in other words, the algorithm tries to use as many elements in y0 as possible to construct  (j) ).
+The final set of indexes  is the union of the subsets produced in each call of the ECM. As for the weights, by virtue of
+the properties of the ECM, each output weights w(j) has mj positive entries (as many as columns in Uj ). However, the
+problem demands that the output weights 𝝎(j) (j = 1, 2 … k) have all m components (m = card()). To ensure this, Line
+14 initializes each 𝝎j to a m-zeros vector, and then assigns wj to the positions in 𝝎j corresponding to the positions occupied
+by  (j) in .
+Remark 2. In the first iteration, when searching for the integration points of the first subspace U(1) , the
+SAW-ECM uses as candidate points the entire set of Gauss points (this is indicated in Line 10 of Algorithm 2
+and Line 4 of Algorithm 1). For the second iteration, the set of points calculated for U(1) serves as the candidate set for the second basis matrix U(2) , and so on until visiting all the basis matrices. It follows then
+that the final set of integration points depends on how the sequence of basis matrices is visited: different
+permutations of U(1) , U(2) , … U(k) will produce different final sets of integration points. This sensitivity to
+the order in which the basis matrices are processed will be studied in the numerical example presented
+in Section 4.3.5.
+
+3.2
+
+Linear programming-based approach
+
+The second method proposed herein for dealing with the cubature problem with multiple subspaces is based on the same
+strategy underlying the empirical quadrature method of Patera et al.13,14 for the standard cubature problem. This strategy
+consists in, first, formulating the cubature problem as a sparsification problem, and then convexify it by replacing the
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+12 of 32
+
+13 of 32
+
+𝓁0 pseudo-norm that characterizes sparsification problems by the 𝓁1 norm—it is well-known that objective functions
+defined in terms of this norm also promote sparsity.31,32
+The formulation of the cubature problem as a sparsification problem requires first to consider the design variables as weight vectors 𝜻 (1) , 𝜻 (2) … 𝜻 (k) of the same size as the FE weight vector W, and, second, to use as objective
+function the total number of integration points m = card() (as done in the global, standard cubature problem 15).
+Since the weights are forced to be nonnegative, it follows that this number is simply equal to the number of positive
+‖∑k
+‖
+entries of the sum of all the weights, that is, m = ‖ i=1 𝜻 (i) ‖ —this idea is illustrated in the sparsity plots displayed in
+‖
+‖0
+Figure 3. With these considerations in mind, the sparsification problem for the case of multiple subspaces may be posed
+T
+as follows: given U(1) , U(2) … U(k) (U(i) ∈ RM×mi ) and b(i) = U(i) W (i = 1, 2 … k), find vector weights 𝜻 (1) , 𝜻 (2) … 𝜻 (k)
+such that:
+min
+
+𝜻 (1) ,𝜻 (2) , … ,𝜻 (k)
+
+s.t.
+
+‖∑
+‖
+‖ k (i) ‖
+‖ 𝜻 ‖
+‖
+‖
+‖ i=1 ‖
+‖
+‖0
+
+(24)
+
+T
+
+U(i) 𝜻 (i) − b(i) = 0, (i = 1, 2, … , k)
+𝜻 (i) ⪰ 0, (i = 1, 2, … , k) .
+
+As pointed out earlier, the convexification of the preceding problem is done by replacing the 𝓁0 in the objective function
+by the 𝓁1 -norm; furthermore, since the weights are positive, we have that
+‖∑
+‖
+k M
+∑
+∑ (i)
+‖ k (i) ‖
+‖ 𝜻 ‖ =
+𝜁j ,
+‖
+‖
+‖ i=1 ‖
+‖
+‖1 i=1 j=1
+
+(25)
+
+and therefore the problem, which was already linear in the constraints, becomes also linear in the objective
+function:
+min
+
+𝜻 (1) ,𝜻 (2) , … ,𝜻 (k)
+
+s.t.
+
+k M
+∑
+∑ (i)
+𝜁j
+i=1 j=1
+
+(26)
+
+T
+
+U(i) 𝜻 (i) − b(i) = 0(i = 1, 2, … , k)
+𝜻 i ⪰ 0(i = 1, 2, … , k) ,
+
+(A)
+
+(B)
+
+Sparsity plots for two feasible sets of sparse vectors 𝜻 (i) for a case with M = 13 points, k = 5 subspaces. For both cases, each
+𝜻 (i = 1, 2 … 5) contains 2 nonzero entries. However, while in one case (A) the non-zero entries are spread among the 13 indices, in the
+other case (B) they lie on the same indices for the five subspaces. This fact can be quantified by counting the nonzero entries of the sum of the
+‖∑5
+‖∑5
+‖
+‖
+weights (which is the objective function of the optimization problem 24): (A) ‖ i=1 𝜻 (i) ‖ = 10; and (B) ‖ i=1 𝜻 (i) ‖ = 2.
+‖
+‖
+‖0
+‖0
+
+FIGURE 3
+(i)
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+and, thus, amenable to be solved by linear programming techniques. More specifically, it can be cast in the standard
+form33 in terms of a single design variable 𝜻̃ as follows:
+min 1T 𝜻̃
+𝜻̃
+
+̃ T 𝜻̃ − b̃ = 0
+s.t. U
+𝜻̃ ⪰ 0 .
+
+(27)
+
+Here, 1 is an all-ones vector of length kM, whereas
+(1)
+⎡b(1) ⎤
+⎡𝜻 ⎤
+⎢ ⎥
+⎢ 𝜻 (2) ⎥
+⎢b(2) ⎥
+⎢
+⎥
+)
+(
+⎢ ⎥ ̃
+T
+T
+T
+𝜻̃ ∶= ⎢ ⋮⎥b̃ ∶= ⎢ ⋮ ⎥ U
+∶= diag U(1) , U(2) , … , U(k) .
+⎢
+⎥
+⎢ (k) ⎥
+⎢ 𝜻 (k) ⎥
+⎢b ⎥
+⎢
+⎥
+⎢ ⎥
+⎣
+⎦
+⎣ ⎦
+
+(28)
+
+Once the sparse weights have been computed, the set of solution indices  is determined as the indices with positive
+∑k
+entries in i=1 𝜻 (i) . Likewise, the solution weights are obtained from the sparse vectors by simply making 𝝎(i) = 𝜻 (i) ()
+(i = 1, 2 … k). Hereafter we will symbolize all these operations as
+(
+
+)
+̃ 𝜻̃ ⪰ 0).
+̃ 1, b,
+, {𝝎(i) }ki=1 ← LP(U,
+
+3.3
+
+(29)
+
+Remark on computational cost and efficiency
+
+The technique described above may prove appealing (in comparison with the SAW-ECM) because it can leverage
+well-established methods and algorithms of linear programming (see e.g., Reference 33). However, it should be noted
+that the size of the design variable 𝜻̃ in this approach is equal to the number of points of the finite element mesh times
+the number of basis matrices; this fact may render it prohibitively costly for relatively large problems. By contrast, the
+SAW-ECM, because of its “greedy” character, only needs to process one basis matrix at a time; besides, the computational
+cost of each call of the ECM in Line 8 of Algorithm 2 depends only on the square of the number of columns of the basis
+matrix (this is demonstrated in Reference 10, Appendix A), but not on the number of Gauss points.
+This remark aside, the focus of the ensuing numerical assessment is not on computational cost per se, but on which of
+the two approaches (SAW-ECM or linear programming) provides the smallest number of points for the same subspaces
+of functions. In this regard, we note that the number of integration points for both the SAW-ECM and the LP-based
+method is bounded below by the maximum of the number of columns of the basis matrices (i.e., m ≥ mmax , where mmax =
+max(mi ), i = 1, 2 … k). Likewise, it may be argued that an upper bound for the number of integration points when using
+the SAW-ECM is the dimension, hereafter denoted by mall , of the alluded to earlier global subspace—the sum of the spans
+of all the basis matrices. A basis matrix for this subspace may be obtained by applying the SVD to the concatenation of all
+the basis matrices U = [U(1) , U(2) … U(k) ]. In summary
+mmax ≤ m ≤ mall .
+
+(30)
+
+Lastly, another approach that may be used for comparing and highlighting the efficiency in terms of number of integration points of the proposed subspace-adaptive weights cubature rules is the “naive” strategy of applying independently
+the ECM (or an LP-based method) to each basis matrix. We will show in the ensuing discussion that the probability of
+this approach in giving overlapping subsets of points is rather low.
+Remark 3. The advantage of maximizing the number of integration points common to all subspaces becomes
+obvious in solid mechanics applications where the materials are governed by constitutive equations with
+internal variables–inasmuch as the number of integration points at which internal variables are to be tracked
+and stored is minimum. It is also advantageous in reduced-order implementations that can be characterized
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+14 of 32
+
+15 of 32
+
+as “noninvasive” in the sense that the transmission of information from one time step to the next is not done
+by updating the reduced coordinates, but rather through the nodal coordinates of the finite elements selected
+in the hyperreduction process. This is the case of the open-source software Kratos Multiphysics§ , employed
+in the hyperreduced-order models presented by the authors in References 34 and 7.
+
+4
+
+NUMERICAL ASSESSMENT
+
+This section is devoted to the numerical assessment of the proposed subspace-adaptive weights cubature/quadrature
+rules. Three examples will be used for this assessment. The first two examples deal with the derivation of rules for univariate polynomial functions (actually the first example is the same employed for illustrating the notion of quadrature
+with subspace-adaptive weights in Section 1.1). The goal in both cases is to compare the performance (in terms of number of integration points), of the SAW-ECM introduced in Section 3.1, and the strategy based on linear programming,
+addressed in Section 3.2. In the latter case, several linear programming algorithms will be explored. The (Python) files
+for reproducing these first two examples are publicly available on the GitHub repository: https://github.com/Rbravo555
+/localECM.
+The third example is concerned with the application of the SAW-ECM algorithm to the local hyperreduction of a
+parameterized FE large-strains, structural model (for reasons that will become apparent later, the linear programming
+strategy will not be tested in this example). Since the interest lies on evaluating the errors introduced exclusively by the
+cubature rule, we will concoct a test in which other sources of errors are either negligible or kept in check.
+
+4.1
+
+Scalar-valued polynomial functions
+
+Let us consider the set of functions {a(i) }ki=1 ∶ Ω ×  → R defined by:
+a(𝜇+1) ∶ [0, 1] × Z+ → R
+(x, 𝜇) → x𝜇 ,
+
+(31)
+
+where each function (monomial) is defined over the spatial domain [0, 1] with the set of non-negative integers Z+ as
+parameter space. The position of the candidate points in the spatial domain coincide with those of a 20-points Gauss rule.
+The parameters for this example are thus:
+h
+N = 20, k = P = 6, {xi }20
+i=1 ∈ [0, 1],  = {0, 1, 2, 3, 4, 5}.
+
+(32)
+
+The monomials and corresponding basis functionsP obtained from the SVD are shown in Figures 4 and 5, respectively.
+Application of the SAW-ECM (Algorithm 2) results in just one point (m = 1) for the six subspaces; Figure 6 shows the
+sparsity plot (representation of the nonzero entries of a matrix) of the vectors 𝜻 (i) involved in the integration of each monomial (i.e., subspace). Thus, we see that the SAW-ECM indeed provides an optimal solution to the problem (as discussed
+in Section 1.1, this problem possesses infinite optimal solutions).
+̃ 𝜻̃ as in Equation (28), and
+̃ b,
+As for the linear programming-based strategy, we construct the matrices and vectors U,
+then call the LP solver:
+)
+̃ 𝜻̃ ⪰ 0).
+̃ 1, b,
+, {𝝎(i) }6i=1 ← LP(U,
+
+(
+
+(33)
+
+Optimization is performed using the linprog function provided by the scipy.optimize module in the SciPy library
+in Python. We employ the six methods available in this library; the solutions furnished by these methods are shown in
+the sparsity plots of Figure 7:
+It can be seen that, interestingly, the different tested LP algorithms furnish different solutions with different degrees
+of sparsity: from the interior point case, which leads to a dense solution using the 20 points, to the revised simplex, which
+delivers an optimal sparse solution, with just one point (notice that the position of this point is different from the one
+provided by the SAW-ECM in Figure 6).
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+FIGURE 4
+
+Functions a(j) ∶ Ω ×  → R.
+
+FIGURE 5
+
+Basis functions u(j) ∶ Ω → R.
+
+F I G U R E 6 Integration of the six subspaces of functions described by Equation (31) (six monomials). Sparsity plot of the weight vectors
+obtained by the SAW-ECM.
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+16 of 32
+
+17 of 32
+
+F I G U R E 7 Integration of the six subspaces of functions described by Equation (31) (six monomials). Sparsity plots furnished by the
+linear programming strategy, using the six different methods available when calling Python function linprog (scipy.optimize module).
+
+F I G U R E 8 Integration of the six subspaces of functions described by Equation (31) (six monomials). Sparsity plot corresponding to the
+application of the ECM to the global subspace (i.e., same weights for the six subspaces).
+
+F I G U R E 9 Integration of the six subspaces of functions described by Equation (31) (six monomials). Sparsity plot for the case of
+applying, independently, the ECM to each subspace.
+
+To complete the assessment, we plot in Figures 8 and 9 the sparsity plots obtained by the ECM applied to
+the global subspace, and the ECM applied individually to each subspace, respectively. In the former case, we
+obtain mall = 6 points (as many as subspaces), and in the latter case, we get one single point per function, yet, as
+expected, the indices of the selected points are not the same for all the functions—the final number of selected point
+is m = 4.
+We summarize in Figure 10 the result of the assessment in terms of number of points. It may be concluded
+from this plot that for this admittedly simplistic example, there is no apparent advantage in adopting the linear programming strategy (using the revised simplex) or the SAW-ECM, for both give optimal solutions featuring
+one integration point. However, the fact that the success of the linear programming strategy is contingent upon
+the specific algorithm used for solving the optimization casts doubts on its reliability. In the studied case presented in the squel, in which we analyze a vector-valued polynomial function, we try to shed more light on
+this issue.
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+F I G U R E 10 Integration of the six subspaces of functions described by Equation (31) (six univariate monomials). Total number of
+points employed by each method.
+
+4.2
+
+Vector-valued polynomial function
+
+Let us now consider the vector-valued polynomial function {a(i) }ki=1 ∶ Ω ×  → R2 defined by:
+a(𝜇+1) ∶ [0, 1] × Z+ → R2
+(x, 𝜇) → (1, x𝜇 ) .
+
+(34)
+
+The full-order integration rule is a 50-points Gauss rule (one single finite element), and we take 20 samples of the
+parametric space; thus, the parameters defining this problem are:
+M = 50, k = P = 20, {xi }50
+∈ [0, 1],  h = {0, 1, 2, … , 19}.
+i=1
+
+(35)
+
+The goal here is to determine the indices of the integration points  ⊆ {1, 2 … 50} and the subspace-adaptive weights
+𝝎(1) , 𝝎(2) … 𝝎(20) corresponding to the column spaces of the sample matrices A(1) , A(2) … A(20) . The number of columns
+of each sample matrix is 2 (A(i) ∈ R50×2 ), and except for A(1) , which has rank one, the remaining matrices have rank 2. It
+follows then that, according to the discussion in Section 3.3, see inequality 30, m ≥ 2.
+The sparsity plot corresponding to the solution provided by the SAW-ECM for the 20 sample matrices is shown in
+Figure 11. Observe that the set  has only m = 2 indices, which means that the SAW-ECM has achieved maximum efficiency. By contrast, the linear programming strategy, whose sparsity plots are displayed in Figure 12, clearly fails to achieve
+this degree of efficiency: the solutions provided by the six LP methods ranges from the full dense solution obtained with
+the interior-point method (50 points), to the 5-points solution furnished by the revised simplex.
+Lastly, for completeness, we show in Figures 13 and 14 the sparsity plots of the ECM applied to the global subspace
+and independently to each subspace, respectively. The former yields 20 points, and the latter 9 points.
+The summary of the results obtained for this family of functions is presented in the bar plot of Figure 15. These results
+confirm the conjecture put forward in the previous section (the linear programming strategy is not reliable because it
+gives varying number of points depending on the specific algorithm employed for solving the optimization problem), and
+furthermore, provides evidence that, when dealing with more complex problems, the SAW-ECM is more efficient than
+the linear programming strategy (2 points vs. 5 points, in the best case of the LP methods). For this reason, the last part
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+18 of 32
+
+19 of 32
+
+F I G U R E 11 Integration of the 20 subspaces of vector-valued polynomial functions described by Equation (34). Sparsity plot of the
+weight vectors obtained by the SAW-ECM.
+
+F I G U R E 12 Integration of the 20 subspaces of vector-valued polynomial functions described by Equation (34). Sparsity plots furnished
+by the linear programming strategy, using the six different methods available when calling Python function linprog (scipy.optimize
+module).
+
+F I G U R E 13 Integration of the 20 subspaces of vector-valued polynomial functions described by Equation (34). Sparsity plot
+corresponding to the application of the ECM to the global subspace (i.e., same weights for the 20 subspaces).
+
+of the assessment—application to local hyperreduction of a finite element model, presented in the ensuing section—will
+be carried out using solely the SAW-ECM.
+The cause behind the higher efficiency of the SAW-ECM over the linear programming strategy is not clear though. For
+the case of the global cubature problem, both methods essentially provide the same number of points when the sample
+matrix is full rank—this is empirically demonstrated by the authors in the introduction of Reference 11. Thus, it is not
+apparent why this is not inherited when moving to the case of multiple subspaces, and, furthermore why the differences
+in performance vary depending on the particular LP algorithm employed for solving the optimization problem. Further
+research is necessary to clarify this issue. One plausible explanation might be related to the fact that the solution strategy
+behind the SAW-ECM exploits the requirement that the full-order weights W must be strictly positive—the notion of
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+F I G U R E 14 Integration of the 20 subspaces of vector-valued polynomial functions described by Equation (34). Sparsity plot for the
+case of applying, independently, the ECM to each subspace.
+
+F I G U R E 15 Integration of the 20 subspaces of vector-valued polynomial functions described by Equation (34). Total number of points
+employed by each method.
+
+conical hull introduced in Section 2.3 relies on this very hypothesis—whereas the LP strategy does not leverage this
+property at all in any of its steps.
+
+4.3
+4.3.1
+
+Local hyperreduction of a parameterized finite element model
+Problem setup
+
+The problem chosen for illustrating the use of subspace-adaptive weights cubature rules (more specifically, the SAW-ECM,
+see Algorithm 2) in the context of local hyperreduction of parameterized finite element analyses is a plane-strain equilibrium problem of a 2 × 2 m structure with a centered circular void of diameter 1 m (see Figure 16A). The boundary
+conditions are prescribed displacements on its external boundary; these displacements are parameterized in terms of
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+20 of 32
+
+21 of 32
+
+(A)
+
+(B)
+
+F I G U R E 16
+
+(A) Finite element mesh of the structure under study, with 1005 bilinear quadratic elements, and 4 Gauss points per
+element (a total of M = 4020 Gauss points). (B) Piecewise affine trajectory in parameter space used to train the HROMs, along with the
+deformed shapes of the structure at the points defining each segment (the reference configuration is shown as well in each case, in order to
+appreciate the extent of the deformations). The axes of the graph represent a parametrization of the displacements of the external boundary
+C
+C
+], where ExC is the elongation along the x axis, EyC is the elongation along the y axis, and Exy
+represents shear deformations.
+EC = [ExC , EyC , Exy
+C
+C
+C
+C
+C
+The points defining the trajectory are E1 = [0, 0, 0], E2 = [2, 0, 0], E3 = [0, 2, 0], E4 = [−0.2, 0, 0], E5 = [0, 0, 0.2], EC6 = [0, 0, −0.2] and
+EC7 = [2, 2, 0.2].
+
+M
+three variables, namely, ExM and EyM , which characterize elongations along the x-axis and y-axis, respectively, and Exy
+,
+which describes the shear deformation of the structure. The material obeys a Neo-Hookean constitutive law, with Young’s
+Modulus E = 70,000 MPa and a Poisson’s ratio 𝜈 = 0.29. The finite element mesh, also displayed in Figure 16A, comprises 1005 bilinear quadrilateral elements, with 4 Gauss point per element (thus the total number of Gauss points is
+M = 1005 ⋅ 4 = 4020); on the other hand, the number of nodes is 1116, out of which nunc = 992 are interior nodes. The
+C
+], solve the equilibrium problem (in the large strain regime), and determine the nodal
+goal is, given 𝝁 = EC = [ExC , EyC , Exy
+displacements d. Since there are no external forces, the equilibrium problem for the case of the full-order (finite element)
+model boils down to equating to zero the vector of nodal internal forces Fint ∈ RN :
+
+F int (d; EC ) =
+
+∫Ω0
+
+BT0 P(d; EC )dV = 0.
+
+(36)
+
+Here P ∶ Ω0 → R4 stands for the 1st Piola-Kirchhoff stress vector, whereas B0 ∶ Ω0 → R4×N is the strain-displacement
+matrix, in its globally supported format, relating the deformation gradient at a given point in the undeformed domain Ω0
+with the nodal displacements (d ∈ RN ) corresponding to the unconstrained DOFs (which in this case are all the interior
+DOFs; N = nunc ⋅ 2 = 992 × 2 = 1984).
+It is worth noting that the above described problem is akin to the classical homogenization problem in large strains,
+which is one of the multi-query scenarios in which the use of reduced-order modeling is warranted, see for instance
+References 35–38. The input parameters EC would play the role of macroscopic Green-Lagrange strain vector, and the
+output of interest would be the volume average of the 1st Piola-Kirchoff stresses (PC = 1∕V ∫Ω PdΩ).
+0
+
+4.3.2
+
+Statement of the local hyperreduction problem
+
+Let us now address the problem of constructing a local hyperreduced-order model for the parameterized FE problem
+represented by Equation (36)—a sketch of this process was already given in Section 1.2 when motivating the need for
+subspace-tailored weights cubature rules. Following the standard offline/online computation paradigm, we solve in the
+offline stage equation (36) for a given set of training parameters, resulting in P solution snapshots d1 , d2 … dP . These P
+snapshots are grouped according to some criterion into k clusters, with Pi snapshots each (1 ≤ k ≤ P is a user-prescribed
+parameter), and then the truncated SVD is applied to each cluster separately, giving local basis matrices 𝚽1 , 𝚽2 … 𝚽k
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+(𝚽i ∈ RN×ni , ni ≤ Pi ). The state of the system (nodal displacements d) is described by indicating in which cluster resides
+the solution, and the amplitude (or reduce coordinates) qi ∈ Rni of the basis matrix corresponding to this cluster (that
+is, d = 𝚽i qi ). Once we know the cluster, and given an input parameter EC , the reduced coordinates qi are determined by
+T
+solving the nonlinear equation resulting from projecting Equation (36) onto the span of 𝚽i , that is, 𝚽i F int (qi ; EC ) = 0.
+This is when the subspace-tailored weight rule proposed in this work comes into play. The integral corresponding to this
+projected equation will be approximated by
+T
+
+𝚽i F int =
+
+∫Ω 0
+
+(B0 (x)𝚽i )T P(x, 𝚽i qi )dV ≈
+
+m
+∑
+𝜔ig (B0 (xg )𝚽i )T P(xg , 𝚽i qi ).
+
+(37)
+
+g=1
+
+Here xg = xg (xj is the jth Gauss point of the mesh, j = 1, 2 … M) and {𝜔i1 , 𝜔i2 , … 𝜔im } (i = 1, 2 … k) are the sets of nonnegative weights adapted to each particular subspace. Both the reduced set of indices  ⊆ {1, 2 … M} and the adaptive
+weights are determined by using the SAW-ECM described in Algorithm 2. The inputs of this algorithm are the vector of
+Gauss weights W ∈ RM (recall that these weights also include the Jacobian of the mapping from parent configuration to
+physical configuration), and the integrand matrix for each cluster: A1 , A2 … Ak . The integrand matrix of the ith cluster
+is computed, in the offline stage as well, by the procedure described in the following.
+Let db1 , db2 … dbPi be the Pi displacement snapshots used for constructing the basis matrix 𝚽i (here {b1 , b2 … bPi } ⊆
+T
+b
+{1, 2 … P}). For each of these snapshots, we compute its projection onto the basis matrix, that is, d̃ j = 𝚽i 𝚽i dbj (j =
+1, 2 … Pi ); then, for each Gauss point xg of the mesh (g = 1, 2 … M), we evaluate the corresponding stresses through the
+b
+constitutive equation, P = P(xg , d̃ j ), and multiply these stresses by the transpose of the matrix of virtual deformation at
+the same Gauss point (B0 (xg )𝚽i ). In practice, the strain-displacement matrix in a FE implementation is given at element
+i
+
+level, so this matrix is actually calculated as B0(e) (xg )𝚽(e) , where B0(e) denotes the strain-displacement matrix of the element
+i
+
+Ωe0 containing point xg , and 𝚽(e) is the restriction of 𝚽i at the DOFs of such element Ωe0 . The resulting integrand matrix
+Ai (whose entries represent physically internal virtual work per unit volume) will be thus of size M × Pi ni .
+
+4.3.3
+
+Transition errors and scope of the assessment
+
+In describing the problem represented by Equation (37), we have glossed over one fundamental, challenging question which pervades local HROMs: how to group the snapshots in clusters so that the transition, in the online stage,
+between neighboring clusters is made without incurring in additional errors. Suppose that, at a certain time of the online
+analysis, the solution vector dold moves from a cluster with basis matrix 𝚽old (i.e., dold = 𝚽old qold ) to a cluster with
+T
+basis matrix 𝚽new . Since the basis matrices are by construction orthogonal (𝚽i 𝚽i = I), the best representation—in the
+T
+least-squares sense—that one can obtain in the new cluster is given by dnew = 𝚽new (𝚽new 𝚽old )qold (dnew is thus the
+orthogonal projection of dold onto the span of 𝚽new ). It follows from this expression that error-free transitions requires
+𝚽old qold ∈ span(𝚽old ) ∩ span(𝚽new ), that is, the “old” state should pertain to the intersection of the spans of the basis
+matrices. Failure to meet this condition will unavoidable result in transitions errors, the worst conceivable scenario being
+T
+when both subspaces are orthogonal (𝚽new 𝚽old = 0), since in this scenario all the information encoded by the reduced
+coordinates qold is lost upon changing the cluster. Thus, in the offline stage, when grouping the snapshots into clusters,
+care is to be exercised so that all clusters that may be considered neighbors in some metric have nonzero intersections.
+Researchers in the field have attempted to enforce this condition by introducing cluster overlapping, which implies that
+some snapshots may pertain simultaneously to different clusters, see for example, References 2,6,39, and 40. The problem
+is elusive though, because overlapping criteria, no matter how sophisticated, can only control transition errors when the
+input parameters are the same used to train the local HROM. In general, for testing parameters different from the training
+parameters, there is certain degree of uncertainty in this regard, and transition errors will be present to a greater or lesser
+extent depending on the level of overlapping—of course, one can always increase the overlapping, but this will increase
+the size of the clusters, and the benefits of using local HROMs would be eventually lost.
+Studying the impact on such transition errors in the hyperreduction process, although of utmost importance for building local HROMs with online predictive capabilities, is out of the scope of the present work. Accordingly, in what follows,
+we focus only on the consistency of the local HROMs (consistency, as defined in Reference 41, is the capability to predict
+with any desired degree of accuracy the same data used for training the model). Objectionable as this assessment might
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+22 of 32
+
+23 of 32
+
+be from the machine learning perspective, it is the only way of ensuring that transition errors are negligible, and therefore, of examining the errors that are caused exclusively by the approximation of the spatial integral in Equation (37) via
+the proposed cubature method.
+We train the local HROMs using a single, piecewise affine trajectory in parameter space, displayed in Figure 16B. For
+carrying out the incremental, nonlinear analysis, this trajectory is discretized into 3497 steps (total Lagrangian formulation). At each step, the system of nonlinear equilibrium equations Equation (36) is solved using a Newton-Raphson
+iterative scheme with convergence tolerance 𝜖nr = 10−10 . On the other hand, the clustering of the corresponding P = 3497
+displacement snapshots into distinct groups—so that no transition errors are introduced—proves trivial in this problem,
+for it suffices to take overlapping sequences of consecutive snapshots, with an overlap of one snapshot with the next and
+previous clusters in the sequence.
+
+4.3.4
+
+Case with just one subspace (global HROM)
+
+Let us begin by studying the limiting case of using just one cluster (k = 1)—notice that this case corresponds to the
+standard, global HROM, because there is only one subspace of functions to be integrated. The tolerance for the truncated
+SVD for determining the basis matrix 𝚽glo is set to 𝜖 = 10−8 . This SVD yields n = 50 left singular vectors; for illustrational
+purposes, we plot the deformed shapes corresponding to some of these basis modes in Figure 17. Following the procedure
+described previously in Section 4.3.2, we compute the integrand matrix A, which has in this case M = 4020 rows and
+n ⋅ P = 50 × 3497 = 174,850 columns. Because of its relative large size, the SVD of this matrix (see expression (12)) is
+carried out by the Sequential Randomized SVD proposed by the authors in Reference 11, appendix# A, with an error
+tolerance 𝜖svd = 0—this zero error tolerance guarantees that the cubature problem is solved exactly, and therefore, the
+only error introduced in the local HROM is to be attributed to the truncation error in the first stage of reduction. This SVD
+reveals that there is a total of 3442 left singular vectors. However, problem Equation (16) would prove ill-posed if we simply
+form the basis matrix U using this 3442 left singular vectors, because under such circumstances d = F int = 0 by virtue of
+Equation (36)—and, consequently, any set of indices  with weights 𝝎 = 0 would be a solution of problem Equation (16).
+As we mentioned in passing in Section 1.3, and reflected in Line 4 of Algorithm 2, the remedy to this ill-posedness is to
+add one column to the matrix of left singular vectors so that the space of constant functions is exactly integrated—while
+keeping the orthogonality of the integrand modes. If orthogonality is in the Euclidean sense, this amounts to simply
+adding a column of ones—the reader is referred to Appendix A.1 to see how to proceed in a general case. In doing so,
+∑M
+d = UT W = [0T , V]T , V = g=1 Wg being the volume of the domain, and the problem ceases to be ill-posed. Using as
+input the resulting matrix U of 3443 columns, the ECM of Algorithm (1.3) gives exactly m = 3443 integration points (the
+location of these points are shown in Figure 17B).
+
+(A)
+
+(B)
+
+F I G U R E 17 Case with just k = 1 cluster (global HROM). (A) Deformed shapes corresponding to 8 vectors out of the n = 50 basis
+vectors obtained via the SVD. (B) Position (in the undeformed configuration) of the m = 3443 Gauss points (out of M = 4020 points) selected
+by the empirical cubature method (Algorithm 1).
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+The accuracy in reproducing with the resulting HROM (which has n = 50 DOFs and m = 3443 integration points) the
+trajectory used for training is measured by computing the Frobenius norm of the difference between the matrix of original
+FE displacement snapshots and its HROM counterparts (divided by the Frobenius norm of the former). This yields an
+error of eglob = 1.1 × 10−8 ; we see thus that the a posteriori error is only 1.1 times larger than the a priori error prescribed by
+the truncation tolerance of the SVD for displacements. Therefore, this HROM can be deemed consistent in the sense given
+in Reference 41. However, it is clear that the model does not deserve the qualifier “hyperreduced,” because the second
+reduction in terms of integration points is marginal: M∕m = 4016∕3443 = 1.17. The reason for this poor hyperreduction
+is that, first, the number of basis vectors for displacements is relatively high (n = 50), and second, the dimension of the
+subspace where the integrand (internal work per unit volume) lives scales, at least, with n2 . This follows from the fact that
+the integrand function in Equation (37) is the product of the n strain modes B0 𝚽glo and the 1st Piola-Kirchhoff stresses P
+engendered by this very n strain modes. The stresses thus live in a space of dimension nstress = (n1+𝛼 ), and consequently,
+the integrand itself resides in a space of dimension (n2+𝛼 ), where 𝛼 ≥ 0 depends on the degree of nonlinearity (which in
+this case is relatively high, for the size of the final deformed structure is 200% larger than its undeformed configuration,
+see Figure 16B).
+
+4.3.5
+
+Case with maximum number of subspaces
+
+Having discussed the (poor) levels of hyperreduction achieved when using the global HROM (just one cluster), let us now
+move to the other extreme in the clustering spectrum, which is when we use almost as many clusters as snapshots. As
+pointed out previously, zero-error transitions demand taking sequences of consecutive snapshots with an overlap of one
+snapshot with the next and previous clusters in the sequence. It follows then that, in this limiting case, the clusters will
+be formed by groups of 3 snapshots: {d1 , d2 , d3 }, {d2 , d3 , d4 } … {di−1 , di , di+1 }, … {dP−2 , dP−1 , dP }. The total number of
+clusters (and thus of subspaces of functions to be integrated) is equal to k = P − 2 = 3495. Application of the SVD (with
+the same truncation tolerance as in the global case, 𝜖 = 10−8 ) to each group of 3 snapshots produces basis matrices, see
+Figure 18A, with 3 modes except for the 2 first clusters, on the one hand, and clusters from 622 and 671, on the other
+hand, which have 2 modes (clusters from 622 and 671 corresponds to the last portion of the trajectory going from point 1
+to point 2 in Figure 16B). With 𝚽1 , 𝚽2 … 𝚽k at our disposal, we compute next, by the procedure outlined in Section 4.3.2,
+the integrand matrices A1 , A2 … Ak associated to these basis matrices, then use the SVD (with 𝜖svd = 0) to determine the
+left singular matrices of each integrand matrix, and finally augment each of these left singular matrices with an additional
+column so that each local cubature problem is well-posed. This results in the distribution of number of integrand modes
+per cluster shown in Figure 18A: except for the first two clusters, which have m1 = m2 = 5 modes, and clusters from
+622 and 671, which have 7 modes, the remaining clusters have 32 + 1 = 10 modes. Thus, we can assert, in the light of
+the discussion presented in Section 4.1, that the number of common points for all clusters that can be obtained by the
+SAW-ECM is bounded below by mmax = 10. It is worth examining as well what is the upper bound mall for this case, which,
+recall, is the dimension of the global subspace, formed as the sum of the spans of all the basis matrices. To this end, we
+concatenate all basis matrices in a single matrix: U = [U1 , U2 … UP ], and apply the untruncated SVD to determine its
+rank. This yields mall = M = 4020—the matrix has thus full rank. This implies that the standard hyperreduction approach
+of using the same set of weights for all clusters (see discussion in Section 1.4) offers no benefit in this case in terms of
+reduction of computational cost—the number of integration points is equal to the number of Gauss points of the mesh,
+and hence there is no hyperreduction at all.
+Let us now concentrate on the performance on the SAW-ECM of Algorithm 2 when given the integrand basis matrices
+U1 , U2 … Uk computed above. As we discussed in Section 2.3, the solution of the enhanced ECM in Algorithm 1 is
+not unique—different input candidate points elicit different solutions. As a consequence, the SAW-ECM itself produces
+different outputs depending on the order in which U1 , U2 … Uk are processed. To examine the influence of such ordering
+in the final number of common points, we invoke the loop in Line 9 of Algorithm 2 using 100 random permutations
+of the indices {1, 2 … 3495}. The resulting discrete probability distribution is displayed in Figure 18B. Observe that the
+variations are not quite pronounced (minimum equal to 20, maximum equal to 26), and furthermore, the minimum value
+is by far the most frequent output (80%). To gain further insight into how the algorithm selects these points in one of
+the permutations leading to m = 20 points, we plot in Figure 18C the cardinality of the candidate set with respect to the
+number of iterations in the loop of Line 9 of Algorithm 2. It is noteworthy that the final set of points is achieved after only
+75 iterations (out of k = 3495). The location of such points is displayed in Figure 18D: approximately 40% of the points
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+24 of 32
+
+25 of 32
+
+F I G U R E 18 Case with k = 3495 clusters (each cluster is formed by three consecutive snapshots). (A) Number of modes for
+displacements and for the integrand function. (B) The number of common points for all clusters (i.e., subspaces) delivered by the SAW-ECM
+depends on the order in which the basis matrices in Algorithm 2 are processed (see Line 6). This bar plot depicts the probability distribution
+obtained from 100 random permutations of {1, 2 … 3495}. (C) Number of iterations in the loop over clusters (Line 2 in Algorithm 2) required
+to achieve the final candidate set (for one of the cases with m = 20 points). (D) Location of the m = 20 points selected in such a case. The
+value of the adaptive weights at such points for different clusters can be seen in Figures 19 and 20.
+
+are relatively near the inner boundary, 40% relatively close to the outer boundary, and the rest are scattered throughout
+the domain.
+Recall that these m = 20 points are the points common to all the k = 3495 subspaces. Each subspace has in principle a
+different distribution of weights, with a maximum of mmax = 10 nonzero weights for each cluster. This can be appreciated
+in Figures 19 and 20. In the former, we display the cubature rules corresponding to the clusters whose centroids are the end
+points of the piecewise affine training trajectory defined previously in Figure 16B (along with the corresponding deformed
+shapes). In Figure 20, on the other hand, we show bar plots of the weights for a sequence of six consecutive clusters (from
+clusters 1623 to 1628). These bar plots reveal that, even though the basis matrices U1 , U2 … Uk are processed in random
+order, and therefore, the SAW-ECM of Algorithm 2 has no information about how close in the solution space such clusters
+are, some consecutive subspaces do display similar weights distribution. For instance, from cluster 1623 (Figure 20A)
+to cluster 1627 (Figure 20E), the set of 10 indices with nonzero weights is the same, and, furthermore, variations in
+weights are practically imperceptible. This is in contrast to the transition from cluster 1627 to 1628 (Figure 20F), which
+is clearly more abrupt: weights corresponding to points whose local indices are {1, 4, 7, 10, 11} become zero, while points
+{6, 14, 15, 19, 20} become active. This might be due to the fact that the centroid of cluster 1628 marks the transition from
+a tension loading state in the y-direction, to a compressive state in the x-direction (see Figures 19C and 16B).
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+F I G U R E 19 Case with k = 3495 clusters. Cubature rules (location of points in the deformed configuration and associated positive
+weights, in m2 ) of the clusters corresponding to the input parameters ECi (i = 1, 2, 3, 4, 6, 7) (these inputs parameters define the end points of
+the piecewise affine training trajectory displayed previously in Figure 16B). The number of common integration points for all the clusters is
+m = 20; the location of all such common points in the undeformed domain are displayed in Figure 18D. (A) Cluster 1 (EC1 = (0, 0, 0)), (B)
+Cluster 675 (EC2 = (2, 0, 0)), (C) Cluster 1628 (EC3 = (0, 2, 0)), (D) Cluster 2305 (EC4 = (−0.2, 0, 0)), (E) Cluster 2534 (EC6 = (0, 0, −0.2)), (F)
+Cluster 3495 (EC7 = (2, 2, 0.2)).
+
+Once the basis matrices for displacements|| 𝚽1 , 𝚽2 and 𝚽k , as well as the location of the m = 20 points and the corresponding k = 3495 sets of m = 20 weights have been determined in the offline stage, we can proceed to construct the
+online local HROMs, and examine its ability to accurately reproduce the same nodal displacements used for training the
+model—as done in Section 4.3.4 for the case of k = 1 cluster.
+T
+At each time step t, the local HROM entails solving a system of nonlinear equations 𝚽i F int (qi ) = 0, which is assembled at each iteration via hyperreduction (see Equation (37)). Here the index i refers to the cluster which is active at this
+time step; it can be readily seen that, in this limiting case of k = 3495 subspaces and P = 3497 snapshots, i = t for 1 < t < P
+(cluster transition takes place at each time step). Likewise, as pointed out in Section 4.3.3, the initial guess for this nont+1T t t
+linear system of equations is obtained from the reduced coordinates of the previous time step: qt+1
+𝚽 )q . Notice
+0 = (𝚽
+T
+
+that the product 𝚽t+1 𝚽t can be pre-computed in the offline stage as well. Thus, all the online operations of the local
+HROM are independent of the size of the underlying finite element mesh: the number of nonlinear equations is equal to
+ni = 2 or 3 depending on the cluster (see Figure 17), and the number of points at which the 1st Piola-Kirchhoff stress and
+the corresponding constitutive tangent matrix have to be computed at each iteration is equal to m = 20.
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+26 of 32
+
+27 of 32
+
+F I G U R E 20 Case with k = 3495 clusters. Cubature rules corresponding to clusters 1623 to 1628—these are the last six clusters of the
+trajectory going from input parameter EC2 = [2, 0, 0] to EC3 = [0, 2, 0] in Figure 16B. The point indices from 1 to 20 correspond to the labels
+shown in Figure 18D.
+
+Once we have computed the reduced coordinates q1 , q2 … qP , in a post-process stage, we reconstruct the nodal
+displacements as dt = 𝚽t qt and compute the Frobenius norm of the difference between the matrices of full-order FE
+snapshots and HROMs snapshots (divided by the norm of the former). This gives an error of 0.88 × 10−8 , which is slightly
+below the employed truncation threshold for the local SVD, 𝜖 = 10−8 . Therefore, we can conclude that the local HROM
+constructed with the proposed 20-points subspace-adaptive weight cubature rule is, not only consistent, but even more
+accurate than the global HROM described in Section 4.3.4, which recall required a cubature rule with 3443 integration
+points. As for the online computational cost, the local hyperreduced-order model (HROM) requires approximately 20 seconds to complete the 3500 time steps, using an in-house MATLAB code executed on an Intel(R) Core(TM) i7-8700 CPU
+at 3.20 GHz with 64 GB RAM on a Linux platform. In comparison, the full-order model takes about 300 seconds, while
+the global HROM discussed in Section 4.3.4 requires 220 s.
+The benefits of using the local HROM in combination with subspace-adaptive weights are not evident only in the
+online stage. The offline stage is considerably less expensive in terms of both computational time and memory requirements as well. For instance, in the case of the global HROM addressed in Section 4.3.4, the computing time required for
+the ECM of Algorithm 1 to select the 3443 points and weights is 330 seconds (using an in-house Matlab code executed
+in an Intel(R) Core(TM) i7-8700 CPU, 3.20 GHz with 64 Gb RAM, in a Linux platform). By contrast, the selection of one
+single set of m = 20 points (and their corresponding k = 3495 weights) via the SAW-ECM of Algorithm 2 using the same
+computer takes approximately 20 s.
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+F I G U R E 21
+
+Number of points determined by the SAW-ECM versus number of subspaces (clusters), along with the distribution of
+integration points for number of clusters equal to k = 1, 10,100, 1000, 3495.
+
+4.3.6
+
+Parameter study in terms of number of subspaces
+
+In the preceding two sections we have studied the limiting cases of minimum number (k = 1) and maximum number
+(k = 3495) of subspaces for the given training trajectory. By way of conclusion, we present in Figure 21 the number of
+points obtained by the SAW-ECM (with 10 random permutations per case) for intermediate values of the number of
+clusters, along with the distribution of integration points for the cases k = 1, 10,100, 1000, 3495. It can be seen that the
+decay is more pronounced in the first portion of the curve (k = 1 to k = 100), and then gradually diminishes until achieving
+the minimum number of points, which in this case is m = 20. Inspection of the distribution of points as the number of
+subspace increases reveals that the decrease of points is not spatially uniform, but tends to be more pronounced away from
+the inner boundary, in which, not coincidentally (stress gradients are higher in this area) most of the points concentrate.
+
+5
+
+CO NCLUDING REMARKS
+
+We have formulated and solved the (as yet unaddressed) problem of deriving quadrature/cubature rules able to deal with
+multiple subspaces of functions with integration points common to all the subspaces, yet different set of weights for each
+subspace. We have proposed two possible approaches (SAW-ECM and linear-programming based approach), and we have
+shown that the former is less computationally costly and more efficient (less integration points for the same accuracy)
+than the latter. The reason for the higher efficiency of the SAW-ECM is not clear though. One plausible explanation could
+be that the SAW-ECM takes advantage of the requirement that the full-order weights be strictly positive—the concept of
+conical hull introduced in Section 2.3 is based on this very hypothesis—whereas the linear-programming strategy does
+not use this property in any of its steps.
+Concerning the application of the SAW-ECM in the construction of local hyperreduced-order models, we have demonstrated that the use of adaptive weights does not introduce additional errors, in the sense that if the truncation tolerance
+of the SVDs for determining basis matrices for the subspaces is set to zero, then the a posteriori error is due exclusively
+to the first reduction stage (and not to the hyperreduction per se). We have seen as well that the gains in computational
+performance increases notably with the number of subspaces used to represent the region of the solution manifold corresponding to the training parameters. For instance, in the studied case, the limiting case of considering each displacement
+snapshot the centroid of a cluster furnishes a hyperreduction factor of over 200 with respect to the standard approach of
+using the same weights for all the clusters (m = 20 points vs. 4020 points).
+On the other hand, it may be inferred from the results obtained in this limiting case that the minimum number that
+can be achieved with the proposed SAW-ECM is dictated by both the intrinsic dimensionality of the integrand manifold and the level of overlapping necessary to avoid transition errors between subspaces. Indeed, in the studied problem,
+we have used only one piecewise affine trajectory in parameter space; since the problem is quasi-static and the constitutive equation is nonlinear elastic (it has no internal variables, and thus, no path-dependence), the projection of this
+trajectory in the solution manifold is a piecewise continuous curve, and therefore, its intrinsic dimensionality is 𝛾 = 1.
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+28 of 32
+
+29 of 32
+
+We have argued that the minimum degree of overlapping required for avoiding transition errors in reproducing this
+very same trajectory is 𝛼over = 2, and that the integrand (internal work per unit volume) scales locally with the square
+of the displacements. Under such circumstances, it follows that the maximum dimension of the integrand subspaces is
+mmax = (𝛾 + 𝛼over )2 + 1 = 10 (the additional one accounts for the integration of the volume), and therefore, the number
+of points determined by the SAW-ECM when hyperreducing internal forces is given by m = kmmax = k((𝛾 + 𝛼over )2 + 1),
+where k ≥ 1 measures the efficiency of the selection process (we have seen that this constant k depends on the order in
+which the basis matrices are processed; for the studied problem k ∼ 2).
+An objectionable aspect, when viewed from the machine learning perspective, of the assessment presented in
+Section 4.3 is that we have only studied the consistency of the local HROM, that is, its capability to reproduce the same
+results used for training, but not its capability to generalize (reproduce results not observed in training). As explained
+in Section 4.3.3, this has been done in order to analyze solely the component of the error due to the approximation of
+the spatial integral, and in doing so, eliminate the part which may be attributed to the so-called transition errors, which
+affect the accuracy of local HROMs to a lesser or greater extent in a general case (depending on the degree of overlapping
+between clusters). Moreover, the success of overlapping criteria, no matter how sophisticated, is contingent in turn on
+how representative of the solution manifold is the ensemble of snapshots collected during the training stage—another
+general challenging issue when constructing reduced-order models. In summary, the subspace-adaptive weights cubature
+method proposed here covers only one facet of local hyperreduction (that of selecting the minimum number of points for
+guaranteeing a user-prescribed accuracy level, provided that other error sources are kept in check). To gain further confidence in the predictive capabilities of the local HROMs based on subspace-adaptive weights, further research should be
+devoted to study the interaction between these various sources of errors, in particular, how the overall transition errors
+are affected by the number and location of the integration points determined by the SAW-ECM.
+ACKNOWLEDGMENTS
+The authors acknowledge the support of the European High-Performance Computing Joint Undertaking (JU)
+under Grant agreement No. 955558 (the JU receives, in turn, support from the European Union’s Horizon
+2020 research and innovation programme and Spain, Germany, France, Italy, Poland, Switzerland, Norway), as
+well as the R&D project PCI2021-121944, financed by MCIN/AEI/10.13039/501100011033 and by the “European
+Union NextGenerationEU/PRTR.” J. A. Hernández expresses gratitude by the support of, on the one hand, the
+“MCIN/AEI/10.13039/501100011033/y por FEDER una manera de hacer Europa” (PID2021-122518OB-I00), and, on the
+other hand, the European Union’s Horizon 2020 research and innovation programme under Grant Agreement No. 952966
+(project FIBREGY). Lastly, both J. R. Bravo and S. Ares de Parga acknowledge the Departament de Recerca i Universitats de la Generalitat de Catalunya for the financial support through doctoral Grants FI-SDUR 2020 and FI SDUR-2021,
+respectively.
+DATA AVAILABILITY STATEMENT
+The data that support the findings of this study are available from the corresponding author upon reasonable request.
+ENDNOTES
+∗ The left singular vectors of a standard SVD are columnwise orthogonal (UT U = I). To obtain W-orthogonality, which is the one consistent
+
+with L2 norm, one must follow the steps outlined in Appendix A.1. Here, for simplicity of exposition, we use orthogonality in the Euclidean
+norm.
+† As demonstrated by authors in Reference 11, it is possible within the context of FE parametric problems to arrive at optimal solutions, but
+this requires considering the position of the points as continuous design variables.
+‡ As pointed out in the introductory section, to avoid ill-conditioned problems, the span of U should contain the vector space of constant
+functions; the procedure for guaranteeing this condition is explained in Appendix A.1.
+§
+https://github.com/KratosMultiphysics/Kratos.
+P
+These basis functions are L2 (Ω) orthogonal, as discussed in Appendix A.2.
+# A matlab version of this algorithm can be found in the repository https://github.com/Rbravo555/CECM-continuous-empirical-cubature
+-method/blob/main/CODE_CECM/SVDlibrary/SRSVD.m.
+||
+In order to avoid storing the k = 3495 basis matrices 𝚽1 , 𝚽2 … 𝚽k , it proves useful to determine a global basis matrix 𝚽all for the column
+T
+space of the snapshots, and then pre-compute and store the products 𝜷 i = 𝚽all 𝚽i (i = 1, 2 … k). This way the nodal displacements may be
+t
+reconstructed by making d = 𝚽all 𝜷 T qt .
+
+ORCID
+J. R. Bravo
+
+https://orcid.org/0000-0002-4465-7536
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+BRAVO et al.
+
+J. A. Hernández https://orcid.org/0000-0001-9334-4002
+S. Ares de Parga https://orcid.org/0000-0001-5709-4683
+R. Rossi https://orcid.org/0000-0003-0528-7074
+REFERENCES
+1. Golub GH, Meurant G. Matrices, Moments and Quadrature with Applications. Princeton University Press; 2009.
+2. Amsallem D, Zahr MJ, Farhat C. Nonlinear model order reduction based on local reduced-order bases. Int J Numer Methods Eng.
+2012;92(10):891-916.
+3. Farhat C, Avery P, Chapman T, Cortial J. Dimensional reduction of nonlinear finite element dynamic models with finite rotations and
+energy-based mesh sampling and weighting for computational efficiency. Int J Numer Methods Eng. 2014;98(9):625-662.
+4. Hernández JA, Caicedo MA, Ferrer A. Dimensional hyper-reduction of nonlinear finite element models via empirical cubature. Comput
+Methods Appl Mech Eng. 2017;313:687-722.
+5. Brunton SL, Kutz JN. Data-Driven Science and Engineering: Machine Learning, Dynamical Systems, and Control. Cambridge University
+Press; 2019.
+6. Grimberg S, Farhat C, Tezaur R, Bou-Mosleh C. Mesh sampling and weighting for the hyperreduction of nonlinear Petrov–Galerkin
+reduced-order models with local reduced-order bases. Int J Numer Methods Eng. 2021;122(7):1846-1874.
+7. de Parga SA, Bravo JR, Hernández JA, Zorrilla R, Rossi R. Hyper-reduction for Petrov-Galerkin reduced order models. Comput Methods
+Appl Mech Eng. 2023;416:116298.
+8. Grimberg S, Farhat C, Youkilis N. On the stability of projection-based model order reduction for convection-dominated laminar and
+turbulent flows. J Comput Phys. 2020;419:109681.
+9. Tezaur R, As’ad F, Farhat C. Robust and globally efficient reduction of parametric, highly nonlinear computational models and real time
+online performance. Comput Methods Appl Mech Eng. 2022;399:115392.
+10. Hernández JA. A multiscale method for periodic structures using domain decomposition and ECM-hyperreduction. Comput Methods
+Appl Mech Eng. 2020;368:113192.
+11. Hernández JA, Bravo JR, de Parga SA. CECM: a continuous empirical cubature method with application to the dimensional hyperreduction of parameterized finite element models. Comput Methods Appl Mech Eng. 2024;418:116552.
+12. Farhat C, Chapman T, Avery P. Structure-preserving, stability, and accuracy properties of the energy-conserving sampling and weighting
+method for the hyper reduction of nonlinear finite element dynamic models. Int J Numer Methods Eng. 2015;102(5):1077-1110.
+13. Patera AT, Yano M. An LP empirical quadrature procedure for parametrized functions. C R Math. 2017;355(11):1161-1167.
+14. Yano M, Patera AT. An LP empirical quadrature procedure for reduced basis treatment of parametrized nonlinear PDEs. Comput Methods
+Appl Mech Eng. 2019;344:1104-1123.
+15. Elad M. Sparse and Redundant Representations: from Theory to Applications in Signal and Image Processing. Vol 2. Springer; 2010.
+16. An S, Kim T, James D. Optimizing cubature for efficient integration of subspace deformations. ACM Trans Graph. 2009;27(5):165.
+17. Amsallem D, Zahr MJ, Washabaugh K. Fast local reduced basis updates for the efficient reduction of nonlinear systems with
+hyper-reduction. Adv Comput Math. 2015;41(5):1187-1230.
+18. Farhat C, Grimberg S, Manzoni A, Quarteroni A. Computational bottlenecks for PROMs: precomputation and hyperreduction.
+Snapshot-Based Methods and Algorithms. Model Order Reduction. De Gruyter; 2020:181-244.
+19. Kovvali N. Theory and Applications of Gaussian Quadrature Methods. Springer Nature; 2022.
+20. Kim T, Delaney J. Subspace fluid re-simulation. ACM Trans Graph. 2013;32(4):62.
+21. von Tycowicz C, Schulz C, Seidel H-P, Hildebrandt K. An efficient construction of reduced deformable objects. ACM Trans Graph.
+2013;32(6):213.
+22. Pan Z, Bao H, Huang J. Subspace dynamic simulation using rotation-strain coordinates. ACM Trans Graph. 2015;34(6):242.
+23. Chapman T, Avery P, Collins P, Farhat C. Accelerated mesh sampling for the hyper reduction of nonlinear computational models. Int
+J Numer Methods Eng. 2016;109:1623-1654.
+24. Hirsch M, Pichi F, Hesthaven JS. Neural empirical interpolation method for nonlinear model reduction. arXiv preprint arXiv:2406.03562,
+2024.
+25. Kim Y, Choi Y, Widemann D, Zohdi T. A fast and accurate physics-informed neural network reduced order model with shallow masked
+autoencoder. J Comput Phys. 2022;451:110841.
+26. Romor F, Stabile G, Rozza G. Explicable hyper-reduced order models on nonlinearly approximated solution manifolds of compressible
+and incompressible Navier-Stokes equations. arXiv preprint arXiv:2308.03396, 2023.
+27. Romor F, Stabile G, Rozza G. Non-linear manifold reduced-order models with convolutional autoencoders and reduced over-collocation
+method. J Sci Comput. 2023;94(3):74.
+28. Boyd S, Boyd SP, Vandenberghe L. Convex Optimization. Cambridge University Press; 2004.
+29. Lawson CL, Hanson RJ. Solving Least Squares Problems. Vol 161. SIAM; 1974.
+30. Hiriart-Urruty J-B, Lemaréchal C. Convex Analysis and Minimization Algorithms I: Fundamentals. Vol 305. Springer; 1996.
+31. Bruckstein AM, Donoho DL, Elad M. From sparse solutions of systems of equations to sparse modeling of signals and images. SIAM Rev.
+2009;51(1):34-81.
+32. Elhamifar E, Vidal R. Sparse subspace clustering: algorithm, theory, and applications. IEEE Trans Pattern Anal Mach Intell.
+2013;35(11):2765-2781.
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+30 of 32
+
+31 of 32
+
+33. Nocedal J, Wright SJ. Numerical Optimization. Springer; 1999.
+34. Bravo JR, Stabile G, Hess M, Hernández JA, Rossi R, Rozza G. Geometrically parametrised reduced order models for studying the hysteresis
+of the Coanda effect in finite element-based incompressible fluid dynamics. J Comput Phys. 2024;509:113058.
+35. Caicedo M, Mroginski JL, Toro S, Raschi M, Huespe A, Oliver J. High performance reduced order modeling techniques based on
+optimal energy quadrature: application to geometrically non-linear multiscale inelastic material modeling. Arch Comput Methods Eng.
+2019;26(4):771-792.
+36. Hernández JA, Oliver J, Huespe AE, Caicedo M, Cante J. High-performance model reduction techniques in computational multiscale
+homogenization. Comput Methods Appl Mech Eng. 2014;276:149-189.
+37. Oliver J, Caicedo M, Huespe AE, Hernández JA, Roubin E. Reduced order modeling strategies for computational multiscale fracture.
+Comput Methods Appl Mech Eng. 2017;313:560-595.
+38. Yvonnet J, He Q-C. The reduced model multiscale method (R3M) for the non-linear homogenization of hyperelastic media at finite strains.
+J Comput Phys. 2007;223(1):341-368.
+39. Pagani S, Manzoni A, Quarteroni A. Numerical approximation of parametrized problems in cardiac electrophysiology by a local reduced
+basis method. Comput Methods Appl Mech Eng. 2018;340:530-558.
+40. Washabaugh K, Amsallem D, Zahr M, Farhat C. Nonlinear model reduction for CFD problems using local reduced-order bases. 42nd
+AIAA Fluid Dynamics Conference and Exhibit. AIAA; 2012:2686.
+41. Carlberg K, Bou-Mosleh C, Farhat C. Efficient non-linear model reduction via a least-squares Petrov–Galerkin projection and compressive
+tensor approximations. Int J Numer Methods Eng. 2011;86(2):155-181.
+
+How to cite this article: Bravo JR, Hernández JA, Ares de Parga S, Rossi R. A subspace-adaptive weights
+cubature method with application to the local hyperreduction of parameterized finite element models. Int J Numer
+Methods Eng. 2024;125(24):e7590. doi: 10.1002/nme.7590
+
+APPENDIX A. PROPERTIES OF THE ECM
+A.1 Incorporation of a non-trivial constraint
+When the trivial solution, 𝝎 = 0, is feasible, it is crucial to introduce an additional constraint. This can be readily
+accomplished by ensuring that the space of constant functions is contained in the column space of the basis matrix
+U ∈ RM×m .
+Given c ∶= {c}M , where c ∈ R ⧵ {0}, the process requires appending the projection of this constant vector onto the
+column space of U:
+[
+]
+(I − UUT )c
+U ← U 𝝀T , 𝝀 ∶=
+.
+‖(I − UUT )c‖
+‖
+‖
+
+(A1)
+
+A detailed discussion on the rationale behind this modification can be found in Reference 11, Section 2.2.
+A.2 Relevance of the L2 (𝛀) orthogonality of continuous basis functions
+In our preceding studies,4,10 we consistently employed orthogonal basis functions at the continuum level. In this article,
+we have chosen to relax this orthogonality constraint to facilitate a clearer exposition. Furthermore, when our focus shifts
+to the selection of elements over Gauss-points, the previous approach is not straightforwardly applicable.
+The problem addressed by the ECM is formulated not in terms of the function a ∶ (x, 𝝁) → (a1 , … , an ), but relative
+to a 𝝁-independent basis function, which is discretely known at the Gauss points:
+u ∶ Ω → R𝓁
+∶ x → (u1 , u2 , … , u𝓁 ) .
+
+(A2)
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+Given the assumption of L2 (Ω) orthogonality on these functions, we can express:
+∫Ω
+
+ui uj dΩ = 𝛿ij
+
+for i, j = 1, 2, … , 𝓁.
+
+(A3)
+
+This assumption leads to the Gauss integration rule:
+
+∫Ω
+
+ui uj dΩ =
+
+Nel
+∑
+e=1
+
+∫Ωe
+
+Nel r
+∑
+∑
+ui (x)uj (x)dΩ =
+ui (x)uj (x)Wge ;
+e
+
+(A4)
+
+e=1 g=1
+
+which can be compactly written as:
+̃ T diag(W)U
+̃ = I.
+U
+
+(A5)
+
+̃ is a matrix containing the discrete representation at the Gauss points of basis functions which in the continuum
+Here, U
+comply with L2 (Ω) orthogonality. Moreover, the operator diag(⋅) constructs a matrix with its argument’s elements on the
+diagonal and zeroes elsewhere. Thus, asserting orthogonality on the basis functions leads to an orthogonality condition
+on the matrix representing the basis function discretely at the Gauss points, not in the Euclidean sense, but according to
+a diag(W)-norm.
+Since the ECM algorithm necessitates input in the form of an orthogonal matrix within the standard Euclidean inner
+product, a method initially adopted in our prior works involved the following steps to generate an orthogonal matrix that
+also considers the basis functions’ inner product (this is called the weighted SVD):
+1. Weighted matrix construction
+From the function samples matrix A, compute a weighted matrix A as
+√
+A ∶= diag( W)A.
+
+(A6)
+
+2. Truncated SVD
+Compute the truncated SVD of the weighted matrix as
+(U, 𝚺, V) ← SVD(A, 𝜖SVD ).
+
+(A7)
+
+3. Matrix preparation for ECM
+Matrix U can safely be passed to the ECM algorithm as presented in Reference 10, since it complies with the
+standard Euclidean inner product, and moreover it complies that
+√
+T
+̃ T WU,
+̃
+U diag( W)U = I = U
+
+(A8)
+
+√
+̃ ∶= diag( W)−1 U.
+where U
+For meshes with similarly sized elements, the decision to enforce or skip the L2 (Ω) orthogonality will yield comparable
+reduced meshes. However, imposing the L2 (Ω) constraint on a mesh with varying element sizes will prioritize larger
+elements.
+For users intending to implement the L2 (Ω) orthogonality,
+modifications to Algorithm 1 are in order. Specifically, the
+√
+T
+objective function needs to be redefined as b = U W, and adjustments to the weight computations should be made
+accordingly. Our repository https://github.com/Rbravo555/localECM accommodates both strategies.
+
+10970207, 2024, 24, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7590 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [15/04/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+
+BRAVO et al.
+
+32 of 32
+
+

@@ -1,0 +1,132 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb,booktabs,graphicx}
+\usepackage[margin=1in]{geometry}
+\title{LS-RBF Dataset Selection with Parameter-Mesh Jacobian Checks}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section*{Goal}
+Improve the LS-based primary-mode selection for PROM-RBF with $n_p=3$ by adding geometric diagnostics:
+\begin{itemize}
+\item Jacobians in a meshed parameter domain,
+\item Jacobians of the mapped (deformed) reduced domain,
+\item macro deformation admissibility through $\det(F)$.
+\end{itemize}
+
+\section*{Example Command}
+\begin{verbatim}
+python3 stage7a_prepare_rbf_dataset_ls.py \
+  --n-primary 3 \
+  --out-dir stage_7_ann_data_ls \
+  --plot-max-samples 110000 \
+  --jacobian-mesh-type delaunay \
+  --jacobian-mesh-max-points 6000 \
+  --jacobian-mesh-seed 42
+\end{verbatim}
+
+\section*{1. LS Primary-Mode Construction}
+Given fluctuation snapshots $W\in\mathbb{R}^{N\times n_f}$ and POD basis $\Phi\in\mathbb{R}^{n_f\times r}$:
+\begin{equation}
+Q = W\Phi.
+\end{equation}
+For $n_p=3$, targets are chosen as
+\begin{equation}
+\mu = [E_{xx},E_{yy},\gamma_{xy}]\in\mathbb{R}^{N\times 3}.
+\end{equation}
+Then LS solves
+\begin{equation}
+C = \arg\min_C \|QC-\mu\|_F,
+\end{equation}
+and builds candidate vectors
+\begin{equation}
+\Phi_c = \Phi C.
+\end{equation}
+The final LS-primary basis is the orthonormalized subspace
+\begin{equation}
+\Phi_p^{LS} = \mathrm{orth}(\Phi_c),
+\end{equation}
+with secondary basis from the orthogonal complement in span$(\Phi)$.
+
+\section*{2. Deformation-Factor Matrix (Parameter Scaling)}
+To reduce anisotropy in parameter coordinates, define
+\begin{equation}
+\xi = D_\mu(\mu-\mu_c),
+\qquad
+D_\mu=\mathrm{diag}\left(\frac{2}{\Delta\mu_1},\frac{2}{\Delta\mu_2},\frac{2}{\Delta\mu_3}\right),
+\end{equation}
+where $\mu_c=(\mu_{\max}+\mu_{\min})/2$ and $\Delta\mu=\mu_{\max}-\mu_{\min}$.
+
+Interpretation:
+\begin{itemize}
+\item $D_\mu$ is a scaling/preconditioning matrix,
+\item it maps the box-like parameter domain to an approximately isotropic cube,
+\item it improves numerical robustness for meshing and local Jacobian estimates.
+\end{itemize}
+
+\section*{3. Parameter Mesh and Local Jacobians}
+Build a tetrahedral mesh (Delaunay) in the scaled parameter cloud $\xi$.
+For each tetrahedron $e$ with 4 node pairs $(\mu_i,q_i^{LS})$:
+\begin{equation}
+M_e = [\mu_1-\mu_0\;\mu_2-\mu_0\;\mu_3-\mu_0],
+\qquad
+Q_e = [q_1-q_0\;q_2-q_0\;q_3-q_0].
+\end{equation}
+Local affine map:
+\begin{equation}
+q^{LS} \approx A_e\mu+b_e,
+\qquad
+A_e = Q_eM_e^{-1}.
+\end{equation}
+Diagnostics:
+\begin{itemize}
+\item $\det(M_e)$: parameter-cell Jacobian (degeneracy check),
+\item $\det(A_e)=\det(\partial q^{LS}/\partial\mu)$: local orientation/stretch from parameter domain to LS domain.
+\end{itemize}
+Negative $\det(A_e)$ indicates local orientation inversion of the mapping.
+
+\section*{4. Deformed-Domain Jacobian Check in Mechanics}
+For each applied Green-Lagrange strain $E$, compute
+\begin{equation}
+C = 2E + I, \qquad F = C^{1/2}, \qquad J_{phys}=\det(F).
+\end{equation}
+Admissibility requires $J_{phys}>0$. If $J_{phys}\le 0$, deformation is non-physical (inversion).
+
+\section*{5. Practical Benefit for RBF with $n_p=3$}
+These checks help identify whether the reduced coordinate map is locally well-oriented and non-degenerate,
+which is often a hidden cause of instability or poor regression quality in compact-center RBFs.
+
+\section*{6. Files Produced by the Implementation}
+The updated stage saves:
+\begin{itemize}
+\item parameter mesh nodes and tetrahedra,
+\item Jacobian arrays ($\det(J_\mu)$, $\det(\partial q^{LS}/\partial\mu)$),
+\item macro $\det(F)$ values,
+\item histogram plots,
+\item text and \texttt{.tex} summaries.
+\end{itemize}
+
+\section*{7. Figures}
+\begin{figure}[h!]
+\centering
+\includegraphics[width=0.48\textwidth]{stage_7_ann_data_ls/domain_mu_targets_3d.png}
+\includegraphics[width=0.48\textwidth]{stage_7_ann_data_ls/domain_qls_first3_3d.png}
+\caption{Point clouds: target parameter domain and LS-primary domain.}
+\end{figure}
+
+\begin{figure}[h!]
+\centering
+\includegraphics[width=0.48\textwidth]{stage_7_ann_data_ls/parameter_mesh_mu_delaunay_edges_3d.png}
+\includegraphics[width=0.48\textwidth]{stage_7_ann_data_ls/parameter_mesh_q_ls_delaunay_edges_3d.png}
+\caption{Delaunay mesh edges in parameter domain and mapped LS-primary domain.}
+\end{figure}
+
+\begin{figure}[h!]
+\centering
+\includegraphics[width=0.70\textwidth]{stage_7_ann_data_ls/jacobian_histograms_ls_rbf.png}
+\caption{Jacobians histogram diagnostics.}
+\end{figure}
+
+\end{document}

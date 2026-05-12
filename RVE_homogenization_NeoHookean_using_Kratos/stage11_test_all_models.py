@@ -4,13 +4,15 @@
 """
 Stage 11: unified benchmark on one trajectory with selectable solvers.
 Default compares all available families:
-  KRATOS, FOM, PROM, HPROM, PROM-DL, PROM-ANN, HPROM-ANN, PROM-RBF, HPROM-RBF
+  KRATOS, FOM, PROM, HPROM, PROM-DL, HPROM-DL, PROM-ANN, HPROM-ANN, PROM-RBF, HPROM-RBF
 """
 
 import os
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+from plot_style_utils import apply_latex_plot_style
+apply_latex_plot_style()
 
 from stage6_test_hprom import generate_safe_test_path
 from stage4_test_rve import plot_path_in_domain
@@ -25,6 +27,7 @@ from kratos_solver_rve import RunKratosBatchSimulation
 from prom_solver_rve import RunPromBatchSimulation
 from hprom_solver_rve import RunHpromBatchSimulation
 from prom_dl_solver_rve import LoadPromDlModel, RunPromDlBatchSimulation
+from hprom_dl_solver_rve import LoadHpromDlModel, RunHpromDlBatchSimulation
 from prom_ann_solver_rve import LoadPromAnnModel, RunPromAnnBatchSimulation
 from hprom_ann_solver_rve import LoadHpromAnnModel, RunHpromAnnBatchSimulation
 from prom_rbf_solver_rve import LoadPromRbfModel, RunPromRbfBatchSimulation
@@ -37,6 +40,7 @@ AVAILABLE_METHODS = [
     "PROM",
     "HPROM",
     "PROM-DL",
+    "HPROM-DL",
     "PROM-ANN",
     "HPROM-ANN",
     "PROM-RBF",
@@ -67,7 +71,7 @@ def _load_hrom_mesh_base_from_ecm_dir(hprom_dir):
     ecm_file = os.path.join(hprom_dir, "ecm_weights_all.npz")
     if not os.path.exists(ecm_file):
         return None
-    data = np.load(ecm_file)
+    data = np.load(ecm_file, allow_pickle=True)
     if "hrom_mesh_base" not in data.files:
         return None
     return str(np.ravel(data["hrom_mesh_base"])[0])
@@ -134,6 +138,7 @@ def _plot_stage11(all_eps, all_sig, out_dir, timings, reference_method):
         "PROM": ("--", 1.5, "r"),
         "HPROM": (":", 1.8, "b"),
         "PROM-DL": ("-", 1.4, "y"),
+        "HPROM-DL": ("-", 1.6, "olive"),
         "PROM-ANN": ("-", 1.6, "tab:orange"),
         "HPROM-ANN": ("-", 1.6, "tab:brown"),
         "PROM-RBF": ("-.", 1.6, "g"),
@@ -220,6 +225,7 @@ def _plot_stage11(all_eps, all_sig, out_dir, timings, reference_method):
             "PROM": "red",
             "HPROM": "blue",
             "PROM-DL": "gold",
+            "HPROM-DL": "olive",
             "PROM-ANN": "tab:orange",
             "HPROM-ANN": "tab:brown",
             "PROM-RBF": "green",
@@ -266,20 +272,32 @@ def run_stage11(
     run_prom=False,
     run_hprom=False,
     run_prom_dl=False,
+    run_hprom_dl=False,
     run_prom_ann=False,
     run_hprom_ann=False,
     run_prom_rbf=False,
     run_hprom_rbf=False,
     mesh_base="rve_geometry",
-    use_hrom_mesh=False,
+    use_hrom_mesh=True,
+    require_hrom_mesh=False,
     hprom_mesh=None,
+    hprom_dl_mesh=None,
     hprom_ann_mesh=None,
     hprom_rbf_mesh=None,
+    hprom_linear_dir="stage_5_hprom_data",
+    pod_dl_data_dir="stage_7_pod_dl_data",
+    hprom_dl_dir="stage_9_hprom_pod_dl_data",
+    ann_data_dir="stage_7_ann_data",
+    hprom_ann_dir="stage_9_hprom_ann_data",
+    rbf_data_dir="stage_7_rbf_data",
+    hprom_rbf_dir="stage_9_hprom_rbf_data",
     hprom_homogenization_method="ecm_weighted",
     fom_homogenization_method="ecm_weighted_full",
     step_reference_amplitude=None,
     use_bundle_reference_amplitude=False,
     strict=False,
+    prom_dl_linear_solver_mode="auto",
+    prom_dl_lstsq_rcond=None,
 ):
     out_dir = "stage_11_all_models_results"
     os.makedirs(out_dir, exist_ok=True)
@@ -346,29 +364,76 @@ def run_stage11(
     print(f"  Step-control reference amplitude (used): {reference_amplitude}")
     print(f"  Segments: {seg_steps}")
 
+    if require_hrom_mesh and not use_hrom_mesh:
+        raise RuntimeError("--require-hrom-mesh cannot be used together with --no-use-hrom-mesh.")
+
     mesh_hprom = str(hprom_mesh) if hprom_mesh else str(mesh_base)
+    mesh_hprom_dl = str(hprom_dl_mesh) if hprom_dl_mesh else str(mesh_base)
     mesh_hprom_ann = str(hprom_ann_mesh) if hprom_ann_mesh else str(mesh_base)
     mesh_hprom_rbf = str(hprom_rbf_mesh) if hprom_rbf_mesh else str(mesh_base)
+    got_hrom_hprom = bool(hprom_mesh)
+    got_hrom_hprom_dl = bool(hprom_dl_mesh)
+    got_hrom_hprom_ann = bool(hprom_ann_mesh)
+    got_hrom_hprom_rbf = bool(hprom_rbf_mesh)
     if use_hrom_mesh:
         if hprom_mesh is None:
-            auto_mesh = _load_hrom_mesh_base_from_ecm_dir("stage_5_hprom_data")
+            auto_mesh = _load_hrom_mesh_base_from_ecm_dir(str(hprom_linear_dir))
             if auto_mesh:
                 mesh_hprom = auto_mesh
+                got_hrom_hprom = True
+        if hprom_dl_mesh is None:
+            auto_mesh = _load_hrom_mesh_base_from_ecm_dir(str(hprom_dl_dir))
+            if auto_mesh:
+                mesh_hprom_dl = auto_mesh
+                got_hrom_hprom_dl = True
         if hprom_ann_mesh is None:
-            auto_mesh = _load_hrom_mesh_base_from_ecm_dir("stage_9_hprom_ann_data")
+            auto_mesh = _load_hrom_mesh_base_from_ecm_dir(str(hprom_ann_dir))
             if auto_mesh:
                 mesh_hprom_ann = auto_mesh
+                got_hrom_hprom_ann = True
         if hprom_rbf_mesh is None:
-            auto_mesh = _load_hrom_mesh_base_from_ecm_dir("stage_9_hprom_rbf_data")
+            auto_mesh = _load_hrom_mesh_base_from_ecm_dir(str(hprom_rbf_dir))
             if auto_mesh:
                 mesh_hprom_rbf = auto_mesh
+                got_hrom_hprom_rbf = True
+
+    if require_hrom_mesh:
+        if "HPROM" in requested_methods and not got_hrom_hprom:
+            raise RuntimeError(
+                f"[Stage11] Missing HROM mesh for HPROM. Provide --hprom-mesh or set hrom_mesh_base in {hprom_linear_dir}/ecm_weights_all.npz."
+            )
+        if "HPROM-DL" in requested_methods and not got_hrom_hprom_dl:
+            raise RuntimeError(
+                f"[Stage11] Missing HROM mesh for HPROM-DL. Provide --hprom-dl-mesh or set hrom_mesh_base in {hprom_dl_dir}/ecm_weights_all.npz."
+            )
+        if "HPROM-ANN" in requested_methods and not got_hrom_hprom_ann:
+            raise RuntimeError(
+                f"[Stage11] Missing HROM mesh for HPROM-ANN. Provide --hprom-ann-mesh or set hrom_mesh_base in {hprom_ann_dir}/ecm_weights_all.npz."
+            )
+        if "HPROM-RBF" in requested_methods and not got_hrom_hprom_rbf:
+            raise RuntimeError(
+                f"[Stage11] Missing HROM mesh for HPROM-RBF. Provide --hprom-rbf-mesh or set hrom_mesh_base in {hprom_rbf_dir}/ecm_weights_all.npz."
+            )
 
     print(f"  Base mesh (KRATOS/FOM/PROM): {mesh_base}")
     print(f"  HPROM mesh:                  {mesh_hprom}")
+    print(f"  HPROM-DL mesh:               {mesh_hprom_dl}")
     print(f"  HPROM-ANN mesh:              {mesh_hprom_ann}")
     print(f"  HPROM-RBF mesh:              {mesh_hprom_rbf}")
+    print(f"  Require HROM mesh:           {bool(require_hrom_mesh)}")
+    print(f"  HPROM linear dir:            {hprom_linear_dir}")
+    print(f"  HPROM-DL dir:                {hprom_dl_dir}")
+    print(f"  ANN data dir:                {ann_data_dir}")
+    print(f"  HPROM-ANN dir:               {hprom_ann_dir}")
+    print(f"  RBF data dir:                {rbf_data_dir}")
+    print(f"  HPROM-RBF dir:               {hprom_rbf_dir}")
     print(f"  HPROM homogenization method: {hprom_homogenization_method}")
     print(f"  FOM homogenization method:   {fom_homogenization_method}")
+    print(
+        "  PROM-DL linear solve:        "
+        f"mode={str(prom_dl_linear_solver_mode).strip().lower()}, "
+        f"lstsq_rcond={'default' if prom_dl_lstsq_rcond is None else f'{float(prom_dl_lstsq_rcond):.3e}'}"
+    )
 
     fom_hom_mode = str(fom_homogenization_method).strip().lower()
     if fom_hom_mode != "ecm_weighted_full":
@@ -380,10 +445,10 @@ def run_stage11(
     w_fom_sig = None
     a0_ref = None
     if fom_hom_mode == "ecm_weighted_full":
-        ecm_path = os.path.join("stage_5_hprom_data", "ecm_weights_all.npz")
+        ecm_path = os.path.join(str(hprom_linear_dir), "ecm_weights_all.npz")
         if not os.path.exists(ecm_path):
             raise FileNotFoundError(
-                "FOM ecm_weighted_full mode requires stage_5_hprom_data/ecm_weights_all.npz"
+                f"FOM ecm_weighted_full mode requires {hprom_linear_dir}/ecm_weights_all.npz"
             )
         ecm_meta = np.load(ecm_path, allow_pickle=True)
         if "n_elem" not in ecm_meta.files:
@@ -433,6 +498,10 @@ def run_stage11(
             os.path.join(out_dir, "prom_dl_strain.npy"),
             os.path.join(out_dir, "prom_dl_stress.npy"),
         ),
+        "HPROM-DL": (
+            os.path.join(out_dir, "hprom_dl_strain.npy"),
+            os.path.join(out_dir, "hprom_dl_stress.npy"),
+        ),
         "PROM-ANN": (
             os.path.join(out_dir, "prom_ann_strain.npy"),
             os.path.join(out_dir, "prom_ann_stress.npy"),
@@ -457,6 +526,7 @@ def run_stage11(
         "PROM": bool(run_prom),
         "HPROM": bool(run_hprom),
         "PROM-DL": bool(run_prom_dl),
+        "HPROM-DL": bool(run_hprom_dl),
         "PROM-ANN": bool(run_prom_ann),
         "HPROM-ANN": bool(run_hprom_ann),
         "PROM-RBF": bool(run_prom_rbf),
@@ -553,7 +623,7 @@ def run_stage11(
         def _run_hprom():
             print("\n[Stage 11] Running HPROM...")
             phi_f, free_dofs, dir_dofs, eq_map, Xc, Yc = _load_linear_rom_model("stage_2_pod_rve")
-            ecm_data = _load_linear_hprom_data("stage_5_hprom_data")
+            ecm_data = _load_linear_hprom_data(str(hprom_linear_dir))
             t0 = time.perf_counter()
             eps, sig = RunHpromBatchSimulation(
                 _get_parameters(mesh_hprom),
@@ -581,7 +651,7 @@ def run_stage11(
             print("\n[Stage 11] Running PROM-DL...")
             phi_q, free_dofs, _, _, pod_dl_model, device, _ = LoadPromDlModel(
                 basis_dir="stage_2_pod_rve",
-                pod_dl_data_dir="stage_7_pod_dl_data",
+                pod_dl_data_dir=str(pod_dl_data_dir),
             )
             t0 = time.perf_counter()
             eps, sig = RunPromDlBatchSimulation(
@@ -591,19 +661,62 @@ def run_stage11(
                 pod_dl_model,
                 device,
                 strain_path,
+                out_dir=out_dir,
                 reference_amplitude=reference_amplitude,
                 reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
+                linear_solver_mode=str(prom_dl_linear_solver_mode),
+                lstsq_rcond=prom_dl_lstsq_rcond,
             )
             return np.asarray(eps, dtype=float), np.asarray(sig, dtype=float), time.perf_counter() - t0
 
         _run_or_load("PROM-DL", _run_prom_dl)
 
+    if "HPROM-DL" in requested_methods:
+        def _run_hprom_dl():
+            print("\n[Stage 11] Running HPROM-DL...")
+            (
+                phi_q,
+                free_dofs,
+                _dir_dofs,
+                eq_map_full,
+                Xc,
+                Yc,
+                pod_dl_model,
+                device,
+                _checkpoint,
+                ecm_data,
+            ) = LoadHpromDlModel(
+                basis_dir="stage_2_pod_rve",
+                pod_dl_data_dir=str(pod_dl_data_dir),
+                hprom_dl_dir=str(hprom_dl_dir),
+            )
+            t0 = time.perf_counter()
+            eps, sig = RunHpromDlBatchSimulation(
+                _get_parameters(mesh_hprom_dl),
+                phi_q,
+                free_dofs,
+                pod_dl_model,
+                device,
+                ecm_data,
+                out_dir=out_dir,
+                strain_path=strain_path,
+                trajectory_index=None,
+                reference_amplitude=reference_amplitude,
+                reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
+                eq_map_full=eq_map_full,
+                Xc=Xc,
+                Yc=Yc,
+            )
+            return np.asarray(eps, dtype=float), np.asarray(sig, dtype=float), time.perf_counter() - t0
+
+        _run_or_load("HPROM-DL", _run_hprom_dl)
+
     if "PROM-ANN" in requested_methods:
         def _run_prom_ann():
             print("\n[Stage 11] Running PROM-ANN...")
-            phi_p, phi_s, free_dofs, _, _, ann_model, device, include_macro = LoadPromAnnModel(
+            phi_p, phi_s, free_dofs, _, _, ann_model, device, _include_macro = LoadPromAnnModel(
                 basis_dir="stage_2_pod_rve",
-                ann_data_dir="stage_7_ann_data",
+                ann_data_dir=str(ann_data_dir),
             )
             t0 = time.perf_counter()
             eps, sig = RunPromAnnBatchSimulation(
@@ -614,7 +727,7 @@ def run_stage11(
                 ann_model,
                 device,
                 strain_path,
-                include_macro_strain_input=include_macro,
+                out_dir=out_dir,
                 reference_amplitude=reference_amplitude,
                 reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
             )
@@ -636,11 +749,11 @@ def run_stage11(
                 ann_model,
                 device,
                 ecm_data,
-                include_macro,
+                _include_macro,
             ) = LoadHpromAnnModel(
                 basis_dir="stage_2_pod_rve",
-                ann_data_dir="stage_7_ann_data",
-                hprom_ann_dir="stage_9_hprom_ann_data",
+                ann_data_dir=str(ann_data_dir),
+                hprom_ann_dir=str(hprom_ann_dir),
             )
             t0 = time.perf_counter()
             eps, sig = RunHpromAnnBatchSimulation(
@@ -654,7 +767,6 @@ def run_stage11(
                 out_dir=out_dir,
                 strain_path=strain_path,
                 trajectory_index=None,
-                include_macro_strain_input=include_macro,
                 reference_amplitude=reference_amplitude,
                 reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
                 eq_map_full=eq_map_full,
@@ -668,9 +780,9 @@ def run_stage11(
     if "PROM-RBF" in requested_methods:
         def _run_prom_rbf():
             print("\n[Stage 11] Running PROM-RBF...")
-            phi_p, phi_s, free_dofs, _, _, rbf_model, include_macro = LoadPromRbfModel(
+            phi_p, phi_s, free_dofs, _, _, rbf_model, _include_macro = LoadPromRbfModel(
                 basis_dir="stage_2_pod_rve",
-                rbf_data_dir="stage_7_rbf_data",
+                rbf_data_dir=str(rbf_data_dir),
             )
             t0 = time.perf_counter()
             eps, sig = RunPromRbfBatchSimulation(
@@ -681,7 +793,6 @@ def run_stage11(
                 rbf_model,
                 strain_path,
                 out_dir=out_dir,
-                include_macro_strain_input=include_macro,
                 reference_amplitude=reference_amplitude,
                 reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
             )
@@ -702,11 +813,11 @@ def run_stage11(
                 Yc,
                 rbf_model,
                 ecm_data,
-                include_macro,
+                _include_macro,
             ) = LoadHpromRbfModel(
                 basis_dir="stage_2_pod_rve",
-                rbf_data_dir="stage_7_rbf_data",
-                hprom_rbf_dir="stage_9_hprom_rbf_data",
+                rbf_data_dir=str(rbf_data_dir),
+                hprom_rbf_dir=str(hprom_rbf_dir),
             )
             t0 = time.perf_counter()
             eps, sig = RunHpromRbfBatchSimulation(
@@ -719,7 +830,6 @@ def run_stage11(
                 out_dir=out_dir,
                 strain_path=strain_path,
                 trajectory_index=None,
-                include_macro_strain_input=include_macro,
                 reference_amplitude=reference_amplitude,
                 reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
                 eq_map_full=eq_map_full,
@@ -808,11 +918,16 @@ if __name__ == "__main__":
     p.add_argument("--run-prom", action="store_true", help="Force recomputation of PROM.")
     p.add_argument("--run-hprom", action="store_true", help="Force recomputation of HPROM.")
     p.add_argument("--run-prom-dl", action="store_true", help="Force recomputation of PROM-DL.")
+    p.add_argument("--run-hprom-dl", action="store_true", help="Force recomputation of HPROM-DL.")
     p.add_argument("--run-prom-ann", action="store_true", help="Force recomputation of PROM-ANN.")
     p.add_argument("--run-hprom-ann", action="store_true", help="Force recomputation of HPROM-ANN.")
     p.add_argument("--run-prom-rbf", action="store_true", help="Force recomputation of PROM-RBF.")
     p.add_argument("--run-hprom-rbf", action="store_true", help="Force recomputation of HPROM-RBF.")
-    p.add_argument("--mesh-base", default="rve_geometry", help="Base mesh for KRATOS/FOM/PROM/PROM-ANN/PROM-RBF.")
+    p.add_argument(
+        "--mesh-base",
+        default="rve_geometry",
+        help="Base mesh for KRATOS/FOM/PROM/PROM-DL/PROM-ANN/PROM-RBF.",
+    )
     p.add_argument(
         "--hprom-homogenization-method",
         default="ecm_weighted",
@@ -828,12 +943,73 @@ if __name__ == "__main__":
     p.add_argument(
         "--use-hrom-mesh",
         action="store_true",
-        help="Use HROM reduced meshes for HPROM variants when available in ECM files.",
+        help="Use HROM reduced meshes for HPROM variants when available in ECM files (default: enabled).",
+    )
+    p.add_argument(
+        "--no-use-hrom-mesh",
+        dest="use_hrom_mesh",
+        action="store_false",
+        help="Disable automatic HROM mesh usage and force base/override meshes.",
     )
     p.add_argument("--hprom-mesh", default=None, help="Override mesh base for HPROM.")
+    p.add_argument("--hprom-dl-mesh", default=None, help="Override mesh base for HPROM-DL.")
     p.add_argument("--hprom-ann-mesh", default=None, help="Override mesh base for HPROM-ANN.")
     p.add_argument("--hprom-rbf-mesh", default=None, help="Override mesh base for HPROM-RBF.")
+    p.add_argument(
+        "--hprom-linear-dir",
+        default="stage_5_hprom_data",
+        help="Directory with linear HPROM ECM data (ecm_weights_all.npz).",
+    )
+    p.add_argument(
+        "--pod-dl-data-dir",
+        default="stage_7_pod_dl_data",
+        help="POD-DL manifold data directory.",
+    )
+    p.add_argument(
+        "--hprom-dl-dir",
+        default="stage_9_hprom_pod_dl_data",
+        help="Directory with HPROM-DL ECM data (ecm_weights_all.npz).",
+    )
+    p.add_argument(
+        "--ann-data-dir",
+        default="stage_7_ann_data",
+        help="ANN manifold data directory (use stage_7_ann_data_ls for ANN-LS).",
+    )
+    p.add_argument(
+        "--hprom-ann-dir",
+        default="stage_9_hprom_ann_data",
+        help="Directory with HPROM-ANN ECM data (use stage_9_hprom_ann_data_ls for ANN-LS).",
+    )
+    p.add_argument(
+        "--rbf-data-dir",
+        default="stage_7_rbf_data",
+        help="RBF manifold data directory.",
+    )
+    p.add_argument(
+        "--hprom-rbf-dir",
+        default="stage_9_hprom_rbf_data",
+        help="Directory with HPROM-RBF ECM data.",
+    )
+    p.add_argument(
+        "--require-hrom-mesh",
+        action="store_true",
+        help="Fail if any selected HPROM variant has no HROM mesh available from override or ECM metadata.",
+    )
+    p.add_argument(
+        "--prom-dl-linear-solver-mode",
+        type=str,
+        default="auto",
+        choices=["auto", "solve", "lstsq"],
+        help="Reduced linear solver mode for PROM-DL in Stage 11.",
+    )
+    p.add_argument(
+        "--prom-dl-lstsq-rcond",
+        type=float,
+        default=None,
+        help="Optional rcond for PROM-DL least-squares mode in Stage 11.",
+    )
     p.add_argument("--strict", action="store_true", help="Fail fast if any selected solver errors.")
+    p.set_defaults(use_hrom_mesh=True)
     args = p.parse_args()
 
     if args.run_all:
@@ -847,6 +1023,8 @@ if __name__ == "__main__":
             args.run_hprom = True
         if "PROM-DL" in args.methods:
             args.run_prom_dl = True
+        if "HPROM-DL" in args.methods:
+            args.run_hprom_dl = True
         if "PROM-ANN" in args.methods:
             args.run_prom_ann = True
         if "HPROM-ANN" in args.methods:
@@ -863,16 +1041,28 @@ if __name__ == "__main__":
         run_prom=args.run_prom,
         run_hprom=args.run_hprom,
         run_prom_dl=args.run_prom_dl,
+        run_hprom_dl=args.run_hprom_dl,
         run_prom_ann=args.run_prom_ann,
         run_hprom_ann=args.run_hprom_ann,
         run_prom_rbf=args.run_prom_rbf,
         run_hprom_rbf=args.run_hprom_rbf,
         mesh_base=args.mesh_base,
         use_hrom_mesh=args.use_hrom_mesh,
+        require_hrom_mesh=args.require_hrom_mesh,
         hprom_mesh=args.hprom_mesh,
+        hprom_dl_mesh=args.hprom_dl_mesh,
         hprom_ann_mesh=args.hprom_ann_mesh,
         hprom_rbf_mesh=args.hprom_rbf_mesh,
+        hprom_linear_dir=args.hprom_linear_dir,
+        pod_dl_data_dir=args.pod_dl_data_dir,
+        hprom_dl_dir=args.hprom_dl_dir,
+        ann_data_dir=args.ann_data_dir,
+        hprom_ann_dir=args.hprom_ann_dir,
+        rbf_data_dir=args.rbf_data_dir,
+        hprom_rbf_dir=args.hprom_rbf_dir,
         hprom_homogenization_method=args.hprom_homogenization_method,
         fom_homogenization_method=args.fom_homogenization_method,
         strict=args.strict,
+        prom_dl_linear_solver_mode=args.prom_dl_linear_solver_mode,
+        prom_dl_lstsq_rcond=args.prom_dl_lstsq_rcond,
     )

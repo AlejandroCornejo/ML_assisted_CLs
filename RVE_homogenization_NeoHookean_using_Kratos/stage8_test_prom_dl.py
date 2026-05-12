@@ -6,6 +6,8 @@ import sys
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+from plot_style_utils import apply_latex_plot_style
+apply_latex_plot_style()
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 # Add Kratos path
@@ -26,6 +28,19 @@ from hprom_solver_rve import RunHpromBatchSimulation
 from prom_dl_solver_rve import LoadPromDlModel, RunPromDlBatchSimulation
 
 
+def _load_hrom_mesh_base_from_ecm_file(ecm_file):
+    if not os.path.exists(ecm_file):
+        return None
+    try:
+        ecm = np.load(ecm_file, allow_pickle=True)
+    except Exception:
+        return None
+    if "hrom_mesh_base" not in ecm:
+        return None
+    try:
+        return str(np.ravel(ecm["hrom_mesh_base"])[0])
+    except Exception:
+        return None
 
 
 def _load_rom_model(model_dir="stage_2_pod_rve"):
@@ -79,6 +94,7 @@ def _run_or_load_hprom(
     out_dir,
     emax,
     reference_steps,
+    ecm_file,
     force_run=False,
     use_old_stiffness_in_first_iteration=True,
 ):
@@ -88,7 +104,7 @@ def _run_or_load_hprom(
     if force_run or not (os.path.exists(hprom_sig_file) and os.path.exists(hprom_eps_file)):
         print("  [Stage 8-DL] Running local HPROM baseline...")
         phi_f, free_dofs, dir_dofs, eq_map, Xc, Yc = _load_rom_model("stage_2_pod_rve")
-        ecm = np.load(os.path.join("stage_5_hprom_data", "ecm_weights_all.npz"))
+        ecm = np.load(ecm_file, allow_pickle=True)
         ecm_data = {k: ecm[k] for k in ecm.files}
 
         eps, sig = RunHpromBatchSimulation(
@@ -127,6 +143,7 @@ def run_stage8_dl(
     plot_only=False,
     use_old_stiffness_in_first_iteration=True,
     pod_dl_data_dir="stage_7_pod_dl_data",
+    hprom_data_dir="stage_5_hprom_data",
     out_dir="stage_8_prom_dl_results",
     use_stage6_waypoints=True,
     relnorm_cutoff=1e-5,
@@ -137,6 +154,8 @@ def run_stage8_dl(
     min_rel_drop_stop=1.0e-2,
     stagnation_relnorm_gate=1.0e-4,
     max_dz_norm=0.5,
+    linear_solver_mode="auto",
+    lstsq_rcond=None,
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -150,9 +169,9 @@ def run_stage8_dl(
         data = np.load(bundle_path, allow_pickle=True)
         rel6 = list(data["relative_boundary"])
         if "emax" in data:
-            emax = float(data["emax"])
+            emax = float(np.ravel(data["emax"])[0])
         else:
-            emax = float(data["reference_amplitude"])
+            emax = float(np.ravel(data["reference_amplitude"])[0])
         if "domain_type" in data:
             domain_type = str(data["domain_type"][0])
 
@@ -180,6 +199,7 @@ def run_stage8_dl(
     print(f"  Reference increment level: {REFERENCE_STEPS_FOR_UNIT_AMPLITUDE}")
     print(f"  Segments: {seg_steps}")
     print(f"  POD-DL data dir: {pod_dl_data_dir}")
+    print(f"  HPROM data dir: {hprom_data_dir}")
     print(
         "  PROM-DL stop params: "
         f"max_its={int(max_its)}, relnorm_cutoff={float(relnorm_cutoff):.3e}, "
@@ -190,15 +210,30 @@ def run_stage8_dl(
         f"stagnation_relnorm_gate={float(stagnation_relnorm_gate):.3e}, "
         f"max_dz_norm={float(max_dz_norm):.3e}"
     )
+    print(
+        "  PROM-DL linear solve: "
+        f"mode={str(linear_solver_mode).strip().lower()}, "
+        f"lstsq_rcond={'default' if lstsq_rcond is None else f'{float(lstsq_rcond):.3e}'}"
+    )
 
     if plot_only:
         print("[Stage 8-DL] --plot-only enabled. Skipping solves.")
         return
 
+    ecm_file = os.path.join(hprom_data_dir, "ecm_weights_all.npz")
+    mesh_fom_prom = "rve_geometry"
+    mesh_hprom = "rve_geometry"
+    auto_hrom_mesh = _load_hrom_mesh_base_from_ecm_file(ecm_file)
+    if auto_hrom_mesh:
+        mesh_hprom = str(auto_hrom_mesh)
+    print(f"  FOM/PROM mesh: {mesh_fom_prom}")
+    print(f"  HPROM mesh:    {mesh_hprom}")
+
     phi_q, free_dofs, _, _, model_dl, device, checkpoint = LoadPromDlModel(
         basis_dir="stage_2_pod_rve", pod_dl_data_dir=pod_dl_data_dir
     )
-    parameters = setup_kratos_parameters("rve_geometry")
+    parameters = setup_kratos_parameters(mesh_fom_prom)
+    parameters_hprom = setup_kratos_parameters(mesh_hprom)
 
     t0 = time.perf_counter()
     kwargs = dict(
@@ -209,7 +244,10 @@ def run_stage8_dl(
         min_rel_drop_stop=float(min_rel_drop_stop),
         stagnation_relnorm_gate=float(stagnation_relnorm_gate),
         max_dz_norm=float(max_dz_norm),
+        linear_solver_mode=str(linear_solver_mode),
     )
+    if lstsq_rcond is not None:
+        kwargs["lstsq_rcond"] = float(lstsq_rcond)
     if abs_res_cutoff is not None:
         kwargs["abs_res_cutoff"] = float(abs_res_cutoff)
     eps_pd, sig_pd = RunPromDlBatchSimulation(
@@ -219,6 +257,7 @@ def run_stage8_dl(
         model_dl,
         device,
         strain_path,
+        out_dir=out_dir,
         reference_amplitude=emax,
         reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
         use_old_stiffness_in_first_iteration=use_old_stiffness_in_first_iteration,
@@ -249,11 +288,12 @@ def run_stage8_dl(
         use_old_stiffness_in_first_iteration=use_old_stiffness_in_first_iteration,
     )
     hprom_eps, hprom_sig = _run_or_load_hprom(
-        parameters,
+        parameters_hprom,
         strain_path,
         out_dir,
         emax,
         REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
+        ecm_file,
         force_run=run_hprom,
         use_old_stiffness_in_first_iteration=use_old_stiffness_in_first_iteration,
     )
@@ -337,6 +377,12 @@ if __name__ == "__main__":
         help="Output directory for Stage 8c POD-DL results.",
     )
     p.add_argument(
+        "--hprom-data-dir",
+        type=str,
+        default="stage_5_hprom_data",
+        help="Directory with HPROM ECM file (ecm_weights_all.npz).",
+    )
+    p.add_argument(
         "--no-old-stiffness-first-it",
         action="store_true",
         help="Disable reuse of previous-step reduced stiffness in Newton iteration 0.",
@@ -379,6 +425,19 @@ if __name__ == "__main__":
         help=argparse.SUPPRESS,
     )
     p.add_argument("--max-dz-norm", type=float, default=0.5, help=argparse.SUPPRESS)
+    p.add_argument(
+        "--linear-solver-mode",
+        type=str,
+        default="auto",
+        choices=["auto", "solve", "lstsq"],
+        help="Reduced linear solver mode for PROM-POD-DL Newton updates.",
+    )
+    p.add_argument(
+        "--lstsq-rcond",
+        type=float,
+        default=None,
+        help="Optional rcond for np.linalg.lstsq when linear-solver-mode uses lstsq.",
+    )
     args = p.parse_args()
 
     run_stage8_dl(
@@ -388,6 +447,7 @@ if __name__ == "__main__":
         plot_only=args.plot_only,
         use_old_stiffness_in_first_iteration=not args.no_old_stiffness_first_it,
         pod_dl_data_dir=args.pod_dl_data_dir,
+        hprom_data_dir=args.hprom_data_dir,
         out_dir=args.out_dir,
         use_stage6_waypoints=not args.control_points_only,
         relnorm_cutoff=args.relnorm_cutoff,
@@ -398,4 +458,6 @@ if __name__ == "__main__":
         min_rel_drop_stop=args.min_rel_drop_stop,
         stagnation_relnorm_gate=args.stagnation_relnorm_gate,
         max_dz_norm=args.max_dz_norm,
+        linear_solver_mode=args.linear_solver_mode,
+        lstsq_rcond=args.lstsq_rcond,
     )
