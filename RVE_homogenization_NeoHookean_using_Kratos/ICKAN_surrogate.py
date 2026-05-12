@@ -37,8 +37,9 @@ INPUT DATASET:
 Load strain and stress from FOM trajectories (10 trajectories from stage_1_training_set_fom folder).
 Data is loaded as [history, step, component] with shape [10, steps, 3].
 """
-n_epochs = 1500
-learning_rate = 0.01
+n_epochs = 10000
+learning_rate = 0.05
+min_steps = 500  # We can set this to a fixed value if we want to truncate all trajectories to the same length (e.g., 150 steps)
 
 # Path to FOM trajectories folder (relative to script location)
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -60,7 +61,7 @@ for i in range(1, 11):  # trajectory_1 to trajectory_10
     print(f"Loaded trajectory_{i}: strain={strain_data.shape}, stress={stress_data.shape}")
 
 # Find minimum number of steps across all trajectories
-min_steps = min(t.shape[0] for t in strain_trajectories)
+# min_steps = min(t.shape[0] for t in strain_trajectories)
 print(f"\nMinimum number of steps across all trajectories: {min_steps}")
 
 # Sample each trajectory at equally spaced intervals to cover the full path
@@ -110,18 +111,18 @@ class KANStressPredictor(nn.Module):
         # EDIT:
         self.order_stretches = 1  # Number of orders (can be set to any value)
         self.k = 2  # Degree of splines
-        self.grid = 3  # Number of knots
+        self.grid = 4  # Number of knots
         # -------------------------------------
 
         self.input_size = 2 * self.order_stretches + 1  # Total inputs: 2 * reg_eigenvalues for each order + 1 * log(J)
 
         # KAN definition
         self.KAN_W = KAN.MultKAN(
-            width=[self.input_size, 1, 1], # output of size 1: W
+            width=[self.input_size, self.input_size, self.input_size-1, 1, 1], # output of size 1: W
             grid=self.grid,
             k=self.k,
-            grid_range_0=[[-1,1],[-1,1],[-1,1]],
-            grid_range=[[-1,1],[-1,1],[-1,1]]
+            grid_range_0=[[-1,1],[-1,1],[0,1]],
+            grid_range=[[-1,1],[-1,1],[0,1]]
         )
 
         # Initialize some extra parameters
@@ -167,7 +168,7 @@ class KANStressPredictor(nn.Module):
         C = 2.0 * E + torch.eye(2)
 
         J = torch.linalg.det(C) ** 0.5  # Determinant of C (Jacobian)
-        log_J = torch.log(J)  # Logarithm of J
+        log_J = torch.log(J + 1.0e-8)  # Logarithm of J
 
         square_eigenvalues = torch.linalg.eigvalsh(C)  # Eigenvalues: batch x steps x 2
         eigenvalues = torch.sqrt(square_eigenvalues)
@@ -401,6 +402,15 @@ def TRAIN_KAN(model, optimizer, train_strain_database, train_stress_database, n_
 # Initialize model, optimizer, and loss function
 model = KANStressPredictor()
 
+# Count total parameters
+total_params = sum(p.numel() for p in model.parameters())
+trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+print(f"\n{'='*50}")
+print(f"Total model parameters: {total_params:,}")
+print(f"Trainable parameters: {trainable_params:,}")
+
+
+
 print("\nNull strain KAN prediction initial CHECK: ", model.forward(torch.tensor([[[0.0, 0.0, 0.0]]]))) # for the order 1
 print("\n")
 
@@ -414,6 +424,12 @@ print("\n")
 #     # line_search_fn='strong_wolfe'
 # )
 optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+# optimizer = optim.LBFGS(
+#                     model.parameters(),
+#                     lr=learning_rate,
+#                     max_iter=20,
+#                     history_size=30
+#                 )
 
 
 # Train the KAN model using mean stress difference loss on all data
