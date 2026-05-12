@@ -128,24 +128,6 @@ def _crossval_rel_l2(x, y, centers_scaled, kernel, epsilon, ridge, splits):
     return float(np.mean(fold_errs))
 
 
-def _auto_epsilon(x_scaled, centers_scaled, rng):
-    n = x_scaled.shape[0]
-    m = centers_scaled.shape[0]
-    ns = min(5000, n)
-    xs = x_scaled[rng.choice(n, size=ns, replace=False)]
-    d2 = _pairwise_dist2(xs, centers_scaled)
-
-    # nearest center distance (exclude exact zero only if present)
-    nn = np.sqrt(np.min(d2, axis=1))
-    nn = nn[nn > 1e-14]
-    if nn.size == 0:
-        return 1.0
-    med = float(np.median(nn))
-    if med <= 1e-14 or not np.isfinite(med):
-        return 1.0
-    return 1.0 / med
-
-
 def _fit_full_dataset_weights(x_scaled, y_scaled, centers_scaled, kernel, epsilon, ridge, block_size):
     m = int(centers_scaled.shape[0])
     out_dim = int(y_scaled.shape[1])
@@ -191,11 +173,9 @@ def _run_grid_search(
     y_scaled,
     centers_scaled,
     base_kernel,
-    base_epsilon,
     base_ridge,
     grid_kernels,
     grid_eps_values,
-    grid_eps_factors,
     grid_ridges,
     grid_folds,
     grid_max_samples,
@@ -207,16 +187,13 @@ def _run_grid_search(
     kernels = [_canonical_kernel_name(k) for k in kernels]
     kernels = list(dict.fromkeys(kernels))
 
-    if grid_eps_values:
-        eps_grid = _parse_csv_floats(grid_eps_values)
-    else:
-        factors = _parse_csv_floats(grid_eps_factors)
-        if not factors:
-            factors = [1.0]
-        eps_grid = [float(base_epsilon) * float(f) for f in factors]
+    eps_grid = _parse_csv_floats(grid_eps_values)
     eps_grid = sorted({float(v) for v in eps_grid if float(v) > 0.0})
     if not eps_grid:
-        raise RuntimeError("Empty epsilon grid for RBF search.")
+        raise RuntimeError(
+            "Empty epsilon grid for RBF search. "
+            "Provide explicit absolute values via --grid-eps-values."
+        )
 
     if grid_ridges:
         ridge_grid = _parse_csv_floats(grid_ridges)
@@ -301,14 +278,12 @@ def train_rbf(
     out_dir="stage_7_rbf_data",
     max_centers=MANDATORY_N_CENTERS,
     kernel="inverse_multiquadric",
-    epsilon=None,
     ridge=1e-8,
     block_size=2048,
     seed=42,
     grid_search=True,
     grid_kernels=None,
     grid_eps_values=None,
-    grid_eps_factors="0.25,0.5,1.0,2.0,4.0",
     grid_ridges=None,
     grid_folds=3,
     grid_max_samples=0,
@@ -328,6 +303,11 @@ def train_rbf(
     n_primary = int(cfg["n_primary"] if cfg["n_primary"] is not None else in_dim)
     n_secondary = int(cfg["n_secondary"] if cfg["n_secondary"] is not None else out_dim)
     include_macro = bool(cfg["include_macro_strain_input"]) if cfg["input_dim"] is not None else (in_dim > n_primary)
+    if include_macro:
+        raise RuntimeError(
+            "Dataset was built with macro-strain manifold inputs (N(q,mu)), "
+            "which is no longer supported. Rebuild Stage 7a without macro inputs."
+        )
 
     if out_dim != n_secondary:
         raise ValueError(f"Output dimension mismatch: y has {out_dim}, expected n_secondary={n_secondary}.")
@@ -366,14 +346,9 @@ def train_rbf(
     center_indices = rng.choice(n_samples, size=m, replace=False)
     centers_scaled = x_scaled[center_indices, :].copy()
 
-    if epsilon is None or float(epsilon) <= 0.0:
-        eps_base = _auto_epsilon(x_scaled, centers_scaled, rng)
-    else:
-        eps_base = float(epsilon)
-
     kernel_sel = _canonical_kernel_name(kernel)
     ridge_sel = float(ridge)
-    eps_sel = float(eps_base)
+    eps_sel = 0.0
     grid_results = []
     search_n_samples = 0
     search_n_folds = 0
@@ -383,11 +358,9 @@ def train_rbf(
         y_scaled=y_scaled,
         centers_scaled=centers_scaled,
         base_kernel=kernel_sel,
-        base_epsilon=eps_base,
         base_ridge=ridge_sel,
         grid_kernels=grid_kernels,
         grid_eps_values=grid_eps_values,
-        grid_eps_factors=grid_eps_factors,
         grid_ridges=grid_ridges,
         grid_folds=grid_folds,
         grid_max_samples=grid_max_samples,
@@ -447,7 +420,7 @@ def train_rbf(
         "output_dim": int(out_dim),
         "n_primary": int(n_primary),
         "n_secondary": int(n_secondary),
-        "include_macro_strain_input": bool(include_macro),
+        "include_macro_strain_input": False,
         "center_indices": center_indices,
     }
 
@@ -465,12 +438,11 @@ def train_rbf(
         f.write(f"output_dim={out_dim}\n")
         f.write(f"n_primary={n_primary}\n")
         f.write(f"n_secondary={n_secondary}\n")
-        f.write(f"include_macro_strain_input={int(include_macro)}\n")
+        f.write("include_macro_strain_input=0\n")
         f.write(f"n_centers={m}\n")
         f.write(f"kernel={kernel_sel}\n")
         f.write(f"epsilon={eps_sel:.16e}\n")
         f.write(f"ridge={ridge_sel:.16e}\n")
-        f.write(f"base_epsilon={eps_base:.16e}\n")
         f.write("grid_search=1\n")
         f.write(f"grid_search_samples={search_n_samples}\n")
         f.write(f"grid_search_folds={search_n_folds}\n")
@@ -497,14 +469,17 @@ if __name__ == "__main__":
     parser.add_argument("--out-dir", type=str, default="stage_7_rbf_data", help="Output directory for trained RBF model.")
     parser.add_argument("--max-centers", type=int, default=MANDATORY_N_CENTERS, help=f"Must be {MANDATORY_N_CENTERS}.")
     parser.add_argument("--kernel", type=str, default="inverse_multiquadric", choices=["inverse_multiquadric", "imq", "gaussian", "multiquadric", "mq", "gauss"], help="RBF kernel type.")
-    parser.add_argument("--epsilon", type=float, default=0.0, help="Kernel epsilon; <=0 means auto.")
     parser.add_argument("--ridge", type=float, default=1e-8, help="Ridge regularization on normal equations.")
     parser.add_argument("--block-size", type=int, default=2048, help="Block size for streaming normal-equation assembly.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     parser.add_argument("--grid-search", action="store_true", help="Deprecated flag; grid search is always enabled.")
     parser.add_argument("--grid-kernels", type=str, default="", help="Comma-separated kernel list (e.g. 'imq,gaussian,mq').")
-    parser.add_argument("--grid-eps-values", type=str, default="", help="Comma-separated epsilon values (absolute).")
-    parser.add_argument("--grid-eps-factors", type=str, default="0.25,0.5,1.0,2.0,4.0", help="Comma-separated factors applied to base epsilon when grid-eps-values is empty.")
+    parser.add_argument(
+        "--grid-eps-values",
+        type=str,
+        default="0.01,0.05,0.1,0.25,0.5,1.0,2.0,5.0",
+        help="Comma-separated epsilon values (absolute).",
+    )
     parser.add_argument("--grid-ridges", type=str, default="", help="Comma-separated ridge values.")
     parser.add_argument("--grid-folds", type=int, default=3, help="Number of K-fold splits for grid search.")
     parser.add_argument("--grid-max-samples", type=int, default=0, help="Deprecated in policy mode; all samples are always used.")
@@ -516,14 +491,12 @@ if __name__ == "__main__":
         out_dir=args.out_dir,
         max_centers=args.max_centers,
         kernel=args.kernel,
-        epsilon=args.epsilon,
         ridge=args.ridge,
         block_size=args.block_size,
         seed=args.seed,
         grid_search=True,
         grid_kernels=args.grid_kernels if args.grid_kernels else None,
         grid_eps_values=args.grid_eps_values if args.grid_eps_values else None,
-        grid_eps_factors=args.grid_eps_factors,
         grid_ridges=args.grid_ridges if args.grid_ridges else None,
         grid_folds=args.grid_folds,
         grid_max_samples=args.grid_max_samples,

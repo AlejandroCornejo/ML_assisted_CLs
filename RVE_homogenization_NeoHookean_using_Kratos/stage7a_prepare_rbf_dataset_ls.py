@@ -451,6 +451,8 @@ def _build_primary_secondary_bases(
 
 def _plot_domain_3d(data, labels, title, out_file):
     import matplotlib.pyplot as plt
+    from plot_style_utils import apply_latex_plot_style
+    apply_latex_plot_style()
 
     fig = plt.figure(figsize=(8, 7))
     ax = fig.add_subplot(111, projection="3d")
@@ -675,6 +677,8 @@ def _build_structured_hex_mesh_from_mu(
 
 def _plot_jacobian_histograms(j_param_det, j_map_det, j_phys, out_dir):
     import matplotlib.pyplot as plt
+    from plot_style_utils import apply_latex_plot_style
+    apply_latex_plot_style()
 
     def _safe_hist(ax, data, color, title, xlabel):
         x = np.asarray(data, dtype=float)
@@ -785,6 +789,8 @@ def _plot_cell_mesh_3d(
     edge_seed=42,
 ):
     import matplotlib.pyplot as plt
+    from plot_style_utils import apply_latex_plot_style
+    apply_latex_plot_style()
     from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
     pts = np.asarray(points, dtype=float)
@@ -1295,7 +1301,6 @@ def _run_parameter_mesh_jacobian_checks(
 
 def prepare_rbf_dataset_least_squares(
     n_primary=3,
-    include_macro_strain_input=False,
     basis_dir="stage_2_pod_rve",
     train_dir="stage_1_training_set_fom",
     out_dir="stage_7_ann_data_ls",
@@ -1350,10 +1355,7 @@ def prepare_rbf_dataset_least_squares(
     qp = w_free @ phi_p
     qs = w_free @ phi_s
 
-    if include_macro_strain_input:
-        x_rbf = np.hstack([qp, e_hist])
-    else:
-        x_rbf = qp
+    x_rbf = qp
 
     n_s = int(phi_s.shape[1])
 
@@ -1392,7 +1394,7 @@ def prepare_rbf_dataset_least_squares(
         n_primary=np.array([n_p], dtype=np.int64),
         n_secondary=np.array([n_s], dtype=np.int64),
         input_dim=np.array([x_rbf.shape[1]], dtype=np.int64),
-        include_macro_strain_input=np.array([1 if include_macro_strain_input else 0], dtype=np.int64),
+        include_macro_strain_input=np.array([0], dtype=np.int64),
         selection_method=np.array(["least_squares"], dtype="U32"),
         jacobian_aware_ls=np.array([1 if bool(enforce_positive_jacobian_ls) else 0], dtype=np.int64),
     )
@@ -1405,7 +1407,7 @@ def prepare_rbf_dataset_least_squares(
         f.write(f"train_dir={train_dir}\n")
         f.write(f"n_primary={n_p}\n")
         f.write(f"n_secondary={n_s}\n")
-        f.write(f"include_macro_strain_input={int(include_macro_strain_input)}\n")
+        f.write("include_macro_strain_input=0\n")
         f.write(f"n_samples={w_free.shape[0]}\n")
         f.write(f"n_free_dofs={w_free.shape[1]}\n")
         f.write(f"ls_target_dim={mu_targets.shape[1]}\n")
@@ -1489,11 +1491,6 @@ if __name__ == "__main__":
         type=int,
         default=3,
         help="Number of primary modes to use in the LS primary basis.",
-    )
-    parser.add_argument(
-        "--with-strain-input",
-        action="store_true",
-        help="Append macro strain [Exx,Eyy,Gxy] to RBF input features.",
     )
     parser.add_argument("--basis-dir", type=str, default="stage_2_pod_rve", help="POD basis directory.")
     parser.add_argument("--train-dir", type=str, default="stage_1_training_set_fom", help="Training snapshots directory.")
@@ -1581,7 +1578,6 @@ if __name__ == "__main__":
 
     prepare_rbf_dataset_least_squares(
         n_primary=args.n_primary,
-        include_macro_strain_input=args.with_strain_input,
         basis_dir=args.basis_dir,
         train_dir=args.train_dir,
         out_dir=args.out_dir,

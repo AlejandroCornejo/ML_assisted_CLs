@@ -5,8 +5,9 @@
 Stage 9b: Compute ECM weights for HPROM-ANN.
 
 Stage-5-style RSVD + ECM workflow with configurable coupling mode:
-  - coupled: EPS starts from Z_res, SIG starts from Z_eps
+  - cascade: EPS starts from Z_res, SIG starts from Z_eps (legacy "coupled")
   - independent: RES/EPS/SIG start independently
+  - single: one ECM solve shared by RES/EPS/SIG
 """
 
 import os
@@ -138,14 +139,102 @@ def parse_args():
     p.add_argument(
         "--ecm-coupling-mode",
         type=str,
-        default="coupled",
-        choices=["coupled", "independent"],
+        default="cascade",
         help=(
-            "coupled: EPS starts from Z_res and SIG starts from Z_eps. "
-            "independent: RES/EPS/SIG are selected independently from full candidates."
+            "ECM coupling mode: "
+            "independent = three separate ECM solves; "
+            "cascade = EPS starts from Z_res and SIG starts from Z_eps (legacy 'coupled'); "
+            "single = one ECM solve shared by RES/EPS/SIG. "
+            "Aliases: coupled->cascade, shared/joint->single."
         ),
     )
+    p.add_argument(
+        "--single-block-normalization",
+        type=str,
+        default="fro",
+        help=(
+            "Scaling for aggregated single-matrix build: "
+            "fro (equal Frobenius-energy blocks), row (1/sqrt(n_rows)), none."
+        ),
+    )
+    p.add_argument(
+        "--rsvd-tol-single",
+        type=float,
+        default=-1.0,
+        help="Tolerance for single aggregated basis (<=0 uses min of res/eps/sig tolerances).",
+    )
     return p.parse_args()
+
+
+def normalize_ecm_coupling_mode(mode_raw):
+    mode = str(mode_raw).strip().lower()
+    if mode in ("independent", "decoupled"):
+        return "independent"
+    if mode in ("cascade", "coupled", "sequential"):
+        return "cascade"
+    if mode in ("single", "shared", "joint", "all_in_one", "all-in-one"):
+        return "single"
+    raise ValueError(
+        f"Unsupported --ecm-coupling-mode='{mode_raw}'. "
+        "Use one of: independent, cascade, single."
+    )
+
+
+def normalize_single_block_normalization(mode_raw):
+    mode = str(mode_raw).strip().lower()
+    if mode in ("fro", "frob", "frobenius"):
+        return "fro"
+    if mode in ("row", "rows", "sqrt_rows"):
+        return "row"
+    if mode in ("none", "off", "no"):
+        return "none"
+    raise ValueError(
+        f"Unsupported --single-block-normalization='{mode_raw}'. Use one of: fro, row, none."
+    )
+
+
+def _compute_single_block_scales(Q_res, C_eps, C_sig, norm_mode):
+    mode = normalize_single_block_normalization(norm_mode)
+    if mode == "none":
+        return 1.0, 1.0, 1.0, mode
+    if mode == "row":
+        return (
+            1.0 / max(np.sqrt(Q_res.shape[0]), 1.0),
+            1.0 / max(np.sqrt(C_eps.shape[0]), 1.0),
+            1.0 / max(np.sqrt(C_sig.shape[0]), 1.0),
+            mode,
+        )
+
+    n_res = float(np.linalg.norm(Q_res))
+    n_eps = float(np.linalg.norm(C_eps))
+    n_sig = float(np.linalg.norm(C_sig))
+    return (
+        1.0 / max(n_res, 1e-30),
+        1.0 / max(n_eps, 1e-30),
+        1.0 / max(n_sig, 1e-30),
+        mode,
+    )
+
+
+def build_single_basis_from_blocks(Q_res, C_eps, C_sig, tol_single, norm_mode, label="ALL"):
+    alpha_res, alpha_eps, alpha_sig, mode = _compute_single_block_scales(Q_res, C_eps, C_sig, norm_mode)
+    print(f"\n[{label}] Single-matrix basis build (RSVD, normalization={mode})")
+    print(
+        f"[{label}] Block scales: alpha_res={alpha_res:.3e}, "
+        f"alpha_eps={alpha_eps:.3e}, alpha_sig={alpha_sig:.3e}"
+    )
+    M_all_T = np.ascontiguousarray(
+        np.concatenate(
+            [
+                float(alpha_res) * np.asarray(Q_res.T, dtype=float),
+                float(alpha_eps) * np.asarray(C_eps.T, dtype=float),
+                float(alpha_sig) * np.asarray(C_sig.T, dtype=float),
+            ],
+            axis=1,
+        )
+    )
+    U, s_kept, eSVD = run_rsvd_on_transpose(M_all_T, tol_single, label=label)
+    return U, s_kept, float(eSVD), (float(alpha_res), float(alpha_eps), float(alpha_sig), mode)
 
 
 def _meta_int(meta, key, fallback_key=None):
@@ -184,6 +273,12 @@ def main():
     n_rows_eps = 3 * ns_hom
     n_rows_sig = 3 * ns_hom
 
+    coupling_mode = normalize_ecm_coupling_mode(args.ecm_coupling_mode)
+    single_block_norm = normalize_single_block_normalization(args.single_block_normalization)
+    tol_single = float(args.rsvd_tol_single)
+    if tol_single <= 0.0:
+        tol_single = float(min(args.rsvd_tol_res, args.rsvd_tol_eps, args.rsvd_tol_sig))
+
     print("=" * 60)
     print("  Stage 9b-ANN: ECM Weight Computation")
     print("=" * 60)
@@ -195,7 +290,12 @@ def main():
     print(f"  C_hom rows     = {n_rows_hom}  (eps={n_rows_eps}, sig={n_rows_sig})")
     print(f"  data_dir       = {data_dir}")
     print(f"  out_dir        = {out_dir}")
-    print(f"  coupling mode  = {args.ecm_coupling_mode}")
+    print(f"  coupling mode  = {coupling_mode} (input='{args.ecm_coupling_mode}')")
+    if coupling_mode == "single":
+        print(
+            f"  single build   = single_matrix_rsvd, "
+            f"single norm={single_block_norm}, rsvd_tol_single={tol_single:.3e}"
+        )
     if A0_ref is not None:
         print(f"  reference area A0 = {A0_ref:.6e}")
 
@@ -225,16 +325,84 @@ def main():
         print("  [HOM][WARN] b_hom is NOT consistent with C_hom!")
     print_snapshot_residual_stats(b_res, nq=nq, ns_res=ns_res)
 
-    # 1) Residual ECM
-    U_res, s_res, eSVD_res = run_rsvd_on_transpose(Q_res.T, args.rsvd_tol_res, label="RES")
-    Z_res, w_res_sel, w_res_full = run_ecm(
-        U_basis=U_res,
-        n_elem=n_elem,
-        ecm_tol=args.ecm_tol_res,
-        init_candidates=None,
-        label="RES",
-        max_unsuccessful_it=args.max_unsuccessful_it,
-    )
+    # Split homogenization blocks (same for all coupling modes)
+    C_blk = np.asarray(C_hom, dtype=float).reshape(ns_hom, 6, n_elem)
+    b_blk = np.asarray(b_hom, dtype=float).reshape(ns_hom, 6)
+
+    C_eps = C_blk[:, 0:3, :].reshape(n_rows_eps, n_elem)
+    b_eps = b_blk[:, 0:3].reshape(n_rows_eps)
+    C_sig = C_blk[:, 3:6, :].reshape(n_rows_sig, n_elem)
+    b_sig = b_blk[:, 3:6].reshape(n_rows_sig)
+
+    # ECM selection according to coupling mode
+    eSVD_all = np.nan
+    alpha_res = 1.0
+    alpha_eps = 1.0
+    alpha_sig = 1.0
+
+    if coupling_mode == "single":
+        eSVD_res = np.nan
+        eSVD_eps = np.nan
+        eSVD_sig = np.nan
+        U_all, _, eSVD_all, scales = build_single_basis_from_blocks(
+            Q_res,
+            C_eps,
+            C_sig,
+            tol_single=tol_single,
+            norm_mode=single_block_norm,
+            label="ALL",
+        )
+        alpha_res, alpha_eps, alpha_sig, _ = scales
+    else:
+        U_res, _, eSVD_res = run_rsvd_on_transpose(Q_res.T, args.rsvd_tol_res, label="RES")
+        U_eps, _, eSVD_eps = run_rsvd_on_transpose(C_eps.T, args.rsvd_tol_eps, label="EPS")
+        U_sig, _, eSVD_sig = run_rsvd_on_transpose(C_sig.T, args.rsvd_tol_sig, label="SIG")
+
+    if coupling_mode == "single":
+        ecm_tol_all = float(min(args.ecm_tol_res, args.ecm_tol_eps, args.ecm_tol_sig))
+        print(
+            f"\n[ALL] single mode active: one ECM for RES+EPS+SIG "
+            f"(basis cols={U_all.shape[1]}, ecm_tol={ecm_tol_all:.3e}, build=single_matrix_rsvd)"
+        )
+        Z_all, w_all_sel, w_all_full = run_ecm(
+            U_basis=U_all,
+            n_elem=n_elem,
+            ecm_tol=ecm_tol_all,
+            init_candidates=None,
+            label="ALL",
+            max_unsuccessful_it=args.max_unsuccessful_it,
+        )
+        Z_res, Z_eps, Z_sig = Z_all.copy(), Z_all.copy(), Z_all.copy()
+        w_res_sel, w_eps_sel, w_sig_sel = w_all_sel.copy(), w_all_sel.copy(), w_all_sel.copy()
+        w_res_full, w_eps_full, w_sig_full = w_all_full.copy(), w_all_full.copy(), w_all_full.copy()
+    else:
+        Z_res, w_res_sel, w_res_full = run_ecm(
+            U_basis=U_res,
+            n_elem=n_elem,
+            ecm_tol=args.ecm_tol_res,
+            init_candidates=None,
+            label="RES",
+            max_unsuccessful_it=args.max_unsuccessful_it,
+        )
+        eps_init = np.array(Z_res, dtype=int) if coupling_mode == "cascade" else None
+        Z_eps, w_eps_sel, w_eps_full = run_ecm(
+            U_basis=U_eps,
+            n_elem=n_elem,
+            ecm_tol=args.ecm_tol_eps,
+            init_candidates=eps_init,
+            label="EPS",
+            max_unsuccessful_it=args.max_unsuccessful_it,
+        )
+        sig_init = np.array(Z_eps, dtype=int) if coupling_mode == "cascade" else None
+        Z_sig, w_sig_sel, w_sig_full = run_ecm(
+            U_basis=U_sig,
+            n_elem=n_elem,
+            ecm_tol=args.ecm_tol_sig,
+            init_candidates=sig_init,
+            label="SIG",
+            max_unsuccessful_it=args.max_unsuccessful_it,
+        )
+
     b_hp_res = Q_res @ w_res_full
     err_hp_res = rel_error(b_hp_res, b_res)
     abs_hp_res = np.linalg.norm(b_hp_res - b_res)
@@ -242,47 +410,12 @@ def main():
     print(f"[RES] Final check ||Q·w − b|| / ||b|| = {err_hp_res:.3e}")
     print(f"[RES] Final check ||Q·w − b||         = {abs_hp_res:.3e}  (max |.| = {max_hp_res:.3e})")
 
-    # 2) Strain ECM (split by 6-row blocks per snapshot)
-    C_blk = np.asarray(C_hom, dtype=float).reshape(ns_hom, 6, n_elem)
-    b_blk = np.asarray(b_hom, dtype=float).reshape(ns_hom, 6)
-
-    C_eps = C_blk[:, 0:3, :].reshape(n_rows_eps, n_elem)
-    b_eps = b_blk[:, 0:3].reshape(n_rows_eps)
-
-    U_eps, s_eps, eSVD_eps = run_rsvd_on_transpose(C_eps.T, args.rsvd_tol_eps, label="EPS")
-
-    eps_init = np.array(Z_res, dtype=int) if str(args.ecm_coupling_mode).lower() == "coupled" else None
-    Z_eps, w_eps_sel, w_eps_full = run_ecm(
-        U_basis=U_eps,
-        n_elem=n_elem,
-        ecm_tol=args.ecm_tol_eps,
-        init_candidates=eps_init,
-        label="EPS",
-        max_unsuccessful_it=args.max_unsuccessful_it,
-    )
-
     b_hp_eps = C_eps @ w_eps_full
     err_hp_eps = rel_error(b_hp_eps, b_eps)
     abs_hp_eps = np.linalg.norm(b_hp_eps - b_eps)
     max_hp_eps = np.max(np.abs(b_hp_eps - b_eps))
     print(f"[EPS] Final check ||C_eps·w − b_eps|| / ||b_eps|| = {err_hp_eps:.3e}")
     print(f"[EPS] Final check ||C_eps·w − b_eps||             = {abs_hp_eps:.3e}  (max |.| = {max_hp_eps:.3e})")
-
-    # 3) Stress ECM (split by 6-row blocks per snapshot)
-    C_sig = C_blk[:, 3:6, :].reshape(n_rows_sig, n_elem)
-    b_sig = b_blk[:, 3:6].reshape(n_rows_sig)
-
-    U_sig, s_sig, eSVD_sig = run_rsvd_on_transpose(C_sig.T, args.rsvd_tol_sig, label="SIG")
-
-    sig_init = np.array(Z_eps, dtype=int) if str(args.ecm_coupling_mode).lower() == "coupled" else None
-    Z_sig, w_sig_sel, w_sig_full = run_ecm(
-        U_basis=U_sig,
-        n_elem=n_elem,
-        ecm_tol=args.ecm_tol_sig,
-        init_candidates=sig_init,
-        label="SIG",
-        max_unsuccessful_it=args.max_unsuccessful_it,
-    )
 
     b_hp_sig = C_sig @ w_sig_full
     err_hp_sig = rel_error(b_hp_sig, b_sig)
@@ -300,8 +433,13 @@ def main():
     print(f"  |Z_eps|   = {Z_eps.size:5d}  ({100.0 * Z_eps.size / n_elem:.1f}%)")
     print(f"  |Z_sig|   = {Z_sig.size:5d}  ({100.0 * Z_sig.size / n_elem:.1f}%)")
     print(f"  |Z_union| = {Z_union.size:5d}  ({100.0 * Z_union.size / n_elem:.1f}%)")
-    if str(args.ecm_coupling_mode).lower() == "coupled":
-        print("  coupling detail: EPS initialized with Z_res, SIG initialized with Z_eps")
+    if coupling_mode == "cascade":
+        print("  coupling detail: cascade (EPS initialized with Z_res, SIG initialized with Z_eps)")
+    elif coupling_mode == "single":
+        print(
+            "  coupling detail: single "
+            f"(same ECM set/weights for RES/EPS/SIG, build=single_matrix_rsvd, norm={single_block_norm})"
+        )
     else:
         print("  coupling detail: EPS and SIG initialized independently (full candidate sets)")
 
@@ -334,7 +472,15 @@ def main():
         ECM_TOL_RES=float(args.ecm_tol_res),
         ECM_TOL_EPS=float(args.ecm_tol_eps),
         ECM_TOL_SIG=float(args.ecm_tol_sig),
-        ECM_COUPLING_MODE=np.array([str(args.ecm_coupling_mode)]),
+        ECM_COUPLING_MODE=np.array([coupling_mode]),
+        ECM_COUPLING_MODE_INPUT=np.array([str(args.ecm_coupling_mode)]),
+        SINGLE_BASIS_BUILD=np.array(["single_matrix_rsvd"]),
+        SINGLE_BLOCK_NORMALIZATION=np.array([single_block_norm]),
+        RSVD_TOL_SINGLE=np.array([tol_single], dtype=float),
+        eSVD_all=np.array([eSVD_all], dtype=float),
+        single_alpha_res=np.array([alpha_res], dtype=float),
+        single_alpha_eps=np.array([alpha_eps], dtype=float),
+        single_alpha_sig=np.array([alpha_sig], dtype=float),
         data_dir=np.array([data_dir]),
         A0_ref=np.array([float(A0_ref if A0_ref is not None else np.nan)], dtype=float),
         hom_reference_measure=np.array([float(A0_ref if A0_ref is not None else np.nan)], dtype=float),

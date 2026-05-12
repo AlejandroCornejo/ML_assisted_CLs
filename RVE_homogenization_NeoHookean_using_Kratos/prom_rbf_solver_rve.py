@@ -43,8 +43,13 @@ def LoadPromRbfModel(basis_dir="stage_2_pod_rve", rbf_data_dir="stage_7_rbf_data
     input_dim = int(rbf_model["input_dim"])
     output_dim = int(rbf_model["output_dim"])
     include_macro_strain_input = bool(rbf_model["include_macro_strain_input"])
+    if include_macro_strain_input:
+        raise RuntimeError(
+            "RBF model was trained with macro-strain manifold inputs (N(q,mu)), "
+            "which is no longer supported. Retrain Stage 7 without macro inputs."
+        )
 
-    expected_input_dim = n_p + (3 if include_macro_strain_input else 0)
+    expected_input_dim = n_p
     if input_dim != expected_input_dim:
         raise ValueError(
             f"RBF input_dim={input_dim} incompatible with n_primary={n_p} "
@@ -70,7 +75,7 @@ def LoadPromRbfModel(basis_dir="stage_2_pod_rve", rbf_data_dir="stage_7_rbf_data
         dir_dofs,
         eq_map,
         rbf_model,
-        include_macro_strain_input,
+        False,
     )
 
 
@@ -92,7 +97,6 @@ def RunPromRbfBatchSimulation(
     max_dq_norm=0.5,
     old_stiffness_residual_cutoff=1.0e5,
     regularization=1.0e-10,
-    include_macro_strain_input=False,
     use_fast_dirichlet_bc=True,
     reference_amplitude=None,
     reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
@@ -169,7 +173,7 @@ def RunPromRbfBatchSimulation(
     results_sig = [np.zeros(3, dtype=float)]
 
     rbf_input_dim = int(rbf_model["input_dim"])
-    expected_input_dim = int(n_primary + (3 if include_macro_strain_input else 0))
+    expected_input_dim = int(n_primary)
     if rbf_input_dim != expected_input_dim:
         raise ValueError(
             f"RBF input size mismatch: model expects {rbf_input_dim}, "
@@ -214,8 +218,6 @@ def RunPromRbfBatchSimulation(
 
     def _build_rbf_input(qp_vec, e_vec):
         qp = np.asarray(qp_vec, dtype=float).reshape(-1)
-        if include_macro_strain_input:
-            return np.concatenate([qp, np.asarray(e_vec, dtype=float).reshape(3)])
         return qp
 
     def _evaluate_qs_and_jac(qp_vec, e_vec):
@@ -241,11 +243,6 @@ def RunPromRbfBatchSimulation(
     q_p = np.zeros(n_primary, dtype=float)
     Kr_old = None
     J_full = np.zeros((n_total_dof, n_primary), dtype=float)
-
-    if include_macro_strain_input:
-        q0_const = None
-    else:
-        q0_const, _ = _evaluate_qs_and_jac(np.zeros(n_primary, dtype=float), np.zeros(3, dtype=float))
 
     print(f"  [PROM-RBF] Solving for {n_steps_total} dynamic increments...")
     print(f"  [PROM-RBF] Full elements assembled each Newton step: {len(elements)} / {len(elements)}")
@@ -279,11 +276,6 @@ def RunPromRbfBatchSimulation(
             sim.ApplyBoundaryConditions()
             disp_base_step = _capture_current_displacement_vector()
 
-        if include_macro_strain_input:
-            q0_step, _ = _evaluate_qs_and_jac(np.zeros(n_primary, dtype=float), E)
-        else:
-            q0_step = q0_const
-
         if step == 1 or step % 100 == 0 or step == n_steps_total:
             print(f"\n[PROM-RBF] Step {step:04d}/{n_steps_total} | E={E}")
         verbose_step = bool(verbose_iterations)
@@ -305,7 +297,7 @@ def RunPromRbfBatchSimulation(
             t0 = time.perf_counter()
             q_s_map, J_rbf = _evaluate_qs_and_jac(q_p, E)
             t_map += time.perf_counter() - t0
-            q_s = q_s_map - q0_step
+            q_s = q_s_map
 
             if verbose_step:
                 qp_norm = float(np.linalg.norm(q_p))
@@ -483,12 +475,12 @@ def RunPromRbfBatchSimulation(
 
         # Ensure the accepted reduced state is explicitly pushed to Kratos.
         q_s_final_map, _ = _evaluate_qs_and_jac(q_p, E)
-        q_s_final = q_s_final_map - q0_step
+        q_s_final = q_s_final_map
         u_fluc_final = phi_p @ q_p + phi_s @ q_s_final
         if not _is_finite(u_fluc_final):
             q_p = q_step_start.copy()
             q_s_final_map, _ = _evaluate_qs_and_jac(q_p, E)
-            q_s_final = q_s_final_map - q0_step
+            q_s_final = q_s_final_map
             u_fluc_final = phi_p @ q_p + phi_s @ q_s_final
         if not _is_finite(u_fluc_final):
             raise RuntimeError("PROM-RBF accepted state is non-finite after rollback.")

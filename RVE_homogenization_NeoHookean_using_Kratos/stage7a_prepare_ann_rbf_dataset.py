@@ -60,7 +60,7 @@ def _compute_affine_free_displacement(E, x_free, y_free, is_x_free):
     return np.where(is_x_free, ux, uy)
 
 
-def prepare_ann_dataset(n_primary=3, include_macro_strain_input=False):
+def prepare_ann_dataset(n_primary=3):
     basis_dir = "stage_2_pod_rve"
     train_dir = "stage_1_training_set_fom"
     out_dir = "stage_7_ann_data"
@@ -83,7 +83,7 @@ def prepare_ann_dataset(n_primary=3, include_macro_strain_input=False):
     phi_s = phi[:, n_p:n_p + n_s]
     
     print(f"Partition: n_p={n_p}, n_s={n_s} (Total={n_p+n_s})")
-    print(f"ANN input features: {'q_p + [Exx,Eyy,Gxy]' if include_macro_strain_input else 'q_p only'}")
+    print("ANN input features: q_p only")
 
     # Affine lifting geometry (exact finite-deformation mapping used in Stage 2)
     n_total_runtime, dof_x, dof_y, is_x_dof, eq_map_runtime = _build_affine_lifting_helpers()
@@ -155,10 +155,7 @@ def prepare_ann_dataset(n_primary=3, include_macro_strain_input=False):
 
         q_p_list.append(qp)
         q_s_list.append(qs)
-        if include_macro_strain_input:
-            x_ann_list.append(np.hstack([qp, E_hist]))
-        else:
-            x_ann_list.append(qp)
+        x_ann_list.append(qp)
 
     if not q_p_list:
         raise RuntimeError("No valid snapshots found to build ANN dataset.")
@@ -186,7 +183,7 @@ def prepare_ann_dataset(n_primary=3, include_macro_strain_input=False):
         n_primary=np.array([n_p], dtype=np.int64),
         n_secondary=np.array([n_s], dtype=np.int64),
         input_dim=np.array([X_ann.shape[1]], dtype=np.int64),
-        include_macro_strain_input=np.array([1 if include_macro_strain_input else 0], dtype=np.int64),
+        include_macro_strain_input=np.array([0], dtype=np.int64),
     )
 
     print(f"Dataset successfully saved to {out_dir}/")
@@ -199,10 +196,5 @@ if __name__ == "__main__":
         default=4,
         help="Number of primary POD modes (n_p). Secondary modes are n_total - n_p.",
     )
-    parser.add_argument(
-        "--with-strain-input",
-        action="store_true",
-        help="Append macro strain [Exx,Eyy,Gxy] to ANN input features.",
-    )
     args = parser.parse_args()
-    prepare_ann_dataset(n_primary=args.n_primary, include_macro_strain_input=args.with_strain_input)
+    prepare_ann_dataset(n_primary=args.n_primary)

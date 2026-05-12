@@ -2,6 +2,10 @@ import os
 import sys
 import torch
 import numpy as np
+try:
+    from torch.func import jacfwd as _torch_jacfwd
+except Exception:
+    _torch_jacfwd = None
 
 # Add Kratos path
 KRATOS_PATH = "/home/kratos/Kratos_Eigen_Check/bin/Release"
@@ -38,9 +42,9 @@ def LoadPromAnnModel(basis_dir="stage_2_pod_rve", ann_data_dir="stage_7_ann_data
     eq_map = np.load(os.path.join(basis_dir, "eq_map.npy"))
     
     # Load Metadata & ANN
-    meta = np.load(os.path.join(ann_data_dir, "manifold_ann_metadata.npz"))
+    meta = np.load(os.path.join(ann_data_dir, "manifold_ann_metadata.npz"), allow_pickle=True)
     dataset_meta_path = os.path.join(ann_data_dir, "ann_dataset_metadata.npz")
-    dataset_meta = np.load(dataset_meta_path) if os.path.exists(dataset_meta_path) else None
+    dataset_meta = np.load(dataset_meta_path, allow_pickle=True) if os.path.exists(dataset_meta_path) else None
     n_p = int(phi_p.shape[1])
     n_s = int(phi_s.shape[1])
 
@@ -59,11 +63,12 @@ def LoadPromAnnModel(basis_dir="stage_2_pod_rve", ann_data_dir="stage_7_ann_data
     elif input_dim == (n_p + 3):
         include_macro_strain_input = True
 
-    if include_macro_strain_input and input_dim != (n_p + 3):
-        raise ValueError(
-            f"ANN input_dim={input_dim} incompatible with n_primary={n_p} and macro-strain inputs."
+    if include_macro_strain_input:
+        raise RuntimeError(
+            "ANN model was trained with macro-strain manifold inputs (N(q,mu)), "
+            "which is no longer supported. Retrain Stage 7 without macro inputs."
         )
-    if (not include_macro_strain_input) and input_dim != n_p:
+    if input_dim != n_p:
         raise ValueError(
             f"ANN input_dim={input_dim} incompatible with n_primary={n_p}."
         )
@@ -74,15 +79,27 @@ def LoadPromAnnModel(basis_dir="stage_2_pod_rve", ann_data_dir="stage_7_ann_data
             f"(x={meta['x_mean'].shape[0]}, expected_input={input_dim}, "
             f"y={meta['y_mean'].shape[0]}, n_s={n_s})."
         )
+    hidden_layers = (128, 256, 256, 256, 128)
+    if "hidden_layers" in meta:
+        hidden_layers = tuple(int(v) for v in np.asarray(meta["hidden_layers"], dtype=np.int64).reshape(-1))
+    activation = str(np.ravel(meta["activation"])[0]).strip().lower() if "activation" in meta else "elu"
+    dropout = float(np.ravel(meta["dropout"])[0]) if "dropout" in meta else 0.0
+    use_batchnorm = bool(int(np.ravel(meta["use_batchnorm"])[0])) if "use_batchnorm" in meta else True
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = ManifoldANN(
         meta["x_mean"], meta["x_std"], meta["y_mean"], meta["y_std"],
-        in_dim=input_dim, out_dim=n_s
+        in_dim=input_dim,
+        out_dim=n_s,
+        hidden_layers=hidden_layers,
+        activation=activation,
+        dropout=dropout,
+        use_batchnorm=use_batchnorm,
     ).to(device)
     model.load_state_dict(torch.load(os.path.join(ann_data_dir, "manifold_ann.pt"), map_location=device))
     model.eval()
     
-    return phi_p, phi_s, free_dofs, dir_dofs, eq_map, model, device, include_macro_strain_input
+    return phi_p, phi_s, free_dofs, dir_dofs, eq_map, model, device, False
 
 def RunPromAnnBatchSimulation(
     parameters,
@@ -92,6 +109,7 @@ def RunPromAnnBatchSimulation(
     ann_model,
     device,
     strain_path,
+    out_dir=None,
     relnorm_cutoff=1e-5,
     max_its=25,
     abs_res_cutoff=NEWTON_TOL_ABS,
@@ -102,11 +120,11 @@ def RunPromAnnBatchSimulation(
     max_dq_norm=0.5,
     old_stiffness_residual_cutoff=1.0e5,
     regularization=1.0e-10,
-    include_macro_strain_input=False,
     use_fast_dirichlet_bc=True,
     reference_amplitude=None,
     reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
     use_old_stiffness_in_first_iteration=USE_OLD_STIFFNESS_IN_FIRST_ITERATION,
+    verbose_iterations=False,
 ):
     free_dofs = np.asarray(free_dofs, dtype=np.int64)
     if phi_p.shape[0] != phi_s.shape[0]:
@@ -136,8 +154,10 @@ def RunPromAnnBatchSimulation(
     n_total_dof, eq_id_map, ta = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
     vec_assembler = VectorizedAssembler(mp, n_total_dof, eq_id_map)
     hom_reference_measure = float(np.sum(np.asarray(vec_assembler.area_e, dtype=float)))
-    with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
-        f.write(f"{hom_reference_measure:.16e}\n")
+    if out_dir is not None:
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
+            f.write(f"{hom_reference_measure:.16e}\n")
     elements = list(mp.Elements)
     entities = list(mp.Elements) + list(mp.Conditions)
 
@@ -178,7 +198,7 @@ def RunPromAnnBatchSimulation(
     results_sig = [np.zeros(3, dtype=float)]
     
     ann_input_dim = int(ann_model.input_scaler.mean.numel())
-    expected_input_dim = int(n_primary + (3 if include_macro_strain_input else 0))
+    expected_input_dim = int(n_primary)
     if ann_input_dim != expected_input_dim:
         raise ValueError(
             f"ANN input size mismatch: model expects {ann_input_dim}, "
@@ -186,25 +206,27 @@ def RunPromAnnBatchSimulation(
         )
 
     def _build_ann_input(qp_tensor, e_tensor):
-        if include_macro_strain_input:
-            return torch.cat([qp_tensor, e_tensor], dim=1)
         return qp_tensor
 
-    # Enforce manifold origin in reduced coordinates.
-    with torch.no_grad():
-        if include_macro_strain_input:
-            N0_const = None
-        else:
-            N0_const = ann_model(torch.zeros((1, n_primary), device=device))
+    jac_backend = "jacfwd" if _torch_jacfwd is not None else "autograd"
 
     def compute_manifold_jacobian(qp_val, e_tensor):
+        nonlocal jac_backend
         with torch.enable_grad():
-            qp_in = qp_val.clone().detach().requires_grad_(True)
+            qp_in = qp_val.reshape(-1).clone().detach().requires_grad_(True)
 
-            def ann_from_q(q_local):
-                return ann_model(_build_ann_input(q_local, e_tensor))
+            def ann_from_qvec(q_local_vec):
+                q_local = q_local_vec.view(1, -1)
+                return ann_model(_build_ann_input(q_local, e_tensor)).reshape(-1)
 
-            jac_ann = torch.autograd.functional.jacobian(ann_from_q, qp_in)
+            if jac_backend == "jacfwd":
+                try:
+                    jac_ann = _torch_jacfwd(ann_from_qvec)(qp_in)
+                except Exception:
+                    jac_backend = "autograd"
+                    jac_ann = torch.autograd.functional.jacobian(ann_from_qvec, qp_in)
+            else:
+                jac_ann = torch.autograd.functional.jacobian(ann_from_qvec, qp_in)
             jac_ann = jac_ann.reshape(n_secondary, n_primary)
         return jac_ann
 
@@ -242,6 +264,7 @@ def RunPromAnnBatchSimulation(
         disp_vec[free_dofs] = np.asarray(u_total_free, dtype=float).reshape(-1)
         SetDisplacementFromEquationVector(disp_vec, eq_id_map, ta)
         UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
+        return disp_vec
 
     def _solve_reduced_system(K_sys, rhs):
         try:
@@ -260,8 +283,10 @@ def RunPromAnnBatchSimulation(
 
     q_p_torch = torch.zeros((1, n_primary), device=device)
     Kr_old = None
+    J_full = np.zeros((n_total_dof, n_primary), dtype=float)
     
     print(f"  [PROM-ANN] Solving for {n_steps_total} dynamic increments...")
+    print(f"  [PROM-ANN] Decoder Jacobian backend: {jac_backend}")
     
     for step in range(1, n_steps_total + 1):
         time_val = float(step) * float(dt)
@@ -288,13 +313,6 @@ def RunPromAnnBatchSimulation(
             sim.ApplyBoundaryConditions()
             disp_base_step = _capture_current_displacement_vector()
 
-        with torch.no_grad():
-            if include_macro_strain_input:
-                q0 = torch.zeros((1, n_primary), device=device)
-                N0_step = ann_model(_build_ann_input(q0, E_torch))
-            else:
-                N0_step = N0_const
-        
         if step == 1 or step % 100 == 0 or step == n_steps_total:
             print(f"\n[PROM-ANN] Step {step:04d}/{n_steps_total} | E={E}")
         
@@ -314,15 +332,17 @@ def RunPromAnnBatchSimulation(
         best_res = np.inf
         best_rel = np.inf
         
+        verbose_step = bool(verbose_iterations)
         while it < max_its:
             mp.ProcessInfo[KM.NL_ITERATION_NUMBER] = it + 1
             # 1. Neural Manifold Enrichment & Jacobian
             with torch.no_grad():
-                q_s = ann_model(_build_ann_input(q_p_torch, E_torch)) - N0_step
+                q_s = ann_model(_build_ann_input(q_p_torch, E_torch))
             
             qp_np = q_p_torch.detach().cpu().numpy().flatten()
             qs_np = q_s.detach().cpu().numpy().flatten()
-            print(f"    > q_p norm: {np.linalg.norm(qp_np):.3e} | q_s norm: {np.linalg.norm(qs_np):.3e}")
+            if verbose_step:
+                print(f"    > q_p norm: {np.linalg.norm(qp_np):.3e} | q_s norm: {np.linalg.norm(qs_np):.3e}")
             if (not _is_finite(qp_np)) or (not _is_finite(qs_np)):
                 print("  [PROM-ANN] WARNING: non-finite reduced state detected.")
                 nonfinite_detected = True
@@ -346,7 +366,8 @@ def RunPromAnnBatchSimulation(
             u_free = u_aff_free + u_fluc
             
             # Jacobian: J = Vp + Vs * (dq_s/dq_p)
-            J_ann = compute_manifold_jacobian(q_p_torch, E_torch).cpu().numpy()
+            J_ann_raw = compute_manifold_jacobian(q_p_torch, E_torch).detach().cpu().numpy()
+            J_ann = J_ann_raw
             if J_ann.shape != (n_secondary, n_primary):
                 raise RuntimeError(
                     f"Invalid ANN Jacobian shape {J_ann.shape}; expected ({n_secondary}, {n_primary})."
@@ -362,24 +383,24 @@ def RunPromAnnBatchSimulation(
                 break
             
             # 2. Update Kratos
-            _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
+            u_eq_curr = _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
             
             # 3. Assemble
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
-            u_curr = _capture_current_displacement_vector()
-            K_sparse, rhs_vec = vec_assembler.Assemble(u_curr)
+            K_sparse, rhs_vec = vec_assembler.Assemble(u_eq_curr)
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
             
-            r_full = rhs_vec[free_dofs]
-            K_full = K_sparse[free_dofs][:, free_dofs].toarray()
-            if (not _is_finite(r_full)) or (not _is_finite(K_full)):
+            if (not _is_finite(rhs_vec)) or (not _is_finite(K_sparse.data)):
                 print("  [PROM-ANN] WARNING: non-finite full residual/stiffness detected.")
                 nonfinite_detected = True
                 break
             
             # 4. Galerkin Projection
-            r_r = J_manifold.T @ r_full
-            K_r = J_manifold.T @ K_full @ J_manifold
+            J_full.fill(0.0)
+            J_full[free_dofs, :] = J_manifold
+            KJ = K_sparse @ J_full
+            r_r = J_full.T @ rhs_vec
+            K_r = J_full.T @ KJ
             Kr_last = K_r
             if (not _is_finite(r_r)) or (not _is_finite(K_r)):
                 print("  [PROM-ANN] WARNING: non-finite reduced residual/stiffness detected.")
@@ -555,23 +576,22 @@ def RunPromAnnBatchSimulation(
 
         # Ensure the accepted reduced state is explicitly pushed to Kratos.
         with torch.no_grad():
-            q_s_final = ann_model(_build_ann_input(q_p_torch, E_torch)) - N0_step
+            q_s_final = ann_model(_build_ann_input(q_p_torch, E_torch))
             u_fluc_final = (q_p_torch @ Vp.T + q_s_final @ Vs.T).detach().cpu().numpy().reshape(-1)
         if not _is_finite(u_fluc_final):
             q_p_torch = q_step_start.detach().clone()
             with torch.no_grad():
-                q_s_final = ann_model(_build_ann_input(q_p_torch, E_torch)) - N0_step
+                q_s_final = ann_model(_build_ann_input(q_p_torch, E_torch))
                 u_fluc_final = (q_p_torch @ Vp.T + q_s_final @ Vs.T).detach().cpu().numpy().reshape(-1)
         if not _is_finite(u_fluc_final):
             raise RuntimeError("PROM-ANN accepted state is non-finite after rollback.")
         if not use_fast_dirichlet_bc:
             sim.ApplyBoundaryConditions()
             disp_base_step = _capture_current_displacement_vector()
-        _apply_total_free_displacement(u_aff_free + u_fluc_final, base_disp_vec=disp_base_step)
+        u_eq_final = _apply_total_free_displacement(u_aff_free + u_fluc_final, base_disp_vec=disp_base_step)
 
         InitializeNonLinearIteration(entities, mp.ProcessInfo)
-        u_curr = _capture_current_displacement_vector()
-        _, _ = vec_assembler.Assemble(u_curr)
+        _, _ = vec_assembler.Assemble(u_eq_final)
         FinalizeNonLinearIteration(entities, mp.ProcessInfo)
         eps_h, sig_h = CalculateHomogenizedFromAssemblerWithElementWeights(
             vec_assembler,

@@ -16,6 +16,8 @@ import sys
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+from plot_style_utils import apply_latex_plot_style
+apply_latex_plot_style()
 
 # Add Kratos path (same convention used in other stage scripts)
 KRATOS_PATH = "/home/kratos/Kratos_Eigen_Check/bin/Release"
@@ -175,7 +177,7 @@ def run_verification(
     model_dir="stage_2_pod_rve",
     ecm_file="stage_5_hprom_data/ecm_weights_all.npz",
     mesh_base="rve_geometry",
-    use_hrom_mesh=False,
+    use_hrom_mesh=True,
     run_fom=False,
     reuse_prom_cache=False,
     reuse_hprom_cache=False,
@@ -527,7 +529,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--use-hrom-mesh",
         action="store_true",
-        help="Use hrom_mesh_base from ECM file for HPROM run.",
+        help="Use hrom_mesh_base from ECM file for HPROM run (default: enabled).",
+    )
+    parser.add_argument(
+        "--no-use-hrom-mesh",
+        dest="use_hrom_mesh",
+        action="store_false",
+        help="Disable automatic HROM mesh usage and force mesh-base.",
     )
     parser.add_argument(
         "--run-fom",
@@ -584,6 +592,7 @@ if __name__ == "__main__":
         default="",
         help="Optional suffix added to output folder name.",
     )
+    parser.set_defaults(use_hrom_mesh=True)
     args = parser.parse_args()
 
     run_verification(

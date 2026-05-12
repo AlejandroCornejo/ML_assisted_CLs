@@ -17,6 +17,8 @@ import sys
 import json
 import numpy as np
 import matplotlib.pyplot as plt
+from plot_style_utils import apply_latex_plot_style
+apply_latex_plot_style()
 from scipy.sparse import save_npz
 
 # Add Kratos path if not in PYTHONPATH (User specific, but following project style)

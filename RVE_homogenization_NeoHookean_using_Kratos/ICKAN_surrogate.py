@@ -3,6 +3,8 @@ import numpy as np
 import scipy as sp
 import torch as torch
 import matplotlib.pyplot as plt
+from plot_style_utils import apply_latex_plot_style
+apply_latex_plot_style()
 import torch.nn as nn
 import torch.optim as optim
 import os

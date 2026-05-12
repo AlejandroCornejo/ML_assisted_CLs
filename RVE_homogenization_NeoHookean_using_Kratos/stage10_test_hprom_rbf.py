@@ -9,6 +9,8 @@ import os
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+from plot_style_utils import apply_latex_plot_style
+apply_latex_plot_style()
 
 from stage6_test_hprom import generate_safe_test_path
 from stage4_test_rve import plot_path_in_domain
@@ -21,6 +23,22 @@ from fom_solver_rve import (
 )
 from prom_rbf_solver_rve import LoadPromRbfModel, RunPromRbfBatchSimulation
 from hprom_rbf_solver_rve import LoadHpromRbfModel, RunHpromRbfBatchSimulation
+
+
+def _load_hrom_mesh_base_from_ecm_dir(hprom_rbf_dir):
+    ecm_file = os.path.join(str(hprom_rbf_dir), "ecm_weights_all.npz")
+    if not os.path.exists(ecm_file):
+        return None
+    try:
+        ecm = np.load(ecm_file, allow_pickle=True)
+    except Exception:
+        return None
+    if "hrom_mesh_base" not in ecm:
+        return None
+    try:
+        return str(np.ravel(ecm["hrom_mesh_base"])[0])
+    except Exception:
+        return None
 
 
 def _compute_equivalent_stress_strain(eps, sig):
@@ -176,7 +194,16 @@ def run_stage10(
     print(f"  HPROM-RBF dir: {hprom_rbf_dir}")
     print(f"  Output dir: {out_dir}")
 
-    parameters = setup_kratos_parameters("rve_geometry")
+    mesh_fom_prom = "rve_geometry"
+    mesh_hprom = "rve_geometry"
+    auto_hrom_mesh = _load_hrom_mesh_base_from_ecm_dir(hprom_rbf_dir)
+    if auto_hrom_mesh:
+        mesh_hprom = str(auto_hrom_mesh)
+    print(f"  FOM/PROM mesh: {mesh_fom_prom}")
+    print(f"  HPROM mesh:    {mesh_hprom}")
+
+    parameters = setup_kratos_parameters(mesh_fom_prom)
+    parameters_hprom = setup_kratos_parameters(mesh_hprom)
     timings = {}
 
     fom_eps_file = os.path.join(out_dir, "fom_strain.npy")
@@ -207,7 +234,7 @@ def run_stage10(
     prom_sig_file = os.path.join(out_dir, "prom_rbf_stress.npy")
     if run_prom_rbf or not (os.path.exists(prom_eps_file) and os.path.exists(prom_sig_file)):
         print("\n[Stage 10] Running PROM-RBF...")
-        phi_p, phi_s, free_dofs, _, _, rbf_model, include_macro = LoadPromRbfModel(
+        phi_p, phi_s, free_dofs, _, _, rbf_model, _include_macro = LoadPromRbfModel(
             basis_dir="stage_2_pod_rve", rbf_data_dir=rbf_data_dir
         )
         t0 = time.perf_counter()
@@ -221,7 +248,6 @@ def run_stage10(
             out_dir=out_dir,
             reference_amplitude=emax,
             reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
-            include_macro_strain_input=include_macro,
         )
         timings["PROM-RBF"] = time.perf_counter() - t0
         p_eps = np.asarray(p_eps, dtype=float)
@@ -247,7 +273,7 @@ def run_stage10(
             Yc_h,
             rbf_model_h,
             ecm_data_h,
-            include_macro_h,
+            _include_macro_h,
         ) = LoadHpromRbfModel(
             basis_dir="stage_2_pod_rve",
             rbf_data_dir=rbf_data_dir,
@@ -255,7 +281,7 @@ def run_stage10(
         )
         t0 = time.perf_counter()
         h_eps, h_sig = RunHpromRbfBatchSimulation(
-            parameters,
+            parameters_hprom,
             phi_p_h,
             phi_s_h,
             free_dofs_h,
@@ -264,7 +290,6 @@ def run_stage10(
             out_dir=out_dir,
             strain_path=strain_path,
             trajectory_index=None,
-            include_macro_strain_input=include_macro_h,
             reference_amplitude=emax,
             reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
             eq_map_full=eq_map_h,
