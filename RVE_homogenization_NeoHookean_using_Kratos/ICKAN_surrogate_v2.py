@@ -140,11 +140,11 @@ class KANStressPredictor(nn.Module):
         )[0]  # Shape: (batches*steps, input_size)
 
         # Apply chain rule to get dW/dE using normalized dW_dI
-        dW_dE = torch.zeros((kan_input.shape[0], 3))  # Initialize dW/dE tensor
-        for i in range(kan_input.shape[0]):
-            dW_dE[i, :] = torch.matmul(dI_dE[i, :, :].T, dW_dI[i, :])  # Shape: (3,)
+        # dW_dE = torch.zeros((kan_input.shape[0], 3))  # Initialize dW/dE tensor
+        # for i in range(kan_input.shape[0]):
+        #     dW_dE[i, :] = torch.matmul(dI_dE[i, :, :].T, dW_dI[i, :])  # Shape: (3,)
         
-        return dW_dE # normalized dW/dE as predicted stress
+        return dW_dI # normalized dW/dE as predicted stress
 
 #=============================================================================================================
 
@@ -155,10 +155,10 @@ def TRAIN_KAN(model, optimizer, kan_input_database, ref_stress_database, dI_dE_d
         optimizer.zero_grad()
 
         # Forward pass: compute predicted stress
-        predicted_stress = model.forward(kan_input_database, dI_dE_database)  # Shape: (batches*steps, 3)
+        predicted_stress = dI_dE_database @ model.forward(kan_input_database, dI_dE_database).T   # Shape: (batches*steps, 3)
 
         # Compute L2 loss between predicted stress and reference stress
-        loss = torch.mean((predicted_stress - ref_stress_database.view(-1, 3)) ** 2)
+        loss = torch.mean((predicted_stress - ref_stress_database) ** 2)
 
         # Backward pass and optimization step
         loss.backward()
