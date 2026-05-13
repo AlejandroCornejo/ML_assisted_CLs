@@ -155,7 +155,8 @@ def TRAIN_KAN(model, optimizer, kan_input_database, ref_stress_database, dI_dE_d
         optimizer.zero_grad()
 
         # Forward pass: compute predicted stress
-        predicted_stress = dI_dE_database @ model.forward(kan_input_database, dI_dE_database).T   # Shape: (batches*steps, 3)
+        dW_dI = model.forward(kan_input_database, dI_dE_database)  # Shape: (batches*steps, 3)
+        predicted_stress = torch.bmm(dI_dE_database, dW_dI.unsqueeze(-1)).squeeze(-1)  # Shape: (batches*steps, 3)
 
         # Compute L2 loss between predicted stress and reference stress
         loss = torch.mean((predicted_stress - ref_stress_database) ** 2)
