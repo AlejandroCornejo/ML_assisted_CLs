@@ -105,10 +105,11 @@ class KANStressPredictor(nn.Module):
         return KAN_input.view(-1, self.input_size) # Reshape to (batches*steps, input_size)
 
     # ==========================================================================================
-    def CalculateW(self, kan_input):
+    def CalculateW(self, strain_database):
         """
         Computes W for the given strain with normalization.
         """
+        kan_input = self._compute_kan_input_for_strain(strain_database)  # Shape: (batches*steps, input_size)
         # Pass the input through the KAN layer
         # W0 = self.KAN_W.forward(torch.zeros_like(kan_input[0, :]).unsqueeze(0)) # compute W0 at the null strain input (reg_eigenvalues=1.0, log_J=0.0) for one sample (shape: (1,1))
 
@@ -119,7 +120,7 @@ class KANStressPredictor(nn.Module):
         return W_raw
 
     # ==========================================================================================
-    def forward(self, kan_input, dI_dE):
+    def forward(self, strain_database):
         """
         This method returns the stress by applying the chain rule to compute dW/dE = dW/dI * dI/dE
         kan_input: Tensor of shape (batches*steps, input_size) with KAN inputs
@@ -129,34 +130,27 @@ class KANStressPredictor(nn.Module):
         
         For that we compute the gradients of W w.r.t invariants using autograd, and then apply the chain rule to get dW/dE.
         """
-        W = self.CalculateW(kan_input)  # Shape: (batches*steps, 1)
+        W = self.CalculateW(strain_database)  # Shape: (batches*steps, 1)
 
-        # Compute gradients of W w.r.t. KAN inputs (invariants)
-        dW_dI = torch.autograd.grad(
+        grad_kan_input = torch.autograd.grad(
             outputs=W,
-            inputs=kan_input,
+            inputs=strain_database,
             grad_outputs=torch.ones_like(W),
             create_graph=True
-        )[0]  # Shape: (batches*steps, input_size)
-
-        # Apply chain rule to get dW/dE using normalized dW_dI
-        # dW_dE = torch.zeros((kan_input.shape[0], 3))  # Initialize dW/dE tensor
-        # for i in range(kan_input.shape[0]):
-        #     dW_dE[i, :] = torch.matmul(dI_dE[i, :, :].T, dW_dI[i, :])  # Shape: (3,)
+        )[0]
         
-        return dW_dI # normalized dW/dE as predicted stress
+        return grad_kan_input
 
 #=============================================================================================================
 
-def TRAIN_KAN(model, optimizer, kan_input_database, ref_stress_database, dI_dE_database, n_epochs):
+def TRAIN_KAN(model, optimizer, ref_strain_database, ref_stress_database, n_epochs):
     # Precompute dW_dI_null ONCE before training to avoid graph recreation each epoch
 
     for epoch in range(n_epochs):
         optimizer.zero_grad()
 
         # Forward pass: compute predicted stress
-        dW_dI = model.forward(kan_input_database, dI_dE_database)  # Shape: (batches*steps, 3)
-        predicted_stress = torch.bmm(dI_dE_database, dW_dI.unsqueeze(-1)).squeeze(-1)  # Shape: (batches*steps, 3)
+        predicted_stress = model.forward(ref_strain_database)
 
         # Compute L2 loss between predicted stress and reference stress
         loss = torch.mean((predicted_stress - ref_stress_database) ** 2)
@@ -178,8 +172,6 @@ Load strain and stress from FOM trajectories (10 trajectories from stage_1_train
 Data is loaded as [history, step, component] with shape [10, steps, 3].
 """
 #***********************************************
-n_epochs = 500
-learning_rate = 0.01
 min_steps = 150  # truncate all trajectories to the same length (e.g., 150 steps)
 #***********************************************
 
@@ -245,6 +237,9 @@ ref_strain_database = ref_strain_database.view(-1, 3) # Reshape to (batches*step
 # print("ref_strain_database shape= ", ref_strain_database.shape)
 ref_stress_database = ref_stress_database.view(-1, 3) # Reshape to (batches*steps, input_size)
 
+
+ref_strain_database = ref_stress_database.detach().requires_grad_(True) # Enable gradients for stress database to compute dW/dI using autograd
+
 # Create the torch model
 model = KANStressPredictor()
 model.KAN_W.speed()
@@ -254,26 +249,22 @@ kan_input = model._compute_kan_input_for_strain(ref_strain_database)
 print(f"KAN input shape: {kan_input.shape}")
 
 
-# Remove [0] indexing: jacobian returns a tensor directly (not a list) when input is a single tensor.
-# Full Jacobian shape: (1500, 3, 1500, 3) where grads[i, a, j, b] = d(kan_input[i, a]) / d(strain[j, b])
-grads = torch.autograd.functional.jacobian(
-    lambda x: model._compute_kan_input_for_strain(x),
-    ref_strain_database
-)
-# print(f"Full Jacobian shape: {grads.shape}")
-
-# Extract per-sample 3x3 Jacobians: d(kan_input[i]) / d(strain[i]) for each sample i
-# Since each output point depends only on its own strain point (no cross-batch coupling),
-# the diagonal blocks grads[i, :, i, :] give the per-sample Jacobian.
-per_sample_jacobian = torch.stack([grads[i, :, i, :] for i in range(ref_strain_database.shape[0])])
-# print(f"Per-sample Jacobian shape: {per_sample_jacobian.shape}")  # (1500, 3, 3)
-
-output = model.forward(kan_input, per_sample_jacobian)
-print("output size: ", output.shape)
-
 print("KAN grid updated with computed KAN inputs from the strain database.")
-model.KAN_W.update_grid(kan_input) # Update KAN grid with the computed KAN inputs (invariants) from the strain database
+# model.KAN_W.update_grid(kan_input) # Update KAN grid with the computed KAN inputs (invariants) from the strain database
+
+
+
+output = model.forward(ref_strain_database)
+print("output size: ", output.shape)
+print("output type: ", output[25,:])
+
+
+
+
+#*****************************
+n_epochs = 500
+learning_rate = 0.0001
+#*****************************
 
 optimizer_1 = optim.Adam(model.parameters(), lr=learning_rate)
-
-TRAIN_KAN(model, optimizer_1, kan_input, ref_stress_database, per_sample_jacobian, n_epochs)
+TRAIN_KAN(model, optimizer_1, ref_strain_database, ref_stress_database, n_epochs)
