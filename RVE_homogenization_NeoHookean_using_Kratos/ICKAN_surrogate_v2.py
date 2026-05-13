@@ -44,7 +44,7 @@ class KANStressPredictor(nn.Module):
 
         grid = []
         for i in range(self.input_size):
-            grid.append([-1, 1])
+            grid.append([0.0, 1.0])
 
         # KAN definition
         self.KAN_W = KAN.MultKAN(
@@ -82,6 +82,7 @@ class KANStressPredictor(nn.Module):
 
         C = 2.0 * E + torch.eye(2)
         J = torch.linalg.det(C) ** 0.5
+        log_J = J**2
         log_J = torch.log(J + 1.0e-12)
 
         square_eigenvalues = torch.linalg.eigvalsh(C)
@@ -110,14 +111,14 @@ class KANStressPredictor(nn.Module):
         Computes W for the given strain with normalization.
         """
         kan_input = self._compute_kan_input_for_strain(strain_database)  # Shape: (batches*steps, input_size)
-        # Pass the input through the KAN layer
-        # W0 = self.KAN_W.forward(torch.zeros_like(kan_input[0, :]).unsqueeze(0)) # compute W0 at the null strain input (reg_eigenvalues=1.0, log_J=0.0) for one sample (shape: (1,1))
 
-        # Normalization (if needed, can be implemented here)
-        # For now, we return W directly without normalization
+        # print("KAN input in CalculateW: ", kan_input)
+
         W_raw = self.KAN_W.forward(kan_input)  # Shape: (batch x steps, 1)
-        # W_raw[:, 0] = W_raw[:, 0] - W0  # Subtract W0 from all samples to normalize
-        return W_raw
+
+        # print("W_raw in CalculateW: ", W_raw)
+        W0 = self.KAN_W.forward(torch.zeros_like(kan_input))
+        return W_raw - W0
 
     # ==========================================================================================
     def forward(self, strain_database):
@@ -138,8 +139,18 @@ class KANStressPredictor(nn.Module):
             grad_outputs=torch.ones_like(W),
             create_graph=True
         )[0]
+
+        zeros = torch.zeros_like(strain_database).requires_grad_(True)
+        W0 = self.CalculateW(zeros)  # Shape: (batches*steps, 1)
+
+        grad_kan_input_0 = torch.autograd.grad(
+            outputs=W0,
+            inputs=zeros,
+            grad_outputs=torch.ones_like(W0),
+            create_graph=True
+        )[0]
         
-        return grad_kan_input
+        return grad_kan_input - grad_kan_input_0
 
 #=============================================================================================================
 
@@ -151,6 +162,9 @@ def TRAIN_KAN(model, optimizer, ref_strain_database, ref_stress_database, n_epoc
 
         # Forward pass: compute predicted stress
         predicted_stress = model.forward(ref_strain_database)
+
+        print(f"Epoch {epoch}, predicted_stress sample: {predicted_stress[25,:]}")
+        print(f"Epoch {epoch}, ref_stress_database sample: {ref_stress_database[25,:]}")
 
         # Compute L2 loss between predicted stress and reference stress
         loss = torch.mean((predicted_stress - ref_stress_database) ** 2)
