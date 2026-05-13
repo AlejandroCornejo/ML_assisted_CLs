@@ -243,9 +243,13 @@ def RunPromRbfBatchSimulation(
     q_p = np.zeros(n_primary, dtype=float)
     Kr_old = None
     J_full = np.zeros((n_total_dof, n_primary), dtype=float)
+    q0_const, J0_const = _evaluate_qs_and_jac(np.zeros(n_primary, dtype=float), np.zeros(3, dtype=float))
+    phi_p_eff = phi_p + phi_s @ J0_const
+    w0_const = phi_s @ q0_const
 
     print(f"  [PROM-RBF] Solving for {n_steps_total} dynamic increments...")
     print(f"  [PROM-RBF] Full elements assembled each Newton step: {len(elements)} / {len(elements)}")
+    print("  [PROM-RBF] Manifold correction active: N(0)=0 and J(0)=0.")
     t_map = 0.0
     t_assembly = 0.0
     t_projection = 0.0
@@ -295,9 +299,10 @@ def RunPromRbfBatchSimulation(
         while it < max_its:
             mp.ProcessInfo[KM.NL_ITERATION_NUMBER] = it + 1
             t0 = time.perf_counter()
-            q_s_map, J_rbf = _evaluate_qs_and_jac(q_p, E)
+            q_s_map, J_rbf_raw = _evaluate_qs_and_jac(q_p, E)
             t_map += time.perf_counter() - t0
-            q_s = q_s_map
+            q_s = q_s_map - q0_const - J0_const @ q_p
+            J_rbf = J_rbf_raw - J0_const
 
             if verbose_step:
                 qp_norm = float(np.linalg.norm(q_p))
@@ -318,14 +323,14 @@ def RunPromRbfBatchSimulation(
                 nonfinite_detected = True
                 break
 
-            u_fluc = phi_p @ q_p + phi_s @ q_s
+            u_fluc = w0_const + phi_p_eff @ q_p + phi_s @ q_s
             if not _is_finite(u_fluc):
                 print("  [PROM-RBF] WARNING: non-finite reconstructed displacement detected.")
                 nonfinite_detected = True
                 break
             u_free = u_aff_free + u_fluc
 
-            J_manifold = phi_p + phi_s @ J_rbf
+            J_manifold = phi_p_eff + phi_s @ J_rbf
             if not _is_finite(J_manifold):
                 print("  [PROM-RBF] WARNING: non-finite manifold Jacobian detected.")
                 nonfinite_detected = True
@@ -475,13 +480,13 @@ def RunPromRbfBatchSimulation(
 
         # Ensure the accepted reduced state is explicitly pushed to Kratos.
         q_s_final_map, _ = _evaluate_qs_and_jac(q_p, E)
-        q_s_final = q_s_final_map
-        u_fluc_final = phi_p @ q_p + phi_s @ q_s_final
+        q_s_final = q_s_final_map - q0_const - J0_const @ q_p
+        u_fluc_final = w0_const + phi_p_eff @ q_p + phi_s @ q_s_final
         if not _is_finite(u_fluc_final):
             q_p = q_step_start.copy()
             q_s_final_map, _ = _evaluate_qs_and_jac(q_p, E)
-            q_s_final = q_s_final_map
-            u_fluc_final = phi_p @ q_p + phi_s @ q_s_final
+            q_s_final = q_s_final_map - q0_const - J0_const @ q_p
+            u_fluc_final = w0_const + phi_p_eff @ q_p + phi_s @ q_s_final
         if not _is_finite(u_fluc_final):
             raise RuntimeError("PROM-RBF accepted state is non-finite after rollback.")
         if not use_fast_dirichlet_bc:

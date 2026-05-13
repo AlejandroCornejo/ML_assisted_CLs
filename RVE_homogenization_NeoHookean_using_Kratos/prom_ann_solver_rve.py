@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import torch
 import numpy as np
 try:
@@ -126,6 +127,8 @@ def RunPromAnnBatchSimulation(
     use_old_stiffness_in_first_iteration=USE_OLD_STIFFNESS_IN_FIRST_ITERATION,
     verbose_iterations=False,
 ):
+    t_wall_total_start = time.perf_counter()
+
     free_dofs = np.asarray(free_dofs, dtype=np.int64)
     if phi_p.shape[0] != phi_s.shape[0]:
         raise ValueError("phi_p and phi_s must have the same number of rows (n_free).")
@@ -191,7 +194,6 @@ def RunPromAnnBatchSimulation(
     is_x_dir = is_x_dof[dir_dofs]
     
     # Pre-process Basis
-    Vp = torch.from_numpy(phi_p.astype(np.float32)).to(device)
     Vs = torch.from_numpy(phi_s.astype(np.float32)).to(device)
 
     results_eps = [np.zeros(3, dtype=float)]
@@ -284,9 +286,27 @@ def RunPromAnnBatchSimulation(
     q_p_torch = torch.zeros((1, n_primary), device=device)
     Kr_old = None
     J_full = np.zeros((n_total_dof, n_primary), dtype=float)
+    q_zero_torch = torch.zeros((1, n_primary), device=device)
+    e_zero_torch = torch.zeros((1, 3), device=device)
+    with torch.no_grad():
+        N0_const = ann_model(_build_ann_input(q_zero_torch, e_zero_torch))
+    J0_const_torch = compute_manifold_jacobian(q_zero_torch, e_zero_torch).detach()
+    J0_const_np = J0_const_torch.cpu().numpy()
+    N0_const_np = N0_const.detach().cpu().numpy().reshape(-1)
+    phi_p_eff_np = phi_p + phi_s @ J0_const_np
+    w0_const_np = phi_s @ N0_const_np
+    Vp_eff = torch.from_numpy(phi_p_eff_np.astype(np.float32)).to(device)
+    w0_const_t = torch.from_numpy(w0_const_np.astype(np.float32)).to(device).unsqueeze(0)
     
     print(f"  [PROM-ANN] Solving for {n_steps_total} dynamic increments...")
     print(f"  [PROM-ANN] Decoder Jacobian backend: {jac_backend}")
+    print("  [PROM-ANN] Manifold correction active: N(0)=0 and J(0)=0.")
+    t_map = 0.0
+    t_assembly = 0.0
+    t_projection = 0.0
+    t_solve = 0.0
+    t_full_sync = 0.0
+    step_iters = []
     
     for step in range(1, n_steps_total + 1):
         time_val = float(step) * float(dt)
@@ -331,13 +351,17 @@ def RunPromAnnBatchSimulation(
         best_q = q_step_start.detach().clone()
         best_res = np.inf
         best_rel = np.inf
+        it_step_count = 0
         
         verbose_step = bool(verbose_iterations)
         while it < max_its:
             mp.ProcessInfo[KM.NL_ITERATION_NUMBER] = it + 1
+            it_step_count += 1
+            t0 = time.perf_counter()
             # 1. Neural Manifold Enrichment & Jacobian
             with torch.no_grad():
-                q_s = ann_model(_build_ann_input(q_p_torch, E_torch))
+                q_s_raw = ann_model(_build_ann_input(q_p_torch, E_torch))
+                q_s = q_s_raw - N0_const - (q_p_torch @ J0_const_torch.T)
             
             qp_np = q_p_torch.detach().cpu().numpy().flatten()
             qs_np = q_s.detach().cpu().numpy().flatten()
@@ -357,7 +381,7 @@ def RunPromAnnBatchSimulation(
             prev_qs_eval = qs_np.copy()
             
             # Displacement reconstruction
-            u_fluc_torch = q_p_torch @ Vp.T + q_s @ Vs.T
+            u_fluc_torch = w0_const_t + q_p_torch @ Vp_eff.T + q_s @ Vs.T
             u_fluc = u_fluc_torch.detach().cpu().numpy().flatten()
             if not _is_finite(u_fluc):
                 print("  [PROM-ANN] WARNING: non-finite reconstructed displacement detected.")
@@ -367,7 +391,7 @@ def RunPromAnnBatchSimulation(
             
             # Jacobian: J = Vp + Vs * (dq_s/dq_p)
             J_ann_raw = compute_manifold_jacobian(q_p_torch, E_torch).detach().cpu().numpy()
-            J_ann = J_ann_raw
+            J_ann = J_ann_raw - J0_const_np
             if J_ann.shape != (n_secondary, n_primary):
                 raise RuntimeError(
                     f"Invalid ANN Jacobian shape {J_ann.shape}; expected ({n_secondary}, {n_primary})."
@@ -376,18 +400,21 @@ def RunPromAnnBatchSimulation(
                 print("  [PROM-ANN] WARNING: non-finite ANN Jacobian detected.")
                 nonfinite_detected = True
                 break
-            J_manifold = phi_p + phi_s @ J_ann
+            J_manifold = phi_p_eff_np + phi_s @ J_ann
             if not _is_finite(J_manifold):
                 print("  [PROM-ANN] WARNING: non-finite manifold Jacobian detected.")
                 nonfinite_detected = True
                 break
+            t_map += time.perf_counter() - t0
             
             # 2. Update Kratos
             u_eq_curr = _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
             
             # 3. Assemble
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
+            t0 = time.perf_counter()
             K_sparse, rhs_vec = vec_assembler.Assemble(u_eq_curr)
+            t_assembly += time.perf_counter() - t0
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
             
             if (not _is_finite(rhs_vec)) or (not _is_finite(K_sparse.data)):
@@ -396,11 +423,13 @@ def RunPromAnnBatchSimulation(
                 break
             
             # 4. Galerkin Projection
+            t0 = time.perf_counter()
             J_full.fill(0.0)
             J_full[free_dofs, :] = J_manifold
             KJ = K_sparse @ J_full
             r_r = J_full.T @ rhs_vec
             K_r = J_full.T @ KJ
+            t_projection += time.perf_counter() - t0
             Kr_last = K_r
             if (not _is_finite(r_r)) or (not _is_finite(K_r)):
                 print("  [PROM-ANN] WARNING: non-finite reduced residual/stiffness detected.")
@@ -497,10 +526,12 @@ def RunPromAnnBatchSimulation(
                 K_solve = Kr_old
                 used_old = True
 
+            t0 = time.perf_counter()
             dq_p = _solve_reduced_system(K_solve, r_r)
             if used_old and not _is_finite(dq_p):
                 dq_p = _solve_reduced_system(K_r, r_r)
                 used_old = False
+            t_solve += time.perf_counter() - t0
             if not _is_finite(dq_p):
                 print("  [PROM-ANN] WARNING: non-finite reduced update detected.")
                 nonfinite_detected = True
@@ -576,13 +607,19 @@ def RunPromAnnBatchSimulation(
 
         # Ensure the accepted reduced state is explicitly pushed to Kratos.
         with torch.no_grad():
-            q_s_final = ann_model(_build_ann_input(q_p_torch, E_torch))
-            u_fluc_final = (q_p_torch @ Vp.T + q_s_final @ Vs.T).detach().cpu().numpy().reshape(-1)
+            q_s_final_raw = ann_model(_build_ann_input(q_p_torch, E_torch))
+            q_s_final = q_s_final_raw - N0_const - (q_p_torch @ J0_const_torch.T)
+            u_fluc_final = (
+                w0_const_t + q_p_torch @ Vp_eff.T + q_s_final @ Vs.T
+            ).detach().cpu().numpy().reshape(-1)
         if not _is_finite(u_fluc_final):
             q_p_torch = q_step_start.detach().clone()
             with torch.no_grad():
-                q_s_final = ann_model(_build_ann_input(q_p_torch, E_torch))
-                u_fluc_final = (q_p_torch @ Vp.T + q_s_final @ Vs.T).detach().cpu().numpy().reshape(-1)
+                q_s_final_raw = ann_model(_build_ann_input(q_p_torch, E_torch))
+                q_s_final = q_s_final_raw - N0_const - (q_p_torch @ J0_const_torch.T)
+                u_fluc_final = (
+                    w0_const_t + q_p_torch @ Vp_eff.T + q_s_final @ Vs.T
+                ).detach().cpu().numpy().reshape(-1)
         if not _is_finite(u_fluc_final):
             raise RuntimeError("PROM-ANN accepted state is non-finite after rollback.")
         if not use_fast_dirichlet_bc:
@@ -591,16 +628,31 @@ def RunPromAnnBatchSimulation(
         u_eq_final = _apply_total_free_displacement(u_aff_free + u_fluc_final, base_disp_vec=disp_base_step)
 
         InitializeNonLinearIteration(entities, mp.ProcessInfo)
+        t0 = time.perf_counter()
         _, _ = vec_assembler.Assemble(u_eq_final)
+        t_full_sync += time.perf_counter() - t0
         FinalizeNonLinearIteration(entities, mp.ProcessInfo)
         eps_h, sig_h = CalculateHomogenizedFromAssemblerWithElementWeights(
             vec_assembler,
             reference_measure=hom_reference_measure,
         )
         sim.FinalizeSolutionStep()
+        step_iters.append(int(it_step_count))
 
         results_eps.append(eps_h)
         results_sig.append(sig_h)
 
     sim.Finalize()
+    t_wall_total = time.perf_counter() - t_wall_total_start
+    t_accounted = t_map + t_assembly + t_projection + t_solve + t_full_sync
+    t_other = max(t_wall_total - t_accounted, 0.0)
+    iters = np.asarray(step_iters, dtype=float)
+    n_iter_total = int(np.sum(iters)) if iters.size else 0
+    n_iter_mean = float(np.mean(iters)) if iters.size else 0.0
+    print(
+        f"\n[PROM-ANN] Timing: map={t_map:.3f}s, assembly={t_assembly:.3f}s, "
+        f"projection={t_projection:.3f}s, solve={t_solve:.3f}s, full_sync={t_full_sync:.3f}s, "
+        f"accounted={t_accounted:.3f}s, other={t_other:.3f}s, total={t_wall_total:.3f}s, "
+        f"iters(total={n_iter_total}, mean/step={n_iter_mean:.2f})"
+    )
     return np.array(results_eps), np.array(results_sig)

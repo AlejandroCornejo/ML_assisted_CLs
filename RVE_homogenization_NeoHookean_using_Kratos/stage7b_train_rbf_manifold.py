@@ -4,7 +4,7 @@ import numpy as np
 
 from rbf_manifold_model import _kernel_from_dist2, save_rbf_model
 
-MANDATORY_N_CENTERS = 4000
+DEFAULT_N_CENTERS = 4000
 
 
 def _load_dataset_config(data_dir):
@@ -72,6 +72,103 @@ def _parse_csv_strings(text):
             continue
         vals.append(s)
     return vals
+
+
+def _select_centers_random(x_scaled, n_centers, rng):
+    n_samples = int(x_scaled.shape[0])
+    idx = rng.choice(n_samples, size=int(n_centers), replace=False)
+    centers = x_scaled[idx, :].copy()
+    return centers, idx
+
+
+def _select_centers_kmeans_minibatch(
+    x_scaled,
+    n_centers,
+    rng,
+    kmeans_max_iters=30,
+    kmeans_batch_size=4096,
+    kmeans_fit_samples=0,
+):
+    n_samples, in_dim = x_scaled.shape
+    n_centers = int(n_centers)
+    if n_centers <= 0:
+        raise ValueError("n_centers must be > 0.")
+    if n_samples < n_centers:
+        raise ValueError(f"Need at least n_centers samples ({n_centers}), got {n_samples}.")
+
+    n_fit = int(kmeans_fit_samples) if int(kmeans_fit_samples) > 0 else n_samples
+    n_fit = min(n_fit, n_samples)
+    if n_fit < n_centers:
+        n_fit = n_centers
+
+    if n_fit < n_samples:
+        fit_idx = rng.choice(n_samples, size=n_fit, replace=False)
+        x_fit = x_scaled[fit_idx, :]
+    else:
+        fit_idx = None
+        x_fit = x_scaled
+
+    init_idx_local = rng.choice(int(x_fit.shape[0]), size=n_centers, replace=False)
+    centers = x_fit[init_idx_local, :].copy()
+    counts = np.ones(n_centers, dtype=np.float64)
+    batch_size = int(max(64, min(int(kmeans_batch_size), int(x_fit.shape[0]))))
+    max_iters = int(max(1, kmeans_max_iters))
+
+    print(
+        f"[RBF] Center selection: kmeans_minibatch | fit_samples={x_fit.shape[0]} | "
+        f"centers={n_centers} | batch_size={batch_size} | iters={max_iters}"
+    )
+
+    for it in range(max_iters):
+        bidx = rng.choice(int(x_fit.shape[0]), size=batch_size, replace=False)
+        xb = x_fit[bidx, :]
+        d2 = _pairwise_dist2(xb, centers)
+        assign = np.argmin(d2, axis=1)
+        for j in np.unique(assign):
+            pts = xb[assign == j, :]
+            if pts.size == 0:
+                continue
+            n_old = counts[int(j)]
+            n_new = float(pts.shape[0])
+            centers[int(j), :] = (n_old * centers[int(j), :] + np.sum(pts, axis=0)) / (n_old + n_new)
+            counts[int(j)] = n_old + n_new
+        if (it + 1) % 10 == 0 or it == max_iters - 1:
+            disp = np.mean(np.linalg.norm(centers, axis=1))
+            print(f"  [kmeans] iter {it+1:03d}/{max_iters:03d} | mean(||c||)={disp:.3e}")
+
+    # Final full assignment on fit set for a stable centroid update.
+    d2_full = _pairwise_dist2(x_fit, centers)
+    assign_full = np.argmin(d2_full, axis=1)
+    for j in range(n_centers):
+        pts = x_fit[assign_full == j, :]
+        if pts.shape[0] > 0:
+            centers[j, :] = np.mean(pts, axis=0)
+
+    return centers, None
+
+
+def _select_centers(
+    x_scaled,
+    n_centers,
+    method,
+    rng,
+    kmeans_max_iters=30,
+    kmeans_batch_size=4096,
+    kmeans_fit_samples=0,
+):
+    mode = str(method).strip().lower()
+    if mode in ("random", "rand"):
+        return _select_centers_random(x_scaled, n_centers, rng)
+    if mode in ("kmeans", "k-means", "mini_batch_kmeans", "minibatch_kmeans"):
+        return _select_centers_kmeans_minibatch(
+            x_scaled=x_scaled,
+            n_centers=n_centers,
+            rng=rng,
+            kmeans_max_iters=kmeans_max_iters,
+            kmeans_batch_size=kmeans_batch_size,
+            kmeans_fit_samples=kmeans_fit_samples,
+        )
+    raise ValueError(f"Unsupported center selection method '{method}'.")
 
 
 def _build_kfold_splits(n_samples, n_folds, rng):
@@ -276,7 +373,12 @@ def _run_grid_search(
 def train_rbf(
     data_dir="stage_7_ann_data",
     out_dir="stage_7_rbf_data",
-    max_centers=MANDATORY_N_CENTERS,
+    max_centers=DEFAULT_N_CENTERS,
+    center_selection="random",
+    sparse_prune_centers=0,
+    kmeans_max_iters=30,
+    kmeans_batch_size=4096,
+    kmeans_fit_samples=0,
     kernel="inverse_multiquadric",
     ridge=1e-8,
     block_size=2048,
@@ -331,20 +433,26 @@ def train_rbf(
             "Training without grid search is not allowed."
         )
 
-    if int(max_centers) != int(MANDATORY_N_CENTERS):
+    max_centers = int(max_centers)
+    if max_centers <= 0:
+        raise RuntimeError("Stage 7b-RBF policy: max_centers must be a positive integer.")
+
+    if int(n_samples) < max_centers:
         raise RuntimeError(
-            f"Stage 7b-RBF policy: max_centers must be exactly {MANDATORY_N_CENTERS}."
+            f"Stage 7b-RBF policy requires at least {max_centers} samples "
+            f"to place {max_centers} centers, but dataset has {n_samples}."
         )
 
-    if int(n_samples) < int(MANDATORY_N_CENTERS):
-        raise RuntimeError(
-            f"Stage 7b-RBF policy requires at least {MANDATORY_N_CENTERS} samples "
-            f"to place {MANDATORY_N_CENTERS} centers, but dataset has {n_samples}."
-        )
-
-    m = int(MANDATORY_N_CENTERS)
-    center_indices = rng.choice(n_samples, size=m, replace=False)
-    centers_scaled = x_scaled[center_indices, :].copy()
+    m = max_centers
+    centers_scaled, center_indices = _select_centers(
+        x_scaled=x_scaled,
+        n_centers=m,
+        method=center_selection,
+        rng=rng,
+        kmeans_max_iters=kmeans_max_iters,
+        kmeans_batch_size=kmeans_batch_size,
+        kmeans_fit_samples=kmeans_fit_samples,
+    )
 
     kernel_sel = _canonical_kernel_name(kernel)
     ridge_sel = float(ridge)
@@ -379,7 +487,8 @@ def train_rbf(
     print(f"X shape: {x.shape} | Y shape: {y.shape}")
     print(f"n_primary={n_primary} | n_secondary={n_secondary} | include_macro_strain_input={include_macro}")
     print(
-        f"Centers: {m} | Kernel: {kernel_sel} | epsilon={eps_sel:.6e} | ridge={ridge_sel:.3e}"
+        f"Centers: {m} | selection={center_selection} | "
+        f"Kernel: {kernel_sel} | epsilon={eps_sel:.6e} | ridge={ridge_sel:.3e}"
     )
     print(
         f"Grid-search selected hyperparameters from {search_n_samples} samples and {search_n_folds} folds."
@@ -394,6 +503,34 @@ def train_rbf(
         ridge=ridge_sel,
         block_size=block_size,
     )
+
+    sparse_keep = int(sparse_prune_centers)
+    sparse_keep = max(0, sparse_keep)
+    if sparse_keep > 0 and sparse_keep < int(centers_scaled.shape[0]):
+        print(
+            f"[RBF] Sparse pruning enabled: keep {sparse_keep}/{centers_scaled.shape[0]} centers "
+            "by ||weights||_2, then refit."
+        )
+        center_scores = np.linalg.norm(weights_scaled, axis=1)
+        keep = np.argpartition(center_scores, -sparse_keep)[-sparse_keep:]
+        keep = keep[np.argsort(center_scores[keep])[::-1]]
+
+        centers_scaled = centers_scaled[keep, :]
+        if center_indices is not None:
+            center_indices = np.asarray(center_indices, dtype=np.int64)[keep]
+        else:
+            center_indices = None
+
+        weights_scaled = _fit_full_dataset_weights(
+            x_scaled=x_scaled,
+            y_scaled=y_scaled,
+            centers_scaled=centers_scaled,
+            kernel=kernel_sel,
+            epsilon=eps_sel,
+            ridge=ridge_sel,
+            block_size=block_size,
+        )
+        print(f"[RBF] Sparse pruning done. Active centers: {centers_scaled.shape[0]}")
 
     rel_l2 = _relative_l2_on_dataset(
         x_scaled=x_scaled,
@@ -422,6 +559,8 @@ def train_rbf(
         "n_secondary": int(n_secondary),
         "include_macro_strain_input": False,
         "center_indices": center_indices,
+        "center_selection": str(center_selection),
+        "sparse_prune_centers": int(sparse_prune_centers),
     }
 
     model_path = os.path.join(out_dir, "rbf_model.npz")
@@ -440,6 +579,9 @@ def train_rbf(
         f.write(f"n_secondary={n_secondary}\n")
         f.write("include_macro_strain_input=0\n")
         f.write(f"n_centers={m}\n")
+        f.write(f"n_centers_active={int(centers_scaled.shape[0])}\n")
+        f.write(f"center_selection={center_selection}\n")
+        f.write(f"sparse_prune_centers={int(sparse_prune_centers)}\n")
         f.write(f"kernel={kernel_sel}\n")
         f.write(f"epsilon={eps_sel:.16e}\n")
         f.write(f"ridge={ridge_sel:.16e}\n")
@@ -467,7 +609,38 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Stage 7b-RBF: train compact-center RBF manifold q_p -> q_s")
     parser.add_argument("--data-dir", type=str, default="stage_7_ann_data", help="Input dataset directory from Stage 7a.")
     parser.add_argument("--out-dir", type=str, default="stage_7_rbf_data", help="Output directory for trained RBF model.")
-    parser.add_argument("--max-centers", type=int, default=MANDATORY_N_CENTERS, help=f"Must be {MANDATORY_N_CENTERS}.")
+    parser.add_argument("--max-centers", type=int, default=DEFAULT_N_CENTERS, help=f"Number of RBF centers (default: {DEFAULT_N_CENTERS}).")
+    parser.add_argument(
+        "--center-selection",
+        type=str,
+        default="random",
+        choices=["random", "kmeans"],
+        help="Center selection strategy: random sample or mini-batch kmeans centroids.",
+    )
+    parser.add_argument(
+        "--sparse-prune-centers",
+        type=int,
+        default=0,
+        help="If >0, keep this many centers by ||weights||_2 and refit (sparse RBF).",
+    )
+    parser.add_argument(
+        "--kmeans-max-iters",
+        type=int,
+        default=30,
+        help="Mini-batch kmeans iterations when --center-selection=kmeans.",
+    )
+    parser.add_argument(
+        "--kmeans-batch-size",
+        type=int,
+        default=4096,
+        help="Mini-batch size when --center-selection=kmeans.",
+    )
+    parser.add_argument(
+        "--kmeans-fit-samples",
+        type=int,
+        default=0,
+        help="Optional cap of samples used for kmeans fitting (0 uses all).",
+    )
     parser.add_argument("--kernel", type=str, default="inverse_multiquadric", choices=["inverse_multiquadric", "imq", "gaussian", "multiquadric", "mq", "gauss"], help="RBF kernel type.")
     parser.add_argument("--ridge", type=float, default=1e-8, help="Ridge regularization on normal equations.")
     parser.add_argument("--block-size", type=int, default=2048, help="Block size for streaming normal-equation assembly.")
@@ -490,6 +663,11 @@ if __name__ == "__main__":
         data_dir=args.data_dir,
         out_dir=args.out_dir,
         max_centers=args.max_centers,
+        center_selection=args.center_selection,
+        sparse_prune_centers=args.sparse_prune_centers,
+        kmeans_max_iters=args.kmeans_max_iters,
+        kmeans_batch_size=args.kmeans_batch_size,
+        kmeans_fit_samples=args.kmeans_fit_samples,
         kernel=args.kernel,
         ridge=args.ridge,
         block_size=args.block_size,

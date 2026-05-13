@@ -9,7 +9,7 @@ Stage-5-style dataset builder with independent sampling for:
   - homogenization targets (C_hom, b_hom)
 
 Residual projection uses the ANN-manifold tangent:
-  J_m = phi_p + phi_s * d(q_s)/d(q_p)
+  J_m = (phi_p + phi_s*J0) + phi_s * d(q_s_corr)/d(q_p)
 """
 
 import os
@@ -211,6 +211,19 @@ def _evaluate_ann_qs_and_jac(q_p_val, ann_model, device, n_secondary, n_primary)
         jac.detach().cpu().numpy().astype(float),
     )
 
+
+def _evaluate_ann_origin_terms(ann_model, device, n_secondary, n_primary):
+    return _evaluate_ann_qs_and_jac(np.zeros(n_primary, dtype=float), ann_model, device, n_secondary, n_primary)
+
+
+def _apply_manifold_origin_correction(q_p_val, q_s_raw, j_qs_qp_raw, q0_ref, j0_ref):
+    q_vec = np.asarray(q_p_val, dtype=float).reshape(-1)
+    q_s_corr = np.asarray(q_s_raw, dtype=float).reshape(-1) - np.asarray(q0_ref, dtype=float).reshape(-1) - (
+        np.asarray(j0_ref, dtype=float) @ q_vec
+    )
+    j_corr = np.asarray(j_qs_qp_raw, dtype=float) - np.asarray(j0_ref, dtype=float)
+    return q_s_corr, j_corr
+
 def _fit_qp_gauss_newton(
     q_init,
     w_free,
@@ -220,6 +233,8 @@ def _fit_qp_gauss_newton(
     device,
     n_secondary,
     n_primary,
+    q0_ref,
+    j0_ref,
     max_iters,
     rel_tol,
     l2_reg,
@@ -228,13 +243,16 @@ def _fit_qp_gauss_newton(
     q = np.asarray(q_init, dtype=float).copy()
     w_target = np.asarray(w_free, dtype=float).reshape(-1)
     target_norm = max(np.linalg.norm(w_target), 1e-30)
+    phi_p_eff = np.asarray(phi_p, dtype=float) + np.asarray(phi_s, dtype=float) @ np.asarray(j0_ref, dtype=float)
+    w0_const = np.asarray(phi_s, dtype=float) @ np.asarray(q0_ref, dtype=float).reshape(-1)
 
-    q_s, j_qs_qp = _evaluate_ann_qs_and_jac(q, ann_model, device, n_secondary, n_primary)
+    q_s_raw, j_qs_qp_raw = _evaluate_ann_qs_and_jac(q, ann_model, device, n_secondary, n_primary)
+    q_s, j_qs_qp = _apply_manifold_origin_correction(q, q_s_raw, j_qs_qp_raw, q0_ref, j0_ref)
     if j_qs_qp.shape != (n_secondary, n_primary):
         raise RuntimeError(
             f"Invalid ANN Jacobian shape {j_qs_qp.shape}, expected {(n_secondary, n_primary)}."
         )
-    w_rec = phi_p @ q + phi_s @ q_s
+    w_rec = w0_const + phi_p_eff @ q + phi_s @ q_s
     rel0 = float(np.linalg.norm(w_rec - w_target) / target_norm)
     rel = rel0
     n_it = 0
@@ -242,7 +260,7 @@ def _fit_qp_gauss_newton(
     for it in range(int(max_iters)):
         if rel <= float(rel_tol):
             break
-        J_m = phi_p + phi_s @ j_qs_qp
+        J_m = phi_p_eff + phi_s @ j_qs_qp
         res = w_rec - w_target
         jtj = J_m.T @ J_m
         if l2_reg > 0.0:
@@ -255,16 +273,18 @@ def _fit_qp_gauss_newton(
         q -= dq
         n_it = it + 1
         if np.linalg.norm(dq) <= float(step_tol) * max(np.linalg.norm(q), 1.0):
-            q_s, j_qs_qp = _evaluate_ann_qs_and_jac(q, ann_model, device, n_secondary, n_primary)
-            w_rec = phi_p @ q + phi_s @ q_s
+            q_s_raw, j_qs_qp_raw = _evaluate_ann_qs_and_jac(q, ann_model, device, n_secondary, n_primary)
+            q_s, j_qs_qp = _apply_manifold_origin_correction(q, q_s_raw, j_qs_qp_raw, q0_ref, j0_ref)
+            w_rec = w0_const + phi_p_eff @ q + phi_s @ q_s
             rel = float(np.linalg.norm(w_rec - w_target) / target_norm)
             break
-        q_s, j_qs_qp = _evaluate_ann_qs_and_jac(q, ann_model, device, n_secondary, n_primary)
+        q_s_raw, j_qs_qp_raw = _evaluate_ann_qs_and_jac(q, ann_model, device, n_secondary, n_primary)
+        q_s, j_qs_qp = _apply_manifold_origin_correction(q, q_s_raw, j_qs_qp_raw, q0_ref, j0_ref)
         if j_qs_qp.shape != (n_secondary, n_primary):
             raise RuntimeError(
                 f"Invalid ANN Jacobian shape {j_qs_qp.shape}, expected {(n_secondary, n_primary)}."
             )
-        w_rec = phi_p @ q + phi_s @ q_s
+        w_rec = w0_const + phi_p_eff @ q + phi_s @ q_s
         rel = float(np.linalg.norm(w_rec - w_target) / target_norm)
 
     return q, q_s, j_qs_qp, rel0, rel, int(n_it)
@@ -372,6 +392,7 @@ def main():
         f"[Info] residual fit mode={fit_mode}, fit_max_iters={fit_max_iters}, "
         f"fit_rel_tol={fit_rel_tol:.2e}, fit_l2_reg={fit_l2_reg:.2e}, fit_step_tol={fit_step_tol:.2e}"
     )
+    print("[Info] Manifold correction active in Stage 9a-ANN: N(0)=0 and J(0)=0.")
 
     trajectories = sorted([d for d in os.listdir(snapshots_dir) if d.startswith("trajectory_")])
     if selected_traj_ids is not None:
@@ -524,6 +545,8 @@ def main():
     fit_rel_before = []
     fit_rel_after = []
     fit_iters = []
+    q0_const, j0_const = _evaluate_ann_origin_terms(ann_model, device, n_secondary, n_primary)
+    phi_p_eff_const = phi_p + phi_s @ j0_const
     s_res_global = 0
     s_hom_global = 0
     for traj_name, u_path, e_path, idx_res, idx_hom in all_tasks:
@@ -560,6 +583,8 @@ def main():
                         device=device,
                         n_secondary=n_secondary,
                         n_primary=n_primary,
+                        q0_ref=q0_const,
+                        j0_ref=j0_const,
                         max_iters=fit_max_iters,
                         rel_tol=fit_rel_tol,
                         l2_reg=fit_l2_reg,
@@ -570,12 +595,17 @@ def main():
                     fit_iters.append(int(nit))
                 else:
                     q_p = q_p_init
-                    _, j_qs_qp = _evaluate_ann_qs_and_jac(q_p, ann_model, device, n_secondary, n_primary)
+                    q_s_raw, j_qs_qp_raw = _evaluate_ann_qs_and_jac(
+                        q_p, ann_model, device, n_secondary, n_primary
+                    )
+                    _, j_qs_qp = _apply_manifold_origin_correction(
+                        q_p, q_s_raw, j_qs_qp_raw, q0_const, j0_const
+                    )
                     if j_qs_qp.shape != (n_secondary, n_primary):
                         raise RuntimeError(
                             f"Invalid ANN Jacobian shape {j_qs_qp.shape}, expected {(n_secondary, n_primary)}."
                         )
-                J_m = phi_p + phi_s @ j_qs_qp
+                J_m = phi_p_eff_const + phi_s @ j_qs_qp
 
                 q_block.fill(0.0)
                 for i, elem in enumerate(elements):
@@ -656,7 +686,7 @@ def main():
         fit_rel_after_max=np.array([float(np.max(fit_rel_after)) if fit_rel_after else np.nan], dtype=float),
         fit_iters_mean=np.array([float(np.mean(fit_iters)) if fit_iters else np.nan], dtype=float),
         fit_iters_max=np.array([float(np.max(fit_iters)) if fit_iters else np.nan], dtype=float),
-        manifold_origin_correction=np.array([0], dtype=np.int64),
+        manifold_origin_correction=np.array([1], dtype=np.int64),
     )
     with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
         f.write(f"{a0_ref:.16e}\n")

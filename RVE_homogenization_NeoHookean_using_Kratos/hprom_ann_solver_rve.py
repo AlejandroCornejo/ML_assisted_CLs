@@ -42,6 +42,8 @@ from fom_solver_rve import (
 )
 from hprom_solver_rve import (
     AssembleHyperReducedSystem,
+    ResetHyperReductionAssemblyStats,
+    GetHyperReductionAssemblyStats,
     ResolveResidualHyperReductionSelection,
     ResolveActiveFreeDofsAndBasisRows,
     ResolveHomogenizationWeightSelection,
@@ -259,6 +261,7 @@ def RunHpromAnnBatchSimulation(
         disp_vec[free_dofs] = np.asarray(u_total_free, dtype=float).reshape(-1)
         SetDisplacementFromEquationVector(disp_vec, eq_id_map, ta)
         UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
+        return disp_vec
 
     def _build_ann_input(q_tensor, e_tensor):
         return q_tensor
@@ -310,9 +313,13 @@ def RunHpromAnnBatchSimulation(
 
     q_p = np.zeros(n_primary, dtype=float)
     Kr_old = None
+    q0_const, J0_const = _evaluate_qs_and_jac(np.zeros(n_primary, dtype=float), np.zeros(3, dtype=float))
+    phi_p_eff = phi_p + phi_s @ J0_const
+    w0_const = phi_s @ q0_const
 
     print(f"  [HPROM-ANN] Solving for {n_steps_total} dynamic increments...")
     print(f"  [HPROM-ANN] Active mesh elements: {len(elements)} (reference full mesh: {n_elem_reference})")
+    print("  [HPROM-ANN] Manifold correction active: N(0)=0 and J(0)=0.")
     print(
         f"  [HPROM-ANN] ECM residual elements: {len(Z_res)} / {len(elements)} | "
         f"union reference size: {len(Z_union)} / {n_elem_reference}"
@@ -325,6 +332,7 @@ def RunHpromAnnBatchSimulation(
     t_solve = 0.0
     t_full_sync = 0.0
     step_iters = []
+    ResetHyperReductionAssemblyStats()
 
     for step in range(1, n_steps_total + 1):
         time_val = float(step) * float(dt)
@@ -371,9 +379,10 @@ def RunHpromAnnBatchSimulation(
             mp.ProcessInfo[KM.NL_ITERATION_NUMBER] = it + 1
             it_step_count += 1
             t0 = time.perf_counter()
-            q_s_map, J_ann = _evaluate_qs_and_jac(q_p, E)
+            q_s_map, J_ann_raw = _evaluate_qs_and_jac(q_p, E)
             t_map += time.perf_counter() - t0
-            q_s = q_s_map
+            q_s = q_s_map - q0_const - J0_const @ q_p
+            J_ann = J_ann_raw - J0_const
 
             if verbose_step:
                 print(f"    > q_p norm: {np.linalg.norm(q_p):.3e} | q_s norm: {np.linalg.norm(q_s):.3e}")
@@ -391,24 +400,26 @@ def RunHpromAnnBatchSimulation(
                 nonfinite_detected = True
                 break
 
-            u_fluc = phi_p @ q_p + phi_s @ q_s
+            u_fluc = w0_const + phi_p_eff @ q_p + phi_s @ q_s
             if not _is_finite(u_fluc):
                 print("  [HPROM-ANN] WARNING: non-finite reconstructed displacement detected.")
                 nonfinite_detected = True
                 break
             u_free = u_aff_free + u_fluc
 
-            J_manifold = phi_p + phi_s @ J_ann
+            J_manifold = phi_p_eff + phi_s @ J_ann
             if not _is_finite(J_manifold):
                 print("  [HPROM-ANN] WARNING: non-finite manifold Jacobian detected.")
                 nonfinite_detected = True
                 break
 
-            _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
+            u_eq_curr = _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
 
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
             t0 = time.perf_counter()
-            K_hp, rhs_hp = AssembleHyperReducedSystem(mp, n_total_dof, elements, Z_res, w_res_selected)
+            K_hp, rhs_hp = AssembleHyperReducedSystem(
+                mp, n_total_dof, elements, Z_res, w_res_selected, u_eq=u_eq_curr
+            )
             t_assembly += time.perf_counter() - t0
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
@@ -545,13 +556,13 @@ def RunHpromAnnBatchSimulation(
             Kr_old = None
 
         q_s_final_map, _ = _evaluate_qs_and_jac(q_p, E)
-        q_s_final = q_s_final_map
-        u_fluc_final = phi_p @ q_p + phi_s @ q_s_final
+        q_s_final = q_s_final_map - q0_const - J0_const @ q_p
+        u_fluc_final = w0_const + phi_p_eff @ q_p + phi_s @ q_s_final
         if not _is_finite(u_fluc_final):
             q_p = q_step_start.copy()
             q_s_final_map, _ = _evaluate_qs_and_jac(q_p, E)
-            q_s_final = q_s_final_map
-            u_fluc_final = phi_p @ q_p + phi_s @ q_s_final
+            q_s_final = q_s_final_map - q0_const - J0_const @ q_p
+            u_fluc_final = w0_const + phi_p_eff @ q_p + phi_s @ q_s_final
         if not _is_finite(u_fluc_final):
             raise RuntimeError("HPROM-ANN accepted state is non-finite after rollback.")
 
@@ -592,6 +603,7 @@ def RunHpromAnnBatchSimulation(
     t_accounted = t_map + t_assembly + t_projection + t_solve + t_full_sync
     t_other = max(t_wall_total - t_accounted, 0.0)
     iters = np.asarray(step_iters, dtype=float)
+    hr_stats = GetHyperReductionAssemblyStats()
     timing_stats = {
         "n_steps": int(len(step_iters)),
         "newton_iters_total": int(np.sum(iters)) if iters.size else 0,
@@ -606,6 +618,8 @@ def RunHpromAnnBatchSimulation(
         "other": float(t_other),
         "total": float(t_wall_total),
     }
+    for k, v in hr_stats.items():
+        timing_stats[f"hr_{k}"] = float(v)
     if timing_stats["newton_iters_total"] > 0:
         timing_stats["mean_time_per_newton_iter"] = float(
             timing_stats["total"] / float(timing_stats["newton_iters_total"])
@@ -622,6 +636,15 @@ def RunHpromAnnBatchSimulation(
         f"projection={t_projection:.3f}s, solve={t_solve:.3f}s, full_sync={t_full_sync:.3f}s, "
         f"accounted={t_accounted:.3f}s, other={t_other:.3f}s, total={t_wall_total:.3f}s, "
         f"iters(total={timing_stats['newton_iters_total']}, mean/step={timing_stats['newton_iters_mean_per_step']:.2f})"
+    )
+    print(
+        f"  [HPROM-ANN] Hyper-assembly stats: calls={int(hr_stats['calls_total'])}, "
+        f"vec={int(hr_stats['vectorized_calls'])}, local={int(hr_stats['local_calls'])}, "
+        f"vec_fail={int(hr_stats['vectorized_failures'])}, "
+        f"cache(rebuild={int(hr_stats['cache_rebuilds'])}, reuse={int(hr_stats['cache_reuses'])}), "
+        f"u_eq_none={int(hr_stats['calls_without_u_eq'])}, "
+        f"mean_vec={1e3*hr_stats['mean_vectorized_time_per_call']:.3f}ms, "
+        f"mean_local={1e3*hr_stats['mean_local_time_per_call']:.3f}ms"
     )
 
     np.savez(os.path.join(out_dir, "hprom_ann_timing_stats.npz"), **{
