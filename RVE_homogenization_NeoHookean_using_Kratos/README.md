@@ -286,6 +286,30 @@ with:
 \mathbf{q}_s = \mathcal{N}(\mathbf{q}_p)
 ```
 
+In the online/offline manifold-consistent implementation, we use the corrected map:
+
+```math
+\bar{\mathcal{N}}(\mathbf{q}_p)
+=
+\mathcal{N}(\mathbf{q}_p)
+-
+\mathcal{N}(\mathbf{0})
+-
+\mathbf{J}_{\mathcal{N}}(\mathbf{0})\,\mathbf{q}_p
+```
+
+with:
+
+```math
+\mathbf{J}_{\mathcal{N}}(\mathbf{q}_p)
+=
+\frac{\partial \mathcal{N}}{\partial \mathbf{q}_p},
+\qquad
+\bar{\mathbf{J}}_{\mathcal{N}}(\mathbf{q}_p)
+=
+\mathbf{J}_{\mathcal{N}}(\mathbf{q}_p)-\mathbf{J}_{\mathcal{N}}(\mathbf{0})
+```
+
 The decoder is:
 
 ```math
@@ -293,7 +317,7 @@ The decoder is:
 =
 \Phi_p\mathbf{q}_p
 +
-\Phi_s\mathcal{N}(\mathbf{q}_p)
+\Phi_s\bar{\mathcal{N}}(\mathbf{q}_p)
 ```
 
 The manifold Jacobian is:
@@ -306,7 +330,7 @@ The manifold Jacobian is:
 \Phi_p
 +
 \Phi_s
-\frac{\partial \mathcal{N}}{\partial \mathbf{q}_p}
+\bar{\mathbf{J}}_{\mathcal{N}}(\mathbf{q}_p)
 ```
 
 The reduced residual is:
@@ -365,6 +389,30 @@ The RBF map is trained with primary coordinates only:
 
 where `\mathcal{R}` is the compact-center RBF map trained in Stage 7b-RBF.
 
+In the online/offline manifold-consistent implementation, we use the corrected map:
+
+```math
+\bar{\mathcal{R}}(\mathbf{q}_p)
+=
+\mathcal{R}(\mathbf{q}_p)
+-
+\mathcal{R}(\mathbf{0})
+-
+\mathbf{J}_{\mathcal{R}}(\mathbf{0})\,\mathbf{q}_p
+```
+
+with:
+
+```math
+\mathbf{J}_{\mathcal{R}}(\mathbf{q}_p)
+=
+\frac{\partial \mathcal{R}}{\partial \mathbf{q}_p},
+\qquad
+\bar{\mathbf{J}}_{\mathcal{R}}(\mathbf{q}_p)
+=
+\mathbf{J}_{\mathcal{R}}(\mathbf{q}_p)-\mathbf{J}_{\mathcal{R}}(\mathbf{0})
+```
+
 The decoder is:
 
 ```math
@@ -372,7 +420,7 @@ The decoder is:
 =
 \Phi_p\mathbf{q}_p
 +
-\Phi_s\mathcal{R}(\mathbf{q}_p)
+\Phi_s\bar{\mathcal{R}}(\mathbf{q}_p)
 ```
 
 The manifold Jacobian with respect to the reduced unknowns is:
@@ -383,7 +431,7 @@ The manifold Jacobian with respect to the reduced unknowns is:
 \Phi_p
 +
 \Phi_s
-\frac{\partial \mathcal{R}}{\partial \mathbf{q}_p}
+\bar{\mathbf{J}}_{\mathcal{R}}(\mathbf{q}_p)
 ```
 
 The reduced residual is:
@@ -776,21 +824,31 @@ manifold_ann_metadata.npz
 
 Policy:
 - grid search is always enabled (training without grid search is blocked),
-- the model uses exactly `4000` centers,
+- the number of centers is user-configurable via `--max-centers` (default `4000`),
 - grid search uses all available training samples.
 
 ```bash
 python3 stage7b_train_rbf_manifold.py \
   --data-dir stage_7_ann_data \
   --out-dir stage_7_rbf_data \
-  --max-centers 4000 \
+  --max-centers 8000 \
+  --center-selection kmeans \
+  --kmeans-max-iters 30 \
+  --kmeans-batch-size 4096 \
+  --kmeans-fit-samples 60000 \
+  --sparse-prune-centers 4000 \
   --kernel gaussian \
   --ridge 1e-10 \
   --grid-kernels gaussian \
-  --grid-eps-values 0.01,0.05,0.1,0.25,0.5,1.0,2.0,5.0 \
-  --grid-ridges 1e-10 \
+  --grid-eps-values 0.2,0.5,1.0,2.0,3.0,4.0,5.0 \
+  --grid-ridges 1e-10,1e-8 \
   --grid-folds 5
 ```
+
+Notes:
+- `--center-selection random|kmeans` controls how center positions are chosen.
+- `--sparse-prune-centers K` keeps the top-`K` centers by `||weights||_2` after an initial fit and then refits the model (sparse RBF).
+- For stable bash parsing, keep comma-separated lists without spaces.
 
 Outputs in:
 

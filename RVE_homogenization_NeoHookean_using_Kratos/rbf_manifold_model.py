@@ -69,6 +69,10 @@ def save_rbf_model(path, model_dict):
     }
     if "center_indices" in model_dict and model_dict["center_indices"] is not None:
         payload["center_indices"] = np.asarray(model_dict["center_indices"], dtype=np.int64)
+    if "center_selection" in model_dict:
+        payload["center_selection"] = np.asarray([str(model_dict["center_selection"])], dtype=object)
+    if "sparse_prune_centers" in model_dict:
+        payload["sparse_prune_centers"] = np.asarray([int(model_dict["sparse_prune_centers"])], dtype=np.int64)
     np.savez(path, **payload)
 
 
@@ -92,6 +96,12 @@ def load_rbf_model(path):
         "center_indices": np.asarray(data["center_indices"], dtype=np.int64)
         if "center_indices" in data
         else None,
+        "center_selection": str(np.ravel(data["center_selection"])[0])
+        if "center_selection" in data
+        else "random",
+        "sparse_prune_centers": int(np.ravel(data["sparse_prune_centers"])[0])
+        if "sparse_prune_centers" in data
+        else 0,
     }
 
 
