@@ -254,23 +254,25 @@ class KANStressPredictor(nn.Module):
         Forward pass to compute the gradient of W with respect to strain.
         
         Args:
-            strain: The input strain tensor of shape (batches, steps, components)
-            kan_input: Optional precomputed KAN input tensor. If provided, this is used
-                       directly instead of computing from strain. This allows computing
-                       the KAN input once and reusing it for multiple forward passes.
-                       The kan_input should have shape (batches*steps, input_size) and
-                       should already have detach().requires_grad_(True) applied.
+            strain: The input strain tensor of shape (batches, steps, components).
+                    NOTE: Strain is NOT used in the forward computation. It is only
+                    used for shape reference and computing grad_at_zero offset.
+            kan_input: REQUIRED precomputed KAN input tensor computed from strain using
+                       model.ComputeKANInput(strain). The KAN model only accepts KAN input
+                       as features - strain must NOT enter the model directly. The kan_input
+                       should have shape (batches*steps, input_size) and should already have
+                       detach().requires_grad_(True) applied.
         
-        The detach() and requires_grad_(True) behavior is maintained to ensure the same
-        gradient computation behavior as the original implementation.
+        IMPORTANT: Only KAN input features are allowed to enter the model. Strain tensor
+        is never passed to the KAN layer. This ensures physical consistency and proper
+        gradient computation.
         
-        Example usage for optimized mode:
-            # Compute KAN input ONCE with gradients enabled
+        Example usage:
+            # Compute KAN input ONCE from strain with gradients enabled
             kan_input = model.ComputeKANInput(strain)
             kan_input = kan_input.detach().requires_grad_(True)
-            # Use it multiple times in forward passes (no recomputation)
-            for i in range(num_passes):
-                grad = model.forward(strain, kan_input=kan_input)
+            # Use it in forward passes (strain is not used by KAN, only for shape)
+            grad = model.forward(strain, kan_input=kan_input)
         """
         batches, steps = strain.shape[0], strain.shape[1]
         
@@ -284,53 +286,38 @@ class KANStressPredictor(nn.Module):
             create_graph=True
         )[0]
         
-        # Apply detach and requires_grad_(True) to strain - maintains original behavior
-        strain = strain.detach().requires_grad_(True)
+        # ENFORCEMENT: kan_input is REQUIRED - only KAN input features are allowed
+        if kan_input is None:
+            raise ValueError(
+                "kan_input is required! Only KAN input features are allowed to enter the model. "
+                "Compute kan_input using: kan_input = model.ComputeKANInput(strain).detach().requires_grad_(True)"
+            )
         
-        # Use precomputed kan_input if provided (avoids recomputing from strain)
-        if kan_input is not None:
-            # Use the precomputed KAN input directly - no recomputation
-            # Ensure it has gradients for backpropagation
-            if not kan_input.requires_grad:
-                kan_input = kan_input.detach().requires_grad_(True)
-        else:
-            # Compute kan_input from strain to ensure gradient flow: strain -> kan_input -> W
-            kan_input = self.ComputeKANInput(strain)
+        # Ensure kan_input has gradients for backpropagation
+        if not kan_input.requires_grad:
+            kan_input = kan_input.detach().requires_grad_(True)
         
         # Compute W0 at zero strain (constant offset, no gradient needed)
         zeros = torch.zeros_like(strain)
         with torch.no_grad():
             W0 = self.CalculateW(zeros)
         
-        # Use the KAN input for W (forward pass)
+        # Use ONLY the precomputed KAN input for W (forward pass)
+        # Strain does NOT enter the KAN model - only KAN input features are used
         W = self.CalculateWWithoutNormalizationFromInput(kan_input, batches, steps)
         W = W - W0
 
-        # Compute gradients w.r.t. the input that has gradients
-        # When kan_input is precomputed, compute grad w.r.t. kan_input, then chain rule through strain
-        # When kan_input is computed from strain, compute grad w.r.t. strain directly
-        if kan_input is not None and kan_input.requires_grad:
-            # Precomputed mode: compute gradient w.r.t. kan_input
-            grad_kan_input = torch.autograd.grad(
-                outputs=W,
-                inputs=kan_input,
-                grad_outputs=torch.ones_like(W),
-                create_graph=True
-            )[0]
-            # Reshape grad_kan_input to match strain shape for consistency with grad_at_zero
-            # grad_kan_input shape: (batches*steps, input_size)
-            # We need to return gradient w.r.t. strain, so we use grad_kan_input directly
-            # since the caller expects stress predictions (gradient of W)
-            return grad_kan_input.view(batches, steps, -1) - grad_at_zero
-        else:
-            # Standard mode: compute gradient w.r.t. strain
-            grad = torch.autograd.grad(
-                outputs=W,
-                inputs=strain,
-                grad_outputs=torch.ones_like(W),
-                create_graph=True
-            )[0]
-            return grad - grad_at_zero
+        # Compute gradients w.r.t. kan_input (the only input to the KAN model)
+        grad_kan_input = torch.autograd.grad(
+            outputs=W,
+            inputs=kan_input,
+            grad_outputs=torch.ones_like(W),
+            create_graph=True
+        )[0]
+        
+        # Reshape grad_kan_input to match strain shape for consistency with grad_at_zero
+        # grad_kan_input shape: (batches*steps, input_size)
+        return grad_kan_input.view(batches, steps, -1) - grad_at_zero
 
 
     # ==========================================================================================
@@ -505,7 +492,7 @@ flat_KAN_input.detach().requires_grad_(True)
 model.KAN_W.update_grid(flat_KAN_input)
 
 
-print("\nNull strain KAN prediction initial CHECK: ", model.forward(torch.tensor([[[0.0, 0.0, 0.0]]]))) # for the order 1
+print("\nNull strain KAN prediction initial CHECK: ", model.forward(torch.tensor([[[0.0, 0.0, 0.0]]]), kan_input=model.ComputeKANInput(torch.tensor([[[0.0, 0.0, 0.0]]])).detach().requires_grad_(True))) # for the order 1
 print("\n")
 
 
@@ -594,7 +581,7 @@ if fix_symbolic:
 
 # model.ComputeHessian(ref_strain_database[:, :, :])  # Check the Hessian eigenvalues for the whole strain
 
-print("\nNull strain KAN prediction POST CHECK: ", model.forward(torch.tensor([[[0.0, 0.0, 0.0]]]))) # for the order 1
+print("\nNull strain KAN prediction POST CHECK: ", model.forward(torch.tensor([[[0.0, 0.0, 0.0]]]), kan_input=model.ComputeKANInput(torch.tensor([[[0.0, 0.0, 0.0]]])).detach().requires_grad_(True))) # for the order 1
 print("\n")
 
 # Create the folder to save the plots if it doesn't exist
