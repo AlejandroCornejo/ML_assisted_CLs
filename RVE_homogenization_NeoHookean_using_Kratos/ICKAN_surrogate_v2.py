@@ -152,27 +152,20 @@ def TRAIN_KAN(model, optimizer, kan_input_database, ref_stress_database, dI_dE_d
     # Precompute dW_dI_null ONCE before training to avoid graph recreation each epoch
 
     for epoch in range(n_epochs):
+        optimizer.zero_grad()
 
-        def closure():
-            optimizer.zero_grad()
+        # Forward pass: compute predicted stress
+        predicted_stress = model.forward(kan_input_database, dI_dE_database)  # Shape: (batches*steps, 3)
 
-            predicted_stress = model.forward(kan_input_database, dI_dE_database)  # Get predictions using the precomputed KAN input and precomputed null gradient
+        # Compute L2 loss between predicted stress and reference stress
+        loss = torch.mean((predicted_stress - ref_stress_database.view(-1, 3)) ** 2)
 
-            # Use mean stress difference loss instead of work-based loss
-            # Compute the mean difference between predicted and reference stress
-            error = predicted_stress - ref_stress_database
-            loss = 0.5 * torch.mean(error ** 2)
-            loss.backward()
-            return loss
-
-        loss = optimizer.step(closure)
+        # Backward pass and optimization step
+        loss.backward()
+        optimizer.step()
 
         if epoch % 20 == 0:
-            print(f"Epoch {epoch}, Loss: {loss.item():.4e}")
-
-        if epoch == n_epochs - 1:
-            print("\nTraining finished.\n")
-            print("\nFinal loss: ", loss.item())
+            print(f"Epoch {epoch}, Loss: {loss.item()}")
 
 #=============================================================================================================
 
@@ -276,8 +269,6 @@ per_sample_jacobian = torch.stack([grads[i, :, i, :] for i in range(ref_strain_d
 
 output = model.forward(kan_input, per_sample_jacobian)
 print("output size: ", output.shape)
-
-# print(output[1, :])
 
 print("KAN grid updated with computed KAN inputs from the strain database.")
 model.KAN_W.update_grid(kan_input) # Update KAN grid with the computed KAN inputs (invariants) from the strain database
