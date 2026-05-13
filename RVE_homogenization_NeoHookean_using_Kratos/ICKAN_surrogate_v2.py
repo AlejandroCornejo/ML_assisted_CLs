@@ -163,9 +163,6 @@ def TRAIN_KAN(model, optimizer, ref_strain_database, ref_stress_database, n_epoc
         # Forward pass: compute predicted stress
         predicted_stress = model.forward(ref_strain_database)
 
-        print(f"Epoch {epoch}, predicted_stress sample: {predicted_stress[25,:]}")
-        print(f"Epoch {epoch}, ref_stress_database sample: {ref_stress_database[25,:]}")
-
         # Compute L2 loss between predicted stress and reference stress
         loss = torch.mean((predicted_stress - ref_stress_database) ** 2)
 
@@ -252,7 +249,7 @@ ref_strain_database = ref_strain_database.view(-1, 3) # Reshape to (batches*step
 ref_stress_database = ref_stress_database.view(-1, 3) # Reshape to (batches*steps, input_size)
 
 
-ref_strain_database = ref_stress_database.detach().requires_grad_(True) # Enable gradients for stress database to compute dW/dI using autograd
+ref_strain_database = ref_strain_database.detach().requires_grad_(True) # Enable gradients for strain database to compute dW/dI using autograd
 
 # Create the torch model
 model = KANStressPredictor()
@@ -277,7 +274,7 @@ print("output type: ", output[25,:])
 
 #*****************************
 n_epochs = 500
-learning_rate = 0.0001
+learning_rate = 0.01
 #*****************************
 
 optimizer_1 = optim.Adam(model.parameters(), lr=learning_rate)
