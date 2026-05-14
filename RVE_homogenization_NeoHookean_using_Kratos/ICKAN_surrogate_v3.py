@@ -143,7 +143,7 @@ class ICKAN_W_Surrogate(nn.Module):
 
 
 # ==========================================================================================
-def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database, n_epochs, gradient_penalty_weight=1.0):
+def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database, n_epochs, gradient_penalty_weight):
     """
     Training function with gradient penalization at null input.
     
@@ -306,7 +306,7 @@ k = 2  # Degree of splines
 grid = 3  # Number of knots
 input_size = 2 * order_stretches + 1
 W_width = [input_size,  1] # output always 1
-W_width = [input_size, input_size, input_size, 1] # output always 1
+W_width = [input_size, input_size, input_size, 1, 1] # output always 1
 #*****************************
 #*****************************
 #*****************************
