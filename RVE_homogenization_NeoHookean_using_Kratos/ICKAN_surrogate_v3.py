@@ -35,36 +35,39 @@ the direct S prediction from the previous version.
 
 class ICKAN_W_Surrogate(nn.Module):
 
-    def __init__(self, order_stretches, grid, k):
-
+    def __init__(self, order_stretches, grid, k, W_width):
         super(ICKAN_W_Surrogate, self).__init__()
 
         self.order_stretches = order_stretches
         self.input_size = 2 * self.order_stretches + 1  # Total inputs: 2 * reg_eigenvalues for each order + 1 * log(J)
         self.grid = grid
         self.k = k
+        self.W_width = W_width
 
         grid = []
         for i in range(self.input_size):
-            grid.append([-0, 1])
+            grid.append([-1, 1])
 
         # KAN definition for the energy density potential W
         self.KAN_W = KAN.MultKAN(
-            width=[self.input_size, 1], # output of size 1: W
-            grid_range_0=grid,
-            grid_range=grid,
-            # base_fun = "identity"
+            width = self.W_width, # output of size 1: W
+            # width=[self.input_size, self.input_size, 1], # output of size 1: W
+            grid_range_0 = grid,
+            grid_range = grid,
+            base_fun = "identity"
         )
 
         self.KAN_W.speed()
 
         # Initialize some extra parameters
         self.ki = nn.ParameterList([
-            nn.Parameter(torch.tensor(1.0)) for p in range(self.order_stretches + 1)
+            # nn.Parameter(torch.tensor(1.0)) for p in range(self.order_stretches + 1)
+            1.0 for p in range(self.order_stretches + 1)
         ])
 
         # The parameter multiplying the log(J) is initially set to 1.0
-        self.ki[-1] = nn.Parameter(torch.tensor(1.0))
+        self.ki[-1] = 1.0
+        # self.ki[-1] = nn.Parameter(torch.tensor(1.0))
 
     # ==========================================================================================
 
@@ -244,19 +247,21 @@ train_W_database /= train_W_database.abs().max()  # Normalize W to have max abso
 #*****************************
 #*****************************
 n_epochs = 1000
-learning_rate = 0.1
+learning_rate = 0.01
 
 
 order_stretches = 1   # Number of orders (can be set to any value)
 k = 2  # Degree of splines
 grid = 3  # Number of knots
+input_size = 2 * order_stretches + 1
+W_width = [input_size, input_size,  1] # output always 1
 #*****************************
 #*****************************
 #*****************************
 
 
 
-model = ICKAN_W_Surrogate(order_stretches=order_stretches, grid=grid, k=k)
+model = ICKAN_W_Surrogate(order_stretches=order_stretches, grid=grid, k=k, W_width=W_width)
 # model.UpdateGridFromSamples(train_strain_database)
 
 optimizer_1 = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
@@ -273,4 +278,5 @@ plt.xlabel('E_xx')
 plt.ylabel('W')
 plt.legend()
 plt.savefig("./ICKAN_predictions/W_history.png")
+plt.show()
 plt.close()
