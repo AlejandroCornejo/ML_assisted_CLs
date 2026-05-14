@@ -258,7 +258,8 @@ W_zero = torch.zeros(batch_strain.shape[0], 1, 1, device=W_cumulative_batch.devi
 W_full_batch = torch.cat([W_zero, W_cumulative_batch], dim=1)  # [10, steps, 1]
 train_W_database = W_full_batch.view(-1, 1)  # [10*steps, 1]
 
-max_W = train_W_database.abs().max()
+max_W = 1
+# max_W = train_W_database.abs().max()
 train_W_database /= max_W  # Normalize W to have max absolute value of 1
 
 
@@ -266,8 +267,8 @@ train_W_database /= max_W  # Normalize W to have max absolute value of 1
 #*****************************
 #*****************************
 #*****************************
-n_epochs = 5000
-learning_rate = 0.1
+n_epochs = 150
+learning_rate = 0.01
 
 
 order_stretches = 1   # Number of orders (can be set to any value)
@@ -285,20 +286,20 @@ W_width = [input_size, input_size, input_size, 1] # output always 1
 model = ICKAN_W_Surrogate(order_stretches=order_stretches, grid=grid, k=k, W_width=W_width)
 # model.UpdateGridFromSamples(train_strain_database)
 
-# optimizer_1 = optim.LBFGS(
-#                     model.parameters(),
-#                     lr=learning_rate,
-#                     max_iter=50,
-#                     history_size=50)
+optimizer_1 = optim.LBFGS(
+                    model.parameters(),
+                    lr=learning_rate,
+                    max_iter=20,
+                    history_size=30)
 
-optimizer_1 = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+# optimizer_1 = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
 
 TRAIN_KAN(model, optimizer_1, train_strain_database, train_W_database, n_epochs)
 
 print("Check null W at null strain: ", model.forward(torch.zeros(1,3)))
 
 
-predicted_w = model.forward(train_strain_database)
+predicted_w = max_W * model.forward(train_strain_database)
 
 plt.plot(train_strain_database[:,0].detach().numpy(), train_W_database[:,0].detach().numpy(), '--', label='Reference W')
 plt.plot(train_strain_database[:,0].detach().numpy(), predicted_w[:,0].detach().numpy(), '-', label='ICKAN W')
