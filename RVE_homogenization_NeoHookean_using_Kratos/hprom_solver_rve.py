@@ -52,6 +52,46 @@ USE_VECTORIZED_HPROM_ASSEMBLY = True
 WEIGHT_ZERO_TOL = 1.0e-14
 
 
+def _CreateHyperReductionAssemblyStats():
+    return {
+        "calls_total": 0,
+        "calls_with_u_eq": 0,
+        "calls_without_u_eq": 0,
+        "vectorized_calls": 0,
+        "local_calls": 0,
+        "vectorized_failures": 0,
+        "cache_rebuilds": 0,
+        "cache_reuses": 0,
+        "capture_from_nodes_calls": 0,
+        "time_total": 0.0,
+        "time_vectorized": 0.0,
+        "time_local": 0.0,
+        "time_capture": 0.0,
+    }
+
+
+def ResetHyperReductionAssemblyStats():
+    setattr(AssembleHyperReducedSystem, "_stats", _CreateHyperReductionAssemblyStats())
+
+
+def GetHyperReductionAssemblyStats():
+    stats = getattr(AssembleHyperReducedSystem, "_stats", None)
+    if stats is None:
+        stats = _CreateHyperReductionAssemblyStats()
+    out = dict(stats)
+
+    n_calls = max(int(out["calls_total"]), 1)
+    n_vec = max(int(out["vectorized_calls"]), 1)
+    n_loc = max(int(out["local_calls"]), 1)
+    n_cap = max(int(out["capture_from_nodes_calls"]), 1)
+
+    out["mean_time_per_call"] = float(out["time_total"]) / float(n_calls)
+    out["mean_vectorized_time_per_call"] = float(out["time_vectorized"]) / float(n_vec)
+    out["mean_local_time_per_call"] = float(out["time_local"]) / float(n_loc)
+    out["mean_capture_time_per_call"] = float(out["time_capture"]) / float(n_cap)
+    return out
+
+
 def _BuildEqMapFromNodes(mp):
     eq_map = np.empty((mp.NumberOfNodes(), 2), dtype=int)
     for i, node in enumerate(mp.Nodes):
@@ -119,8 +159,25 @@ def AssembleHyperReducedSystem(mp, n_dof, elements, elem_indices, elem_weights, 
     Assemble K and rhs using ONLY the ECM-selected elements,
     scaling each element's contribution by its cubature weight.
     """
+    stats = getattr(AssembleHyperReducedSystem, "_stats", None)
+    if stats is None:
+        stats = _CreateHyperReductionAssemblyStats()
+        setattr(AssembleHyperReducedSystem, "_stats", stats)
+
+    t_call = time.perf_counter()
+    stats["calls_total"] += 1
+    if u_eq is None:
+        stats["calls_without_u_eq"] += 1
+    else:
+        stats["calls_with_u_eq"] += 1
+
     if not USE_VECTORIZED_HPROM_ASSEMBLY:
-        return _AssembleHyperReducedSystemKratosLocal(mp, n_dof, elements, elem_indices, elem_weights)
+        t0 = time.perf_counter()
+        out = _AssembleHyperReducedSystemKratosLocal(mp, n_dof, elements, elem_indices, elem_weights)
+        stats["local_calls"] += 1
+        stats["time_local"] += time.perf_counter() - t0
+        stats["time_total"] += time.perf_counter() - t_call
+        return out
 
     elem_idx_arr = np.asarray(elem_indices, dtype=np.int64).reshape(-1)
     elem_w_arr = np.asarray(elem_weights, dtype=float).reshape(-1)
@@ -159,16 +216,33 @@ def AssembleHyperReducedSystem(mp, n_dof, elements, elem_indices, elem_weights, 
         }
         cache[id(mp)] = rec
         setattr(AssembleHyperReducedSystem, "_vectorized_cache", cache)
+        stats["cache_rebuilds"] += 1
+    else:
+        stats["cache_reuses"] += 1
 
     try:
         if u_eq is None:
+            t_cap = time.perf_counter()
             u_curr = _CaptureDisplacementFromNodes(mp, int(n_dof), rec["eq_map"])
+            stats["capture_from_nodes_calls"] += 1
+            stats["time_capture"] += time.perf_counter() - t_cap
         else:
             u_curr = np.asarray(u_eq, dtype=float).reshape(-1)
-        return rec["assembler"].Assemble(u_curr)
+        t0 = time.perf_counter()
+        out = rec["assembler"].Assemble(u_curr)
+        stats["vectorized_calls"] += 1
+        stats["time_vectorized"] += time.perf_counter() - t0
+        stats["time_total"] += time.perf_counter() - t_call
+        return out
     except Exception as exc:
+        stats["vectorized_failures"] += 1
         print(f"[HPROM] WARNING: vectorized hyper-reduced assembly failed, using Kratos local system. ({exc})")
-        return _AssembleHyperReducedSystemKratosLocal(mp, n_dof, elements, elem_indices, elem_weights)
+        t0 = time.perf_counter()
+        out = _AssembleHyperReducedSystemKratosLocal(mp, n_dof, elements, elem_indices, elem_weights)
+        stats["local_calls"] += 1
+        stats["time_local"] += time.perf_counter() - t0
+        stats["time_total"] += time.perf_counter() - t_call
+        return out
 
 
 def _LoadNodeIdsFromMeshBase(mesh_base):

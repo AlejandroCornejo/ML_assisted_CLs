@@ -70,3 +70,8 @@ plt.plot(x, y, label='REF')
 plt.plot(x, y_KAN, '--', label='KAN (trained)')
 plt.legend()
 plt.show()
+plt.close()
+
+
+model(x_torch)
+model.plot()

@@ -55,14 +55,17 @@ def _load_manifold_predictor(model_type, basis_dir, ann_data_dir, rbf_data_dir):
             basis_dir=basis_dir, rbf_data_dir=rbf_data_dir
         )
         n_p = int(phi_p.shape[1])
+        q0_const, j0_const = evaluate_rbf_map_and_jacobian_qp(
+            np.zeros(n_p, dtype=float), rbf_model, n_p
+        )
 
         def predict_qs(qp_vec, e_vec):
             qp = np.asarray(qp_vec, dtype=float).reshape(-1)
             q_map, _ = evaluate_rbf_map_and_jacobian_qp(qp, rbf_model, n_p)
-            return np.asarray(q_map, dtype=float).reshape(-1)
+            return np.asarray(q_map - q0_const - j0_const @ qp, dtype=float).reshape(-1)
 
         model_label = "PROM-RBF"
-        return phi_p, phi_s, free_dofs, include_macro, predict_qs, model_label
+        return phi_p, phi_s, free_dofs, include_macro, predict_qs, model_label, q0_const, j0_const
 
     if model_type == "ann":
         import torch
@@ -90,13 +93,15 @@ def _load_manifold_predictor(model_type, basis_dir, ann_data_dir, rbf_data_dir):
                 jac.detach().cpu().numpy().astype(float),
             )
 
+        q0_const, j0_const = _eval_ann_raw_and_jac(np.zeros(n_p, dtype=np.float32), np.zeros(3, dtype=np.float32))
+
         def predict_qs(qp_vec, e_vec):
             qp = np.asarray(qp_vec, dtype=np.float32).reshape(-1)
             q_map, _ = _eval_ann_raw_and_jac(qp.astype(np.float32), np.zeros(3, dtype=np.float32))
-            return np.asarray(q_map, dtype=float).reshape(-1)
+            return np.asarray(q_map - q0_const - j0_const @ qp, dtype=float).reshape(-1)
 
         model_label = "PROM-ANN"
-        return phi_p, phi_s, free_dofs, include_macro, predict_qs, model_label
+        return phi_p, phi_s, free_dofs, include_macro, predict_qs, model_label, q0_const, j0_const
 
     raise ValueError(f"Unsupported model type '{model_type}'. Use 'rbf' or 'ann'.")
 
@@ -291,7 +296,7 @@ def run_stage7c_reconstruction_check(
 
     os.makedirs(out_dir, exist_ok=True)
 
-    phi_p, phi_s, free_dofs, include_macro, predict_qs, model_label = _load_manifold_predictor(
+    phi_p, phi_s, free_dofs, include_macro, predict_qs, model_label, q0_const, j0_const = _load_manifold_predictor(
         model_type=model_type,
         basis_dir=basis_dir,
         ann_data_dir=ann_data_dir,
@@ -299,6 +304,10 @@ def run_stage7c_reconstruction_check(
     )
     n_p = int(phi_p.shape[1])
     n_s = int(phi_s.shape[1])
+    q0_const = np.asarray(q0_const, dtype=float).reshape(-1)
+    j0_const = np.asarray(j0_const, dtype=float)
+    phi_p_eff = phi_p + phi_s @ j0_const
+    w0_const = phi_s @ q0_const
     dir_dofs = np.load(os.path.join(basis_dir, "dirichlet_dofs.npy"))
     eq_map = np.load(os.path.join(basis_dir, "eq_map.npy"))
     n_total_dofs = int(len(free_dofs) + len(dir_dofs))
@@ -340,11 +349,12 @@ def run_stage7c_reconstruction_check(
         w_free = U_free[k] - u_aff_free
 
         qp = w_free @ phi_p
-        qs = w_free @ phi_s
+        qs_raw = w_free @ phi_s
+        qs = qs_raw - q0_const - j0_const @ qp
         qs_hat = predict_qs(qp, E_hist[k])
 
-        w_proj = phi_p @ qp + phi_s @ qs
-        w_pred = phi_p @ qp + phi_s @ qs_hat
+        w_proj = w0_const + phi_p_eff @ qp + phi_s @ qs
+        w_pred = w0_const + phi_p_eff @ qp + phi_s @ qs_hat
 
         q_p_true[k, :] = qp
         q_s_true[k, :] = qs
@@ -465,13 +475,31 @@ def run_stage7c_bounds_comparison(
     """
     os.makedirs(out_dir, exist_ok=True)
 
-    phi_p_ann, phi_s_ann, free_dofs_ann, inc_ann, predict_qs_ann, _ = _load_manifold_predictor(
+    (
+        phi_p_ann,
+        phi_s_ann,
+        free_dofs_ann,
+        inc_ann,
+        predict_qs_ann,
+        _,
+        q0_ann,
+        j0_ann,
+    ) = _load_manifold_predictor(
         model_type="ann",
         basis_dir=basis_dir,
         ann_data_dir=ann_data_dir,
         rbf_data_dir=rbf_data_dir,
     )
-    phi_p_rbf, phi_s_rbf, free_dofs_rbf, inc_rbf, predict_qs_rbf, _ = _load_manifold_predictor(
+    (
+        phi_p_rbf,
+        phi_s_rbf,
+        free_dofs_rbf,
+        inc_rbf,
+        predict_qs_rbf,
+        _,
+        q0_rbf,
+        j0_rbf,
+    ) = _load_manifold_predictor(
         model_type="rbf",
         basis_dir=basis_dir,
         ann_data_dir=ann_data_dir,
@@ -494,6 +522,14 @@ def run_stage7c_bounds_comparison(
     free_dofs = free_dofs_ann
     n_p = int(phi_p.shape[1])
     n_s = int(phi_s.shape[1])
+    q0_ann = np.asarray(q0_ann, dtype=float).reshape(-1)
+    j0_ann = np.asarray(j0_ann, dtype=float)
+    q0_rbf = np.asarray(q0_rbf, dtype=float).reshape(-1)
+    j0_rbf = np.asarray(j0_rbf, dtype=float)
+    phi_p_eff_ann = phi_p + phi_s @ j0_ann
+    phi_p_eff_rbf = phi_p + phi_s @ j0_rbf
+    w0_ann = phi_s @ q0_ann
+    w0_rbf = phi_s @ q0_rbf
     n_rank9 = int(n_p + n_s)
     if int(q_dim_dl) != n_rank9:
         raise RuntimeError(
@@ -528,6 +564,7 @@ def run_stage7c_bounds_comparison(
     # Histories
     q_p_true = np.zeros((n_steps, n_p), dtype=float)
     q_s_true = np.zeros((n_steps, n_s), dtype=float)
+    q_s_true_rbf = np.zeros((n_steps, n_s), dtype=float)
     q_s_ann = np.zeros((n_steps, n_s), dtype=float)
     q_s_rbf = np.zeros((n_steps, n_s), dtype=float)
     q_dl_true = np.zeros((n_steps, n_rank9), dtype=float)
@@ -562,21 +599,24 @@ def run_stage7c_bounds_comparison(
         w_free = U_free[k] - u_aff_free
 
         qp = w_free @ phi_p
-        qs = w_free @ phi_s
-        q9 = np.concatenate([qp, qs], axis=0)
+        qs_raw = w_free @ phi_s
+        qs_ann_true = qs_raw - q0_ann - j0_ann @ qp
+        qs_rbf_true = qs_raw - q0_rbf - j0_rbf @ qp
+        q9 = np.concatenate([qp, qs_raw], axis=0)
 
         qs_hat_ann = predict_qs_ann(qp, E_hist[k])
         qs_hat_rbf = predict_qs_rbf(qp, E_hist[k])
         q9_hat_dl = reconstruct_q_dl(q9)
 
         w_pod4 = phi_p @ qp
-        w_pod9 = w_pod4 + phi_s @ qs
-        w_ann = w_pod4 + phi_s @ qs_hat_ann
-        w_rbf = w_pod4 + phi_s @ qs_hat_rbf
+        w_pod9 = w_pod4 + phi_s @ qs_raw
+        w_ann = w0_ann + phi_p_eff_ann @ qp + phi_s @ qs_hat_ann
+        w_rbf = w0_rbf + phi_p_eff_rbf @ qp + phi_s @ qs_hat_rbf
         w_dl = phi_q_dl @ q9_hat_dl
 
         q_p_true[k, :] = qp
-        q_s_true[k, :] = qs
+        q_s_true[k, :] = qs_ann_true
+        q_s_true_rbf[k, :] = qs_rbf_true
         q_s_ann[k, :] = qs_hat_ann
         q_s_rbf[k, :] = qs_hat_rbf
         q_dl_true[k, :] = q9
@@ -591,7 +631,8 @@ def run_stage7c_bounds_comparison(
 
         denom_w = np.linalg.norm(w_free) + 1e-30
         denom_w9 = np.linalg.norm(w_pod9) + 1e-30
-        denom_qs = np.linalg.norm(qs) + 1e-30
+        denom_qs_ann = np.linalg.norm(qs_ann_true) + 1e-30
+        denom_qs_rbf = np.linalg.norm(qs_rbf_true) + 1e-30
         denom_q9 = np.linalg.norm(q9) + 1e-30
 
         err_pod4_step[k] = np.linalg.norm(w_pod4 - w_free) / denom_w
@@ -604,8 +645,8 @@ def run_stage7c_bounds_comparison(
         err_rbf_vs_pod9_step[k] = np.linalg.norm(w_rbf - w_pod9) / denom_w9
         err_dl_vs_pod9_step[k] = np.linalg.norm(w_dl - w_pod9) / denom_w9
 
-        err_qs_ann_step[k] = np.linalg.norm(qs_hat_ann - qs) / denom_qs
-        err_qs_rbf_step[k] = np.linalg.norm(qs_hat_rbf - qs) / denom_qs
+        err_qs_ann_step[k] = np.linalg.norm(qs_hat_ann - qs_ann_true) / denom_qs_ann
+        err_qs_rbf_step[k] = np.linalg.norm(qs_hat_rbf - qs_rbf_true) / denom_qs_rbf
         err_q_dl_step[k] = np.linalg.norm(q9_hat_dl - q9) / denom_q9
 
     # Global relative L2 errors
@@ -620,7 +661,7 @@ def run_stage7c_bounds_comparison(
     rel_dl_vs_pod9 = np.linalg.norm(w_dl_hist - w_pod9_hist) / (np.linalg.norm(w_pod9_hist) + 1e-30)
 
     rel_qs_ann = np.linalg.norm(q_s_ann - q_s_true) / (np.linalg.norm(q_s_true) + 1e-30)
-    rel_qs_rbf = np.linalg.norm(q_s_rbf - q_s_true) / (np.linalg.norm(q_s_true) + 1e-30)
+    rel_qs_rbf = np.linalg.norm(q_s_rbf - q_s_true_rbf) / (np.linalg.norm(q_s_true_rbf) + 1e-30)
     rel_q_dl = np.linalg.norm(q_dl_pred - q_dl_true) / (np.linalg.norm(q_dl_true) + 1e-30)
 
     case_dir = os.path.join(out_dir, f"bounds_traj_{int(trajectory_index)}")
@@ -628,6 +669,7 @@ def run_stage7c_bounds_comparison(
 
     np.save(os.path.join(case_dir, "q_p_true.npy"), q_p_true)
     np.save(os.path.join(case_dir, "q_s_true.npy"), q_s_true)
+    np.save(os.path.join(case_dir, "q_s_true_rbf.npy"), q_s_true_rbf)
     np.save(os.path.join(case_dir, "q_s_ann_pred.npy"), q_s_ann)
     np.save(os.path.join(case_dir, "q_s_rbf_pred.npy"), q_s_rbf)
     np.save(os.path.join(case_dir, "q9_true.npy"), q_dl_true)
