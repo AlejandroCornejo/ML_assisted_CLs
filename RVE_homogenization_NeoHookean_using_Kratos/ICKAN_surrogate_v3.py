@@ -143,14 +143,42 @@ class ICKAN_W_Surrogate(nn.Module):
 
 
 # ==========================================================================================
-def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database, n_epochs):
-    # Precompute dW_dI_null ONCE before training to avoid graph recreation each epoch
-
+def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database, n_epochs, gradient_penalty_weight=1.0):
+    """
+    Training function with gradient penalization at null input.
+    
+    Args:
+        model: ICKAN_W_Surrogate model
+        optimizer: Optimizer
+        ref_strain_database: Reference strain data
+        ref_W_database: Reference energy data
+        n_epochs: Number of training epochs
+        gradient_penalty_weight: Weight for gradient penalization term at null strain
+    """
+    # Precompute null strain input
+    null_strain = torch.zeros(1,3)
+    
     for epoch in range(n_epochs):
         def closure():
             optimizer.zero_grad()
+            
+            # Data loss: match reference W values
             predicted_W = model.forward(ref_strain_database)
-            loss = torch.mean((predicted_W - ref_W_database) ** 2)
+            data_loss = torch.mean((predicted_W - ref_W_database) ** 2)
+            
+            # Gradient penalization at null input: encourage dW/dE = 0 at reference configuration
+            null_strain_grad = null_strain.requires_grad_(True)
+            W_at_null = model.forward(null_strain_grad)
+            gradient_at_null = torch.autograd.grad(
+                outputs=W_at_null,
+                inputs=null_strain_grad,
+                grad_outputs=torch.ones_like(W_at_null),
+                create_graph=False
+            )[0]
+            gradient_penalty = torch.mean(gradient_at_null ** 2)
+            
+            # Combined loss
+            loss = data_loss + gradient_penalty_weight * gradient_penalty
             loss.backward()
             return loss
         
@@ -258,8 +286,10 @@ W_zero = torch.zeros(batch_strain.shape[0], 1, 1, device=W_cumulative_batch.devi
 W_full_batch = torch.cat([W_zero, W_cumulative_batch], dim=1)  # [10, steps, 1]
 train_W_database = W_full_batch.view(-1, 1)  # [10*steps, 1]
 
-max_W = 1
-# max_W = train_W_database.abs().max()
+
+
+# max_W = 1
+max_W = train_W_database.abs().max()
 train_W_database /= max_W  # Normalize W to have max absolute value of 1
 
 
@@ -267,7 +297,7 @@ train_W_database /= max_W  # Normalize W to have max absolute value of 1
 #*****************************
 #*****************************
 #*****************************
-n_epochs = 150
+n_epochs = 500
 learning_rate = 0.01
 
 
@@ -294,7 +324,7 @@ optimizer_1 = optim.LBFGS(
 
 # optimizer_1 = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
 
-TRAIN_KAN(model, optimizer_1, train_strain_database, train_W_database, n_epochs)
+TRAIN_KAN(model, optimizer_1, train_strain_database, train_W_database, n_epochs, 0.1)
 
 print("Check null W at null strain: ", model.forward(torch.zeros(1,3)))
 
@@ -340,6 +370,7 @@ stress_0 = torch.autograd.grad(
             )[0]
 
 stress = max_W*(predicted_stress - stress_0)
+# stress = max_W*(predicted_stress)
 
 plt.plot(train_strain_database[:,0].detach().numpy(), train_stress_database[:,0].numpy(), '--', label='Reference S_xx')
 plt.plot(train_strain_database[:,0].detach().numpy(), stress[:,0].detach().numpy(), '-', label='ICKAN S_xx')
