@@ -848,6 +848,8 @@ python3 stage7b_train_rbf_manifold.py \
 Notes:
 - `--center-selection random|kmeans` controls how center positions are chosen.
 - `--sparse-prune-centers K` keeps the top-`K` centers by `||weights||_2` after an initial fit and then refits the model (sparse RBF).
+- `--rbf-metric anisotropic` enables per-dimension epsilon scaling (analytic derivatives are preserved).
+- If `--anisotropic-scales` is omitted, Stage 7b estimates anisotropy from linear sensitivity and normalizes it.
 - For stable bash parsing, keep comma-separated lists without spaces.
 
 Outputs in:
@@ -866,6 +868,33 @@ training_summary.txt
 ```
 
 Important: keep comma-separated CLI values without spaces in bash.
+
+### Stage 7b-Sparse-GPR (optional): True Sparse-GP Manifold
+
+This branch trains a pure sparse variational GP manifold `q_p -> q_s` and exports
+`sparse_gp_model.npz` with analytic kernel coefficients for online PROM/HPROM-GPR.
+No RBF-hyperfit export is used in this branch.
+
+```bash
+python3 stage7b_train_sparse_gpr_manifold.py \
+  --data-dir stage_7_ann_data \
+  --out-dir stage_7_gpr_data \
+  --num-inducing 800 \
+  --inducing-selection kmeans \
+  --kmeans-max-iters 40 \
+  --kmeans-batch-size 4096 \
+  --kmeans-fit-samples 40000 \
+  --epochs 120 \
+  --batch-size 2048 \
+  --lr 0.05 \
+  --val-fraction 0.1 \
+  --device auto
+```
+
+Outputs:
+- `sparse_gp_model.npz` (analytic sparse-GP online model),
+- `phi_p.npy`, `phi_s.npy`,
+- `training_summary.txt`.
 
 ### Stage 7b-POD-DL: Train POD-DL / POD-AE Manifold
 
