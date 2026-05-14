@@ -32,6 +32,34 @@ from sparse_gp_manifold_model import (
 )
 
 
+def _load_optional_mu_affine_initializer(gpr_data_dir, n_primary):
+    init_path = os.path.join(gpr_data_dir, "qp_init_mu_affine.npz")
+    if not os.path.exists(init_path):
+        return None
+    data = np.load(init_path, allow_pickle=True)
+    if "b_aff" not in data:
+        raise RuntimeError(f"[PROM-GPR] Invalid initializer file (missing b_aff): {init_path}")
+    b_aff = np.asarray(data["b_aff"], dtype=float)
+    if b_aff.ndim != 2 or b_aff.shape[0] < 2:
+        raise RuntimeError(f"[PROM-GPR] Invalid b_aff shape in {init_path}: {b_aff.shape}")
+    qp_dim = int(np.ravel(data["qp_dim"])[0]) if "qp_dim" in data else int(b_aff.shape[1])
+    mu_dim = int(np.ravel(data["mu_dim"])[0]) if "mu_dim" in data else int(b_aff.shape[0] - 1)
+    if qp_dim != int(n_primary):
+        raise RuntimeError(
+            f"[PROM-GPR] qp_init_mu_affine qp_dim={qp_dim} incompatible with n_primary={n_primary}."
+        )
+    if mu_dim != int(b_aff.shape[0] - 1):
+        raise RuntimeError(
+            f"[PROM-GPR] qp_init_mu_affine mu_dim metadata mismatch ({mu_dim} vs {b_aff.shape[0] - 1})."
+        )
+    return {
+        "path": init_path,
+        "b_aff": b_aff,
+        "mu_dim": mu_dim,
+        "qp_dim": qp_dim,
+    }
+
+
 def LoadPromGprModel(basis_dir="stage_2_pod_rve", gpr_data_dir="stage_7_gpr_data"):
     phi_p = np.load(os.path.join(gpr_data_dir, "phi_p.npy"))
     phi_s = np.load(os.path.join(gpr_data_dir, "phi_s.npy"))
@@ -70,6 +98,7 @@ def LoadPromGprModel(basis_dir="stage_2_pod_rve", gpr_data_dir="stage_7_gpr_data
         raise ValueError(
             f"GPR metadata n_secondary={int(gpr_model['n_secondary'])} does not match phi_s ({n_s})."
         )
+    gpr_model["qp_init_mu_affine"] = _load_optional_mu_affine_initializer(gpr_data_dir, n_primary=n_p)
 
     return (
         phi_p,
@@ -105,6 +134,7 @@ def RunPromGprBatchSimulation(
     reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
     use_old_stiffness_in_first_iteration=USE_OLD_STIFFNESS_IN_FIRST_ITERATION,
     verbose_iterations=False,
+    qp_init_mode="previous",
 ):
     t_wall_total_start = time.perf_counter()
 
@@ -174,6 +204,7 @@ def RunPromGprBatchSimulation(
 
     results_eps = [np.zeros(3, dtype=float)]
     results_sig = [np.zeros(3, dtype=float)]
+    q_hist = [np.zeros(n_primary, dtype=float)]
 
     gpr_input_dim = int(gpr_model["input_dim"])
     expected_input_dim = int(n_primary)
@@ -181,6 +212,17 @@ def RunPromGprBatchSimulation(
         raise ValueError(
             f"GPR input size mismatch: model expects {gpr_input_dim}, "
             f"but solver was configured for {expected_input_dim}."
+        )
+    qp_init_mode = str(qp_init_mode).strip().lower()
+    if qp_init_mode not in ("previous", "zero", "mu_affine"):
+        raise ValueError(
+            f"Unsupported qp_init_mode='{qp_init_mode}'. Use one of: previous, zero, mu_affine."
+        )
+    qp_aff = gpr_model.get("qp_init_mu_affine", None)
+    if qp_init_mode == "mu_affine" and qp_aff is None:
+        raise RuntimeError(
+            "[PROM-GPR] qp_init_mode='mu_affine' requested but qp_init_mu_affine.npz is missing "
+            f"in model directory."
         )
 
     def _is_finite(arr):
@@ -228,6 +270,21 @@ def RunPromGprBatchSimulation(
         q_s_map, j_qs_qp = evaluate_sparse_gp_map_and_jacobian_qp(x_in, gpr_model, n_primary)
         return np.asarray(q_s_map, dtype=float).reshape(-1), np.asarray(j_qs_qp, dtype=float)
 
+    def _initial_qp_guess(e_vec, q_prev):
+        if qp_init_mode == "previous":
+            return np.asarray(q_prev, dtype=float).copy()
+        if qp_init_mode == "zero":
+            return np.zeros(n_primary, dtype=float)
+        mu_dim = int(qp_aff["mu_dim"])
+        mu = np.asarray(e_vec, dtype=float).reshape(-1)[:mu_dim]
+        if mu.size < mu_dim:
+            raise RuntimeError(
+                f"[PROM-GPR] qp_init_mu_affine expects mu_dim={mu_dim} but got only {mu.size} strain components."
+            )
+        x_aug = np.concatenate([mu, np.array([1.0], dtype=float)])
+        q0 = x_aug @ np.asarray(qp_aff["b_aff"], dtype=float)
+        return np.asarray(q0, dtype=float).reshape(-1)
+
     def _solve_reduced_system(K_sys, rhs):
         try:
             dq_loc = np.linalg.solve(K_sys, rhs)
@@ -253,6 +310,9 @@ def RunPromGprBatchSimulation(
     print(f"  [PROM-GPR] Solving for {n_steps_total} dynamic increments...")
     print(f"  [PROM-GPR] Full elements assembled each Newton step: {len(elements)} / {len(elements)}")
     print("  [PROM-GPR] Manifold correction active: N(0)=0 and J(0)=0.")
+    print(f"  [PROM-GPR] q_p initializer mode: {qp_init_mode}")
+    if qp_init_mode == "mu_affine" and qp_aff is not None:
+        print(f"  [PROM-GPR] Using affine initializer: {qp_aff['path']}")
     t_map = 0.0
     t_assembly = 0.0
     t_projection = 0.0
@@ -287,6 +347,7 @@ def RunPromGprBatchSimulation(
             print(f"\n[PROM-GPR] Step {step:04d}/{n_steps_total} | E={E}")
         verbose_step = bool(verbose_iterations)
 
+        q_p = _initial_qp_guess(E, q_p)
         it = 0
         res_norm_0 = None
         converged = False
@@ -512,6 +573,7 @@ def RunPromGprBatchSimulation(
         sim.FinalizeSolutionStep()
         results_eps.append(eps_h)
         results_sig.append(sig_h)
+        q_hist.append(q_p.copy())
 
     sim.Finalize()
     t_wall_total = time.perf_counter() - t_wall_total_start
@@ -522,4 +584,6 @@ def RunPromGprBatchSimulation(
         f"projection={t_projection:.3f}s, solve={t_solve:.3f}s, full_sync={t_full_sync:.3f}s, "
         f"accounted={t_accounted:.3f}s, other={t_other:.3f}s, total={t_wall_total:.3f}s"
     )
+    if out_dir is not None:
+        np.save(os.path.join(out_dir, "prom_gpr_run_q_p.npy"), np.stack(q_hist))
     return np.array(results_eps), np.array(results_sig)

@@ -59,6 +59,210 @@ def _compute_equivalent_stress_strain(eps, sig):
     return eps_eq, sigma_eq
 
 
+def _rel_fro(a, b):
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    return float(np.linalg.norm(a - b) / max(np.linalg.norm(b), 1e-30))
+
+
+def _build_step_macro_strain_series(strain_path, seg_steps):
+    e_wp = np.asarray(strain_path, dtype=float)
+    if e_wp.ndim != 2 or e_wp.shape[1] < 3:
+        raise ValueError("strain_path must have shape [n_pts, >=3].")
+    seg_steps = np.asarray(seg_steps, dtype=int).reshape(-1)
+    n_steps = int(np.sum(seg_steps))
+    step_offsets = np.concatenate(([0], np.cumsum(seg_steps)))
+    e_hist = np.zeros((n_steps + 1, 3), dtype=float)
+    n_seg = int(len(seg_steps))
+    for step in range(1, n_steps + 1):
+        s = int(np.searchsorted(step_offsets, step, side="left") - 1)
+        s = max(0, min(s, n_seg - 1))
+        xi = float(step - step_offsets[s]) / float(max(seg_steps[s], 1))
+        e_hist[step, :] = (1.0 - xi) * e_wp[s, :3] + xi * e_wp[s + 1, :3]
+    return e_hist
+
+
+def _column_corr(x, y):
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    c = np.zeros(x.shape[1], dtype=float)
+    for j in range(x.shape[1]):
+        sx = float(np.std(x[:, j]))
+        sy = float(np.std(y[:, j]))
+        if sx <= 1e-30 or sy <= 1e-30:
+            c[j] = 0.0
+        else:
+            c[j] = float(np.corrcoef(x[:, j], y[:, j])[0, 1])
+    return c
+
+
+def _analyze_mu_vs_qp(mu_hist, qp_hist):
+    mu = np.asarray(mu_hist, dtype=float)
+    qp = np.asarray(qp_hist, dtype=float)
+    if mu.ndim != 2 or qp.ndim != 2:
+        raise ValueError("mu_hist and qp_hist must be 2D arrays.")
+
+    k = int(min(3, mu.shape[1], qp.shape[1]))
+    if k <= 0:
+        raise ValueError("No overlapping dimensions to compare (need at least 1).")
+
+    n = int(min(mu.shape[0], qp.shape[0]))
+    x = mu[:n, :k]
+    y = qp[:n, :k]
+    mask = np.all(np.isfinite(x), axis=1) & np.all(np.isfinite(y), axis=1)
+    x = x[mask, :]
+    y = y[mask, :]
+
+    if x.shape[0] < max(10, 2 * k):
+        raise RuntimeError("Not enough valid samples for mu-vs-q_p diagnostics.")
+
+    # 1) Direct comparison (identity)
+    rel_direct = _rel_fro(x, y)
+    corr_direct = _column_corr(x, y)
+
+    # 2) Per-axis scale/sign map: y_i ≈ a_i x_i
+    den = np.sum(x * x, axis=0)
+    den = np.where(den <= 1e-30, 1.0, den)
+    a_diag = np.sum(x * y, axis=0) / den
+    y_hat_diag = x * a_diag[None, :]
+    rel_diag = _rel_fro(y_hat_diag, y)
+    corr_diag = _column_corr(y_hat_diag, y)
+
+    # 3) Full linear map (scaling/rotation/shear, no translation): y ≈ x A
+    a_lin, *_ = np.linalg.lstsq(x, y, rcond=None)
+    y_hat_lin = x @ a_lin
+    rel_lin = _rel_fro(y_hat_lin, y)
+    corr_lin = _column_corr(y_hat_lin, y)
+
+    # 4) Affine map (linear + translation): y ≈ [x,1] B
+    x_aug = np.hstack([x, np.ones((x.shape[0], 1), dtype=float)])
+    b_aff, *_ = np.linalg.lstsq(x_aug, y, rcond=None)
+    y_hat_aff = x_aug @ b_aff
+    rel_aff = _rel_fro(y_hat_aff, y)
+    corr_aff = _column_corr(y_hat_aff, y)
+
+    # 5) Similarity Procrustes (rotation/reflection + uniform scale + translation)
+    x_mean = np.mean(x, axis=0, keepdims=True)
+    y_mean = np.mean(y, axis=0, keepdims=True)
+    xc = x - x_mean
+    yc = y - y_mean
+    u, svals, vt = np.linalg.svd(xc.T @ yc, full_matrices=False)
+    r = u @ vt
+    beta = float(np.sum(svals) / max(np.sum(xc * xc), 1e-30))
+    y_hat_sim = beta * (xc @ r) + y_mean
+    rel_sim = _rel_fro(y_hat_sim, y)
+    corr_sim = _column_corr(y_hat_sim, y)
+
+    return {
+        "n_samples": int(x.shape[0]),
+        "k_compare": int(k),
+        "x": x,
+        "y": y,
+        "y_hat_diag": y_hat_diag,
+        "y_hat_lin": y_hat_lin,
+        "y_hat_aff": y_hat_aff,
+        "y_hat_sim": y_hat_sim,
+        "a_diag": a_diag,
+        "a_lin": a_lin,
+        "b_aff": b_aff,
+        "r_sim": r,
+        "beta_sim": beta,
+        "rel_direct": rel_direct,
+        "rel_diag": rel_diag,
+        "rel_lin": rel_lin,
+        "rel_aff": rel_aff,
+        "rel_sim": rel_sim,
+        "corr_direct": corr_direct,
+        "corr_diag": corr_diag,
+        "corr_lin": corr_lin,
+        "corr_aff": corr_aff,
+        "corr_sim": corr_sim,
+    }
+
+
+def _save_mu_qp_diagnostics(diag, out_dir, label):
+    x = diag["x"]
+    y = diag["y"]
+    y_hat_aff = diag["y_hat_aff"]
+    k = int(diag["k_compare"])
+    safe = str(label).strip().lower().replace(" ", "_")
+
+    summary_path = os.path.join(out_dir, f"mu_qp_alignment_{safe}.txt")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        f.write(f"label={label}\n")
+        f.write(f"n_samples={diag['n_samples']}\n")
+        f.write(f"k_compare={k}\n")
+        f.write(f"rel_direct={diag['rel_direct']:.16e}\n")
+        f.write(f"rel_diag={diag['rel_diag']:.16e}\n")
+        f.write(f"rel_linear={diag['rel_lin']:.16e}\n")
+        f.write(f"rel_affine={diag['rel_aff']:.16e}\n")
+        f.write(f"rel_similarity={diag['rel_sim']:.16e}\n")
+        f.write("a_diag=" + ",".join([f"{float(v):.16e}" for v in diag["a_diag"]]) + "\n")
+        f.write(
+            "corr_direct=" + ",".join([f"{float(v):.16e}" for v in diag["corr_direct"]]) + "\n"
+        )
+        f.write("corr_affine=" + ",".join([f"{float(v):.16e}" for v in diag["corr_aff"]]) + "\n")
+
+    np.savez(
+        os.path.join(out_dir, f"mu_qp_alignment_{safe}.npz"),
+        x=x,
+        y=y,
+        y_hat_diag=diag["y_hat_diag"],
+        y_hat_lin=diag["y_hat_lin"],
+        y_hat_aff=y_hat_aff,
+        y_hat_sim=diag["y_hat_sim"],
+        a_diag=diag["a_diag"],
+        a_lin=diag["a_lin"],
+        b_aff=diag["b_aff"],
+        r_sim=diag["r_sim"],
+        beta_sim=np.array([diag["beta_sim"]], dtype=float),
+    )
+
+    fig, axs = plt.subplots(1, k, figsize=(5.2 * k, 4.6))
+    if k == 1:
+        axs = [axs]
+    for j in range(k):
+        ax = axs[j]
+        ax.scatter(x[:, j], y[:, j], s=8, alpha=0.35, label=r"$q_p$ vs $\mu$")
+        ax.scatter(x[:, j], y_hat_aff[:, j], s=8, alpha=0.35, label="Affine fit")
+        xmin = float(min(np.min(x[:, j]), np.min(y[:, j])))
+        xmax = float(max(np.max(x[:, j]), np.max(y[:, j])))
+        if xmax > xmin:
+            ax.plot([xmin, xmax], [xmin, xmax], "k--", lw=1.0, alpha=0.8, label="y=x")
+        ax.set_xlabel(fr"$\mu_{j+1}$")
+        ax.set_ylabel(fr"$q_{{p,{j+1}}}$")
+        ax.grid(True, linestyle="--", alpha=0.35)
+    axs[0].legend(loc="best")
+    fig.suptitle(f"mu vs q_p Alignment ({label})")
+    fig.tight_layout()
+    fig.savefig(os.path.join(out_dir, f"mu_qp_alignment_{safe}_scatter.png"), dpi=180)
+    plt.close(fig)
+
+    fig, axs = plt.subplots(k, 1, figsize=(9.5, 2.4 * k), sharex=True)
+    if k == 1:
+        axs = [axs]
+    t = np.arange(x.shape[0], dtype=int)
+    for j in range(k):
+        ax = axs[j]
+        ax.plot(t, y[:, j], "k-", lw=1.2, label=fr"$q_{{p,{j+1}}}$")
+        ax.plot(t, x[:, j], "r--", lw=1.0, label=fr"$\mu_{j+1}$")
+        ax.plot(t, y_hat_aff[:, j], "b:", lw=1.0, label="Affine fit")
+        ax.grid(True, linestyle="--", alpha=0.35)
+        ax.set_ylabel(fr"comp {j+1}")
+    axs[0].legend(loc="best")
+    axs[-1].set_xlabel("Step")
+    fig.suptitle(f"mu/q_p Time Series ({label})")
+    fig.tight_layout()
+    fig.savefig(os.path.join(out_dir, f"mu_qp_alignment_{safe}_timeseries.png"), dpi=180)
+    plt.close(fig)
+
+    print(f"  [{label}] mu-vs-q_p diagnostics saved: {summary_path}")
+    print(
+        f"  [{label}] rel errors: direct={diag['rel_direct']:.3e}, "
+        f"diag={diag['rel_diag']:.3e}, linear={diag['rel_lin']:.3e}, "
+        f"affine={diag['rel_aff']:.3e}, similarity={diag['rel_sim']:.3e}"
+    )
+
 def plot_hprom_gpr_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir, timings=None):
     n = min(len(f_sig), len(p_sig), len(h_sig), len(f_eps), len(p_eps), len(h_eps))
 
@@ -149,6 +353,7 @@ def run_stage10(
     gpr_data_dir="stage_7_gpr_data",
     hprom_gpr_dir="stage_9_hprom_gpr_data",
     out_dir="stage_10_hprom_gpr_results",
+    qp_init_mode="previous",
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -248,6 +453,7 @@ def run_stage10(
             out_dir=out_dir,
             reference_amplitude=emax,
             reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
+            qp_init_mode=qp_init_mode,
         )
         timings["PROM-GPR"] = time.perf_counter() - t0
         p_eps = np.asarray(p_eps, dtype=float)
@@ -295,6 +501,7 @@ def run_stage10(
             eq_map_full=eq_map_h,
             Xc=Xc_h,
             Yc=Yc_h,
+            qp_init_mode=qp_init_mode,
         )
         timings["HPROM-GPR"] = time.perf_counter() - t0
         h_eps = np.asarray(h_eps, dtype=float)
@@ -317,6 +524,24 @@ def run_stage10(
     print(f"  HPROM-GPR vs FOM: Rel. Stress Error = {err_hprom:.4e}")
     for method, t in timings.items():
         print(f"  {method} time: {t:.2f}s")
+
+    # mu vs q_p diagnostics (important for LS interpretation and initialization quality)
+    try:
+        mu_hist = _build_step_macro_strain_series(strain_path, seg_steps)
+        prom_q_file = os.path.join(out_dir, "prom_gpr_run_q_p.npy")
+        hprom_q_file = os.path.join(out_dir, "hprom_gpr_run_q_p.npy")
+        if os.path.exists(prom_q_file):
+            d_prom = _analyze_mu_vs_qp(mu_hist, np.load(prom_q_file))
+            _save_mu_qp_diagnostics(d_prom, out_dir, label="PROM-GPR")
+        else:
+            print(f"  [PROM-GPR] mu-vs-q_p diagnostics skipped (missing {prom_q_file}).")
+        if os.path.exists(hprom_q_file):
+            d_hprom = _analyze_mu_vs_qp(mu_hist, np.load(hprom_q_file))
+            _save_mu_qp_diagnostics(d_hprom, out_dir, label="HPROM-GPR")
+        else:
+            print(f"  [HPROM-GPR] mu-vs-q_p diagnostics skipped (missing {hprom_q_file}).")
+    except Exception as ex:
+        print(f"  [Stage 10] WARNING: mu-vs-q_p diagnostics failed: {ex}")
 
     plot_hprom_gpr_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir, timings)
 
@@ -346,6 +571,13 @@ if __name__ == "__main__":
         default="stage_10_hprom_gpr_results",
         help="Output directory for Stage 10 results.",
     )
+    p.add_argument(
+        "--qp-init-mode",
+        type=str,
+        default="previous",
+        choices=["previous", "zero", "mu_affine"],
+        help="Initializer for q_p at each increment in PROM/HPROM-GPR.",
+    )
     args = p.parse_args()
 
     run_stage10(
@@ -355,4 +587,5 @@ if __name__ == "__main__":
         gpr_data_dir=args.gpr_data_dir,
         hprom_gpr_dir=args.hprom_gpr_dir,
         out_dir=args.out_dir,
+        qp_init_mode=args.qp_init_mode,
     )

@@ -163,6 +163,7 @@ def run_stage8_gpr(
     hprom_data_dir="stage_5_hprom_data",
     out_dir="stage_8_prom_gpr_results",
     use_stage6_waypoints=True,
+    qp_init_mode="previous",
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -239,6 +240,7 @@ def run_stage8_gpr(
         reference_amplitude=emax,
         reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
         use_old_stiffness_in_first_iteration=use_old_stiffness_in_first_iteration,
+        qp_init_mode=qp_init_mode,
     )
     t_pr = time.perf_counter() - t0
 
@@ -376,6 +378,13 @@ if __name__ == "__main__":
         help="Directory with HPROM ECM file (ecm_weights_all.npz).",
     )
     p.add_argument(
+        "--qp-init-mode",
+        type=str,
+        default="previous",
+        choices=["previous", "zero", "mu_affine"],
+        help="Initializer for q_p at each increment in PROM-GPR.",
+    )
+    p.add_argument(
         "--no-old-stiffness-first-it",
         action="store_true",
         help="Disable reuse of previous-step reduced stiffness in Newton iteration 0.",
@@ -402,4 +411,5 @@ if __name__ == "__main__":
         hprom_data_dir=args.hprom_data_dir,
         out_dir=args.out_dir,
         use_stage6_waypoints=not args.control_points_only,
+        qp_init_mode=args.qp_init_mode,
     )

@@ -104,6 +104,7 @@ def RunHpromGprBatchSimulation(
     Xc=None,
     Yc=None,
     return_stats=False,
+    qp_init_mode="previous",
 ):
     t_wall_total_start = time.perf_counter()
 
@@ -220,6 +221,17 @@ def RunHpromGprBatchSimulation(
             f"GPR input size mismatch: model expects {gpr_input_dim}, "
             f"but solver was configured for {expected_input_dim}."
         )
+    qp_init_mode = str(qp_init_mode).strip().lower()
+    if qp_init_mode not in ("previous", "zero", "mu_affine"):
+        raise ValueError(
+            f"Unsupported qp_init_mode='{qp_init_mode}'. Use one of: previous, zero, mu_affine."
+        )
+    qp_aff = gpr_model.get("qp_init_mu_affine", None)
+    if qp_init_mode == "mu_affine" and qp_aff is None:
+        raise RuntimeError(
+            "[HPROM-GPR] qp_init_mode='mu_affine' requested but qp_init_mu_affine.npz is missing "
+            f"in model directory."
+        )
 
     def _is_finite(arr):
         return bool(np.all(np.isfinite(np.asarray(arr))))
@@ -266,6 +278,21 @@ def RunHpromGprBatchSimulation(
         q_s_map, j_qs_qp = evaluate_sparse_gp_map_and_jacobian_qp(x_in, gpr_model, n_primary)
         return np.asarray(q_s_map, dtype=float).reshape(-1), np.asarray(j_qs_qp, dtype=float)
 
+    def _initial_qp_guess(e_vec, q_prev):
+        if qp_init_mode == "previous":
+            return np.asarray(q_prev, dtype=float).copy()
+        if qp_init_mode == "zero":
+            return np.zeros(n_primary, dtype=float)
+        mu_dim = int(qp_aff["mu_dim"])
+        mu = np.asarray(e_vec, dtype=float).reshape(-1)[:mu_dim]
+        if mu.size < mu_dim:
+            raise RuntimeError(
+                f"[HPROM-GPR] qp_init_mu_affine expects mu_dim={mu_dim} but got only {mu.size} strain components."
+            )
+        x_aug = np.concatenate([mu, np.array([1.0], dtype=float)])
+        q0 = x_aug @ np.asarray(qp_aff["b_aff"], dtype=float)
+        return np.asarray(q0, dtype=float).reshape(-1)
+
     def _solve_reduced_system(K_sys, rhs):
         try:
             dq_loc = np.linalg.solve(K_sys, rhs)
@@ -291,6 +318,9 @@ def RunHpromGprBatchSimulation(
     print(f"  [HPROM-GPR] Solving for {n_steps_total} dynamic increments...")
     print(f"  [HPROM-GPR] Active mesh elements: {len(elements)} (reference full mesh: {n_elem_reference})")
     print("  [HPROM-GPR] Manifold correction active: N(0)=0 and J(0)=0.")
+    print(f"  [HPROM-GPR] q_p initializer mode: {qp_init_mode}")
+    if qp_init_mode == "mu_affine" and qp_aff is not None:
+        print(f"  [HPROM-GPR] Using affine initializer: {qp_aff['path']}")
     print(
         f"  [HPROM-GPR] ECM residual elements: {len(Z_res)} / {len(elements)} | "
         f"union reference size: {len(Z_union)} / {n_elem_reference}"
@@ -333,6 +363,7 @@ def RunHpromGprBatchSimulation(
             print(f"\n[HPROM-GPR] Step {step:04d}/{n_steps_total} | E={E}")
         verbose_step = bool(verbose_iterations)
 
+        q_p = _initial_qp_guess(E, q_p)
         it = 0
         res_norm_0 = None
         converged = False

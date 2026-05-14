@@ -96,6 +96,44 @@ def _standardize(x, y):
     return x_scaled, y_scaled, x_mean, x_std, y_mean, y_std
 
 
+def _build_optional_mu_qp_affine(data_dir, n_primary):
+    mu_path = os.path.join(data_dir, "ls_targets_train.npy")
+    if not os.path.exists(mu_path):
+        return None
+
+    qp_path = os.path.join(data_dir, "q_p_train.npy")
+    if os.path.exists(qp_path):
+        qp = np.load(qp_path).astype(np.float64)
+    else:
+        x_file = "ann_input_train.npy" if os.path.exists(os.path.join(data_dir, "ann_input_train.npy")) else "q_p_train.npy"
+        qp = np.load(os.path.join(data_dir, x_file)).astype(np.float64)
+
+    mu = np.load(mu_path).astype(np.float64)
+    if mu.ndim != 2 or qp.ndim != 2:
+        return None
+    if mu.shape[0] != qp.shape[0]:
+        return None
+    if qp.shape[1] < int(n_primary):
+        return None
+
+    mu_dim = int(min(3, mu.shape[1]))
+    if mu_dim <= 0:
+        return None
+    x = np.asarray(mu[:, :mu_dim], dtype=float)
+    y = np.asarray(qp[:, : int(n_primary)], dtype=float)
+    x_aug = np.hstack([x, np.ones((x.shape[0], 1), dtype=float)])
+    b_aff, *_ = np.linalg.lstsq(x_aug, y, rcond=None)
+    y_hat = x_aug @ b_aff
+    rel = float(np.linalg.norm(y_hat - y) / max(np.linalg.norm(y), 1e-30))
+    return {
+        "b_aff": np.asarray(b_aff, dtype=float),
+        "mu_dim": int(mu_dim),
+        "qp_dim": int(n_primary),
+        "rel_fit": rel,
+        "n_samples": int(x.shape[0]),
+    }
+
+
 def _choose_inducing_points(
     x_train,
     num_inducing,
@@ -553,6 +591,24 @@ def train_sparse_gp(
     np.save(os.path.join(out_dir, "phi_p.npy"), phi_p)
     np.save(os.path.join(out_dir, "phi_s.npy"), phi_s)
 
+    mu_qp_aff = _build_optional_mu_qp_affine(data_dir, n_primary=n_primary)
+    if mu_qp_aff is not None:
+        np.savez(
+            os.path.join(out_dir, "qp_init_mu_affine.npz"),
+            b_aff=np.asarray(mu_qp_aff["b_aff"], dtype=float),
+            mu_dim=np.array([int(mu_qp_aff["mu_dim"])], dtype=np.int64),
+            qp_dim=np.array([int(mu_qp_aff["qp_dim"])], dtype=np.int64),
+            rel_fit=np.array([float(mu_qp_aff["rel_fit"])], dtype=float),
+            n_samples=np.array([int(mu_qp_aff["n_samples"])], dtype=np.int64),
+        )
+        print(
+            "[Sparse-GP] Saved q_p initializer map: "
+            f"{os.path.join(out_dir, 'qp_init_mu_affine.npz')} "
+            f"(mu_dim={mu_qp_aff['mu_dim']}, rel_fit={mu_qp_aff['rel_fit']:.3e})"
+        )
+    else:
+        print("[Sparse-GP] No LS targets found; qp_init_mu_affine.npz was not generated.")
+
     summary_path = os.path.join(out_dir, "training_summary.txt")
     with open(summary_path, "w", encoding="utf-8") as f:
         f.write("Stage 7b Sparse-GP manifold summary\n")
@@ -583,6 +639,12 @@ def train_sparse_gp(
             "mean_best_val_mse_per_output="
             f"{float(np.nanmean(best_val_mse)):.16e}\n"
         )
+        if mu_qp_aff is not None:
+            f.write("qp_init_mu_affine_available=1\n")
+            f.write(f"qp_init_mu_affine_mu_dim={int(mu_qp_aff['mu_dim'])}\n")
+            f.write(f"qp_init_mu_affine_rel_fit={float(mu_qp_aff['rel_fit']):.16e}\n")
+        else:
+            f.write("qp_init_mu_affine_available=0\n")
 
     print("\n" + "=" * 72)
     print("Sparse-GP training complete")

@@ -896,6 +896,78 @@ Outputs:
 - `phi_p.npy`, `phi_s.npy`,
 - `training_summary.txt`.
 
+If the input dataset contains `ls_targets_train.npy` (LS branch), Stage 7b-Sparse-GPR
+also exports:
+
+- `qp_init_mu_affine.npz`
+
+This file enables the online initializer mode:
+
+- `--qp-init-mode mu_affine`
+
+in `stage8_test_prom_gpr.py` and `stage10_test_hprom_gpr.py`.
+
+### Recommended Model (Current Best): Sparse-GPR
+
+Current recommended branch for production runs:
+- Stage 7 sparse-GPR manifold (`sparse_gp_model.npz`)
+- Stage 9 GPR ECM
+- Stage 10 HPROM-GPR benchmark
+
+Complete cascade:
+
+```bash
+cd /home/kratos/ML_assisted_CLs_clean/RVE_homogenization_NeoHookean_using_Kratos
+
+python3 stage7a_prepare_ann_rbf_dataset.py --n-primary 4
+
+python3 stage7b_train_sparse_gpr_manifold.py \
+  --data-dir stage_7_ann_data \
+  --out-dir stage_7_gpr_data \
+  --num-inducing 800 \
+  --inducing-selection kmeans \
+  --kmeans-max-iters 40 \
+  --kmeans-batch-size 4096 \
+  --kmeans-fit-samples 110000 \
+  --train-samples 0 \
+  --val-fraction 0.1 \
+  --epochs 120 \
+  --batch-size 2048 \
+  --lr 0.05 \
+  --device auto \
+  --seed 42
+
+python3 stage9_build_ecm_dataset_gpr.py \
+  --gpr-dir stage_7_gpr_data \
+  --out-dir stage_9_ecm_dataset_gpr \
+  --snapshot-percent-res 5 \
+  --snapshot-percent-hom 5 \
+  --residual-fit-mode gauss_newton
+
+python3 stage9_compute_ecm_weights_gpr.py \
+  --data-dir stage_9_ecm_dataset_gpr \
+  --out-dir stage_9_hprom_gpr_data \
+  --ecm-coupling-mode cascade \
+  --ecm-tol-res 0 \
+  --ecm-tol-eps 0 \
+  --ecm-tol-sig 0
+
+python3 build_hrom_mesh_from_ecm.py \
+  --base-mesh rve_geometry \
+  --ecm-file stage_9_hprom_gpr_data/ecm_weights_all.npz \
+  --selection-key Z_union \
+  --condition-mode all \
+  --output-mesh rve_geometry_stage_9_hprom_gpr_data_z_union_hrom \
+  --inplace-ecm
+
+python3 stage10_test_hprom_gpr.py \
+  --run-prom-gpr \
+  --run-hprom-gpr \
+  --gpr-data-dir stage_7_gpr_data \
+  --hprom-gpr-dir stage_9_hprom_gpr_data \
+  --out-dir stage_10_hprom_gpr_results
+```
+
 ### Stage 7b-POD-DL: Train POD-DL / POD-AE Manifold
 
 ```bash
@@ -1047,6 +1119,32 @@ python3 stage8_test_prom_dl.py --run-fom --run-hprom
 
 Default Stage 8-POD-DL trajectory mode is already the Stage-6 dense waypoint path.
 
+### Stage 8-GPR: PROM-GPR Benchmark
+
+PROM-GPR only:
+
+```bash
+python3 stage8_test_prom_gpr.py --no-compare
+```
+
+PROM-GPR only with affine initialization from macro strain (`mu -> q_p`):
+
+```bash
+python3 stage8_test_prom_gpr.py --no-compare --qp-init-mode mu_affine
+```
+
+PROM-GPR plus local FOM/HPROM comparison:
+
+```bash
+python3 stage8_test_prom_gpr.py
+```
+
+Force recompute Stage 8-GPR local baselines:
+
+```bash
+python3 stage8_test_prom_gpr.py --run-fom --run-hprom
+```
+
 ### Stage 9a: Build ECM Dataset for HPROM-RBF
 
 This stage uses the same stratified snapshot sampling logic as Stage 5a, but projects element residuals with the RBF-manifold tangent:
@@ -1164,6 +1262,86 @@ Optional forced recompute:
 ```bash
 python3 stage10_test_hprom_rbf.py --run-fom --run-prom-rbf --run-hprom-rbf
 ```
+
+### Stage 9a/9b + Stage 10 for HPROM-GPR
+
+Build GPR ECM dataset:
+
+```bash
+python3 stage9_build_ecm_dataset_gpr.py \
+  --gpr-dir stage_7_gpr_data \
+  --snapshot-percent-res 5 \
+  --snapshot-percent-hom 5 \
+  --residual-fit-mode gauss_newton
+```
+
+Compute GPR ECM weights:
+
+```bash
+python3 stage9_compute_ecm_weights_gpr.py \
+  --ecm-coupling-mode cascade
+```
+
+Build HROM mesh from GPR ECM selection:
+
+```bash
+python3 build_hrom_mesh_from_ecm.py \
+  --base-mesh rve_geometry \
+  --ecm-file stage_9_hprom_gpr_data/ecm_weights_all.npz \
+  --selection-key Z_union \
+  --condition-mode all \
+  --output-mesh rve_geometry_stage_9_hprom_gpr_data_z_union_hrom \
+  --inplace-ecm \
+  --save-selection-image stage_9_hprom_gpr_data/Z_union_selected_elements_paper.png \
+  --model-label "HPROM-GPR (ECM)"
+```
+
+Run FOM vs PROM-GPR vs HPROM-GPR:
+
+```bash
+python3 stage10_test_hprom_gpr.py
+```
+
+Run with affine `mu -> q_p` initialization:
+
+```bash
+python3 stage10_test_hprom_gpr.py \
+  --run-prom-gpr --run-hprom-gpr \
+  --gpr-data-dir stage_7_gpr_data_ls \
+  --hprom-gpr-dir stage_9_hprom_gpr_data_ls \
+  --out-dir stage_10_hprom_gpr_ls_results \
+  --qp-init-mode mu_affine
+```
+
+Important:
+- `--qp-init-mode mu_affine` requires `qp_init_mu_affine.npz` inside `--gpr-data-dir`.
+- If that file is missing, the script aborts by design.
+
+Optional forced recompute:
+
+```bash
+python3 stage10_test_hprom_gpr.py --run-fom --run-prom-gpr --run-hprom-gpr
+```
+
+### Stage 10 (Sparse-Point Variant): HPROM-GPR at N Points Only
+
+This variant keeps the full Stage-10 trajectory definition but solves HPROM-GPR only
+at a sparse subset of dynamic points (for example 20 points), then compares against
+FOM sampled at the same points.
+
+```bash
+python3 stage10_test_hprom_gpr_sparse_points.py \
+  --n-points 20 \
+  --run-hprom-gpr \
+  --gpr-data-dir stage_7_gpr_data_ls \
+  --hprom-gpr-dir stage_9_hprom_gpr_data_ls \
+  --out-dir stage_10_hprom_gpr_sparse_points \
+  --qp-init-mode mu_affine
+```
+
+Plot behavior:
+- FOM is shown as the full trajectory (all points).
+- HPROM-GPR is shown as scatter only at the sparse evaluated points.
 
 ### Stage 9a/9b + Stage 10 for HPROM-POD-DL
 
@@ -1386,8 +1564,10 @@ fom_solver_rve.py
 prom_solver_rve.py
 hprom_solver_rve.py
 hprom_rbf_solver_rve.py
+hprom_gpr_solver_rve.py
 prom_ann_solver_rve.py
 prom_rbf_solver_rve.py
+prom_gpr_solver_rve.py
 prom_dl_solver_rve.py
 ```
 
@@ -1406,6 +1586,7 @@ stage7a_prepare_ann_rbf_dataset.py
 stage7a_prepare_pod_dl_dataset.py
 stage7b_train_ann_manifold.py
 stage7b_train_rbf_manifold.py
+stage7b_train_sparse_gpr_manifold.py
 stage7b_train_pod_dl_manifold.py
 stage7c_test_ann_rom.py
 stage7c_test_rbf_rom.py
@@ -1413,10 +1594,14 @@ stage7c_test_pod_dl_rom.py
 stage7c_compare_bounds.py
 stage8_test_prom_ann.py
 stage8_test_prom_rbf.py
+stage8_test_prom_gpr.py
 stage8_test_prom_dl.py
 stage9_build_ecm_dataset_rbf.py
+stage9_build_ecm_dataset_gpr.py
 stage9_compute_ecm_weights_rbf.py
+stage9_compute_ecm_weights_gpr.py
 stage10_test_hprom_rbf.py
+stage10_test_hprom_gpr.py
 ```
 
 ### Inputs
@@ -1434,5 +1619,5 @@ Before running the full workflow, check that the following are consistent:
 - The trajectory settings in Stage 0 match the intended strain domain.
 - If the mesh changes, regenerate Stage 1 and all downstream stages.
 - If the POD dimension changes, regenerate Stage 2 and all downstream reduced models.
-- If the ANN, RBF, or POD-DL architecture changes, regenerate the corresponding Stage 7 model and downstream benchmarks.
+- If the ANN, RBF, sparse-GPR, or POD-DL architecture changes, regenerate the corresponding Stage 7 model and downstream benchmarks.
 - If ECM weights are regenerated, rerun the corresponding HPROM benchmark.
