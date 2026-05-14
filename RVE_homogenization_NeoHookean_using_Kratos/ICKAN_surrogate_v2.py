@@ -44,16 +44,17 @@ class KANStressPredictor(nn.Module):
 
         grid = []
         for i in range(self.input_size):
-            grid.append([0.0, 1.0])
+            grid.append([0.0, 0.5])
 
         # KAN definition
         self.KAN_W = KAN.MultKAN(
-            width=[self.input_size,  1], # output of size 1: W
+            width=[self.input_size, 1,  1], # output of size 1: W
             grid=self.grid,
             k=self.k,
             grid_range_0=grid,
             grid_range=grid
         )
+        # self.KAN_W.speed()
 
         # Initialize some extra parameters
         self.ki = nn.ParameterList([
@@ -103,7 +104,9 @@ class KANStressPredictor(nn.Module):
         kan_inputs.append(log_J_expanded)
 
         KAN_input = torch.cat(kan_inputs, dim=-1)
-        return KAN_input.view(-1, self.input_size) # Reshape to (batches*steps, input_size)
+        
+        viewed_KAN_input = KAN_input.view(-1, self.input_size)
+        return viewed_KAN_input # Reshape to (batches*steps, input_size)
 
     # ==========================================================================================
     def CalculateW(self, strain_database):
@@ -183,7 +186,7 @@ Load strain and stress from FOM trajectories (10 trajectories from stage_1_train
 Data is loaded as [history, step, component] with shape [10, steps, 3].
 """
 #***********************************************
-min_steps = 150  # truncate all trajectories to the same length (e.g., 150 steps)
+min_steps = 250  # truncate all trajectories to the same length (e.g., 150 steps)
 #***********************************************
 
 # Path to FOM trajectories folder (relative to script location)
@@ -253,29 +256,66 @@ ref_strain_database = ref_strain_database.detach().requires_grad_(True) # Enable
 
 # Create the torch model
 model = KANStressPredictor()
-model.KAN_W.speed()
+# model.KAN_W.speed()
 
 # Here we compute the KAN inputs, invariants
 kan_input = model._compute_kan_input_for_strain(ref_strain_database)
-print(f"KAN input shape: {kan_input.shape}")
+# print(f"KAN input shape: {kan_input.shape}")
+# print("KAN grid updated with computed KAN inputs from the strain database.")
+model.KAN_W.update_grid(kan_input) # Update KAN grid with the computed KAN inputs (invariants) from the strain database
 
+# Check null stress at null strain
+print("\nChecking null stress at null strain...")
+null_strain = torch.zeros((1, 3), requires_grad=True)  # Shape
+print("null stress = ", model.forward(null_strain))
 
-print("KAN grid updated with computed KAN inputs from the strain database.")
-# model.KAN_W.update_grid(kan_input) # Update KAN grid with the computed KAN inputs (invariants) from the strain database
-
-
-
-output = model.forward(ref_strain_database)
-print("output size: ", output.shape)
-print("output type: ", output[25,:])
+# output = model.forward(ref_strain_database)
+# print("output size: ", output.shape)
+# print("output type: ", output[25,:])
 
 
 
 
 #*****************************
-n_epochs = 500
+n_epochs = 5000
 learning_rate = 0.01
 #*****************************
 
-optimizer_1 = optim.Adam(model.parameters(), lr=learning_rate)
+optimizer_1 = optim.AdamW(model.parameters(), lr=learning_rate)
 TRAIN_KAN(model, optimizer_1, ref_strain_database, ref_stress_database, n_epochs)
+
+
+
+
+
+
+
+# ==========================================================================================
+# PLOTTING: Create batch plots showing Strain vs Stress (Reference vs Predicted)
+# ==========================================================================================
+
+# Restore original shapes for plotting (before reshaping to batches*steps)
+# Original: [10 trajectories, 150 steps, 3 components]
+num_trajectories = 10
+steps_per_trajectory = min_steps
+
+
+predicted_stress = model.forward(ref_strain_database).detach().numpy()  # Shape: (batches*steps, 3)
+
+
+plt.plot(ref_strain_database[:, 0].detach().numpy(), ref_stress_database[:, 0].detach().numpy(), 'ro', label='Reference Stress Component 0', color=GetColor(0), linestyle="")
+plt.plot(ref_strain_database[:, 1].detach().numpy(), ref_stress_database[:, 1].detach().numpy(), 'bo', label='Reference Stress Component 1', color=GetColor(1), linestyle="")
+plt.plot(ref_strain_database[:, 2].detach().numpy(), ref_stress_database[:, 2].detach().numpy(), 'go', label='Reference Stress Component 2', color=GetColor(2), linestyle="")
+plt.plot(ref_strain_database[:, 0].detach().numpy(), predicted_stress[:, 0], 'r-', label='Predicted Stress Component 0', color=GetColor(0), linestyle="-")
+plt.plot(ref_strain_database[:, 1].detach().numpy(), predicted_stress[:, 1], 'b-', label='Predicted Stress Component 1', color=GetColor(1), linestyle="-")
+plt.plot(ref_strain_database[:, 2].detach().numpy(), predicted_stress[:, 2], 'g-', label='Predicted Stress Component 2', color=GetColor(2), linestyle="-")
+
+plt.xlabel('Strain')
+plt.ylabel('Stress')
+plt.legend()
+plt.show()
+
+model.plot_spline_edges()
+model.KAN_W.plot(folder="./ICKAN_predictions")
+plt.savefig("./ICKAN_predictions/KAN_splines.png")
+print("\nAll batch plots saved to ICKAN_predictions folder.")
