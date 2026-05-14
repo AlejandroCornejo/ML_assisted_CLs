@@ -277,7 +277,7 @@ print("null stress = ", model.forward(null_strain))
 
 
 #*****************************
-n_epochs = 5000
+n_epochs = 10
 learning_rate = 0.01
 #*****************************
 
@@ -287,12 +287,26 @@ TRAIN_KAN(model, optimizer_1, ref_strain_database, ref_stress_database, n_epochs
 
 
 
-
-
-
 # ==========================================================================================
 # PLOTTING: Create batch plots showing Strain vs Stress (Reference vs Predicted)
 # ==========================================================================================
+
+
+# Create the folder to save the plots if it doesn't exist
+output_folder = "ICKAN_predictions"
+os.makedirs(output_folder, exist_ok=True)
+torch.save(model.state_dict(), "ICKAN_predictions/ICKAN_model_weights.pth")
+
+
+model.KAN_W.save_act = True
+model.KAN_W.forward(ref_strain_database)
+model.KAN_W.plot(folder="./ICKAN_predictions")
+plt.savefig("./ICKAN_predictions/KAN_splines.png")
+plt.close()
+
+
+
+
 
 # Restore original shapes for plotting (before reshaping to batches*steps)
 # Original: [10 trajectories, 150 steps, 3 components]
@@ -315,7 +329,7 @@ plt.ylabel('Stress')
 plt.legend()
 plt.show()
 
-model.plot_spline_edges()
+# model.plot_spline_edges()
 model.KAN_W.plot(folder="./ICKAN_predictions")
 plt.savefig("./ICKAN_predictions/KAN_splines.png")
 print("\nAll batch plots saved to ICKAN_predictions folder.")
