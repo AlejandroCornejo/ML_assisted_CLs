@@ -46,7 +46,7 @@ class ICKAN_W_Surrogate(nn.Module):
 
         grid = []
         for i in range(self.input_size):
-            grid.append([-1, 1])
+            grid.append([-0.1, 1])
 
         # KAN definition for the energy density potential W
         self.KAN_W = KAN.MultKAN(
@@ -147,17 +147,14 @@ def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database, n_epochs):
     # Precompute dW_dI_null ONCE before training to avoid graph recreation each epoch
 
     for epoch in range(n_epochs):
-        optimizer.zero_grad()
-
-        # Forward pass: compute predicted W
-        predicted_W = model.forward(ref_strain_database)
-
-        # Compute L2 loss between predicted W and reference W
-        loss = torch.mean((predicted_W - ref_W_database) ** 2)
-
-        # Backward pass and optimization step
-        loss.backward()
-        optimizer.step()
+        def closure():
+            optimizer.zero_grad()
+            predicted_W = model.forward(ref_strain_database)
+            loss = torch.mean((predicted_W - ref_W_database) ** 2)
+            loss.backward()
+            return loss
+        
+        loss = optimizer.step(closure)
 
         if epoch % 20 == 0:
             print(f"Epoch {epoch}, Loss: {loss.item()}")
@@ -264,7 +261,12 @@ W_width = [input_size, input_size,  1] # output always 1
 model = ICKAN_W_Surrogate(order_stretches=order_stretches, grid=grid, k=k, W_width=W_width)
 # model.UpdateGridFromSamples(train_strain_database)
 
-optimizer_1 = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+optimizer_1 = optim.LBFGS(
+                    model.parameters(),
+                    lr=learning_rate,
+                    max_iter=50,
+                    history_size=50)
+
 TRAIN_KAN(model, optimizer_1, train_strain_database, train_W_database, n_epochs)
 
 print("Check null W at null strain: ", model.forward(torch.zeros(1,3)))
