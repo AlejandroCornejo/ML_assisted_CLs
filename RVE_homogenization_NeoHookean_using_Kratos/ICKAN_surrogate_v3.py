@@ -54,7 +54,7 @@ class ICKAN_W_Surrogate(nn.Module):
             # width=[self.input_size, self.input_size, 1], # output of size 1: W
             grid_range_0 = grid,
             grid_range = grid,
-            base_fun = "identity"
+            # base_fun = "identity"
         )
 
         self.KAN_W.speed()
@@ -168,7 +168,7 @@ Load strain and stress from FOM trajectories (10 trajectories from stage_1_train
 Data is loaded as [history, step, component] with shape [10, steps, 3].
 """
 #***********************************************
-min_steps = 250  # truncate all trajectories to the same length (e.g., 150 steps)
+min_steps = 500  # truncate all trajectories to the same length (e.g., 150 steps)
 #***********************************************
 
 # Path to FOM trajectories folder (relative to script location)
@@ -223,35 +223,59 @@ ref_strain_database /= ref_strain_database.abs().max()  # Normalize strain to ha
 train_strain_database = ref_strain_database.view(-1, 3)
 train_stress_database = ref_stress_database.view(-1, 3)
 
+
 print("\nLaunching the training of a KAN...")
 print(f"Number of training trajectories: {train_strain_database.shape[0]}")
 print(f"Number of total trajectories: {ref_strain_database.shape[0]}")
 print(f"Number of steps: {ref_strain_database.shape[1]}")
 print(f"Strain size: {ref_strain_database.shape[2]}\n")
 
-train_W_database = torch.zeros(train_strain_database.shape[0], 1)  # Placeholder for W values
+# Compute W using trapezoidal rule for better integration accuracy
+# Work increment: dW = 0.5 * (sigma_i + sigma_{i-1}) : d(epsilon_i - epsilon_{i-1})
+# This averages stress at start and end of each increment (trapezoidal rule)
 
-train_W_database[:, 0] = 0.5 * (train_stress_database[:,0] * train_strain_database[:,0] +
-                                train_stress_database[:,1] * train_strain_database[:,1] + 
-                                train_stress_database[:,2] * train_strain_database[:,2])
+# Keep trajectory structure for per-trajectory cumsum: shape [batches, steps, 3]
+batch_strain = ref_strain_database  # [10, steps, 3]
+batch_stress = ref_stress_database  # [10, steps, 3]
 
-train_W_database /= train_W_database.abs().max()  # Normalize W to have max absolute value of 1
+# Compute strain increments per trajectory: shape [batches, steps, 3]
+delta_strain_batch = torch.zeros_like(batch_strain)
+delta_strain_batch[:, 1:, :] = batch_strain[:, 1:, :] - batch_strain[:, :-1, :]
 
+# Trapezoidal rule: average stress at start and end of each increment
+# stress_avg at step i uses (stress[i] + stress[i-1]) / 2
+stress_avg = 0.5 * (batch_stress[:, 1:, :] + batch_stress[:, :-1, :])
+
+# W increment per trajectory step: shape [batches, steps-1, 1]
+W_increment_batch = (stress_avg * delta_strain_batch[:, 1:, :]).sum(dim=2, keepdim=True)
+
+# Cumulative sum per trajectory, starting from zero energy at reference state
+# Shape: [batches, steps-1, 1]
+W_cumulative_batch = torch.cumsum(W_increment_batch, dim=1)  # [10, steps-1, 1]
+
+# Prepend zero (W=0 at reference state) and reshape to [batches*steps, 1]
+W_zero = torch.zeros(batch_strain.shape[0], 1, 1, device=W_cumulative_batch.device)  # [10, 1, 1]
+W_full_batch = torch.cat([W_zero, W_cumulative_batch], dim=1)  # [10, steps, 1]
+train_W_database = W_full_batch.view(-1, 1)  # [10*steps, 1]
+
+max_W = train_W_database.abs().max()
+train_W_database /= max_W  # Normalize W to have max absolute value of 1
 
 
 
 #*****************************
 #*****************************
 #*****************************
-n_epochs = 1000
-learning_rate = 0.01
+n_epochs = 5000
+learning_rate = 0.1
 
 
 order_stretches = 1   # Number of orders (can be set to any value)
 k = 2  # Degree of splines
 grid = 3  # Number of knots
 input_size = 2 * order_stretches + 1
-W_width = [input_size, input_size,  1] # output always 1
+W_width = [input_size,  1] # output always 1
+W_width = [input_size, input_size, input_size, 1] # output always 1
 #*****************************
 #*****************************
 #*****************************
@@ -261,11 +285,13 @@ W_width = [input_size, input_size,  1] # output always 1
 model = ICKAN_W_Surrogate(order_stretches=order_stretches, grid=grid, k=k, W_width=W_width)
 # model.UpdateGridFromSamples(train_strain_database)
 
-optimizer_1 = optim.LBFGS(
-                    model.parameters(),
-                    lr=learning_rate,
-                    max_iter=50,
-                    history_size=50)
+# optimizer_1 = optim.LBFGS(
+#                     model.parameters(),
+#                     lr=learning_rate,
+#                     max_iter=50,
+#                     history_size=50)
+
+optimizer_1 = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
 
 TRAIN_KAN(model, optimizer_1, train_strain_database, train_W_database, n_epochs)
 
@@ -274,11 +300,52 @@ print("Check null W at null strain: ", model.forward(torch.zeros(1,3)))
 
 predicted_w = model.forward(train_strain_database)
 
-plt.plot(train_strain_database[:,0].numpy(), train_W_database[:,0].numpy(), '--', label='Reference W')
-plt.plot(train_strain_database[:,0].numpy(), predicted_w[:,0].detach().numpy(), '-', label='ICKAN W')
+plt.plot(train_strain_database[:,0].detach().numpy(), train_W_database[:,0].detach().numpy(), '--', label='Reference W')
+plt.plot(train_strain_database[:,0].detach().numpy(), predicted_w[:,0].detach().numpy(), '-', label='ICKAN W')
 plt.xlabel('E_xx')
 plt.ylabel('W')
 plt.legend()
 plt.savefig("./ICKAN_predictions/W_history.png")
 plt.show()
 plt.close()
+
+
+
+
+# now we can compute the predicted stress using autograd on the predicted W
+# predicted_stress = torch.zeros_like(train_stress_database)
+# predicted_stress[:,0] = torch.autograd.grad(predicted_w, train_strain_database[:,0], create_graph=True)[0]
+# predicted_stress[:,1] = torch.autograd.grad(predicted_w, train_strain_database[:,1], create_graph=True)[0]
+# predicted_stress[:,2] = torch.autograd.grad(predicted_w, train_strain_database[:,2], create_graph=True)[0]
+
+# Enable gradients for strain database to compute dW/dE using autograd
+train_strain_database = train_strain_database.requires_grad_(True)
+predicted_w = model.forward(train_strain_database)
+
+predicted_stress = torch.autograd.grad(
+            outputs=predicted_w,
+            inputs=train_strain_database,
+            grad_outputs=torch.ones_like(predicted_w),
+            create_graph=True
+            )[0]
+
+null_train_strain_database = torch.zeros_like(train_strain_database).requires_grad_(True)
+predicted_w_0 = model.forward(null_train_strain_database)
+stress_0 = torch.autograd.grad(
+            outputs=predicted_w_0,
+            inputs=null_train_strain_database,
+            grad_outputs=torch.ones_like(predicted_w_0),
+            create_graph=True
+            )[0]
+
+stress = max_W*(predicted_stress - stress_0)
+
+plt.plot(train_strain_database[:,0].detach().numpy(), train_stress_database[:,0].numpy(), '--', label='Reference S_xx')
+plt.plot(train_strain_database[:,0].detach().numpy(), stress[:,0].detach().numpy(), '-', label='ICKAN S_xx')
+plt.xlabel('E_xx')
+plt.ylabel('S_xx')
+plt.legend()
+plt.savefig("./ICKAN_predictions/S_xx_history.png")
+plt.show()
+plt.close()
+
