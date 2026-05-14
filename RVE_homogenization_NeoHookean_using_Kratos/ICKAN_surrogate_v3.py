@@ -43,17 +43,17 @@ class ICKAN_W_Surrogate(nn.Module):
         self.input_size = 2 * self.order_stretches + 1  # Total inputs: 2 * reg_eigenvalues for each order + 1 * log(J)
         self.grid = grid
         self.k = k
-        
+
         grid = []
         for i in range(self.input_size):
-            grid.append([-1, 1])
+            grid.append([-0, 1])
 
         # KAN definition for the energy density potential W
         self.KAN_W = KAN.MultKAN(
             width=[self.input_size, 1], # output of size 1: W
             grid_range_0=grid,
             grid_range=grid,
-            base_fun = "identity"
+            # base_fun = "identity"
         )
 
         self.KAN_W.speed()
@@ -92,7 +92,6 @@ class ICKAN_W_Surrogate(nn.Module):
 
         C = 2.0 * E + torch.eye(2)
         J = torch.linalg.det(C) ** 0.5
-        log_J = J**2
         log_J = torch.log(J + 1.0e-12)
 
         square_eigenvalues = torch.linalg.eigvalsh(C)
@@ -128,7 +127,9 @@ class ICKAN_W_Surrogate(nn.Module):
 
         W_raw = self.KAN_W.forward(kan_input)  # Shape: (batch x steps, 1)
 
-        W0 = self.KAN_W.forward(torch.zeros_like(kan_input))
+        null_kan_input = self._compute_kan_input_for_strain(torch.zeros_like(strain_database))
+        W0 = self.KAN_W.forward(null_kan_input)
+
         return W_raw - W0
     # ==========================================================================================
 
@@ -214,8 +215,8 @@ ref_strain_database = torch.tensor(np.stack(strain_trajectories_truncated), dtyp
 ref_stress_database = torch.tensor(np.stack(stress_trajectories_truncated), dtype=torch.float32)  # [10, steps, 3]
 
 # Convert stress to be base 1
-ref_stress_database /= 1.0e9
-ref_strain_database /= 2.0
+ref_stress_database /= ref_stress_database.abs().max()  # Normalize stress to have max absolute value of 1
+ref_strain_database /= ref_strain_database.abs().max()  # Normalize strain to have max absolute value of 1
 
 # Use all data for training (no train/test split)
 # reshape for optimal loops
@@ -236,23 +237,32 @@ train_W_database[:, 0] = 0.5 * (train_stress_database[:,0] * train_strain_databa
 
 train_W_database /= train_W_database.abs().max()  # Normalize W to have max absolute value of 1
 
+
+
+
+#*****************************
+#*****************************
 #*****************************
 n_epochs = 1000
-learning_rate = 0.01
+learning_rate = 0.1
 
 
 order_stretches = 1   # Number of orders (can be set to any value)
 k = 2  # Degree of splines
 grid = 3  # Number of knots
 #*****************************
+#*****************************
+#*****************************
+
+
 
 model = ICKAN_W_Surrogate(order_stretches=order_stretches, grid=grid, k=k)
-model.UpdateGridFromSamples(train_strain_database)
+# model.UpdateGridFromSamples(train_strain_database)
 
 optimizer_1 = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
 TRAIN_KAN(model, optimizer_1, train_strain_database, train_W_database, n_epochs)
 
-
+print("Check null W at null strain: ", model.forward(torch.zeros(1,3)))
 
 
 predicted_w = model.forward(train_strain_database)
@@ -262,4 +272,5 @@ plt.plot(train_strain_database[:,0].numpy(), predicted_w[:,0].detach().numpy(), 
 plt.xlabel('E_xx')
 plt.ylabel('W')
 plt.legend()
-plt.show()
+plt.savefig("./ICKAN_predictions/W_history.png")
+plt.close()
