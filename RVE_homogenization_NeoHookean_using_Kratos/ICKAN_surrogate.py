@@ -8,28 +8,29 @@ import ickan as KAN
 
 class ICKAN_W_Surrogate(nn.Module):
 
-    def __init__(self, order_stretches, grid, k, W_width):
+    def __init__(self, order_stretches, grid_size, k, W_width):
         super(ICKAN_W_Surrogate, self).__init__()
 
         self.order_stretches = order_stretches
         self.input_size = 2 * self.order_stretches + 1  # Total inputs: 2 * reg_eigenvalues for each order + 1 * log(J)
-        self.grid = grid
+        self.grid_size = grid_size
         self.k = k
         self.W_width = W_width
 
-        grid = []
+        grid_range = []
         for i in range(self.input_size):
-            grid.append([0, 10])
+            grid_range.append([-1, 1])
 
         # KAN definition for the energy density potential W
         self.KAN_W = KAN.MultKAN(
             width = self.W_width, # output of size 1: W
-            grid_range_0 = grid,
-            grid_range = grid,
-            base_fun = "identity"
+            grid_range_0 = grid_range,
+            grid_range = grid_range,
+            # base_fun = "identity",
+            # save_act = True
         )
 
-        self.KAN_W.speed()
+        # self.KAN_W.speed()
 
         # Initialize some extra parameters
         self.ki = nn.ParameterList([

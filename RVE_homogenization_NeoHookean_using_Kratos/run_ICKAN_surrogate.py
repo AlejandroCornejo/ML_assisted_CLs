@@ -173,18 +173,23 @@ learning_rate = 0.01
 
 order_stretches = 1   # Number of orders (can be set to any value)
 k = 2  # Degree of splines
-grid = 3  # Number of knots
+grid_size = 3  # Number of knots
 
 input_size = 2 * order_stretches + 1
 
-W_width = [input_size, input_size+5,  1] # output always 1
+W_width = [input_size,  1] # output always 1
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 
 
 
-model = surrogate.ICKAN_W_Surrogate(order_stretches=order_stretches, grid=grid, k=k, W_width=W_width)
+model = surrogate.ICKAN_W_Surrogate(
+    order_stretches=order_stretches,
+    grid_size=grid_size,
+    k=k,
+    W_width=W_width)
+
 # model.UpdateGridFromSamples(train_strain_database)
 
 # optimizer_1 = optim.LBFGS(
@@ -195,7 +200,7 @@ model = surrogate.ICKAN_W_Surrogate(order_stretches=order_stretches, grid=grid, 
 
 optimizer_1 = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
 
-print("Check null W at null strain: ", model.forward(torch.zeros(1,3)))
+print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
 print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
 
 
@@ -209,8 +214,14 @@ TRAIN_KAN(
     max_W)
 
 
+model.KAN_W.save_act = True
+predicted_w = model.KAN_W.forward(train_strain_database)
+model.KAN_W.plot()
+# plt.show()
+plt.savefig("./ICKAN_predictions/ICKAN.png")
+plt.close()
 
-predicted_w = model.forward(train_strain_database)
+predicted_w = model.CalculateW(train_strain_database)
 
 plt.plot(train_strain_database[:,0].detach().numpy(), train_W_database[:,0].detach().numpy(), '--', label='Reference W')
 plt.plot(train_strain_database[:,0].detach().numpy(), predicted_w[:,0].detach().numpy(), '-', label='ICKAN W')
