@@ -188,16 +188,18 @@ def TRAIN_KAN(
         if loss.item() < best_loss:
             best_loss = loss.item()
             patience_counter = 0
+            best_parameters = {k: v.clone() for k, v in model.state_dict().items()}  # Save best model parameters
         else:
             patience_counter += 1
-
             # Reduce learning rate when patience is exhausted
             if patience_counter >= patience and not is_patient:
                 current_lr = optimizer.param_groups[0]['lr']
                 new_lr = current_lr * reduce_lr_factor
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = new_lr
+                    model.load_state_dict(best_parameters)  # Revert to best parameters
                 print(f"Reducing learning rate from {current_lr} to {new_lr} at epoch {epoch}")
+                print(f"Reverting to best model parameters with loss {best_loss:.8f}")
                 patience_counter = 0  # Reset patience counter
         
         if epoch % 50 == 0:
@@ -248,18 +250,18 @@ print("\nStarting stress based optimization...")
 print(20*"=")
 
 TRAIN_KAN(
-    model                  =  model,
-    optimizer              =  optimizer_1,
-    ref_strain_database    =  train_strain_database,
-    ref_W_database         =  train_W_database,
-    ref_stress_database    =  train_stress_database,
-    n_epochs               =  n_epochs,
-    max_W                  =  max_W,
-    patience               =  30,
-    reduce_lr_factor       =  0.9,
-    is_patient             =  True,
-    train_W                =  False,
-    mixed_sovolev_training = True,
+    model                       =  model,
+    optimizer                   =  optimizer_1,
+    ref_strain_database         =  train_strain_database,
+    ref_W_database              =  train_W_database,
+    ref_stress_database         =  train_stress_database,
+    n_epochs                    =  n_epochs,
+    max_W                       =  max_W,
+    patience                    =  30,
+    reduce_lr_factor            =  0.9,
+    is_patient                  =  True,
+    train_W                     =  False,
+    mixed_sovolev_training      = True,
     mixed_sovolev_W_loss_weight = 0.9 # 1 is only W loss, 0 is only S loss, 0.5 is equal weighting
 )
 
