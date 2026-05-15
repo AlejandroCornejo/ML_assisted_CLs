@@ -17,15 +17,15 @@ class ICKAN_W_Surrogate(nn.Module):
         self.k = k
         self.W_width = W_width
 
-        grid_range = []
-        for i in range(self.input_size):
-            grid_range.append([-1, 1])
+        # grid_range = []
+        # for i in range(self.input_size):
+        #     grid_range.append([-1, 1])
 
         # KAN definition for the energy density potential W
         self.KAN_W = KAN.MultKAN(
             width = self.W_width, # output of size 1: W
-            grid_range_0 = grid_range,
-            grid_range = grid_range,
+            # grid_range_0 = grid_range,
+            # grid_range = grid_range,
             # base_fun = "identity",
             # save_act = True
         )
