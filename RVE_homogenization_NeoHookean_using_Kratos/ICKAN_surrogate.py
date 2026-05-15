@@ -26,55 +26,28 @@ class ICKAN_W_Surrogate(nn.Module):
             width = self.W_width, # output of size 1: W
             # grid_range_0 = grid_range,
             # grid_range = grid_range,
-            # base_fun = "identity",
+            # base_fun = "softplus",
             # save_act = True
         )
 
-        # self.KAN_W.speed()
+        self.KAN_W.speed()
 
         # Initialize some extra parameters
         self.ki = nn.ParameterList([
             # nn.Parameter(torch.tensor(1.0)) for p in range(self.order_stretches + 1)
-            1.0 for p in range(self.order_stretches + 1)
+            nn.Parameter(torch.tensor(p+1.0)) for p in range(self.order_stretches + 1)
         ])
 
         # The parameter multiplying the log(J) is initially set to 1.0
-        self.ki[-1] = 1.0
-        # self.ki[-1] = nn.Parameter(torch.tensor(1.0))
+        # self.ki[-1] = 1.0
+        self.ki[-1] = nn.Parameter(torch.tensor(1.0))
 
     # ==========================================================================================
 
     def UpdateGridFromSamples(self, strain_database):
-        # === DIAGNOSTIC LOGS FOR NaN DEBUGGING ===
-        print("=" * 60)
-        print("DIAGNOSTIC: Before _compute_kan_input_for_strain")
-        print(f"strain_database shape: {strain_database.shape}")
-        print(f"strain_database min: {strain_database.min().item()}, max: {strain_database.max().item()}")
-        print(f"strain_database has NaN: {torch.isnan(strain_database).any().item()}")
-        print("=" * 60)
-        
-        kan_input = self._compute_kan_input_for_strain(strain_database)
-        
-        print("=" * 60)
-        print("DIAGNOSTIC: After _compute_kan_input_for_strain")
-        print(f"kan_input shape: {kan_input.shape}")
-        print(f"kan_input min: {kan_input.min().item()}, max: {kan_input.max().item()}")
-        print(f"kan_input has NaN: {torch.isnan(kan_input).any().item()}")
-        print(f"kan_input has inf: {torch.isinf(kan_input).any().item()}")
-        if torch.isnan(kan_input).any():
-            for i in range(kan_input.shape[1]):
-                print(f"  Column {i}: NaN count = {torch.isnan(kan_input[:, i]).sum().item()}, min = {kan_input[:, i][~torch.isnan(kan_input[:, i])].min().item() if (~torch.isnan(kan_input[:, i])).any() else 'N/A'}, max = {kan_input[:, i][~torch.isnan(kan_input[:, i])].max().item() if (~torch.isnan(kan_input[:, i])).any() else 'N/A'}")
-        print("=" * 60)
-        
-        # self.KAN_W.update_grid_from_samples(kan_input)
-        self.KAN_W.update_grid(kan_input)
-        
-        print("=" * 60)
-        print("DIAGNOSTIC: After update_grid")
-        print("Grid values in act_fun:")
-        for l, layer in enumerate(self.KAN_W.act_fun):
-            print(f"  Layer {l}: grid min = {layer.grid.min().item()}, max = {layer.grid.max().item()}, has NaN = {torch.isnan(layer.grid).any().item()}")
-        print("=" * 60)
+        # self.KAN_W.update_grid_from_samples(strain_database)
+        self.KAN_W.update_grid(strain_database)
+
 
     # ==========================================================================================
 
@@ -97,6 +70,7 @@ class ICKAN_W_Surrogate(nn.Module):
         C = 2.0 * E + torch.eye(2)
         J = torch.linalg.det(C) ** 0.5
         log_J = torch.log(J + 1.0e-12)
+        # log_J = (J - 0.99)**2
 
         square_eigenvalues = torch.linalg.eigvalsh(C)
         eigenvalues = torch.sqrt(square_eigenvalues)
@@ -105,6 +79,8 @@ class ICKAN_W_Surrogate(nn.Module):
         aux = J ** (-1 / 3)
         reg_eigenvalues[:, 0] = eigenvalues[:, 0] * aux
         reg_eigenvalues[:, 1] = eigenvalues[:, 1] * aux
+        # reg_eigenvalues[:, 0] = eigenvalues[:, 0]
+        # reg_eigenvalues[:, 1] = eigenvalues[:, 1]
 
         kan_inputs = []
         for index in range(self.order_stretches):

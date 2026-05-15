@@ -135,54 +135,86 @@ max_W = train_W_database.abs().max()
 train_W_database /= max_W  # Normalize W to have max absolute value of 1
 
 # ==========================================================================================
-def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database, ref_stress_database, n_epochs, max_W):
+def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database, ref_stress_database, n_epochs, max_W, patience=20, reduce_lr_factor=0.5):
     """
-    Training function with gradient penalization at null input.
+    Training function with early stopping and learning rate reduction.
     
     Args:
         model: ICKAN_W_Surrogate model
         optimizer: Optimizer
         ref_strain_database: Reference strain data
         ref_W_database: Reference energy data
+        ref_stress_database: Reference stress data
         n_epochs: Number of training epochs
         max_W: Maximum value for W normalization
-    """   
+        patience: Number of epochs to wait for improvement before reducing learning rate (default: 20)
+        reduce_lr_factor: Factor to reduce learning rate by (default: 0.5)
+    """
+    best_loss = float('inf')
+    patience_counter = 0
+    
     for epoch in range(n_epochs):
         def closure():
             optimizer.zero_grad()
 
             normalized_stress = model.CalculateNormalizedStress(ref_strain_database) * max_W
 
+            predicted_w = model.CalculateW(ref_strain_database)
+
             # Data loss: match predicted stress to reference stress
             loss = torch.mean((normalized_stress - ref_stress_database) ** 2)
+            loss = loss + 0.01 * torch.mean((predicted_w - ref_W_database) ** 2)  # Add W loss for better convergence
+
             loss.backward()
             return loss
-        
+
         loss = optimizer.step(closure)
 
+        # Check for very low loss (absolute early stopping)
+        if loss.item() < 1e-4:
+            print(f"Early stopping at epoch {epoch} with loss {loss.item()}")
+            break
+
+        # Track best loss and patience
+        if loss.item() < best_loss:
+            best_loss = loss.item()
+            patience_counter = 0
+        else:
+            patience_counter += 1
+
+            # Reduce learning rate when patience is exhausted
+            if patience_counter >= patience:
+                current_lr = optimizer.param_groups[0]['lr']
+                new_lr = current_lr * reduce_lr_factor
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = new_lr
+                print(f"Reducing learning rate from {current_lr} to {new_lr} at epoch {epoch}")
+                patience_counter = 0  # Reset patience counter
+        
         if epoch % 20 == 0:
-            print(f"Epoch {epoch}, Loss: {loss.item()}")
+            print(f"Epoch {epoch}, Loss: {loss.item()}, Best Loss: {best_loss:.6f}, Patience: {patience_counter}/{patience}")
 # ==========================================================================================
 
 
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 1000
-learning_rate = 0.01
+n_epochs = 20000
+learning_rate = 0.02
 
-order_stretches = 1   # Number of orders (can be set to any value)
+order_stretches = 2   # Number of orders (can be set to any value)
 k = 2  # Degree of splines
 grid_size = 3  # Number of knots
 
 input_size = 2 * order_stretches + 1
 
-W_width = [input_size,  1] # output always 1
+W_width = [input_size,
+            5,
+            3,
+            1] # output always 1
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-
-
 
 model = surrogate.ICKAN_W_Surrogate(
     order_stretches=order_stretches,
@@ -192,13 +224,15 @@ model = surrogate.ICKAN_W_Surrogate(
 
 # model.UpdateGridFromSamples(train_strain_database)
 
+optimizer_1 = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-5)
+
 # optimizer_1 = optim.LBFGS(
 #                     model.parameters(),
 #                     lr=learning_rate,
 #                     max_iter=20,
 #                     history_size=30)
 
-optimizer_1 = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+
 
 print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
 print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
@@ -215,7 +249,8 @@ TRAIN_KAN(
 
 
 model.KAN_W.save_act = True
-predicted_w = model.KAN_W.forward(train_strain_database)
+kan_input = model._compute_kan_input_for_strain(train_strain_database) 
+predicted_w = model.KAN_W.forward(kan_input)
 model.KAN_W.plot()
 # plt.show()
 plt.savefig("./ICKAN_predictions/ICKAN.png")
