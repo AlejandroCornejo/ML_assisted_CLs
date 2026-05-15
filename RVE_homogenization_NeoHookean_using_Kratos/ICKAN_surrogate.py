@@ -18,27 +18,26 @@ class ICKAN_W_Surrogate(nn.Module):
         self.W_width = W_width
 
         # Define the spline grid range for all inputs
-        grid_range = [1.0e-12, 1.2]
+        grid_range = [-1.0, 1.0]
 
         # KAN definition for the energy density potential W
         self.KAN_W = KAN.MultKAN(
             width=self.W_width,  # output of size 1: W
             grid_range=grid_range,
-            grid_range_0=grid_range,
-            # base_fun="softplus",
+            grid_range_0=grid_range
         )
 
-        self.KAN_W.speed()
+        self.KAN_W.speed(True)
 
         # Initialize some extra parameters
         self.ki = nn.ParameterList([
-            # nn.Parameter(torch.tensor(1.0)) for p in range(self.order_stretches + 1)
-            nn.Parameter(torch.tensor(p+1.0)) for p in range(self.order_stretches + 1)
+            1.0 for p in range(self.order_stretches + 1)
+            # nn.Parameter(torch.tensor(p+1.0)) for p in range(self.order_stretches + 1)
         ])
 
         # The parameter multiplying the log(J) is initially set to 1.0
-        # self.ki[-1] = 1.0
-        self.ki[-1] = nn.Parameter(torch.tensor(1.0))
+        self.ki[-1] = 1.0
+        # self.ki[-1] = nn.Parameter(torch.tensor(1.0))
 
     # ==========================================================================================
 
@@ -68,7 +67,6 @@ class ICKAN_W_Surrogate(nn.Module):
         C = 2.0 * E + torch.eye(2)
         J = torch.linalg.det(C) ** 0.5
         log_J = torch.log(J + 1.0e-12)
-        # log_J = (J - 0.99)**2
 
         square_eigenvalues = torch.linalg.eigvalsh(C)
         eigenvalues = torch.sqrt(square_eigenvalues)
@@ -77,8 +75,6 @@ class ICKAN_W_Surrogate(nn.Module):
         aux = J ** (-1 / 3)
         reg_eigenvalues[:, 0] = eigenvalues[:, 0] * aux
         reg_eigenvalues[:, 1] = eigenvalues[:, 1] * aux
-        # reg_eigenvalues[:, 0] = eigenvalues[:, 0]
-        # reg_eigenvalues[:, 1] = eigenvalues[:, 1]
 
         kan_inputs = []
         for index in range(self.order_stretches):
