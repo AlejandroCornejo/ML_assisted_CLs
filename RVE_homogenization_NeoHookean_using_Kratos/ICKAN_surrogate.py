@@ -27,7 +27,7 @@ class ICKAN_W_Surrogate(nn.Module):
             grid_range_0=grid_range
         )
 
-        self.KAN_W.speed(True)
+        self.KAN_W.speed()
 
         # Initialize some extra parameters
         self.ki = nn.ParameterList([

@@ -135,10 +135,20 @@ max_W = train_W_database.abs().max()
 train_W_database /= max_W  # Normalize W to have max absolute value of 1
 
 # ==========================================================================================
-def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database,
-                ref_stress_database, n_epochs, max_W, patience=10, reduce_lr_factor=0.5,
-                is_patient=True,
-                train_W = False):
+def TRAIN_KAN(
+    model,
+    optimizer,
+    ref_strain_database,
+    ref_W_database,
+    ref_stress_database,
+    n_epochs, max_W,
+    patience=10, 
+    reduce_lr_factor=0.5,
+    is_patient=True,
+    train_W = False,
+    mixed_sovolev_training = False,
+    mixed_sovolev_W_loss_weight = 0.5
+    ):
 
     best_loss = float('inf')
     patience_counter = 0
@@ -148,12 +158,21 @@ def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database,
             optimizer.zero_grad()
 
             # Data loss: match predicted stress to reference stress
-            if train_W:
+            if mixed_sovolev_training:
                 predicted_w = model.CalculateW(ref_strain_database)
-                loss = torch.mean((predicted_w - ref_W_database) ** 2)
-            else:
+                loss_W = torch.mean((predicted_w - ref_W_database) ** 2)
+
                 normalized_stress = model.CalculateNormalizedStress(ref_strain_database) * max_W
-                loss = torch.mean((normalized_stress - ref_stress_database) ** 2)
+                loss_S = torch.mean((normalized_stress - ref_stress_database) ** 2)
+
+                loss = mixed_sovolev_W_loss_weight * loss_W + (1 - mixed_sovolev_W_loss_weight) * loss_S
+            else:
+                if train_W:
+                    predicted_w = model.CalculateW(ref_strain_database)
+                    loss = torch.mean((predicted_w - ref_W_database) ** 2)
+                else:
+                    normalized_stress = model.CalculateNormalizedStress(ref_strain_database) * max_W
+                    loss = torch.mean((normalized_stress - ref_stress_database) ** 2)
 
             loss.backward()
             return loss
@@ -162,7 +181,7 @@ def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database,
 
         # Check for very low loss (absolute early stopping)
         if loss.item() < 1e-4:
-            print(f"Early stopping at epoch {epoch} with loss {loss.item():.6f}")
+            print(f"Early stopping at epoch {epoch} with loss {loss.item():.8f}")
             break
 
         # Track best loss and patience
@@ -181,7 +200,7 @@ def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database,
                 print(f"Reducing learning rate from {current_lr} to {new_lr} at epoch {epoch}")
                 patience_counter = 0  # Reset patience counter
         
-        if epoch % 20 == 0:
+        if epoch % 50 == 0:
             print(f"Epoch {epoch}, Loss: {loss.item():.8f}, Best Loss: {best_loss:.6f}, Patience: {patience_counter}/{patience}")
 # ==========================================================================================
 
@@ -189,18 +208,18 @@ def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database,
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 5000
-learning_rate = 0.01
+n_epochs = 2000
+learning_rate = 0.1
 
 order_stretches = 1   # Number of orders (can be set to any value)
 k = 2  # Degree of splines
-grid_size = 4  # Number of knots
+grid_size = 3  # Number of knots
 
 input_size = 2 * order_stretches + 1
 
 W_width = [input_size,
-            # input_size,
-            1,
+            input_size + 1,
+            input_size,
             1] # output always 1
 #*****************************************************************************************************************
 #*****************************************************************************************************************
@@ -210,57 +229,38 @@ model = surrogate.ICKAN_W_Surrogate(
     order_stretches=order_stretches,
     grid_size=grid_size,
     k=k,
-    W_width=W_width)
-
-# model.UpdateGridFromSamples(train_strain_database)
-print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
-print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
-
-optimizer_1 = optim.Adam(
-    model.parameters(),
-    lr=learning_rate,
-    # weight_decay=0.1
-    )
-
-print(20*"=")
-print("\nStarting W based optimization...")
-print(20*"=")
-TRAIN_KAN(
-    model               =  model,
-    optimizer           =  optimizer_1,
-    ref_strain_database =  train_strain_database,
-    ref_W_database      =  train_W_database,
-    ref_stress_database =  train_stress_database,
-    n_epochs            =  n_epochs,
-    max_W               =  max_W,
-    patience            =  50,
-    reduce_lr_factor    =  0.9,
-    is_patient          =  False,
-    train_W             =  True
+    W_width=W_width
 )
 
-# optimizer_2 = optim.LBFGS(
-#                     model.parameters(),
-#                     lr=learning_rate,
-#                     max_iter=10,
-#                     history_size=20,
-#                     # line_search_fn='strong_wolfe'
-#                     )
+# model.UpdateGridFromSamples(train_strain_database)
+# print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
+# print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
+
+optimizer_1 = optim.AdamW(
+    model.parameters(),
+    lr=learning_rate,
+    weight_decay=1.0e-2,
+    amsgrad = True
+)
+
 print(20*"=")
 print("\nStarting stress based optimization...")
 print(20*"=")
+
 TRAIN_KAN(
-    model               =  model,
-    optimizer           =  optimizer_1,
-    ref_strain_database =  train_strain_database,
-    ref_W_database      =  train_W_database,
-    ref_stress_database =  train_stress_database,
-    n_epochs            =  n_epochs,
-    max_W               =  max_W,
-    patience            =  30,
-    reduce_lr_factor    =  0.9,
-    is_patient          =  True,
-    train_W             =  False
+    model                  =  model,
+    optimizer              =  optimizer_1,
+    ref_strain_database    =  train_strain_database,
+    ref_W_database         =  train_W_database,
+    ref_stress_database    =  train_stress_database,
+    n_epochs               =  n_epochs,
+    max_W                  =  max_W,
+    patience               =  30,
+    reduce_lr_factor       =  0.9,
+    is_patient             =  True,
+    train_W                =  False,
+    mixed_sovolev_training = True,
+    mixed_sovolev_W_loss_weight = 0.9 # 1 is only W loss, 0 is only S loss, 0.5 is equal weighting
 )
 
 torch.save(model.state_dict(), "ICKAN_predictions/ICKAN_model_weights.pth")
