@@ -30,59 +30,6 @@ the direct S prediction from the previous version.
 """
 
 
-# ==========================================================================================
-def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database, ref_stress_database, n_epochs, gradient_penalty_weight):
-    """
-    Training function with gradient penalization at null input.
-    
-    Args:
-        model: ICKAN_W_Surrogate model
-        optimizer: Optimizer
-        ref_strain_database: Reference strain data
-        ref_W_database: Reference energy data
-        n_epochs: Number of training epochs
-        gradient_penalty_weight: Weight for gradient penalization term at null strain
-    """
-    # Precompute null strain input
-    null_strain = torch.zeros(1,3)
-    # max_W = 1
-    max_W = train_W_database.abs().max()
-    
-    for epoch in range(n_epochs):
-        def closure():
-            optimizer.zero_grad()
-            
-            # Compute predicted stress from model: dW/dE at each strain point
-            ref_strain_pred = ref_strain_database.requires_grad_(True)
-            predicted_W_ref = model.forward(ref_strain_pred)
-            predicted_stress = max_W * torch.autograd.grad(
-                outputs=predicted_W_ref,
-                inputs=ref_strain_pred,
-                grad_outputs=torch.ones_like(predicted_W_ref),
-                create_graph=True
-            )[0]
-
-            grad_null_strain = null_strain.requires_grad_(True)
-            predicted_W_null = model.forward(grad_null_strain)
-            predicted_stress_null = max_W * torch.autograd.grad(
-                outputs=predicted_W_null,
-                inputs=grad_null_strain,
-                grad_outputs=torch.ones_like(predicted_W_null),
-                create_graph=True
-            )[0]
-
-            # Data loss: match predicted stress to reference stress
-            loss = torch.mean((predicted_stress - predicted_stress_null - ref_stress_database) ** 2)
-            loss.backward()
-            return loss
-        
-        loss = optimizer.step(closure)
-
-        if epoch % 20 == 0:
-            print(f"Epoch {epoch}, Loss: {loss.item()}")
-# ==========================================================================================
-
-
 
 """
 INPUT DATASET:
@@ -90,7 +37,7 @@ Load strain and stress from FOM trajectories (10 trajectories from stage_1_train
 Data is loaded as [history, step, component] with shape [10, steps, 3].
 """
 #***********************************************
-min_steps = 150  # truncate all trajectories to the same length (e.g., 150 steps)
+min_steps = 300  # truncate all trajectories to the same length (e.g., 150 steps)
 #***********************************************
 
 # Path to FOM trajectories folder (relative to script location)
@@ -187,42 +134,80 @@ max_W = train_W_database.abs().max()
 # max_W = 1
 train_W_database /= max_W  # Normalize W to have max absolute value of 1
 
+# ==========================================================================================
+def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database, ref_stress_database, n_epochs, max_W):
+    """
+    Training function with gradient penalization at null input.
+    
+    Args:
+        model: ICKAN_W_Surrogate model
+        optimizer: Optimizer
+        ref_strain_database: Reference strain data
+        ref_W_database: Reference energy data
+        n_epochs: Number of training epochs
+        max_W: Maximum value for W normalization
+    """   
+    for epoch in range(n_epochs):
+        def closure():
+            optimizer.zero_grad()
+
+            normalized_stress = model.CalculateNormalizedStress(ref_strain_database) * max_W
+
+            # Data loss: match predicted stress to reference stress
+            loss = torch.mean((normalized_stress - ref_stress_database) ** 2)
+            loss.backward()
+            return loss
+        
+        loss = optimizer.step(closure)
+
+        if epoch % 20 == 0:
+            print(f"Epoch {epoch}, Loss: {loss.item()}")
+# ==========================================================================================
 
 
-#**********************************************************
-#**********************************************************
-#**********************************************************
-n_epochs = 500
-learning_rate = 0.1
-
+#*****************************************************************************************************************
+#*****************************************************************************************************************
+#*****************************************************************************************************************
+n_epochs = 1000
+learning_rate = 0.01
 
 order_stretches = 1   # Number of orders (can be set to any value)
 k = 2  # Degree of splines
 grid = 3  # Number of knots
+
 input_size = 2 * order_stretches + 1
 
-W_width = [input_size,  1] # output always 1
-W_width = [input_size, input_size, input_size, 1] # output always 1
-#**********************************************************
-#**********************************************************
-#**********************************************************
+W_width = [input_size, input_size+5,  1] # output always 1
+#*****************************************************************************************************************
+#*****************************************************************************************************************
+#*****************************************************************************************************************
 
 
 
 model = surrogate.ICKAN_W_Surrogate(order_stretches=order_stretches, grid=grid, k=k, W_width=W_width)
 # model.UpdateGridFromSamples(train_strain_database)
 
-optimizer_1 = optim.LBFGS(
-                    model.parameters(),
-                    lr=learning_rate,
-                    max_iter=20,
-                    history_size=30)
+# optimizer_1 = optim.LBFGS(
+#                     model.parameters(),
+#                     lr=learning_rate,
+#                     max_iter=20,
+#                     history_size=30)
 
-# optimizer_1 = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-
-TRAIN_KAN(model, optimizer_1, train_strain_database, train_W_database, train_stress_database, n_epochs, 0.01)
+optimizer_1 = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
 
 print("Check null W at null strain: ", model.forward(torch.zeros(1,3)))
+print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
+
+
+TRAIN_KAN(
+    model,
+    optimizer_1,
+    train_strain_database,
+    train_W_database,
+    train_stress_database,
+    n_epochs,
+    max_W)
+
 
 
 predicted_w = model.forward(train_strain_database)
@@ -236,31 +221,10 @@ plt.savefig("./ICKAN_predictions/W_history.png")
 plt.show()
 plt.close()
 
-# Enable gradients for strain database to compute dW/dE using autograd
-train_strain_database = train_strain_database.requires_grad_(True)
-predicted_w = model.forward(train_strain_database)
-
-predicted_stress = torch.autograd.grad(
-            outputs=predicted_w,
-            inputs=train_strain_database,
-            grad_outputs=torch.ones_like(predicted_w),
-            create_graph=True
-            )[0]
-
-null_train_strain_database = torch.zeros_like(train_strain_database).requires_grad_(True)
-predicted_w_0 = model.forward(null_train_strain_database)
-stress_0 = torch.autograd.grad(
-            outputs=predicted_w_0,
-            inputs=null_train_strain_database,
-            grad_outputs=torch.ones_like(predicted_w_0),
-            create_graph=True
-            )[0]
-
-stress = max_W * (predicted_stress - stress_0)
-# stress = max_W*(predicted_stress)
+predicted_stress = max_W * model.CalculateNormalizedStress(train_strain_database)
 
 plt.plot(train_strain_database[:,0].detach().numpy(), train_stress_database[:,0].numpy(), '--', label='Reference S_xx')
-plt.plot(train_strain_database[:,0].detach().numpy(), stress[:,0].detach().numpy(), '-', label='ICKAN S_xx')
+plt.plot(train_strain_database[:,0].detach().numpy(), predicted_stress[:,0].detach().numpy(), '-', label='ICKAN S_xx')
 plt.xlabel('E_xx')
 plt.ylabel('S_xx')
 plt.legend()

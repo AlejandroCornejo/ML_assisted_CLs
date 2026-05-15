@@ -19,7 +19,7 @@ class ICKAN_W_Surrogate(nn.Module):
 
         grid = []
         for i in range(self.input_size):
-            grid.append([-0.1, 1])
+            grid.append([0, 10])
 
         # KAN definition for the energy density potential W
         self.KAN_W = KAN.MultKAN(
@@ -140,3 +140,31 @@ class ICKAN_W_Surrogate(nn.Module):
         return self.CalculateW(strain_database)
 
     # ==========================================================================================
+    def CalculateNormalizedStress(self, strain_database):
+        """
+        Computes the normalized stress (derivative of W with respect to strain) for the given strain.
+        """
+
+        # Ensure strain_database requires gradient for autograd.grad computation
+        strain_database = strain_database.requires_grad_(True)
+
+        W = self.CalculateW(strain_database)  # Shape: (batches*steps, 1)
+
+        null_strain  = torch.zeros(1, 3).requires_grad_(True)
+        W0 = self.CalculateW(null_strain)
+
+        predicted_stress = torch.autograd.grad(
+                    outputs=W,
+                    inputs=strain_database,
+                    grad_outputs=torch.ones_like(W),
+                    create_graph=True
+                    )[0]
+
+        stress_0 = torch.autograd.grad(
+                    outputs=W0,
+                    inputs=null_strain,
+                    grad_outputs=torch.ones_like(W0),
+                    create_graph=True
+                    )[0]
+
+        return predicted_stress - stress_0
