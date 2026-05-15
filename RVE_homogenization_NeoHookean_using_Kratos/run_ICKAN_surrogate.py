@@ -135,7 +135,8 @@ max_W = train_W_database.abs().max()
 train_W_database /= max_W  # Normalize W to have max absolute value of 1
 
 # ==========================================================================================
-def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database, ref_stress_database, n_epochs, max_W, patience=20, reduce_lr_factor=0.5):
+def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database,
+                ref_stress_database, n_epochs, max_W, patience=10, reduce_lr_factor=0.5):
     """
     Training function with early stopping and learning rate reduction.
     
@@ -172,7 +173,7 @@ def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database, ref_stress_
 
         # Check for very low loss (absolute early stopping)
         if loss.item() < 1e-4:
-            print(f"Early stopping at epoch {epoch} with loss {loss.item()}")
+            print(f"Early stopping at epoch {epoch} with loss {loss.item():.6f}")
             break
 
         # Track best loss and patience
@@ -192,14 +193,14 @@ def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database, ref_stress_
                 patience_counter = 0  # Reset patience counter
         
         if epoch % 20 == 0:
-            print(f"Epoch {epoch}, Loss: {loss.item()}, Best Loss: {best_loss:.6f}, Patience: {patience_counter}/{patience}")
+            print(f"Epoch {epoch}, Loss: {loss.item():.6f}, Best Loss: {best_loss:.6f}, Patience: {patience_counter}/{patience}")
 # ==========================================================================================
 
 
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 20000
+n_epochs = 500
 learning_rate = 0.02
 
 order_stretches = 2   # Number of orders (can be set to any value)

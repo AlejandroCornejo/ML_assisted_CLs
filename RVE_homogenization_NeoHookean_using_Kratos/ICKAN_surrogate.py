@@ -17,17 +17,15 @@ class ICKAN_W_Surrogate(nn.Module):
         self.k = k
         self.W_width = W_width
 
-        # grid_range = []
-        # for i in range(self.input_size):
-        #     grid_range.append([-1, 1])
+        # Define the spline grid range for all inputs
+        grid_range = [1.0e-12, 1.2]
 
         # KAN definition for the energy density potential W
         self.KAN_W = KAN.MultKAN(
-            width = self.W_width, # output of size 1: W
-            # grid_range_0 = grid_range,
-            # grid_range = grid_range,
-            # base_fun = "softplus",
-            # save_act = True
+            width=self.W_width,  # output of size 1: W
+            grid_range=grid_range,
+            grid_range_0=grid_range,
+            # base_fun="softplus",
         )
 
         self.KAN_W.speed()
