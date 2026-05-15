@@ -1,15 +1,11 @@
 import numpy as np
-import scipy as sp
 import torch as torch
 import matplotlib.pyplot as plt
-import torch.nn as nn
 import torch.optim as optim
 import os
-import sys
+import ICKAN_surrogate as surrogate
 
-sys.path.insert(0, r'C:\ICKANs')
 
-import ickan as KAN
 
 # Define the GetColor method
 def GetColor(component):
@@ -33,117 +29,9 @@ the direct S prediction from the previous version.
 
 """
 
-class ICKAN_W_Surrogate(nn.Module):
-
-    def __init__(self, order_stretches, grid, k, W_width):
-        super(ICKAN_W_Surrogate, self).__init__()
-
-        self.order_stretches = order_stretches
-        self.input_size = 2 * self.order_stretches + 1  # Total inputs: 2 * reg_eigenvalues for each order + 1 * log(J)
-        self.grid = grid
-        self.k = k
-        self.W_width = W_width
-
-        grid = []
-        for i in range(self.input_size):
-            grid.append([-0.1, 1])
-
-        # KAN definition for the energy density potential W
-        self.KAN_W = KAN.MultKAN(
-            width = self.W_width, # output of size 1: W
-            # width=[self.input_size, self.input_size, 1], # output of size 1: W
-            grid_range_0 = grid,
-            grid_range = grid,
-            # base_fun = "identity"
-        )
-
-        self.KAN_W.speed()
-
-        # Initialize some extra parameters
-        self.ki = nn.ParameterList([
-            # nn.Parameter(torch.tensor(1.0)) for p in range(self.order_stretches + 1)
-            1.0 for p in range(self.order_stretches + 1)
-        ])
-
-        # The parameter multiplying the log(J) is initially set to 1.0
-        self.ki[-1] = 1.0
-        # self.ki[-1] = nn.Parameter(torch.tensor(1.0))
-
-    # ==========================================================================================
-
-    def UpdateGridFromSamples(self, strain_database):
-        kan_input = self._compute_kan_input_for_strain(strain_database)
-        self.KAN_W.update_grid_from_samples(kan_input)
-
-    # ==========================================================================================
-
-    def _compute_kan_input_for_strain(self, strain):
-        """
-        Compute KAN input for a given strain tensor
-        strain: Tensor of shape (batches, 3) with components [E_xx, E_yy, E_xy]
-        Returns: Tensor of shape (batches, input_size) with KAN inputs
-        
-        This method must be called just ONCE when loading the strain database, to compute the KAN inputs for all samples.
-        """
-        batches = strain.shape[0]
-
-        E = torch.zeros((batches, 2, 2))
-        E[:, 0, 0] = strain[:, 0]
-        E[:, 1, 1] = strain[:, 1]
-        E[:, 0, 1] = 0.5 * strain[:, 2]
-        E[:, 1, 0] = 0.5 * strain[:, 2]
-
-        C = 2.0 * E + torch.eye(2)
-        J = torch.linalg.det(C) ** 0.5
-        log_J = torch.log(J + 1.0e-12)
-
-        square_eigenvalues = torch.linalg.eigvalsh(C)
-        eigenvalues = torch.sqrt(square_eigenvalues)
-
-        reg_eigenvalues = torch.zeros_like(eigenvalues)
-        aux = J ** (-1 / 3)
-        reg_eigenvalues[:, 0] = eigenvalues[:, 0] * aux
-        reg_eigenvalues[:, 1] = eigenvalues[:, 1] * aux
-
-        kan_inputs = []
-        for index in range(self.order_stretches):
-            reg_eigenvalues_order = reg_eigenvalues ** self.ki[index]
-            kan_inputs.append(reg_eigenvalues_order)
-
-        log_J_scaled = log_J * self.ki[-1]
-        log_J_expanded = log_J_scaled.unsqueeze(-1)
-        kan_inputs.append(log_J_expanded)
-
-        KAN_input = torch.cat(kan_inputs, dim=-1)
-        
-        viewed_KAN_input = KAN_input.view(-1, self.input_size)
-
-        return viewed_KAN_input # Reshape to (batches*steps, input_size)
-
-
-    # ==========================================================================================
-    def CalculateW(self, strain_database):
-        """
-        Computes W for the given strain with normalization.
-        """
-        kan_input = self._compute_kan_input_for_strain(strain_database)  # Shape: (batches*steps, input_size)
-
-        W_raw = self.KAN_W.forward(kan_input)  # Shape: (batch x steps, 1)
-
-        null_kan_input = self._compute_kan_input_for_strain(torch.zeros_like(strain_database))
-        W0 = self.KAN_W.forward(null_kan_input)
-
-        return W_raw - W0
-    # ==========================================================================================
-
-    def forward(self, strain_database):
-        return self.CalculateW(strain_database)
-
-    # ==========================================================================================
-
 
 # ==========================================================================================
-def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database, n_epochs, gradient_penalty_weight):
+def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database, ref_stress_database, n_epochs, gradient_penalty_weight):
     """
     Training function with gradient penalization at null input.
     
@@ -157,28 +45,34 @@ def TRAIN_KAN(model, optimizer, ref_strain_database, ref_W_database, n_epochs, g
     """
     # Precompute null strain input
     null_strain = torch.zeros(1,3)
+    # max_W = 1
+    max_W = train_W_database.abs().max()
     
     for epoch in range(n_epochs):
         def closure():
             optimizer.zero_grad()
             
-            # Data loss: match reference W values
-            predicted_W = model.forward(ref_strain_database)
-            data_loss = torch.mean((predicted_W - ref_W_database) ** 2)
-            
-            # Gradient penalization at null input: encourage dW/dE = 0 at reference configuration
-            null_strain_grad = null_strain.requires_grad_(True)
-            W_at_null = model.forward(null_strain_grad)
-            gradient_at_null = torch.autograd.grad(
-                outputs=W_at_null,
-                inputs=null_strain_grad,
-                grad_outputs=torch.ones_like(W_at_null),
-                create_graph=False
+            # Compute predicted stress from model: dW/dE at each strain point
+            ref_strain_pred = ref_strain_database.requires_grad_(True)
+            predicted_W_ref = model.forward(ref_strain_pred)
+            predicted_stress = max_W * torch.autograd.grad(
+                outputs=predicted_W_ref,
+                inputs=ref_strain_pred,
+                grad_outputs=torch.ones_like(predicted_W_ref),
+                create_graph=True
             )[0]
-            gradient_penalty = torch.mean(gradient_at_null ** 2)
-            
-            # Combined loss
-            loss = data_loss + gradient_penalty_weight * gradient_penalty
+
+            grad_null_strain = null_strain.requires_grad_(True)
+            predicted_W_null = model.forward(grad_null_strain)
+            predicted_stress_null = max_W * torch.autograd.grad(
+                outputs=predicted_W_null,
+                inputs=grad_null_strain,
+                grad_outputs=torch.ones_like(predicted_W_null),
+                create_graph=True
+            )[0]
+
+            # Data loss: match predicted stress to reference stress
+            loss = torch.mean((predicted_stress - predicted_stress_null - ref_stress_database) ** 2)
             loss.backward()
             return loss
         
@@ -196,7 +90,7 @@ Load strain and stress from FOM trajectories (10 trajectories from stage_1_train
 Data is loaded as [history, step, component] with shape [10, steps, 3].
 """
 #***********************************************
-min_steps = 500  # truncate all trajectories to the same length (e.g., 150 steps)
+min_steps = 150  # truncate all trajectories to the same length (e.g., 150 steps)
 #***********************************************
 
 # Path to FOM trajectories folder (relative to script location)
@@ -213,7 +107,7 @@ for i in range(1, 11):  # trajectory_1 to trajectory_10
     
     strain_data = np.load(strain_file)  # shape: (steps, 3)
     stress_data = np.load(stress_file)  # shape: (steps, 3)
-    
+
     strain_trajectories.append(strain_data)
     stress_trajectories.append(stress_data)
     print(f"Loaded trajectory_{i}: strain={strain_data.shape}, stress={stress_data.shape}")
@@ -290,30 +184,32 @@ train_W_database = W_full_batch.view(-1, 1)  # [10*steps, 1]
 
 # max_W = 1
 max_W = train_W_database.abs().max()
+# max_W = 1
 train_W_database /= max_W  # Normalize W to have max absolute value of 1
 
 
 
-#*****************************
-#*****************************
-#*****************************
+#**********************************************************
+#**********************************************************
+#**********************************************************
 n_epochs = 500
-learning_rate = 0.01
+learning_rate = 0.1
 
 
 order_stretches = 1   # Number of orders (can be set to any value)
 k = 2  # Degree of splines
 grid = 3  # Number of knots
 input_size = 2 * order_stretches + 1
+
 W_width = [input_size,  1] # output always 1
-W_width = [input_size, input_size, input_size, 1, 1] # output always 1
-#*****************************
-#*****************************
-#*****************************
+W_width = [input_size, input_size, input_size, 1] # output always 1
+#**********************************************************
+#**********************************************************
+#**********************************************************
 
 
 
-model = ICKAN_W_Surrogate(order_stretches=order_stretches, grid=grid, k=k, W_width=W_width)
+model = surrogate.ICKAN_W_Surrogate(order_stretches=order_stretches, grid=grid, k=k, W_width=W_width)
 # model.UpdateGridFromSamples(train_strain_database)
 
 optimizer_1 = optim.LBFGS(
@@ -324,12 +220,12 @@ optimizer_1 = optim.LBFGS(
 
 # optimizer_1 = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
 
-TRAIN_KAN(model, optimizer_1, train_strain_database, train_W_database, n_epochs, 0.1)
+TRAIN_KAN(model, optimizer_1, train_strain_database, train_W_database, train_stress_database, n_epochs, 0.01)
 
 print("Check null W at null strain: ", model.forward(torch.zeros(1,3)))
 
 
-predicted_w = max_W * model.forward(train_strain_database)
+predicted_w = model.forward(train_strain_database)
 
 plt.plot(train_strain_database[:,0].detach().numpy(), train_W_database[:,0].detach().numpy(), '--', label='Reference W')
 plt.plot(train_strain_database[:,0].detach().numpy(), predicted_w[:,0].detach().numpy(), '-', label='ICKAN W')
@@ -339,15 +235,6 @@ plt.legend()
 plt.savefig("./ICKAN_predictions/W_history.png")
 plt.show()
 plt.close()
-
-
-
-
-# now we can compute the predicted stress using autograd on the predicted W
-# predicted_stress = torch.zeros_like(train_stress_database)
-# predicted_stress[:,0] = torch.autograd.grad(predicted_w, train_strain_database[:,0], create_graph=True)[0]
-# predicted_stress[:,1] = torch.autograd.grad(predicted_w, train_strain_database[:,1], create_graph=True)[0]
-# predicted_stress[:,2] = torch.autograd.grad(predicted_w, train_strain_database[:,2], create_graph=True)[0]
 
 # Enable gradients for strain database to compute dW/dE using autograd
 train_strain_database = train_strain_database.requires_grad_(True)
@@ -369,7 +256,7 @@ stress_0 = torch.autograd.grad(
             create_graph=True
             )[0]
 
-stress = max_W*(predicted_stress - stress_0)
+stress = max_W * (predicted_stress - stress_0)
 # stress = max_W*(predicted_stress)
 
 plt.plot(train_strain_database[:,0].detach().numpy(), train_stress_database[:,0].numpy(), '--', label='Reference S_xx')

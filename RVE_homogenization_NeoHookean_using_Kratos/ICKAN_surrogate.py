@@ -1,172 +1,97 @@
-# std libs imports
-import numpy as np
-import scipy as sp
+
 import torch as torch
-import matplotlib.pyplot as plt
-from plot_style_utils import apply_latex_plot_style
-apply_latex_plot_style()
 import torch.nn as nn
-import torch.optim as optim
-import os
 import sys
-import random
 
-# import pykan.kan as KAN # now the repo is local, not pip
-
-# NOW we use input convex KANs, so we import the KAN class from the ICKANs module instead of pykan
 sys.path.insert(0, r'C:\ICKANs')
-
 import ickan as KAN
-# import kan as KAN
 
+class ICKAN_W_Surrogate(nn.Module):
 
-# Define the GetColor method
-def GetColor(component):
-    if component == 0:
-        return "r"  # Red for component 0
-    elif component == 1:
-        return "b"  # Blue for component 1
-    elif component == 2:
-        return "g"  # Green for component 2
-    else:
-        return "k"  # Black for any other component
+    def __init__(self, order_stretches, grid, k, W_width):
+        super(ICKAN_W_Surrogate, self).__init__()
 
-
-
-#=============================================================================================================
-"""
-INPUT DATASET:
-Load strain and stress from FOM trajectories (10 trajectories from stage_1_training_set_fom folder).
-Data is loaded as [history, step, component] with shape [10, steps, 3].
-"""
-n_epochs = 5000
-learning_rate = 0.01
-min_steps = 150  # We can set this to a fixed value if we want to truncate all trajectories to the same length (e.g., 150 steps)
-
-# Path to FOM trajectories folder (relative to script location)
-script_dir = os.path.dirname(os.path.abspath(__file__))
-fom_trajectories_dir = os.path.join(script_dir, 'stage_1_training_set_fom')
-
-# Load all 10 trajectories
-strain_trajectories = []
-stress_trajectories = []
-
-for i in range(1, 11):  # trajectory_1 to trajectory_10
-    strain_file = os.path.join(fom_trajectories_dir, f'trajectory_{i}', f'trajectory_{i}_strain.npy')
-    stress_file = os.path.join(fom_trajectories_dir, f'trajectory_{i}', f'trajectory_{i}_stress.npy')
-    
-    strain_data = np.load(strain_file)  # shape: (steps, 3)
-    stress_data = np.load(stress_file)  # shape: (steps, 3)
-    
-    strain_trajectories.append(strain_data)
-    stress_trajectories.append(stress_data)
-    print(f"Loaded trajectory_{i}: strain={strain_data.shape}, stress={stress_data.shape}")
-
-# Find minimum number of steps across all trajectories
-# min_steps = min(t.shape[0] for t in strain_trajectories)
-print(f"\nMinimum number of steps across all trajectories: {min_steps}")
-
-# Sample each trajectory at equally spaced intervals to cover the full path
-# For trajectories longer than min_steps, select min_steps points evenly spaced
-def sample_equally_spaced(data, n_samples):
-    """Sample data at equally spaced intervals."""
-    original_n = data.shape[0]
-    if original_n == n_samples:
-        return data  # No sampling needed
-    # Create indices that are equally spaced
-    indices = np.linspace(0, original_n - 1, n_samples, dtype=int)
-    return data[indices]
-
-strain_trajectories_truncated = [sample_equally_spaced(t, min_steps) for t in strain_trajectories]
-stress_trajectories_truncated = [sample_equally_spaced(t, min_steps) for t in stress_trajectories]
-
-print(f"Sampled trajectories to {min_steps} equally spaced points from original lengths: {[t.shape[0] for t in strain_trajectories]}")
-
-# Stack trajectories into [history, step, component] format
-ref_strain_database = torch.tensor(np.stack(strain_trajectories_truncated), dtype=torch.float32)  # [10, steps, 3]
-ref_stress_database = torch.tensor(np.stack(stress_trajectories_truncated), dtype=torch.float32)  # [10, steps, 3]
-
-# Convert stress to be base 1
-ref_stress_database /= 1.0e9
-ref_strain_database /= 2.0
-
-# Use all data for training (no train/test split)
-train_strain_database = ref_strain_database
-train_stress_database = ref_stress_database
-
-print("\nLaunching the training of a KAN...")
-print(f"Number of training trajectories: {train_strain_database.shape[0]}")
-print(f"Number of total trajectories: {ref_strain_database.shape[0]}")
-print(f"Number of steps: {train_strain_database.shape[1]}")
-print(f"Strain size: {train_strain_database.shape[2]}")
-
-# ==========================================================================================
-
-class KANStressPredictor(nn.Module):
-    """
-    KAN-based Stress Predictor with support for multiple orders of stretches.
-    """
-
-    def __init__(self):
-        super(KANStressPredictor, self).__init__()
-
-        # EDIT:
-        self.order_stretches = 1  # Number of orders (can be set to any value)
-        self.k = 2  # Degree of splines
-        self.grid = 3  # Number of knots
-        # -------------------------------------
-
+        self.order_stretches = order_stretches
         self.input_size = 2 * self.order_stretches + 1  # Total inputs: 2 * reg_eigenvalues for each order + 1 * log(J)
+        self.grid = grid
+        self.k = k
+        self.W_width = W_width
 
-        # KAN definition
-        # Expanded grid range to [-0.05, 1.05] to keep null strain input
-        # (reg_eigenvalues=1.0, log_J=0.0) safely within grid interior.
-        # Original [0,1] caused nan due to extrapolation at boundaries
-        # in coef2curve (eps=1e-3 division amplifies numerical noise).
+        grid = []
+        for i in range(self.input_size):
+            grid.append([-0.1, 1])
+
+        # KAN definition for the energy density potential W
         self.KAN_W = KAN.MultKAN(
-            width=[self.input_size,  1], # output of size 1: W
-            grid=self.grid,
-            k=self.k,
-            grid_range_0=[[-0.05,1.05],[-0.05,1.05],[-0.05,1.05]],
-            grid_range=[[-0.05,1.05],[-0.05,1.05],[-0.05,1.05]]
+            width = self.W_width, # output of size 1: W
+            grid_range_0 = grid,
+            grid_range = grid,
+            base_fun = "identity"
         )
 
+        self.KAN_W.speed()
+
         # Initialize some extra parameters
         self.ki = nn.ParameterList([
-            # nn.Parameter(torch.tensor((float(p + 1)))) for p in range(self.order_stretches + 1)
-            nn.Parameter(torch.tensor(1.0)) for p in range(self.order_stretches + 1)
+            # nn.Parameter(torch.tensor(1.0)) for p in range(self.order_stretches + 1)
+            1.0 for p in range(self.order_stretches + 1)
         ])
 
         # The parameter multiplying the log(J) is initially set to 1.0
-        self.ki[-1] = nn.Parameter(torch.tensor(1.0))
-        # self.ki[-1] = 1.0
-
-        for i, ki in enumerate(self.ki):
-            print("self.ki[i]: ", ki.data)
-
-    def ResetParameters(self):
-        # Initialize some extra parameters
-        self.ki = nn.ParameterList([
-            nn.Parameter(torch.tensor(float(p + 1) + random.random())) for p in range(self.order_stretches + 1)
-            # nn.Parameter(torch.tensor(float(p + 1))) for p in range(self.order_stretches + 1)
-        ])
-
-        # The parameter multiplying the log(J) is initially set to 1.0
-        self.ki[-1] = nn.Parameter(torch.tensor(1.0))
+        self.ki[-1] = 1.0
+        # self.ki[-1] = nn.Parameter(torch.tensor(1.0))
 
     # ==========================================================================================
+
+    def UpdateGridFromSamples(self, strain_database):
+        # === DIAGNOSTIC LOGS FOR NaN DEBUGGING ===
+        print("=" * 60)
+        print("DIAGNOSTIC: Before _compute_kan_input_for_strain")
+        print(f"strain_database shape: {strain_database.shape}")
+        print(f"strain_database min: {strain_database.min().item()}, max: {strain_database.max().item()}")
+        print(f"strain_database has NaN: {torch.isnan(strain_database).any().item()}")
+        print("=" * 60)
+        
+        kan_input = self._compute_kan_input_for_strain(strain_database)
+        
+        print("=" * 60)
+        print("DIAGNOSTIC: After _compute_kan_input_for_strain")
+        print(f"kan_input shape: {kan_input.shape}")
+        print(f"kan_input min: {kan_input.min().item()}, max: {kan_input.max().item()}")
+        print(f"kan_input has NaN: {torch.isnan(kan_input).any().item()}")
+        print(f"kan_input has inf: {torch.isinf(kan_input).any().item()}")
+        if torch.isnan(kan_input).any():
+            for i in range(kan_input.shape[1]):
+                print(f"  Column {i}: NaN count = {torch.isnan(kan_input[:, i]).sum().item()}, min = {kan_input[:, i][~torch.isnan(kan_input[:, i])].min().item() if (~torch.isnan(kan_input[:, i])).any() else 'N/A'}, max = {kan_input[:, i][~torch.isnan(kan_input[:, i])].max().item() if (~torch.isnan(kan_input[:, i])).any() else 'N/A'}")
+        print("=" * 60)
+        
+        # self.KAN_W.update_grid_from_samples(kan_input)
+        self.KAN_W.update_grid(kan_input)
+        
+        print("=" * 60)
+        print("DIAGNOSTIC: After update_grid")
+        print("Grid values in act_fun:")
+        for l, layer in enumerate(self.KAN_W.act_fun):
+            print(f"  Layer {l}: grid min = {layer.grid.min().item()}, max = {layer.grid.max().item()}, has NaN = {torch.isnan(layer.grid).any().item()}")
+        print("=" * 60)
+
+    # ==========================================================================================
+
     def _compute_kan_input_for_strain(self, strain):
         """
-        Compute KAN input for a given strain tensor (internal, no debug print).
+        Compute KAN input for a given strain tensor
+        strain: Tensor of shape (batches, 3) with components [E_xx, E_yy, E_xy]
+        Returns: Tensor of shape (batches, input_size) with KAN inputs
+        
+        This method must be called just ONCE when loading the strain database, to compute the KAN inputs for all samples.
         """
         batches = strain.shape[0]
-        steps = strain.shape[1]
 
-        E = torch.zeros((batches, steps, 2, 2))
-        E[:, :, 0, 0] = strain[:, :, 0]
-        E[:, :, 1, 1] = strain[:, :, 1]
-        E[:, :, 0, 1] = 0.5 * strain[:, :, 2]
-        E[:, :, 1, 0] = 0.5 * strain[:, :, 2]
+        E = torch.zeros((batches, 2, 2))
+        E[:, 0, 0] = strain[:, 0]
+        E[:, 1, 1] = strain[:, 1]
+        E[:, 0, 1] = 0.5 * strain[:, 2]
+        E[:, 1, 0] = 0.5 * strain[:, 2]
 
         C = 2.0 * E + torch.eye(2)
         J = torch.linalg.det(C) ** 0.5
@@ -177,8 +102,8 @@ class KANStressPredictor(nn.Module):
 
         reg_eigenvalues = torch.zeros_like(eigenvalues)
         aux = J ** (-1 / 3)
-        reg_eigenvalues[:, :, 0] = eigenvalues[:, :, 0] * aux
-        reg_eigenvalues[:, :, 1] = eigenvalues[:, :, 1] * aux
+        reg_eigenvalues[:, 0] = eigenvalues[:, 0] * aux
+        reg_eigenvalues[:, 1] = eigenvalues[:, 1] * aux
 
         kan_inputs = []
         for index in range(self.order_stretches):
@@ -190,606 +115,28 @@ class KANStressPredictor(nn.Module):
         kan_inputs.append(log_J_expanded)
 
         KAN_input = torch.cat(kan_inputs, dim=-1)
-        return KAN_input.view(-1, self.input_size)
-
-    def _compute_w0_at_zero(self, strain_shape):
-        """
-        Compute W0 (W at zero strain) using cached null kan_input value.
         
-        The cached null kan_input contains the KAN input values at zero strain
-        (shape: [1, input_size]). We broadcast this to the required batch/step
-        dimensions and pass through the KAN to get W0.
-        """
-        batches, steps = strain_shape[0], strain_shape[1]
+        viewed_KAN_input = KAN_input.view(-1, self.input_size)
 
-        if (hasattr(self, '_cached_null_kan_input') and
-                self._cached_null_kan_input is not None):
-            # null_kan_input_cached has shape [1, input_size]
-            null_kan_input_cached = self._cached_null_kan_input
-            # Broadcast to [batches*steps, input_size] for this forward pass
-            n_points = batches * steps
-            null_kan_input = null_kan_input_cached.expand(n_points, -1).detach()
-        else:
-            zeros = torch.zeros(strain_shape)
-            null_kan_input = self._compute_kan_input_for_strain(zeros)
-            null_kan_input = null_kan_input.detach()
-
-        with torch.no_grad():
-            W0_flat = self.KAN_W.forward(null_kan_input)
-            W0 = W0_flat.view(batches, steps, -1)
-        return W0
-
-    def _compute_grad_at_zero(self, strain_shape):
-        """
-        Compute grad_at_zero using cached null kan_input value.
-        
-        Computes dW/d(kan_input) at zero strain, reshaped to [batches, steps, input_size]
-        to match grad_kan_input.view(batches, steps, -1).
-        """
-        batches, steps = strain_shape[0], strain_shape[1]
-        n_points = batches * steps
-
-        if (hasattr(self, '_cached_null_kan_input') and
-                self._cached_null_kan_input is not None):
-            null_kan_input_cached = self._cached_null_kan_input
-            # Expand cached [1, input_size] to [n_points, input_size]
-            null_kan_input = null_kan_input_cached.expand(n_points, -1).detach()
-            null_kan_input = null_kan_input.requires_grad_(True)
-        else:
-            zeros = torch.zeros(strain_shape)
-            null_kan_input = self._compute_kan_input_for_strain(zeros)
-            null_kan_input = null_kan_input.detach().requires_grad_(True)
-
-        W0_for_grad_flat = self.KAN_W.forward(null_kan_input)
-        W0_for_grad = W0_for_grad_flat.view(batches, steps, -1)
-
-        grad_at_zero = torch.autograd.grad(
-            outputs=W0_for_grad,
-            inputs=null_kan_input,
-            grad_outputs=torch.ones_like(W0_for_grad),
-            create_graph=True
-        )[0]
-        # grad_at_zero has shape [n_points, input_size], reshape to [batches, steps, input_size]
-        grad_at_zero = grad_at_zero.view(batches, steps, -1)
-        return grad_at_zero
-
-    def _precompute_all_kan_inputs(self, train_strain_database, train_stress_database=None):
-        """
-        Precompute KAN inputs for the entire training dataset ONCE.
-
-        Computes and caches:
-        - KAN inputs for all training strain data
-        - KAN input for zero (null) strain (single point, broadcastable to any batch size)
-
-        Args:
-            train_strain_database: Training strain data [batch, steps, components]
-            train_stress_database: Optional training stress data
-
-        Returns:
-            tuple: (train_kan_input, null_kan_input)
-        """
-        train_kan_input = self._compute_kan_input_for_strain(train_strain_database)
-        train_kan_input = train_kan_input.detach().requires_grad_(True)
-
-        # Compute null KAN input for a SINGLE zero strain point [1, 1, components]
-        # This is a single point that represents the KAN input at zero strain,
-        # independent of batch/step dimensions
-        single_zero = torch.zeros((1, 1, train_strain_database.shape[-1]))
-        null_kan_input = self._compute_kan_input_for_strain(single_zero)
-        null_kan_input = null_kan_input.detach().requires_grad_(True)
-
-        self._cached_null_kan_input = null_kan_input
-
-        if train_stress_database is not None:
-            self._cached_train_kan_input = train_kan_input
-
-        return train_kan_input, null_kan_input
-
-    def _get_cached_kan_inputs(self):
-        """
-        Get cached KAN inputs if available.
-
-        Returns:
-            tuple: (train_kan_input, null_kan_input) or (None, None)
-        """
-        if (hasattr(self, '_cached_train_kan_input') and
-                self._cached_train_kan_input is not None):
-            return self._cached_train_kan_input, self._cached_null_kan_input
-        return None, None
-
-    # ==========================================================================================
-    def ComputeKANInput(self, strain):
-        """
-        Computes the input for the KAN layer based on the given strain.
-
-        NOTE: For training efficiency, prefer using _precompute_all_kan_inputs()
-        to compute KAN inputs once for the entire dataset and pass them via
-        kan_input parameter in forward().
-        """
-        print(20*"**")
-        batches = strain.shape[0]
-        steps = strain.shape[1]
-
-        E = torch.zeros((batches, steps, 2, 2))
-        E[:, :, 0, 0] = strain[:, :, 0]  # Exx
-        E[:, :, 1, 1] = strain[:, :, 1]  # Eyy
-        E[:, :, 0, 1] = 0.5 * strain[:, :, 2]  # Exy
-        E[:, :, 1, 0] = 0.5 * strain[:, :, 2]  # Eyx
-
-        C = torch.zeros_like(E)
-        C = 2.0 * E + torch.eye(2)
-
-        J = torch.linalg.det(C) ** 0.5
-        log_J = torch.log(J + 1.0e-12)
-
-        square_eigenvalues = torch.linalg.eigvalsh(C)
-        eigenvalues = torch.sqrt(square_eigenvalues)
-
-        reg_eigenvalues = torch.zeros_like(eigenvalues)
-        aux = J ** (-1 / 3)
-        reg_eigenvalues[:, :, 0] = eigenvalues[:, :, 0] * aux
-        reg_eigenvalues[:, :, 1] = eigenvalues[:, :, 1] * aux
-
-        kan_inputs = []
-        for index in range(self.order_stretches):
-            reg_eigenvalues_order = reg_eigenvalues ** self.ki[index]
-            kan_inputs.append(reg_eigenvalues_order)
-
-        log_J_scaled = log_J * self.ki[-1]
-        log_J_expanded = log_J_scaled.unsqueeze(-1)
-        kan_inputs.append(log_J_expanded)
-
-        KAN_input = torch.cat(kan_inputs, dim=-1)
-        return KAN_input.view(-1, self.input_size)
-
-    def CalculateWWithoutNormalizationFromInput(self, kan_input, batches, steps):
-        """
-        Computes W using a precomputed KAN input (no need to recompute from strain).
-        
-        Args:
-            kan_input: Precomputed KAN input tensor of shape (batches*steps, input_size)
-            batches: Number of batches
-            steps: Number of steps
-        """
-        # Pass the precomputed input through the KAN layer
-        W_flat = self.KAN_W.forward(kan_input)  # Shape: (batch x steps, 1)
-
-        # Reshape the output back to the original shape
-        W = W_flat.view(batches, steps, -1)  # Shape: (batches, steps, 1)
-
-        return W
-
-    def CalculateWWithoutNormalization(self, strain):
-        """
-        Computes W for the given strain without normalization.
-        """
-        batches = strain.shape[0]
-        steps = strain.shape[1]
-
-        flat_KAN_input = self.ComputeKANInput(strain)
-
-        # Pass the input through the KAN layer
-        W_flat = self.KAN_W.forward(flat_KAN_input)  # Shape: (batch x steps, 1)
-
-        # Reshape the output back to the original shape
-        W = W_flat.view(batches, steps, -1)  # Shape: (batches, steps, 1)
-
-        return W
-
-    # ==========================================================================================
-    def CalculateW(self, strain):
-        """
-        Computes W for the given strain and subtracts W evaluated at strain = torch.zeros.
-        """
-        # Compute W at strain = torch.zeros
-        zeros = torch.zeros_like(strain)
-        W0 = self.CalculateWWithoutNormalization(zeros)
-
-        # Compute W without normalization
-        W = self.CalculateWWithoutNormalization(strain)
-
-        # Subtract W0 from W
-        return W - W0
-
-    # ==========================================================================================
-    def forward(self, strain, kan_input=None):
-        """
-        Forward pass to compute the gradient of W with respect to strain.
-        
-        Args:
-            strain: The input strain tensor of shape (batches, steps, components).
-                    NOTE: Strain is NOT used in the forward computation. It is only
-                    used for shape reference and computing grad_at_zero offset.
-            kan_input: REQUIRED precomputed KAN input tensor computed from strain using
-                       model.ComputeKANInput(strain) or model._precompute_all_kan_inputs().
-                       The KAN model only accepts KAN input as features - strain must NOT
-                       enter the model directly. The kan_input should have shape
-                       (batches*steps, input_size) and should already have
-                       detach().requires_grad_(True) applied.
-        
-        IMPORTANT: Only KAN input features are allowed to enter the model. Strain tensor
-        is never passed to the KAN layer. This ensures physical consistency and proper
-        gradient computation.
-        
-        NOTE: The null strain KAN input is computed once via _precompute_all_kan_inputs()
-        and cached internally. All forward passes reuse this cached value for W0 and
-        grad_at_zero computation, avoiding redundant KAN input calculations.
-        
-        Example usage:
-            # Precompute KAN inputs ONCE for entire dataset (includes null strain)
-            train_kan_input, null_kan_input = model._precompute_all_kan_inputs(
-                train_strain_database, train_stress_database)
-            # Use precomputed kan_input in forward passes
-            grad = model.forward(strain, kan_input=train_kan_input)
-        """
-        batches, steps = strain.shape[0], strain.shape[1]
-        
-        # ENFORCEMENT: kan_input is REQUIRED - only KAN input features are allowed
-        if kan_input is None:
-            raise ValueError(
-                "kan_input is required! Only KAN input features are allowed to enter the model. "
-                "Compute kan_input using: kan_input = model.ComputeKANInput(strain).detach().requires_grad_(True)"
-            )
-        
-        # Ensure kan_input has gradients for backpropagation
-        if not kan_input.requires_grad:
-            kan_input = kan_input.detach().requires_grad_(True)
-        
-        # Use cached null KAN input for W0 and grad_at_zero (computed once via _precompute_all_kan_inputs)
-        # This avoids recomputing KAN input for zero strain on every forward pass
-        W0 = self._compute_w0_at_zero(strain.shape)
-        grad_at_zero = self._compute_grad_at_zero(strain.shape)
-        
-        # Use ONLY the precomputed KAN input for W (forward pass)
-        # Strain does NOT enter the KAN model - only KAN input features are used
-        W = self.CalculateWWithoutNormalizationFromInput(kan_input, batches, steps)
-        W = W - W0
-
-        # Compute gradients w.r.t. kan_input (the only input to the KAN model)
-        grad_kan_input = torch.autograd.grad(
-            outputs=W,
-            inputs=kan_input,
-            grad_outputs=torch.ones_like(W),
-            create_graph=True
-        )[0]
-        
-        # Reshape grad_kan_input to match strain shape for consistency with grad_at_zero
-        # grad_kan_input shape: (batches*steps, input_size)
-        return grad_kan_input.view(batches, steps, -1) - grad_at_zero
+        return viewed_KAN_input # Reshape to (batches*steps, input_size)
 
 
     # ==========================================================================================
-    def ComputeHessian(self, strain):
-        strain = strain.detach().requires_grad_(True)  # Ensure strain requires gradients
+    def CalculateW(self, strain_database):
+        """
+        Computes W for the given strain with normalization.
+        """
+        kan_input = self._compute_kan_input_for_strain(strain_database)  # Shape: (batches*steps, input_size)
 
-        # Compute the first gradient (Jacobian)
-        W = self.CalculateW(strain)  # Shape: (batches, steps, 1)
-        grad = torch.autograd.grad(
-            outputs=W,
-            inputs=strain,
-            grad_outputs=torch.ones_like(W),
-            create_graph=True
-        )[0]  # Shape: (batches, steps, strain_size)
+        W_raw = self.KAN_W.forward(kan_input)  # Shape: (batch x steps, 1)
 
-        # Compute the second gradient (Hessian)
-        hessian = []
-        for i in range(strain.shape[-1]):  # Loop over strain components
-            grad_i = grad[..., i]  # Select the i-th component of the gradient
-            hessian_row = torch.autograd.grad(
-                outputs=grad_i,
-                inputs=strain,
-                grad_outputs=torch.ones_like(grad_i),
-                create_graph=True
-            )[0]  # Shape: (batches, steps, strain_size)
-            hessian.append(hessian_row)
+        null_kan_input = self._compute_kan_input_for_strain(torch.zeros_like(strain_database))
+        W0 = self.KAN_W.forward(null_kan_input)
 
-        # Stack the Hessian rows to form the full Hessian matrix
-        hessian = torch.stack(hessian, dim=-1)  # Shape: (batches, steps, strain_size, strain_size)
+        return W_raw - W0
+    # ==========================================================================================
 
-        # Compute eigenvalues of the Hessian for each strain
-        hessian_eigenvalues = torch.linalg.eigvalsh(hessian)  # Shape: (batches, steps, strain_size)
-
-        # Check if all eigenvalues are positive
-        is_positive_definite = (hessian_eigenvalues > 0).all(dim=-1)  # Shape: (batches, steps)
-        if not is_positive_definite.all():
-            print("**************************************************************")
-            print("Warning: Hessian is not positive definite for some strains.")
-            print("**************************************************************")
-        return hessian
-
+    def forward(self, strain_database):
+        return self.CalculateW(strain_database)
 
     # ==========================================================================================
-    def plot_spline_edges(self, folder="./ICKAN_predictions", scale=0.5):
-        """
-        Plot the spline edges for each connection in the KAN layer.
-
-        Args:
-            folder (str): The folder to save the plots.
-            scale (float): Scale factor for the plot size.
-        """
-
-        if not self.KAN_W.save_act:
-            raise ValueError("Cannot plot since activations are not saved. Set `save_act=True` before the forward pass.")
-
-        if self.KAN_W.acts is None:
-            if self.KAN_W.cache_data is None:
-                raise ValueError("No cached data available. Perform a forward pass with input data.")
-            self.KAN_W.forward(self.KAN_W.cache_data)  # Populate activations
-
-        # Create the folder if it doesn't exist
-        if not os.path.exists(folder):
-            os.makedirs(folder)
-
-        depth = len(self.KAN_W.width) - 1  # Number of layers
-        for l in range(depth):
-            for i in range(self.KAN_W.width_in[l]):  # Loop over input nodes
-                for j in range(self.KAN_W.width_out[l + 1]):  # Loop over output nodes
-                    # Extract activations and spline outputs
-                    x = self.KAN_W.acts[l][:, i].cpu().detach().numpy()  # Input activations
-                    y = self.KAN_W.spline_postacts[l][:, j, i].cpu().detach().numpy()  # Spline outputs
-
-                    # Sort the activations for a smooth plot
-                    sorted_indices = x.argsort()
-                    x_sorted = x[sorted_indices]
-                    y_sorted = y[sorted_indices]
-
-                    # Plot the spline edge
-                    plt.figure(figsize=(6 * scale, 4 * scale))
-                    plt.plot(x_sorted, y_sorted, label=f"Edge {i} -> {j}", color="blue", lw=2)
-                    plt.xlabel("Activation (Input)")
-                    plt.ylabel("Spline Output")
-                    plt.title(f"Spline Edge: Layer {l}, Node {i} -> Node {j}")
-                    plt.legend()
-                    plt.grid(True)
-
-                    # Save the plot
-                    plot_path = os.path.join(folder, f"spline_edge_layer{l}_node{i}_to_node{j}.png")
-                    plt.savefig(plot_path, bbox_inches="tight", dpi=300)
-                    plt.close()
-
-        print(f"Spline edge plots saved in the folder: {folder}")
-    
-    def reset_splines(self):
-        """
-        Reset the spline parameters to their initial state.
-        This is useful if you want to reinitialize the splines without creating a new model instance.
-        """
-        depth = len(self.KAN_W.width) - 1  # Number of layers
-        for l in range(depth):
-            for i in range(self.KAN_W.width_in[l]):  # Loop over input nodes
-                for j in range(self.KAN_W.width_out[l + 1]):  # Loop over output nodes
-                    # Extract activations and spline outputs
-                    x = self.KAN_W.acts[l][:, i]  # Input activations
-                    y = self.KAN_W.spline_postacts[l][:, j, i]  # Spline outputs
-                    self.KAN_W.acts[l][:, j, i] = torch.zeros_like(x)  # Reset spline outputs to zero
-                    self.KAN_W.spline_postacts[l][:, j, i] = torch.zeros_like(y)  # Reset spline outputs to zero
-                    self.KAN_W.spline_preacts[l][:, j, i]  = torch.zeros_like(x)  # Reset spline pre-activations to zero
-                    # print(x)
-                    # print(y)
-        print("Spline parameters have been reset to their initial state.")
-
-# =========================================================================================
-#==========================================================================================
-
-def TRAIN_KAN(model, optimizer, train_strain_database, train_stress_database, kan_input=None, n_epochs=100):
-    """
-    Train KAN model using mean stress difference loss.
-    
-    Args:
-        model: KAN stress predictor model
-        optimizer: Optimizer
-        train_strain_database: Training strain data [batch, steps, components]
-        train_stress_database: Training stress data [batch, steps, components] (in MPa)
-        kan_input: Precomputed KAN input tensor (computed once, reused for all forward passes).
-                   If None, will be computed automatically. Should have shape (batch*steps, input_size).
-        n_epochs: Number of training epochs
-    """
-    if kan_input is None:
-        kan_input = model.ComputeKANInput(train_strain_database)  # Compute KAN input once for the whole training set
-    else:
-        # Ensure kan_input has gradients enabled for backpropagation
-        kan_input = kan_input.detach().requires_grad_(True)
-
-    for epoch in range(n_epochs):
-        def closure():
-            optimizer.zero_grad()
-
-            predicted_stress = model.forward(train_strain_database, kan_input=kan_input)  # Get predictions using the precomputed KAN input
-            
-            # Use mean stress difference loss instead of work-based loss
-            # Compute the mean difference between predicted and reference stress
-            error = predicted_stress - train_stress_database
-            loss = 0.5 * torch.mean(error ** 2)
-            loss.backward()
-            return loss
-
-        loss = optimizer.step(closure)
-
-        if epoch % 20 == 0:
-            print(f"Epoch {epoch}, Loss: {loss.item():.6e}")
-
-        if epoch == n_epochs - 1:
-            print("\nTraining finished.\n")
-            print("\nFinal loss: ", loss.item())
-
-
-# Initialize model, optimizer, and loss function
-model = KANStressPredictor()
-model.KAN_W.speed()
-
-# Count total parameters
-total_params = sum(p.numel() for p in model.parameters())
-trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-print(f"\n{'='*50}")
-print(f"Total model parameters: {total_params:,}")
-print(f"Trainable parameters: {trainable_params:,}")
-
-# =====================================================================
-# Precompute KAN inputs ONCE for training data and null strain.
-# This avoids calling ComputeKANInput repeatedly during training.
-# =====================================================================
-print("\nPrecomputing KAN inputs ONCE for training data and null strain...")
-flat_KAN_input, null_kan_input = model._precompute_all_kan_inputs(
-    train_strain_database, train_stress_database)
-print(f"  - Training KAN input shape: {flat_KAN_input.shape}")
-print(f"  - Null KAN input shape: {null_kan_input.shape}")
-
-# We adapt the grids of the KAN to the input data before training, so that the splines are active from the beginning of training
-model.KAN_W.update_grid(flat_KAN_input)
-
-# Verify null strain prediction using cached null_kan_input
-print("\nNull strain KAN prediction initial CHECK (using cached null input): ",
-      model.forward(torch.tensor([[[0.0, 0.0, 0.0]]]), kan_input=null_kan_input))
-print()
-
-
-# Initialize the optimizer
-# optimizer = optim.Adam(
-#     model.parameters(),
-#     lr=learning_rate,
-#     # max_iter=5,
-#     # history_size=7,
-#     # line_search_fn='strong_wolfe'
-# )
-optimizer_1 = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-3)
-optimizer_2 = optim.LBFGS(
-                    model.parameters(),
-                    lr=learning_rate,
-                    max_iter=50,
-                    history_size=50
-                )
-
-
-# Train the KAN model using mean stress difference loss on all data
-# (flat_KAN_input and null_kan_input are already precomputed and cached)
-TRAIN_KAN(
-    model=model,
-    optimizer=optimizer_1,
-    train_strain_database=train_strain_database,
-    train_stress_database=train_stress_database,
-    kan_input=flat_KAN_input,
-    n_epochs=n_epochs)
-
-# fine tuning with LBFGS
-# TRAIN_KAN(
-#     model=model,
-#     optimizer=optimizer_2,
-#     train_strain_database=train_strain_database,
-#     train_stress_database=train_stress_database,
-#     kan_input=flat_KAN_input,
-#     n_epochs=500)
-
-for i, ki in enumerate(model.ki):
-    print("self.ki[i]: ", ki.data)
-
-# Prune the KAN model (optional)
-prune_KAN = False
-if prune_KAN:
-    print("Pruning the KAN...")
-    model.CalculateW(train_strain_database)  # Forward pass to compute activations
-    model.KAN_W = model.KAN_W.prune(node_th=0.1, edge_th=0.1)
-    model.KAN_W.reset_model()  # new implementation
-    model.ResetParameters()  # Reset the parameters after pruning
-    model.CalculateW(train_strain_database)  # Forward pass to compute activations
-
-    # Reinicializar completamente el modelo después del pruning
-    # model = KANStressPredictor()
-    print("All model parameters have been reset after pruning.")
-
-    optimizer = optim.LBFGS(
-                        model.parameters(),
-                        lr=0.01,
-                        max_iter=20,
-                        history_size=30
-                    )
-
-    TRAIN_KAN(
-        model=model,
-        optimizer=optimizer,
-        train_strain_database=train_strain_database,
-        train_stress_database=train_stress_database,
-        n_epochs=100 )
-
-fix_symbolic = False
-if fix_symbolic:
-    # model.KAN_W.suggest_symbolic(0,0,0,weight_simple=0.0)
-    # model.KAN_W.suggest_symbolic(0,1,0,weight_simple=0.)
-    # model.KAN_W.suggest_symbolic(0,2,0,weight_simple=0.)
-
-    model.KAN_W.fix_symbolic(0,0,0,'abs', random=False)
-    model.KAN_W.fix_symbolic(0,1,0,'abs', random=False)
-    # model.KAN_W.fix_symbolic(0,2,0,'x^2')
-
-    TRAIN_KAN(
-        model=model,
-        optimizer=optimizer,
-        train_strain_database=train_strain_database,
-        train_stress_database=train_stress_database,
-        n_epochs=200)
-
-# model.ComputeHessian(ref_strain_database[:, :, :])  # Check the Hessian eigenvalues for the whole strain
-
-# Verify null strain prediction using cached null_kan_input (computed once during precompute)
-print("\nNull strain KAN prediction POST CHECK (using cached null input): ",
-      model.forward(torch.tensor([[[0.0, 0.0, 0.0]]]), kan_input=null_kan_input))
-print()
-
-# Create the folder to save the plots if it doesn't exist
-output_folder = "ICKAN_predictions"
-os.makedirs(output_folder, exist_ok=True)
-torch.save(model.state_dict(), "ICKAN_predictions/KAN_model_weights.pth")
-
-# Generate predictions for the full database (all data)
-# For ref_strain_database != train_strain_database, compute KAN input once
-print("\nComputing KAN input ONCE for prediction database...")
-pred_kan_input = model._compute_kan_input_for_strain(ref_strain_database)
-pred_kan_input = pred_kan_input.detach().requires_grad_(True)
-print("Generating predictions using precomputed KAN input...")
-prediction_KAN = model.forward(ref_strain_database, kan_input=pred_kan_input)
-
-# Plot and save results for all trajectories (all data)
-for elem in range(ref_strain_database.shape[0]):
-    plt.figure(figsize=(8, 6))  # Create a new figure for each trajectory
-
-    for compo in [0, 1, 2]:
-        strain_for_print = ref_strain_database[elem, :, compo]
-        predicted_stress_ANN = prediction_KAN[elem, :, compo].detach().numpy()
-
-        plt.plot(
-            strain_for_print,
-            ref_stress_database[elem, :, compo],
-            label=f"DATA_comp{compo}",
-            # marker="o",
-            color=GetColor(compo),
-            # s=50,
-            alpha=0.7,      # This should work...
-            # edgecolors='none' # Try adding this to see if the borders are the issue
-            linestyle="--"
-        )
-        plt.plot(
-            strain_for_print,
-            predicted_stress_ANN,
-            label=f"ICKAN_comp{compo}",
-            color=GetColor(compo),
-            linestyle="-"
-        )
-
-    # Add plot details
-    plt.title(f"Trajectory: {elem}" + f" KAN")
-    plt.xlabel("Strain [-]")
-    plt.ylabel("Stress [MPa]")
-    plt.legend()
-    plt.grid(True)
-
-    # Save the plot in the output folder
-    output_path = os.path.join(output_folder, f"batch_{elem}.png")
-    plt.savefig(output_path, dpi=600)
-    plt.close()  # Close the figure to free memory
-print(f"Plots saved in the folder: {output_folder}")
-
-
-model.CalculateW(ref_strain_database[:, :, :])  # Compute the spline activations
-# print("check that W is null at zero strain: ", model.CalculateW(torch.zeros_like(ref_strain_database[:, :, :])))
-model.plot_spline_edges()
-model.KAN_W.plot(folder="./ICKAN_predictions")
-plt.savefig("./ICKAN_predictions/KAN_splines.png")
