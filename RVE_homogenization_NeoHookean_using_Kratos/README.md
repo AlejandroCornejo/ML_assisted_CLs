@@ -1343,6 +1343,40 @@ Plot behavior:
 - FOM is shown as the full trajectory (all points).
 - HPROM-GPR is shown as scatter only at the sparse evaluated points.
 
+Optional: also run a sparse **pointwise FOM warm-start** baseline, where each sparse
+point is solved as an independent FOM problem initialized from the nearest Stage-1
+snapshot in `mu=[E_xx,E_yy,0.5*G_xy]` space:
+
+```bash
+python3 stage10_test_hprom_gpr_sparse_points.py \
+  --n-points 20 \
+  --run-fom \
+  --run-fom-sparse-warm \
+  --run-hprom-gpr \
+  --run-hprom-gpr-no-newton \
+  --stage1-fom-dir stage_1_training_set_fom \
+  --fom-warm-bridge-mode adaptive \
+  --fom-warm-ref-steps 400 \
+  --gpr-data-dir stage_7_gpr_data_ls \
+  --hprom-gpr-dir stage_9_hprom_gpr_data_ls \
+  --out-dir stage_10_hprom_gpr_sparse_points \
+  --qp-init-mode mu_affine
+```
+
+This generates additional files:
+- `fom_sparse_warm_strain.npy`, `fom_sparse_warm_stress.npy`
+- `fom_sparse_warm_nn_dist.npy` (nearest-neighbor distances in `mu`-space)
+- `fom_sparse_warm_bridge_steps.npy` (dynamic increments used by each adaptive local bridge)
+- `hprom_sparse_no_newton_strain.npy`, `hprom_sparse_no_newton_stress.npy`
+- timing bar with `FOM full`, `FOM sparse warm`, and `HPROM sparse`
+
+Notes:
+- `--fom-warm-bridge-mode adaptive` is the recommended robust option: each sparse point is
+  solved from nearest-snapshot strain to target strain using dynamic step allocation.
+- `--fom-warm-bridge-mode single_jump` keeps the old one-step jump behavior.
+- `--run-hprom-gpr-no-newton` runs a predictor-only HPROM-GPR variant (`max_its=0`) to compare
+  "initial guess only" versus fully iterated HPROM-GPR.
+
 ### Stage 9a/9b + Stage 10 for HPROM-POD-DL
 
 Build POD-DL ECM dataset (same 5/5 default sampling style):

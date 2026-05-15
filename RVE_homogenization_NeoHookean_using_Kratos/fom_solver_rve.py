@@ -1388,6 +1388,7 @@ def CheckConvergenceStatus(criterion, res_ok, disp_ok):
 def RunFomBatchSimulation(
     parameters,
     out_dir=DEFAULT_OUTPUT_DIR,
+    save_results=True,
     save_plot=True,
     strain_path=None,
     trajectory_index=None,
@@ -1405,6 +1406,7 @@ def RunFomBatchSimulation(
     hom_weights_eps_full=None,
     hom_weights_sig_full=None,
     hom_reference_measure=None,
+    initial_displacement=None,
 ):
     """Executes the RVE simulation for a given strain trajectory."""
     os.makedirs(out_dir, exist_ok=True)
@@ -1495,6 +1497,16 @@ def RunFomBatchSimulation(
         free_dofs_fast = None
 
     u_n = np.zeros(n_dof, dtype=float)
+    if initial_displacement is not None:
+        u0 = np.asarray(initial_displacement, dtype=float).reshape(-1)
+        if u0.size != n_dof:
+            raise ValueError(
+                f"initial_displacement size {u0.size} does not match n_dof={n_dof}."
+            )
+        if not np.all(np.isfinite(u0)):
+            raise ValueError("initial_displacement contains non-finite values.")
+        u_n[:] = u0
+        print("[FOM] Using user-provided initial displacement guess.")
     U_hist, strain_hist, stress_hist, applied_strain_hist = [], [], [], []
     
     # Store initial state (origin)
@@ -1676,14 +1688,15 @@ def RunFomBatchSimulation(
     sim.Finalize()
     
     # Save results with simple naming
-    tag = f"trajectory_{trajectory_index}" if trajectory_index else "single_run"
-    np.save(os.path.join(out_dir, f"{tag}_strain.npy"), np.stack(strain_hist))
-    np.save(os.path.join(out_dir, f"{tag}_stress.npy"), np.stack(stress_hist))
-    np.save(os.path.join(out_dir, f"{tag}_U.npy"), np.stack(U_hist))
-    np.save(os.path.join(out_dir, f"{tag}_applied_strain.npy"), np.stack(applied_strain_hist))
+    if save_results:
+        tag = f"trajectory_{trajectory_index}" if trajectory_index else "single_run"
+        np.save(os.path.join(out_dir, f"{tag}_strain.npy"), np.stack(strain_hist))
+        np.save(os.path.join(out_dir, f"{tag}_stress.npy"), np.stack(stress_hist))
+        np.save(os.path.join(out_dir, f"{tag}_U.npy"), np.stack(U_hist))
+        np.save(os.path.join(out_dir, f"{tag}_applied_strain.npy"), np.stack(applied_strain_hist))
 
-    if save_plot:
-        _save_diagnostic_plots(np.stack(strain_hist), np.stack(stress_hist), out_dir, tag)
+        if save_plot:
+            _save_diagnostic_plots(np.stack(strain_hist), np.stack(stress_hist), out_dir, tag)
 
     return strain_hist, stress_hist
 

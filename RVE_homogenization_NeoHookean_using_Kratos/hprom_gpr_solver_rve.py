@@ -309,6 +309,7 @@ def RunHpromGprBatchSimulation(
         return dq_loc
 
     q_p = np.zeros(n_primary, dtype=float)
+    predictor_only_mode = int(max_its) <= 0
     Kr_old = None
     J_full = np.zeros((n_total_dof, n_primary), dtype=float)
     q0_const, J0_const = _evaluate_qs_and_jac(np.zeros(n_primary, dtype=float), np.zeros(3, dtype=float))
@@ -319,6 +320,8 @@ def RunHpromGprBatchSimulation(
     print(f"  [HPROM-GPR] Active mesh elements: {len(elements)} (reference full mesh: {n_elem_reference})")
     print("  [HPROM-GPR] Manifold correction active: N(0)=0 and J(0)=0.")
     print(f"  [HPROM-GPR] q_p initializer mode: {qp_init_mode}")
+    if predictor_only_mode:
+        print("  [HPROM-GPR] Predictor-only mode enabled (max_its <= 0): no Newton correction.")
     if qp_init_mode == "mu_affine" and qp_aff is not None:
         print(f"  [HPROM-GPR] Using affine initializer: {qp_aff['path']}")
     print(
@@ -527,31 +530,35 @@ def RunHpromGprBatchSimulation(
             it += 1
 
         if not converged:
-            quasi_converged = (
-                np.isfinite(best_res)
-                and np.isfinite(best_rel)
-                and (best_rel < float(relnorm_cutoff))
-                and (best_res < float(max_res_for_rel_convergence))
-            )
-            if quasi_converged:
-                q_p = best_q.copy()
+            if predictor_only_mode:
                 converged = True
-                print(
-                    "  [HPROM-GPR] Step accepted as quasi-converged: "
-                    f"best ||R_r||={best_res:.3e}, rel={best_rel:.3e}."
-                )
                 Kr_old = None
             else:
-                print(f"  [HPROM-GPR] WARNING: step {step} did not converge in {max_its} iterations.")
-                if nonfinite_detected:
-                    print("  [HPROM-GPR] WARNING: non-finite state encountered; rolling back to best finite iterate.")
-                if np.isfinite(best_res):
+                quasi_converged = (
+                    np.isfinite(best_res)
+                    and np.isfinite(best_rel)
+                    and (best_rel < float(relnorm_cutoff))
+                    and (best_res < float(max_res_for_rel_convergence))
+                )
+                if quasi_converged:
                     q_p = best_q.copy()
-                    print(f"  [HPROM-GPR] Using best finite iterate with ||R_r||={best_res:.3e}.")
+                    converged = True
+                    print(
+                        "  [HPROM-GPR] Step accepted as quasi-converged: "
+                        f"best ||R_r||={best_res:.3e}, rel={best_rel:.3e}."
+                    )
+                    Kr_old = None
                 else:
-                    q_p = q_step_start.copy()
-                    print("  [HPROM-GPR] Reverting to previous-step reduced state.")
-                Kr_old = None
+                    print(f"  [HPROM-GPR] WARNING: step {step} did not converge in {max_its} iterations.")
+                    if nonfinite_detected:
+                        print("  [HPROM-GPR] WARNING: non-finite state encountered; rolling back to best finite iterate.")
+                    if np.isfinite(best_res):
+                        q_p = best_q.copy()
+                        print(f"  [HPROM-GPR] Using best finite iterate with ||R_r||={best_res:.3e}.")
+                    else:
+                        q_p = q_step_start.copy()
+                        print("  [HPROM-GPR] Reverting to previous-step reduced state.")
+                    Kr_old = None
         elif Kr_last is not None and _is_finite(Kr_last):
             Kr_old = Kr_last.copy()
         else:
