@@ -198,8 +198,8 @@ def TRAIN_KAN(
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = new_lr
                     model.load_state_dict(best_parameters)  # Revert to best parameters
-                print(f"Reducing learning rate from {current_lr} to {new_lr} at epoch {epoch}")
-                print(f"Reverting to best model parameters with loss {best_loss:.8f}")
+                print(f"\tReducing learning rate from {current_lr:.3f} to {new_lr:.3f} at epoch {epoch}")
+                print(f"\tReverting to best model parameters with loss {best_loss:.4f}")
                 patience_counter = 0  # Reset patience counter
         
         if epoch % 50 == 0:
@@ -210,8 +210,8 @@ def TRAIN_KAN(
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 2000
-learning_rate = 0.1
+n_epochs = 10_000
+learning_rate = 0.01
 
 order_stretches = 1   # Number of orders (can be set to any value)
 k = 2  # Degree of splines
@@ -220,8 +220,8 @@ grid_size = 3  # Number of knots
 input_size = 2 * order_stretches + 1
 
 W_width = [input_size,
-            input_size + 1,
             input_size,
+            2,
             1] # output always 1
 #*****************************************************************************************************************
 #*****************************************************************************************************************
@@ -241,8 +241,8 @@ model = surrogate.ICKAN_W_Surrogate(
 optimizer_1 = optim.AdamW(
     model.parameters(),
     lr=learning_rate,
-    weight_decay=1.0e-2,
-    amsgrad = True
+    weight_decay=1.0e-3,
+    # amsgrad = True
 )
 
 print(20*"=")
@@ -250,19 +250,19 @@ print("\nStarting stress based optimization...")
 print(20*"=")
 
 TRAIN_KAN(
-    model                       =  model,
-    optimizer                   =  optimizer_1,
-    ref_strain_database         =  train_strain_database,
-    ref_W_database              =  train_W_database,
-    ref_stress_database         =  train_stress_database,
-    n_epochs                    =  n_epochs,
-    max_W                       =  max_W,
-    patience                    =  30,
-    reduce_lr_factor            =  0.9,
-    is_patient                  =  True,
-    train_W                     =  False,
+    model                       = model,
+    optimizer                   = optimizer_1,
+    ref_strain_database         = train_strain_database,
+    ref_W_database              = train_W_database,
+    ref_stress_database         = train_stress_database,
+    n_epochs                    = n_epochs,
+    max_W                       = max_W,
+    patience                    = 30,
+    reduce_lr_factor            = 0.9,
+    is_patient                  = False,
+    train_W                     = False,
     mixed_sovolev_training      = True,
-    mixed_sovolev_W_loss_weight = 0.9 # 1 is only W loss, 0 is only S loss, 0.5 is equal weighting
+    mixed_sovolev_W_loss_weight = 0.01 # 1 is only W loss, 0 is only S loss
 )
 
 torch.save(model.state_dict(), "ICKAN_predictions/ICKAN_model_weights.pth")
