@@ -210,7 +210,7 @@ def TRAIN_KAN(
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 10_000
+n_epochs = 100_000
 learning_rate = 0.01
 
 order_stretches = 1   # Number of orders (can be set to any value)
@@ -220,8 +220,9 @@ grid_size = 3  # Number of knots
 input_size = 2 * order_stretches + 1
 
 W_width = [input_size,
+            input_size+1,
             input_size,
-            2,
+            input_size-1,
             1] # output always 1
 #*****************************************************************************************************************
 #*****************************************************************************************************************
@@ -241,7 +242,7 @@ model = surrogate.ICKAN_W_Surrogate(
 optimizer_1 = optim.AdamW(
     model.parameters(),
     lr=learning_rate,
-    weight_decay=1.0e-3,
+    weight_decay=1.0e-4,
     # amsgrad = True
 )
 
@@ -262,7 +263,7 @@ TRAIN_KAN(
     is_patient                  = False,
     train_W                     = False,
     mixed_sovolev_training      = True,
-    mixed_sovolev_W_loss_weight = 0.01 # 1 is only W loss, 0 is only S loss
+    mixed_sovolev_W_loss_weight = 0.1 # 1 is only W loss, 0 is only S loss
 )
 
 torch.save(model.state_dict(), "ICKAN_predictions/ICKAN_model_weights.pth")
