@@ -198,12 +198,12 @@ def TRAIN_KAN(
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = new_lr
                     model.load_state_dict(best_parameters)  # Revert to best parameters
-                print(f"\tReducing learning rate from {current_lr:.3f} to {new_lr:.3f} at epoch {epoch}")
-                print(f"\tReverting to best model parameters with loss {best_loss:.4f}")
+                print(f"\tReducing learning rate from {current_lr:.3E} to {new_lr:.3E} at epoch {epoch}")
+                print(f"\tReverting to best model parameters with loss {best_loss:.4E}")
                 patience_counter = 0  # Reset patience counter
         
         if epoch % 50 == 0:
-            print(f"Epoch {epoch}, Loss: {loss.item():.8f}, Best Loss: {best_loss:.6f}, Patience: {patience_counter}/{patience}")
+            print(f"Epoch {epoch}, Loss: {loss.item():.8E}, Best Loss: {best_loss:.6E}, Patience: {patience_counter}/{patience}")
 # ==========================================================================================
 
 
@@ -215,7 +215,7 @@ learning_rate = 0.01
 
 order_stretches = 1   # Number of orders (can be set to any value)
 k = 2  # Degree of splines
-grid_size = 3  # Number of knots
+grid_size = 5  # Number of knots
 
 input_size = 2 * order_stretches + 1
 
@@ -223,6 +223,7 @@ W_width = [input_size,
             input_size+1,
             input_size,
             input_size-1,
+            1,
             1] # output always 1
 #*****************************************************************************************************************
 #*****************************************************************************************************************
@@ -263,7 +264,7 @@ TRAIN_KAN(
     is_patient                  = False,
     train_W                     = False,
     mixed_sovolev_training      = True,
-    mixed_sovolev_W_loss_weight = 0.1 # 1 is only W loss, 0 is only S loss
+    mixed_sovolev_W_loss_weight = 0.05 # 1 is only W loss, 0 is only S loss
 )
 
 torch.save(model.state_dict(), "ICKAN_predictions/ICKAN_model_weights.pth")

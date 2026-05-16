@@ -23,8 +23,13 @@ class ICKAN_W_Surrogate(nn.Module):
         # KAN definition for the energy density potential W
         self.KAN_W = KAN.MultKAN(
             width=self.W_width,  # output of size 1: W
+            grid=self.grid_size,
+            k=self.k,
+
             grid_range=grid_range,
-            grid_range_0=grid_range
+            grid_range_0=grid_range,
+            device="cpu",
+            base_fun="identity"
         )
 
         self.KAN_W.speed()
