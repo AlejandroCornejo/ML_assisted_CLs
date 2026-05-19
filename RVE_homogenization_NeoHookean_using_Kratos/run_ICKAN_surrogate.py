@@ -230,12 +230,12 @@ learning_rate = 1.0e-3
 
 order_stretches = 1   # Number of orders (can be set to any value)
 k = 2  # Degree of splines
-grid_size = 4  # Number of knots
+grid_size = 5  # Number of knots
 
 input_size = 2 * order_stretches + 1
 
 W_width = [input_size,
-            4,
+            5,
             1] # output always 1
 #*****************************************************************************************************************
 #*****************************************************************************************************************
@@ -285,7 +285,7 @@ TRAIN_KAN(
     reduce_lr_factor            = 0.5,
     minimum_lr                  = 1.0e-6,
     train_W                     = True,
-    early_stopping_threshold    = 1.0e-8,
+    early_stopping_threshold    = 1.0e-5,
     mixed_sovolev_training      = True,
     mixed_sovolev_W_loss_weight = 0.001 # 1 is only W loss, 0 is only S loss
 )

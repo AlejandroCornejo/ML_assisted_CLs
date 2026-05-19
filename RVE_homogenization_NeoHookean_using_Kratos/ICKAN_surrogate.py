@@ -18,7 +18,7 @@ class ICKAN_W_Surrogate(nn.Module):
         self.W_width = W_width
 
         # Define the spline grid range for all inputs
-        grid_range = [0.001, 1.0]
+        grid_range = [-0.1, 1.2]
 
         # KAN definition for the energy density potential W
         self.KAN_W = KAN.MultKAN(
