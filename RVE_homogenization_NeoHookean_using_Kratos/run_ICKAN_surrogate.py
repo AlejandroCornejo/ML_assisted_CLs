@@ -163,11 +163,11 @@ def TRAIN_KAN(
             if mixed_sovolev_training:
                 predicted_w = model.CalculateW(ref_strain_database)
                 # loss_W = torch.sum(((predicted_w - ref_W_database)**2) / (ref_W_database**2 + 1e-12))  # Relative W loss
-                loss_W = (torch.sum((predicted_w - ref_W_database)**2) / (torch.sum(ref_W_database**2) + 1e-12))  # Relative W loss
+                loss_W = (torch.sum((predicted_w - ref_W_database)**2) / (torch.sum(ref_W_database**2)))  # Relative W loss
 
                 normalized_stress = model.CalculateNormalizedStress(ref_strain_database) * max_W
                 # loss_S = torch.sum(((normalized_stress - ref_stress_database) ** 2) / (ref_stress_database**2 + 1e-12))  # Relative S loss
-                loss_S = (torch.sum((normalized_stress - ref_stress_database)**2) / (torch.sum(ref_stress_database**2) + 1e-12))  # Relative S loss
+                loss_S = (torch.sum((normalized_stress - ref_stress_database)**2) / (torch.sum(ref_stress_database**2)))  # Relative S loss
 
                 loss = mixed_sovolev_W_loss_weight * (loss_W) + (1.0 - mixed_sovolev_W_loss_weight) * (loss_S)
             else:
@@ -230,7 +230,7 @@ learning_rate = 1.0e-3
 
 order_stretches = 1   # Number of orders (can be set to any value)
 k = 2  # Degree of splines
-grid_size = 3  # Number of knots
+grid_size = 4  # Number of knots
 
 input_size = 2 * order_stretches + 1
 
