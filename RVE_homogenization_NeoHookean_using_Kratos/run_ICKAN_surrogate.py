@@ -227,7 +227,7 @@ def TRAIN_KAN(
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 5_000
+n_epochs = 10
 learning_rate = 1.0e-2
 
 order_stretches = 1   # Number of orders (can be set to any value)
@@ -301,7 +301,10 @@ torch.save(model.state_dict(), "ICKAN_predictions/ICKAN_model_weights.pth")
 model.KAN_W.save_act = True
 kan_input = model._compute_kan_input_for_strain(train_strain_database) 
 predicted_w = model.KAN_W.forward(kan_input)
-model.KAN_W.plot()
+model.KAN_W.plot(
+                folder="./ICKAN_predictions/splines",
+                tick=True
+                )
 # plt.show()
 plt.savefig("./ICKAN_predictions/ICKAN.eps")
 plt.close()
@@ -333,6 +336,5 @@ plt.close()
 
 print("\nFinished training and plotting results. Model weights saved to 'ICKAN_predictions/ICKAN_model_weights.pth'.")
 
-print("*"*20)
 print("*"*20)
 print("*"*20)
