@@ -227,18 +227,18 @@ def TRAIN_KAN(
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 10
+n_epochs = 5_000
 learning_rate = 1.0e-2
 
 order_stretches = 1   # Number of orders (can be set to any value)
-k = 3  # Degree of splines
+k = 4  # Degree of splines
 grid_size = 12  # Number of knots
 
 input_size = 2 * order_stretches + 1
 
 W_width = [input_size,
-            8,
-            8,
+            5,
+            5,
             3,
             1] # output always 1
 
@@ -313,8 +313,8 @@ predicted_w = model.CalculateW(train_strain_database)
 
 plt.plot(train_strain_database[:,0].detach().numpy(), train_W_database[:,0].detach().numpy(), '--', label='Reference W')
 plt.plot(train_strain_database[:,0].detach().numpy(), predicted_w[:,0].detach().numpy(), '-', label='ICKAN W')
-plt.xlabel('E_xx')
-plt.ylabel('W')
+plt.xlabel('Strain XX')
+plt.ylabel('Elastic Energy Density W')
 plt.legend()
 plt.grid()
 plt.savefig("./ICKAN_predictions/W_history.eps")
@@ -325,8 +325,8 @@ predicted_stress = max_W * model.CalculateNormalizedStress(train_strain_database
 
 plt.plot(train_strain_database[:,0].detach().numpy(), train_stress_database[:,0].numpy(), '--', label='Reference S_xx')
 plt.plot(train_strain_database[:,0].detach().numpy(), predicted_stress[:,0].detach().numpy(), '-', label='ICKAN S_xx')
-plt.xlabel('E_xx')
-plt.ylabel('S_xx')
+plt.xlabel('Strain XX')
+plt.ylabel('Normalized Stress XX')
 plt.legend()
 plt.grid()
 plt.savefig("./ICKAN_predictions/S_xx_history.eps")
