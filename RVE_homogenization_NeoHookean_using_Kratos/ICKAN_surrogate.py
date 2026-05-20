@@ -18,7 +18,7 @@ class ICKAN_W_Surrogate(nn.Module):
         self.W_width = W_width
 
         # Define the spline grid range for all inputs
-        grid_range = [1.0e-8, 1.5]
+        grid_range = [-1, 1]
 
         # KAN definition for the energy density potential W
         self.KAN_W = KAN.MultKAN(
@@ -26,17 +26,22 @@ class ICKAN_W_Surrogate(nn.Module):
             grid=self.grid_size,
             k=self.k,
 
-            grid_range=grid_range,
-            grid_range_0=grid_range,
-            device="cpu",
-            # base_fun="identity"
+            # grid_range=grid_range,
+            # grid_range_0=grid_range,
+            grid_range=[grid_range,grid_range,grid_range],
+            grid_range_0=[grid_range,grid_range,grid_range],
+            # grid_eps = 1.0,
+            
+            # base_fun = "zero",
+            # sp_trainable = True,
+            # sb_trainable = True,
         )
 
         self.KAN_W.speed()
 
         # Initialize some extra parameters
         self.ki = nn.ParameterList([
-            1.0 for p in range(self.order_stretches + 1)
+            p + 1 for p in range(self.order_stretches + 1)
             # nn.Parameter(torch.tensor(p + 1.0)) for p in range(self.order_stretches + 1)
         ])
 
@@ -49,9 +54,28 @@ class ICKAN_W_Surrogate(nn.Module):
 
     # ==========================================================================================
 
-    def UpdateGridFromSamples(self, strain_database):
-        # self.KAN_W.update_grid_from_samples(strain_database)
-        self.KAN_W.update_grid(strain_database)
+    def print_kan_edge_grid_ranges(self):
+        """
+        Print the grid input ranges for each KAN layer edge.
+        """
+        print("KAN grid edge ranges:")
+        for layer_idx, kanlayer in enumerate(self.KAN_W.act_fun):
+            grid = kanlayer.grid.detach().cpu()
+            if grid.ndim == 1:
+                x_min, x_max = float(grid[0]), float(grid[-1])
+                print(f"  layer {layer_idx}: [{x_min:.6g}, {x_max:.6g}]")
+            else:
+                print(f"  layer {layer_idx} (in_dim={grid.shape[0]}, out_dim={kanlayer.out_dim}):")
+                for inp in range(grid.shape[0]):
+                    x_min = float(grid[inp, 0])
+                    x_max = float(grid[inp, -1])
+                    print(f"    edge input {inp}: [{x_min:.6g}, {x_max:.6g}]")
+
+    # ==========================================================================================
+
+    def UpdateGridFromSamples(self, kan_input):
+        # kan_input = self._compute_kan_input_for_strain(strain_database)  # Shape: (batches*steps, input_size)
+        self.KAN_W.update_grid(kan_input)
 
 
     # ==========================================================================================
@@ -107,10 +131,10 @@ class ICKAN_W_Surrogate(nn.Module):
         """
         kan_input = self._compute_kan_input_for_strain(strain_database)  # Shape: (batches*steps, input_size)
 
-        W_raw = self.KAN_W.forward(kan_input)  # Shape: (batch x steps, 1)
-
         null_kan_input = self._compute_kan_input_for_strain(torch.zeros_like(strain_database))
         W0 = self.KAN_W.forward(null_kan_input)
+
+        W_raw = self.KAN_W.forward(kan_input)  # Shape: (batch x steps, 1)
 
         return W_raw - W0
     # ==========================================================================================
@@ -127,10 +151,17 @@ class ICKAN_W_Surrogate(nn.Module):
         # Ensure strain_database requires gradient for autograd.grad computation
         strain_database = strain_database.requires_grad_(True)
 
-        W = self.CalculateW(strain_database)  # Shape: (batches*steps, 1)
-
         null_strain  = torch.zeros(1, 3).requires_grad_(True)
         W0 = self.CalculateW(null_strain)
+
+        W = self.CalculateW(strain_database)  # Shape: (batches*steps, 1)
+
+        stress_0 = torch.autograd.grad(
+                    outputs=W0,
+                    inputs=null_strain,
+                    grad_outputs=torch.ones_like(W0),
+                    create_graph=True
+                    )[0]
 
         predicted_stress = torch.autograd.grad(
                     outputs=W,
@@ -139,11 +170,5 @@ class ICKAN_W_Surrogate(nn.Module):
                     create_graph=True
                     )[0]
 
-        stress_0 = torch.autograd.grad(
-                    outputs=W0,
-                    inputs=null_strain,
-                    grad_outputs=torch.ones_like(W0),
-                    create_graph=True
-                    )[0]
 
         return predicted_stress - stress_0

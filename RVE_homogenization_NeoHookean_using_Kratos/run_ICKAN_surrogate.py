@@ -37,7 +37,7 @@ Load strain and stress from FOM trajectories (10 trajectories from stage_1_train
 Data is loaded as [history, step, component] with shape [10, steps, 3].
 """
 #***********************************************
-min_steps = 1000  # truncate all trajectories to the same length (e.g., 150 steps)
+min_steps = 500  # truncate all trajectories to the same length (e.g., 150 steps)
 #***********************************************
 
 # Path to FOM trajectories folder (relative to script location)
@@ -129,8 +129,8 @@ train_W_database = W_full_batch.view(-1, 1)  # [10*steps, 1]
 
 
 
-# max_W = 1
-max_W = train_W_database.abs().max()
+max_W = 1
+# max_W = train_W_database.abs().max()
 # max_W = 1
 train_W_database /= max_W  # Normalize W to have max absolute value of 1
 
@@ -211,7 +211,7 @@ def TRAIN_KAN(
                 print(f"\t\tReducing learning rate from {current_lr:.3E} to {new_lr:.3E} at epoch {epoch}")
                 print(f"\t\tReverting to best model parameters with loss {best_loss:.4E}")
                 patience_counter = 0  # Reset patience counter
-        
+
         if epoch % 50 == 0:
             print(f"Epoch {epoch}, Loss: {loss.item():.8E}, Best Loss: {best_loss:.6E}, Patience: {patience_counter}/{patience}")
         
@@ -221,25 +221,23 @@ def TRAIN_KAN(
                 if loss.item() < best_loss:
                     print(f"Final model is the best model with loss {loss.item():.6E}")
                     model.load_state_dict(best_parameters)  # Revert to best parameters
+
 # ==========================================================================================
 
 
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 5_000
-learning_rate = 1.0e-2
+n_epochs = 500
+learning_rate = 1.0e-3
 
 order_stretches = 1   # Number of orders (can be set to any value)
-k = 4  # Degree of splines
-grid_size = 12  # Number of knots
+k = 3  # Degree of splines
+grid_size = 7  # Number of knots
 
 input_size = 2 * order_stretches + 1
-
 W_width = [input_size,
-            5,
-            5,
-            3,
+            2,
             1] # output always 1
 
 #*****************************************************************************************************************
@@ -254,23 +252,24 @@ model = surrogate.ICKAN_W_Surrogate(
 )
 
 # model.UpdateGridFromSamples(train_strain_database)
-# print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
-# print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
 
-optimizer_1 = optim.AdamW(
-    model.parameters(),
-    lr=learning_rate,
-    weight_decay=1.0e-3,
-    # amsgrad = True
-)
 
-# optimizer_1 = optim.LBFGS(
+print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
+print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
+
+# optimizer_1 = optim.Adam(
 #     model.parameters(),
 #     lr=learning_rate,
-#     max_iter=50,
-#     history_size=50,
-#     line_search_fn="strong_wolfe"
+#     weight_decay=1.0e-4,
+#     # amsgrad = True
 # )
+
+optimizer_1 = optim.LBFGS(
+    model.parameters(),
+    lr=learning_rate,
+    max_iter=10,
+    history_size=20
+)
 
 print(20*"=")
 print("\nStarting stress based optimization...")
@@ -285,14 +284,14 @@ TRAIN_KAN(
     ref_stress_database         = train_stress_database,
     n_epochs                    = n_epochs,
     max_W                       = max_W,
-    is_patient                  = False,
+    is_patient                  = True,
     patience                    = 15,
     reduce_lr_factor            = 0.5,
     minimum_lr                  = 1.0e-4,
     train_W                     = True,
     early_stopping_threshold    = 1.0e-4,
     mixed_sovolev_training      = True,
-    mixed_sovolev_W_loss_weight = 0.01 # 1 is only W loss, 0 is only S loss
+    mixed_sovolev_W_loss_weight = 0.1 # 1 is only W loss, 0 is only S loss
 )
 #------------------------------------------------------------------------------------
 
@@ -307,6 +306,7 @@ model.KAN_W.plot(
                 )
 # plt.show()
 plt.savefig("./ICKAN_predictions/ICKAN.eps")
+plt.savefig("./ICKAN_predictions/ICKAN.png")
 plt.close()
 
 predicted_w = model.CalculateW(train_strain_database)
@@ -318,6 +318,7 @@ plt.ylabel('Elastic Energy Density W')
 plt.legend()
 plt.grid()
 plt.savefig("./ICKAN_predictions/W_history.eps")
+plt.savefig("./ICKAN_predictions/W_history.png")
 # plt.show()
 plt.close()
 
@@ -330,11 +331,12 @@ plt.ylabel('Normalized Stress XX')
 plt.legend()
 plt.grid()
 plt.savefig("./ICKAN_predictions/S_xx_history.eps")
+plt.savefig("./ICKAN_predictions/S_xx_history.png")
 # plt.show()
 plt.close()
 
 
 print("\nFinished training and plotting results. Model weights saved to 'ICKAN_predictions/ICKAN_model_weights.pth'.")
 
-print("*"*20)
-print("*"*20)
+print("*"*60)
+print("*"*60)
