@@ -37,7 +37,7 @@ Load strain and stress from FOM trajectories (10 trajectories from stage_1_train
 Data is loaded as [history, step, component] with shape [10, steps, 3].
 """
 #***********************************************
-min_steps = 500  # truncate all trajectories to the same length (e.g., 150 steps)
+min_steps = 4500  # truncate all trajectories to the same length (e.g., 150 steps)
 #***********************************************
 
 # Path to FOM trajectories folder (relative to script location)
@@ -60,7 +60,7 @@ for i in range(1, 11):  # trajectory_1 to trajectory_10
     print(f"Loaded trajectory_{i}: strain={strain_data.shape}, stress={stress_data.shape}")
 
 # Find minimum number of steps across all trajectories
-# min_steps = min(t.shape[0] for t in strain_trajectories)
+min_steps = min(t.shape[0] for t in strain_trajectories)
 print(f"\nMinimum number of steps across all trajectories: {min_steps}")
 
 # Sample each trajectory at equally spaced intervals to cover the full path
@@ -168,7 +168,6 @@ def TRAIN_KAN(
                 loss_W = L2_relative_error(predicted_w, ref_W_database)  # Relative W loss
 
                 normalized_stress = model.CalculateNormalizedStress(ref_strain_database) * max_W
-                # loss_S = torch.sum(((normalized_stress - ref_stress_database) ** 2) / (ref_stress_database**2 + 1e-12))  # Relative S loss
                 loss_S = L2_relative_error(normalized_stress, ref_stress_database)  # Relative S loss
 
                 loss = mixed_sovolev_W_loss_weight * (loss_W) + (1.0 - mixed_sovolev_W_loss_weight) * (loss_S)
@@ -212,7 +211,7 @@ def TRAIN_KAN(
                 print(f"\t\tReverting to best model parameters with loss {best_loss:.4E}")
                 patience_counter = 0  # Reset patience counter
 
-        if epoch % 50 == 0:
+        if epoch % 100 == 0:
             print(f"Epoch {epoch}, Loss: {loss.item():.8E}, Best Loss: {best_loss:.6E}, Patience: {patience_counter}/{patience}")
         
         if epoch == n_epochs - 1:
@@ -231,16 +230,16 @@ def TRAIN_KAN(
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 150
+n_epochs = 1_000
 learning_rate = 1.0e-2
 
-order_stretches = 2   # Number of orders (can be set to any value)
+order_stretches = 1   # Number of orders (can be set to any value)
 k = 3  # Degree of splines
-grid_size = 8  # Number of knots
+grid_size = 3  # Number of knots
 
 input_size = 2 * order_stretches + 1
 W_width = [input_size,
-            2,
+            1,
             1] # output always 1
 
 #*****************************************************************************************************************
@@ -261,7 +260,7 @@ model = surrogate.ICKAN_W_Surrogate(
 # print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
 
 
-optimizer_1 = optim.AdamW(
+optimizer_1 = optim.Adam(
     model.parameters(),
     lr=learning_rate,
     weight_decay=1.0e-3,
@@ -295,7 +294,7 @@ TRAIN_KAN(
     train_W                     = True,
     early_stopping_threshold    = 1.0e-4,
     mixed_sovolev_training      = True,
-    mixed_sovolev_W_loss_weight = 0.9 # 1 is only W loss, 0 is only S loss
+    mixed_sovolev_W_loss_weight = 0.01 # 1 is only W loss, 0 is only S loss
 )
 #------------------------------------------------------------------------------------
 
@@ -321,8 +320,30 @@ plt.xlabel('Strain XX')
 plt.ylabel('Elastic Energy Density W')
 plt.legend()
 plt.grid()
-plt.savefig("./ICKAN_predictions/W_history.eps")
-plt.savefig("./ICKAN_predictions/W_history.png")
+plt.savefig("./ICKAN_predictions/W_history_x.eps")
+plt.savefig("./ICKAN_predictions/W_history_x.png")
+# plt.show()
+plt.close()
+
+plt.plot(train_strain_database[:,1].detach().numpy(), train_W_database[:,0].detach().numpy(), '--', label='Reference W')
+plt.plot(train_strain_database[:,1].detach().numpy(), predicted_w[:,0].detach().numpy(), '-', label='ICKAN W')
+plt.xlabel('Strain YY')
+plt.ylabel('Elastic Energy Density W')
+plt.legend()
+plt.grid()
+plt.savefig("./ICKAN_predictions/W_history_y.eps")
+plt.savefig("./ICKAN_predictions/W_history_y.png")
+# plt.show()
+plt.close()
+
+plt.plot(train_strain_database[:,2].detach().numpy(), train_W_database[:,0].detach().numpy(), '--', label='Reference W')
+plt.plot(train_strain_database[:,2].detach().numpy(), predicted_w[:,0].detach().numpy(), '-', label='ICKAN W')
+plt.xlabel('Strain XY')
+plt.ylabel('Elastic Energy Density W')
+plt.legend()
+plt.grid()
+plt.savefig("./ICKAN_predictions/W_history_xy.eps")
+plt.savefig("./ICKAN_predictions/W_history_xy.png")
 # plt.show()
 plt.close()
 

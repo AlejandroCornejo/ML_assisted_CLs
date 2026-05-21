@@ -15,23 +15,22 @@ class ICKAN_W_Surrogate(nn.Module):
         self.input_size = 2 * self.order_stretches + 1  # Total inputs: 2 * reg_eigenvalues for each order + 1 * log(J)
         self.grid_size = grid_size
         self.k = k
-        self.W_width = W_width
 
         # Define the spline grid range for all inputs
-        grid_range = [-0.1, 2.0]
+        grid_range = [-5.0, 5.0]
 
         # KAN definition for the energy density potential W
         self.KAN_W = KAN.MultKAN(
             base_fun = "zero",
-            grid_eps = 0.25,
-            width=self.W_width,  # output of size 1: W
+            grid_eps = 1.0, # 1 grid is uniformly spaced in the range [grid_range[0], grid_range[1]]
+            width=W_width,  # output of size 1: W
             grid=self.grid_size,
             k=self.k,
 
-            # grid_range=grid_range,
-            # grid_range_0=grid_range,
-            grid_range=[grid_range,grid_range,grid_range, grid_range, grid_range],
-            grid_range_0=[grid_range,grid_range,grid_range, grid_range, grid_range],
+            grid_range=grid_range,
+            grid_range_0=grid_range,
+            # grid_range=[grid_range,grid_range,grid_range, grid_range, grid_range],
+            # grid_range_0=[grid_range,grid_range,grid_range, grid_range, grid_range],
             
             # sp_trainable = True,
             sb_trainable = False,
