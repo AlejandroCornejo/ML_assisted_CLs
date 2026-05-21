@@ -130,8 +130,8 @@ train_W_database = W_full_batch.view(-1, 1)  # [10*steps, 1]
 
 
 # max_W = 1
-max_W = train_W_database.abs().max()
-# max_W = 1
+# max_W = train_W_database.abs().max()
+max_W = 1
 train_W_database /= max_W  # Normalize W to have max absolute value of 1
 
 def L2_relative_error(pred, target):
@@ -221,6 +221,9 @@ def TRAIN_KAN(
                 if loss.item() < best_loss:
                     print(f"Final model is the best model with loss {loss.item():.6E}")
                     model.load_state_dict(best_parameters)  # Revert to best parameters
+                    
+        # if epoch > 50:
+        #     model.UpdateGridFromSamples(ref_strain_database)
 
 # ==========================================================================================
 
@@ -228,16 +231,15 @@ def TRAIN_KAN(
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 5000
+n_epochs = 150
 learning_rate = 1.0e-2
 
-order_stretches = 1   # Number of orders (can be set to any value)
+order_stretches = 2   # Number of orders (can be set to any value)
 k = 3  # Degree of splines
-grid_size = 5  # Number of knots
+grid_size = 8  # Number of knots
 
 input_size = 2 * order_stretches + 1
 W_width = [input_size,
-            input_size,
             2,
             1] # output always 1
 
@@ -257,6 +259,7 @@ model = surrogate.ICKAN_W_Surrogate(
 
 # print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
 # print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
+
 
 optimizer_1 = optim.AdamW(
     model.parameters(),
@@ -292,7 +295,7 @@ TRAIN_KAN(
     train_W                     = True,
     early_stopping_threshold    = 1.0e-4,
     mixed_sovolev_training      = True,
-    mixed_sovolev_W_loss_weight = 0.01 # 1 is only W loss, 0 is only S loss
+    mixed_sovolev_W_loss_weight = 0.9 # 1 is only W loss, 0 is only S loss
 )
 #------------------------------------------------------------------------------------
 

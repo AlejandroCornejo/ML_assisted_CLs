@@ -18,36 +18,36 @@ class ICKAN_W_Surrogate(nn.Module):
         self.W_width = W_width
 
         # Define the spline grid range for all inputs
-        grid_range = [-1, 1]
+        grid_range = [-0.1, 2.0]
 
         # KAN definition for the energy density potential W
         self.KAN_W = KAN.MultKAN(
-            # base_fun = "zero",
-            grid_eps = 0.5,
+            base_fun = "zero",
+            grid_eps = 0.25,
             width=self.W_width,  # output of size 1: W
             grid=self.grid_size,
             k=self.k,
 
             # grid_range=grid_range,
             # grid_range_0=grid_range,
-            # grid_range=[grid_range,grid_range,grid_range],
-            # grid_range_0=[grid_range,grid_range,grid_range],
+            grid_range=[grid_range,grid_range,grid_range, grid_range, grid_range],
+            grid_range_0=[grid_range,grid_range,grid_range, grid_range, grid_range],
             
             # sp_trainable = True,
-            # sb_trainable = True,
+            sb_trainable = False,
         )
 
-        self.KAN_W.speed()
+        # self.KAN_W.speed()
 
         # Initialize some extra parameters
         self.ki = nn.ParameterList([
-            # p + 1 for p in range(self.order_stretches + 1)
-            nn.Parameter(torch.tensor(p + 1.0)) for p in range(self.order_stretches + 1)
+            p + 1 for p in range(self.order_stretches + 1)
+            # nn.Parameter(torch.tensor(p + 1.0)) for p in range(self.order_stretches + 1)
         ])
 
         # The parameter multiplying the log(J) is initially set to 1.0
-        # self.ki[-1] = 1.0
-        self.ki[-1] = nn.Parameter(torch.tensor(1.0))
+        self.ki[-1] = 1.0
+        # self.ki[-1] = nn.Parameter(torch.tensor(1.0))
         
         # for k in self.ki:
         #     print(f"Initial ki: {k.item()}")
@@ -73,8 +73,8 @@ class ICKAN_W_Surrogate(nn.Module):
 
     # ==========================================================================================
 
-    def UpdateGridFromSamples(self, kan_input):
-        # kan_input = self._compute_kan_input_for_strain(strain_database)  # Shape: (batches*steps, input_size)
+    def UpdateGridFromSamples(self, strain_database):
+        kan_input = self._compute_kan_input_for_strain(strain_database)  # Shape: (batches*steps, input_size)
         self.KAN_W.update_grid(kan_input)
 
 
@@ -98,7 +98,8 @@ class ICKAN_W_Surrogate(nn.Module):
 
         C = 2.0 * E + torch.eye(2)
         J = torch.linalg.det(C) ** 0.5
-        log_J = torch.log(J + 1.0e-12)
+        # log_J = torch.log(J + 1.0e-12)
+        log_J = (J - 1)**2
 
         square_eigenvalues = torch.linalg.eigvalsh(C)
         eigenvalues = torch.sqrt(square_eigenvalues)
