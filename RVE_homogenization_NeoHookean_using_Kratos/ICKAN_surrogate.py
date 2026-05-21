@@ -22,17 +22,17 @@ class ICKAN_W_Surrogate(nn.Module):
 
         # KAN definition for the energy density potential W
         self.KAN_W = KAN.MultKAN(
+            base_fun = "zero",
+            # grid_eps = 0.01,
             width=self.W_width,  # output of size 1: W
             grid=self.grid_size,
             k=self.k,
 
             # grid_range=grid_range,
             # grid_range_0=grid_range,
-            grid_range=[grid_range,grid_range,grid_range],
-            grid_range_0=[grid_range,grid_range,grid_range],
-            # grid_eps = 1.0,
+            # grid_range=[grid_range,grid_range,grid_range],
+            # grid_range_0=[grid_range,grid_range,grid_range],
             
-            # base_fun = "zero",
             # sp_trainable = True,
             # sb_trainable = True,
         )

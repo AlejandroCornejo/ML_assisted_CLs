@@ -129,8 +129,8 @@ train_W_database = W_full_batch.view(-1, 1)  # [10*steps, 1]
 
 
 
-max_W = 1
-# max_W = train_W_database.abs().max()
+# max_W = 1
+max_W = train_W_database.abs().max()
 # max_W = 1
 train_W_database /= max_W  # Normalize W to have max absolute value of 1
 
@@ -228,17 +228,17 @@ def TRAIN_KAN(
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 2000
-learning_rate = 1.0e-3
+n_epochs = 5000
+learning_rate = 1.0e-2
 
 order_stretches = 1   # Number of orders (can be set to any value)
 k = 3  # Degree of splines
-grid_size = 6  # Number of knots
+grid_size = 4  # Number of knots
 
 input_size = 2 * order_stretches + 1
 W_width = [input_size,
+            input_size,
             2,
-            1,
             1] # output always 1
 
 #*****************************************************************************************************************
@@ -255,22 +255,22 @@ model = surrogate.ICKAN_W_Surrogate(
 # model.UpdateGridFromSamples(train_strain_database)
 
 
-print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
-print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
+# print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
+# print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
 
-# optimizer_1 = optim.Adam(
-#     model.parameters(),
-#     lr=learning_rate,
-#     weight_decay=1.0e-4,
-#     # amsgrad = True
-# )
-
-optimizer_1 = optim.LBFGS(
+optimizer_1 = optim.AdamW(
     model.parameters(),
     lr=learning_rate,
-    max_iter=10,
-    history_size=20
+    weight_decay=1.0e-2,
+    # amsgrad = True
 )
+
+# optimizer_1 = optim.LBFGS(
+#     model.parameters(),
+#     lr=learning_rate,
+#     max_iter=10,
+#     history_size=20
+# )
 
 print(20*"=")
 print("\nStarting stress based optimization...")
@@ -286,7 +286,7 @@ TRAIN_KAN(
     n_epochs                    = n_epochs,
     max_W                       = max_W,
     is_patient                  = True,
-    patience                    = 15,
+    patience                    = 25,
     reduce_lr_factor            = 0.5,
     minimum_lr                  = 1.0e-4,
     train_W                     = True,
@@ -326,13 +326,35 @@ plt.close()
 predicted_stress = max_W * model.CalculateNormalizedStress(train_strain_database)
 
 plt.plot(train_strain_database[:,0].detach().numpy(), train_stress_database[:,0].numpy(), '--', label='Reference S_xx')
-plt.plot(train_strain_database[:,0].detach().numpy(), predicted_stress[:,0].detach().numpy(), '-', label='ICKAN S_xx')
+plt.plot(train_strain_database[:,0].detach().numpy(), predicted_stress[:,0].detach().numpy(), '-', label='ICKAN S_xx' )
 plt.xlabel('Strain XX')
 plt.ylabel('Normalized Stress XX')
 plt.legend()
 plt.grid()
 plt.savefig("./ICKAN_predictions/S_xx_history.eps")
 plt.savefig("./ICKAN_predictions/S_xx_history.png")
+# plt.show()
+plt.close()
+
+plt.plot(train_strain_database[:,1].detach().numpy(), train_stress_database[:,1].numpy(), '--', label='Reference S_yy')
+plt.plot(train_strain_database[:,1].detach().numpy(), predicted_stress[:,1].detach().numpy(), '-', label='ICKAN S_yy' )
+plt.xlabel('Strain YY')
+plt.ylabel('Normalized Stress YY')
+plt.legend()
+plt.grid()
+plt.savefig("./ICKAN_predictions/S_yy_history.eps")
+plt.savefig("./ICKAN_predictions/S_yy_history.png")
+# plt.show()
+plt.close()
+
+plt.plot(train_strain_database[:,2].detach().numpy(), train_stress_database[:,2].numpy(), '--', label='Reference S_xy')
+plt.plot(train_strain_database[:,2].detach().numpy(), predicted_stress[:,2].detach().numpy(), '-', label='ICKAN S_xy' )
+plt.xlabel('Strain XY')
+plt.ylabel('Normalized Stress XY')
+plt.legend()
+plt.grid()
+plt.savefig("./ICKAN_predictions/S_xy_history.eps")
+plt.savefig("./ICKAN_predictions/S_xy_history.png")
 # plt.show()
 plt.close()
 
