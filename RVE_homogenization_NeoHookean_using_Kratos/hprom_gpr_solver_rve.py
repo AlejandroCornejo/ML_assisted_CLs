@@ -93,6 +93,8 @@ def RunHpromGprBatchSimulation(
     min_rel_drop_stop=1.0e-2,
     stagnation_relnorm_gate=1.0e-4,
     max_dq_norm=0.5,
+    damping_after_iter=10,
+    damping_factor=0.5,
     old_stiffness_residual_cutoff=1.0e5,
     regularization=1.0e-10,
     reference_amplitude=None,
@@ -123,6 +125,10 @@ def RunHpromGprBatchSimulation(
 
     n_primary = int(phi_p_ref.shape[1])
     n_secondary = int(phi_s_ref.shape[1])
+    damping_after_iter = int(damping_after_iter)
+    damping_factor = float(damping_factor)
+    if not (0.0 < damping_factor <= 1.0):
+        raise ValueError(f"damping_factor must be in (0, 1], got {damping_factor}.")
 
     dt = parameters["solver_settings"]["time_stepping"]["time_step"].GetDouble()
     E_wp = np.array(strain_path, dtype=float)
@@ -517,7 +523,9 @@ def RunHpromGprBatchSimulation(
                 dq_norm = float(np.linalg.norm(dq_p))
                 print(f"    > large reduced update clipped with scale={scale:.3e}")
 
-            alpha = 1.0 if it <= 10 else 0.5
+            alpha = 1.0
+            if it > int(damping_after_iter):
+                alpha = float(damping_factor)
             q_trial = q_p + alpha * dq_p
             if not _is_finite(q_trial):
                 print("  [HPROM-GPR] WARNING: non-finite reduced state update detected.")

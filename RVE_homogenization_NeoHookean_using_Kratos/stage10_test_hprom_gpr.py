@@ -354,6 +354,20 @@ def run_stage10(
     hprom_gpr_dir="stage_9_hprom_gpr_data",
     out_dir="stage_10_hprom_gpr_results",
     qp_init_mode="previous",
+    max_its=25,
+    relnorm_cutoff=1.0e-5,
+    abs_res_cutoff=1.0e-8,
+    dq_abs_cutoff=1.0e-6,
+    max_res_for_rel_convergence=1.0e-1,
+    min_rel_drop_stop=1.0e-2,
+    stagnation_relnorm_gate=1.0e-4,
+    max_dq_norm=0.5,
+    damping_after_iter=10,
+    damping_factor=0.5,
+    old_stiffness_residual_cutoff=1.0e5,
+    regularization=1.0e-10,
+    no_old_stiffness_first_it=False,
+    verbose_iterations=False,
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -398,6 +412,13 @@ def run_stage10(
     print(f"  GPR data dir: {gpr_data_dir}")
     print(f"  HPROM-GPR dir: {hprom_gpr_dir}")
     print(f"  Output dir: {out_dir}")
+    print(
+        "  Newton knobs: "
+        f"max_its={int(max_its)}, rel_tol={float(relnorm_cutoff):.1e}, "
+        f"abs_tol={float(abs_res_cutoff):.1e}, dq_abs_tol={float(dq_abs_cutoff):.1e}, "
+        f"res_floor={float(max_res_for_rel_convergence):.1e}, "
+        f"damping_after_iter={int(damping_after_iter)}, damping_factor={float(damping_factor):.3f}"
+    )
 
     mesh_fom_prom = "rve_geometry"
     mesh_hprom = "rve_geometry"
@@ -454,6 +475,20 @@ def run_stage10(
             reference_amplitude=emax,
             reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
             qp_init_mode=qp_init_mode,
+            max_its=max_its,
+            relnorm_cutoff=relnorm_cutoff,
+            abs_res_cutoff=abs_res_cutoff,
+            dq_abs_cutoff=dq_abs_cutoff,
+            max_res_for_rel_convergence=max_res_for_rel_convergence,
+            min_rel_drop_stop=min_rel_drop_stop,
+            stagnation_relnorm_gate=stagnation_relnorm_gate,
+            max_dq_norm=max_dq_norm,
+            damping_after_iter=damping_after_iter,
+            damping_factor=damping_factor,
+            old_stiffness_residual_cutoff=old_stiffness_residual_cutoff,
+            regularization=regularization,
+            use_old_stiffness_in_first_iteration=not bool(no_old_stiffness_first_it),
+            verbose_iterations=bool(verbose_iterations),
         )
         timings["PROM-GPR"] = time.perf_counter() - t0
         p_eps = np.asarray(p_eps, dtype=float)
@@ -502,6 +537,20 @@ def run_stage10(
             Xc=Xc_h,
             Yc=Yc_h,
             qp_init_mode=qp_init_mode,
+            max_its=max_its,
+            relnorm_cutoff=relnorm_cutoff,
+            abs_res_cutoff=abs_res_cutoff,
+            dq_abs_cutoff=dq_abs_cutoff,
+            max_res_for_rel_convergence=max_res_for_rel_convergence,
+            min_rel_drop_stop=min_rel_drop_stop,
+            stagnation_relnorm_gate=stagnation_relnorm_gate,
+            max_dq_norm=max_dq_norm,
+            damping_after_iter=damping_after_iter,
+            damping_factor=damping_factor,
+            old_stiffness_residual_cutoff=old_stiffness_residual_cutoff,
+            regularization=regularization,
+            use_old_stiffness_in_first_iteration=not bool(no_old_stiffness_first_it),
+            verbose_iterations=bool(verbose_iterations),
         )
         timings["HPROM-GPR"] = time.perf_counter() - t0
         h_eps = np.asarray(h_eps, dtype=float)
@@ -578,6 +627,53 @@ if __name__ == "__main__":
         choices=["previous", "zero", "mu_affine"],
         help="Initializer for q_p at each increment in PROM/HPROM-GPR.",
     )
+    p.add_argument("--max-its", type=int, default=25, help="Max reduced Newton corrector iterations.")
+    p.add_argument("--relnorm-cutoff", type=float, default=1e-5, help="Relative reduced residual tolerance.")
+    p.add_argument("--abs-res-cutoff", type=float, default=1e-8, help="Absolute reduced residual tolerance.")
+    p.add_argument("--dq-abs-cutoff", type=float, default=1e-6, help="Absolute reduced increment tolerance.")
+    p.add_argument(
+        "--max-res-for-rel-convergence",
+        type=float,
+        default=1e-1,
+        help="Residual floor used with relative/stagnation criteria.",
+    )
+    p.add_argument("--min-rel-drop-stop", type=float, default=1e-2, help="Stagnation relative-drop threshold.")
+    p.add_argument(
+        "--stagnation-relnorm-gate",
+        type=float,
+        default=1e-4,
+        help="Relative residual gate for stagnation acceptance.",
+    )
+    p.add_argument("--max-dq-norm", type=float, default=0.5, help="Clip threshold for ||dq||.")
+    p.add_argument(
+        "--damping-after-iter",
+        type=int,
+        default=10,
+        help="Apply damping to reduced update for it > this iteration.",
+    )
+    p.add_argument(
+        "--damping-factor",
+        type=float,
+        default=0.5,
+        help="Reduced update damping factor after damping-after-iter.",
+    )
+    p.add_argument(
+        "--old-stiffness-residual-cutoff",
+        type=float,
+        default=1e5,
+        help="Use K_old on first iteration only when ||R_r|| is below this value.",
+    )
+    p.add_argument("--regularization", type=float, default=1e-10, help="L2 regularization used in reduced solve fallback.")
+    p.add_argument(
+        "--no-old-stiffness-first-it",
+        action="store_true",
+        help="Disable K_old acceleration in first corrector iteration.",
+    )
+    p.add_argument(
+        "--verbose-iterations",
+        action="store_true",
+        help="Print extra per-iteration reduced-state diagnostics.",
+    )
     args = p.parse_args()
 
     run_stage10(
@@ -588,4 +684,18 @@ if __name__ == "__main__":
         hprom_gpr_dir=args.hprom_gpr_dir,
         out_dir=args.out_dir,
         qp_init_mode=args.qp_init_mode,
+        max_its=args.max_its,
+        relnorm_cutoff=args.relnorm_cutoff,
+        abs_res_cutoff=args.abs_res_cutoff,
+        dq_abs_cutoff=args.dq_abs_cutoff,
+        max_res_for_rel_convergence=args.max_res_for_rel_convergence,
+        min_rel_drop_stop=args.min_rel_drop_stop,
+        stagnation_relnorm_gate=args.stagnation_relnorm_gate,
+        max_dq_norm=args.max_dq_norm,
+        damping_after_iter=args.damping_after_iter,
+        damping_factor=args.damping_factor,
+        old_stiffness_residual_cutoff=args.old_stiffness_residual_cutoff,
+        regularization=args.regularization,
+        no_old_stiffness_first_it=args.no_old_stiffness_first_it,
+        verbose_iterations=args.verbose_iterations,
     )

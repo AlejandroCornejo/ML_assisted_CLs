@@ -127,6 +127,8 @@ def RunPromGprBatchSimulation(
     min_rel_drop_stop=1.0e-2,
     stagnation_relnorm_gate=1.0e-4,
     max_dq_norm=0.5,
+    damping_after_iter=10,
+    damping_factor=0.5,
     old_stiffness_residual_cutoff=1.0e5,
     regularization=1.0e-10,
     use_fast_dirichlet_bc=True,
@@ -135,6 +137,7 @@ def RunPromGprBatchSimulation(
     use_old_stiffness_in_first_iteration=USE_OLD_STIFFNESS_IN_FIRST_ITERATION,
     verbose_iterations=False,
     qp_init_mode="previous",
+    evaluate_homogenization=True,
 ):
     t_wall_total_start = time.perf_counter()
 
@@ -144,6 +147,10 @@ def RunPromGprBatchSimulation(
 
     n_primary = int(phi_p.shape[1])
     n_secondary = int(phi_s.shape[1])
+    damping_after_iter = int(damping_after_iter)
+    damping_factor = float(damping_factor)
+    if not (0.0 < damping_factor <= 1.0):
+        raise ValueError(f"damping_factor must be in (0, 1], got {damping_factor}.")
 
     dt = parameters["solver_settings"]["time_stepping"]["time_step"].GetDouble()
     E_wp = np.array(strain_path, dtype=float)
@@ -166,7 +173,7 @@ def RunPromGprBatchSimulation(
     n_total_dof, eq_id_map, ta = SetUpDofEquationIdsAndDisplacementAdaptor(mp)
     vec_assembler = VectorizedAssembler(mp, n_total_dof, eq_id_map)
     hom_reference_measure = float(np.sum(np.asarray(vec_assembler.area_e, dtype=float)))
-    if out_dir is not None:
+    if out_dir is not None and bool(evaluate_homogenization):
         os.makedirs(out_dir, exist_ok=True)
         with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
             f.write(f"{hom_reference_measure:.16e}\n")
@@ -499,7 +506,9 @@ def RunPromGprBatchSimulation(
                 dq_norm = float(np.linalg.norm(dq_p))
                 print(f"    > large reduced update clipped with scale={scale:.3e}")
 
-            alpha = 1.0 if it <= 10 else 0.5
+            alpha = 1.0
+            if it > int(damping_after_iter):
+                alpha = float(damping_factor)
             q_trial = q_p + alpha * dq_p
             if not _is_finite(q_trial):
                 print("  [PROM-GPR] WARNING: non-finite reduced state update detected.")
@@ -560,16 +569,19 @@ def RunPromGprBatchSimulation(
             u_aff_free + u_fluc_final, base_disp_vec=disp_base_step
         )
 
-        InitializeNonLinearIteration(entities, mp.ProcessInfo)
-        t0 = time.perf_counter()
-        _, _ = vec_assembler.Assemble(u_eq_final)
-        t_full_sync += time.perf_counter() - t0
-        FinalizeNonLinearIteration(entities, mp.ProcessInfo)
-
-        eps_h, sig_h = CalculateHomogenizedFromAssemblerWithElementWeights(
-            vec_assembler,
-            reference_measure=hom_reference_measure,
-        )
+        if bool(evaluate_homogenization):
+            InitializeNonLinearIteration(entities, mp.ProcessInfo)
+            t0 = time.perf_counter()
+            _, _ = vec_assembler.Assemble(u_eq_final)
+            t_full_sync += time.perf_counter() - t0
+            FinalizeNonLinearIteration(entities, mp.ProcessInfo)
+            eps_h, sig_h = CalculateHomogenizedFromAssemblerWithElementWeights(
+                vec_assembler,
+                reference_measure=hom_reference_measure,
+            )
+        else:
+            eps_h = np.zeros(3, dtype=float)
+            sig_h = np.zeros(3, dtype=float)
         sim.FinalizeSolutionStep()
         results_eps.append(eps_h)
         results_sig.append(sig_h)
