@@ -99,6 +99,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--root-dir", type=str, default=".")
 
     p.add_argument("--dataset-dir", type=str, default="stage_8a_mawecm_res_dataset")
+    p.add_argument("--hom-source", type=str, default="full_mesh", choices=["full_mesh", "fixed_ecm"])
+    p.add_argument("--fixed-ecm-file", type=str, default="stage_6b_hprom_ecm/ecm_weights_all.npz")
     p.add_argument("--res-bootstrap-ecm-file", type=str, default="")
     p.add_argument("--max-number-zeros-active-set-loop-maw-ecm", type=int, default=1)
     p.add_argument("--save-weight-field-plots", type=int, default=1, choices=[0, 1])
@@ -136,14 +138,14 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--run-fom", type=int, default=1, choices=[0, 1])
     p.add_argument("--run-prom-gpr", type=int, default=1, choices=[0, 1])
     p.add_argument("--run-hprom-mawecm-gpr", type=int, default=1, choices=[0, 1])
-    # Legacy options kept for CLI compatibility, but ignored in strict Stage8 online.
-    p.add_argument("--hprom-homogenization-mode", type=str, default="full_fom")
+    p.add_argument("--hprom-homogenization-mode", type=str, default="ecm_separate", choices=["full_fom", "ecm_separate"])
     p.add_argument("--hprom-use-hrom-mdpa", type=int, default=1, choices=[0, 1])
     p.add_argument("--hprom-hrom-strict", type=int, default=1, choices=[0, 1])
     p.add_argument("--hprom-update-maw-each-iter", type=int, default=1, choices=[0, 1])
     p.add_argument("--hprom-include-weight-tangent", type=int, default=1, choices=[0, 1])
     p.add_argument("--hprom-clip-nonnegative", type=int, default=1, choices=[0, 1])
     p.add_argument("--hprom-renorm-weights", type=int, default=0, choices=[0, 1])
+    p.add_argument("--hprom-fail-on-nonconvergence", type=int, default=1, choices=[0, 1])
     p.add_argument("--save-plots", type=int, default=1, choices=[0, 1])
 
     p.add_argument("--stop-on-fail", type=int, default=1, choices=[0, 1])
@@ -175,13 +177,15 @@ def main() -> None:
     print(f"root_dir    : {root_dir}")
     print(f"supports    : {supports} (0 => auto)")
     print(f"logs_root   : {logs_root}")
+    print(f"hom_mode    : {args.hprom_homogenization_mode}")
+    print(f"hom_source8b: {args.hom_source}")
     print(f"sum(w) local: {int(args.enforce_sum_weights)}")
     print(f"sum(w) boot : {int(args.res_bootstrap_constrain_sum_weights)}")
     print(f"stop_on_fail: {int(stop_on_fail)}")
-    if str(args.hprom_homogenization_mode) != "full_fom" or int(args.hprom_use_hrom_mdpa) != 1 or int(args.hprom_hrom_strict) != 1:
+    if int(args.hprom_use_hrom_mdpa) != 1 or int(args.hprom_hrom_strict) != 1:
         print(
-            "[INFO] Legacy online options (--hprom-homogenization-mode, --hprom-use-hrom-mdpa, "
-            "--hprom-hrom-strict) are ignored by current strict Stage8 online script."
+            "[INFO] Legacy online options (--hprom-use-hrom-mdpa, --hprom-hrom-strict) are ignored "
+            "by current strict Stage8 online script."
         )
 
     for s in supports:
@@ -201,6 +205,8 @@ def main() -> None:
             "stage8b_build_mawecm_res_model_rbf.py",
             "--dataset-dir",
             args.dataset_dir,
+            "--hom-source",
+            str(args.hom_source),
             "--max-number-zeros-active-set-loop-maw-ecm",
             str(int(args.max_number_zeros_active_set_loop_maw_ecm)),
             "--maw-min-support-size",
@@ -226,6 +232,8 @@ def main() -> None:
             "--out-dir",
             f"{args.stage8b_prefix}{tag}",
         ]
+        if str(args.hom_source).strip().lower() == "fixed_ecm":
+            stage8b_cmd.extend(["--fixed-ecm-file", str(args.fixed_ecm_file)])
         if str(args.res_bootstrap_ecm_file).strip():
             stage8b_cmd.extend(["--res-bootstrap-ecm-file", str(args.res_bootstrap_ecm_file).strip()])
 
@@ -290,10 +298,14 @@ def main() -> None:
             str(int(args.hprom_update_maw_each_iter)),
             "--hprom-include-weight-tangent",
             str(int(args.hprom_include_weight_tangent)),
+            "--hprom-homogenization-mode",
+            str(args.hprom_homogenization_mode),
             "--hprom-clip-nonnegative",
             str(int(args.hprom_clip_nonnegative)),
             "--hprom-renorm-weights",
             str(int(args.hprom_renorm_weights)),
+            "--hprom-fail-on-nonconvergence",
+            str(int(args.hprom_fail_on_nonconvergence)),
             "--save-plots",
             str(int(args.save_plots)),
             "--out-dir",

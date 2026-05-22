@@ -69,6 +69,13 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--hprom-clip-nonnegative", type=int, default=1, choices=[0, 1])
     p.add_argument("--hprom-renorm-weights", type=int, default=0, choices=[0, 1])
+    p.add_argument(
+        "--hprom-homogenization-mode",
+        type=str,
+        default="ecm_separate",
+        choices=["full_fom", "ecm_separate"],
+        help="Homogenization backend for HPROM-MAWECM-GPR.",
+    )
 
     p.add_argument("--stage2a-dir", type=str, default="stage_2a_pod_data")
     p.add_argument("--stage2b-dir", type=str, default="stage_2b_ls_master")
@@ -445,7 +452,7 @@ def main():
             include_weight_tangent=args.hprom_include_weight_tangent,
             clip_nonnegative=args.hprom_clip_nonnegative,
             renorm_weights=args.hprom_renorm_weights,
-            homogenization_mode="full_fom",
+            homogenization_mode=args.hprom_homogenization_mode,
             track_q_pod=0,
         )
         t_h = float(time.perf_counter() - t0)
@@ -532,7 +539,7 @@ def main():
         "hprom_renorm_weights": int(args.hprom_renorm_weights),
         "hprom_include_weight_tangent": int(args.hprom_include_weight_tangent),
         "hprom_fail_on_nonconvergence": int(args.hprom_fail_on_nonconvergence),
-        "hprom_homogenization_mode": "full_fom",
+        "hprom_homogenization_mode": str(args.hprom_homogenization_mode),
         "hprom_corrector_dq_abs_tol": float(args.hprom_corrector_dq_abs_tol),
         "hprom_corrector_dq_rel_tol": float(args.hprom_corrector_dq_rel_tol),
         "hprom_corrector_res_floor_for_dq": float(args.hprom_corrector_res_floor_for_dq),

@@ -382,9 +382,10 @@ def RunHpromMawEcmGprBatchSimulation(
     need_qpod_state = False
     renorm_target = float(np.ravel(mawecm_data["maw_res_renorm_target"])[0]) if "maw_res_renorm_target" in mawecm_data else None
     hom_mode = str(homogenization_mode).strip().lower()
-    if hom_mode != "full_fom":
+    if hom_mode not in {"full_fom", "ecm_separate"}:
         raise RuntimeError(
-            "HPROM-MAWECM-GPR strict mode only supports homogenization_mode='full_fom'."
+            "Unsupported homogenization_mode for HPROM-MAWECM-GPR. "
+            "Use one of: {'full_fom', 'ecm_separate'}."
         )
 
     dt = parameters["solver_settings"]["time_stepping"]["time_step"].GetDouble()
@@ -415,7 +416,7 @@ def RunHpromMawEcmGprBatchSimulation(
     elements_all = list(mp.Elements)
     n_elem = len(elements_all)
 
-    z_res, _z_eps_unused, _z_sig_unused, _w_eps_full_unused, _w_sig_full_unused, mesh_mode = _extract_hrom_aligned_maw_arrays(
+    z_res, z_eps, z_sig, w_eps_full, w_sig_full, mesh_mode = _extract_hrom_aligned_maw_arrays(
         mawecm_data=mawecm_data,
         n_elem=n_elem,
     )
@@ -458,16 +459,58 @@ def RunHpromMawEcmGprBatchSimulation(
         if w_try.size == n_elem:
             w_res_support_fixed = w_try[z_res]
     elem_res = [elements_all[int(i)] for i in z_res.tolist()]
-    z_hom_union = np.arange(n_elem, dtype=np.int64)
-    elem_hom_union = [elements_all[int(i)] for i in z_hom_union.tolist()]
-    assembler_hom_full = VectorizedAssembler(
-        mp,
-        n_dof,
-        eq_map_runtime,
-        elements=elem_hom_union,
-        element_scales=None,
-        log_label="HPROM-MAW-HomAssemblerFull",
-    )
+    assembler_hom_full = None
+    assembler_hom_eps = None
+    assembler_hom_sig = None
+    w_eps_sel = None
+    w_sig_sel = None
+    a0_ref = None
+
+    if hom_mode == "full_fom":
+        z_hom_full = np.arange(n_elem, dtype=np.int64)
+        elem_hom_full = [elements_all[int(i)] for i in z_hom_full.tolist()]
+        assembler_hom_full = VectorizedAssembler(
+            mp,
+            n_dof,
+            eq_map_runtime,
+            elements=elem_hom_full,
+            element_scales=None,
+            log_label="HPROM-MAW-HomAssemblerFull",
+        )
+    elif hom_mode == "ecm_separate":
+        if "A0_ref" in mawecm_data:
+            a0_ref = float(np.ravel(mawecm_data["A0_ref"])[0])
+        elif "hom_reference_measure" in mawecm_data:
+            a0_ref = float(np.ravel(mawecm_data["hom_reference_measure"])[0])
+        else:
+            raise RuntimeError(
+                "MAW-ECM file missing A0_ref / hom_reference_measure required for homogenization_mode='ecm_separate'."
+            )
+        if z_eps.size == 0 or z_sig.size == 0:
+            raise RuntimeError(
+                "homogenization_mode='ecm_separate' requires non-empty Z_eps and Z_sig."
+            )
+
+        elem_hom_eps = [elements_all[int(i)] for i in z_eps.tolist()]
+        elem_hom_sig = [elements_all[int(i)] for i in z_sig.tolist()]
+        w_eps_sel = np.asarray(w_eps_full[z_eps], dtype=float)
+        w_sig_sel = np.asarray(w_sig_full[z_sig], dtype=float)
+        assembler_hom_eps = VectorizedAssembler(
+            mp,
+            n_dof,
+            eq_map_runtime,
+            elements=elem_hom_eps,
+            element_scales=None,
+            log_label="HPROM-MAW-HomAssemblerEPS",
+        )
+        assembler_hom_sig = VectorizedAssembler(
+            mp,
+            n_dof,
+            eq_map_runtime,
+            elements=elem_hom_sig,
+            element_scales=None,
+            log_label="HPROM-MAW-HomAssemblerSIG",
+        )
 
     sim._InitializeDomainCenterIfNeeded(mp)
     x0c, y0c = float(sim._x0c), float(sim._y0c)
@@ -611,10 +654,18 @@ def RunHpromMawEcmGprBatchSimulation(
         f"  [HPROM-MAWECM-GPR] Residual support: |Z_res|={z_res.size} "
         f"({100.0*z_res.size/max(n_elem,1):.1f}% of {n_elem})"
     )
-    print(
-        f"  [HPROM-MAWECM-GPR] Hom support: full mesh "
-        f"({n_elem}/{n_elem}, 100.0%), mesh_mode={mesh_mode}"
-    )
+    if hom_mode == "full_fom":
+        print(
+            f"  [HPROM-MAWECM-GPR] Hom support: full mesh "
+            f"({n_elem}/{n_elem}, 100.0%), mesh_mode={mesh_mode}"
+        )
+    else:
+        print(
+            f"  [HPROM-MAWECM-GPR] Hom support (separate ECM): "
+            f"|Z_eps|={z_eps.size} ({100.0*z_eps.size/max(n_elem,1):.1f}%), "
+            f"|Z_sig|={z_sig.size} ({100.0*z_sig.size/max(n_elem,1):.1f}%), "
+            f"mesh_mode={mesh_mode}"
+        )
     print(
         f"  [HPROM-MAWECM-GPR] DOF overlap full->mesh: free_used={n_overlap}/{free_dofs_full.size}"
     )
@@ -926,17 +977,40 @@ def RunHpromMawEcmGprBatchSimulation(
 
         SetDisplacementFromEquationVector(u, eq_map_runtime, ta_disp)
         UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
-        InitializeNonLinearIteration(entities, mp.ProcessInfo)
-        _, _ = assembler_hom_full.Assemble(u)
-        FinalizeNonLinearIteration(entities, mp.ProcessInfo)
+        if hom_mode == "full_fom":
+            InitializeNonLinearIteration(entities, mp.ProcessInfo)
+            _, _ = assembler_hom_full.Assemble(u)
+            FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
-        ref_full = float(np.sum(np.asarray(assembler_hom_full.area_e, dtype=float)))
-        eps_h, sig_h = CalculateHomogenizedFromAssemblerWithElementWeights(
-            assembler_hom_full,
-            w_eps=None,
-            w_sig=None,
-            reference_measure=ref_full,
-        )
+            ref_full = float(np.sum(np.asarray(assembler_hom_full.area_e, dtype=float)))
+            eps_h, sig_h = CalculateHomogenizedFromAssemblerWithElementWeights(
+                assembler_hom_full,
+                w_eps=None,
+                w_sig=None,
+                reference_measure=ref_full,
+            )
+        else:
+            InitializeNonLinearIteration(entities, mp.ProcessInfo)
+            _, _ = assembler_hom_eps.Assemble(u)
+            FinalizeNonLinearIteration(entities, mp.ProcessInfo)
+            eps_h_local, _ = CalculateHomogenizedFromAssemblerWithElementWeights(
+                assembler_hom_eps,
+                w_eps=w_eps_sel,
+                w_sig=None,
+                reference_measure=a0_ref,
+            )
+
+            InitializeNonLinearIteration(entities, mp.ProcessInfo)
+            _, _ = assembler_hom_sig.Assemble(u)
+            FinalizeNonLinearIteration(entities, mp.ProcessInfo)
+            _, sig_h_local = CalculateHomogenizedFromAssemblerWithElementWeights(
+                assembler_hom_sig,
+                w_eps=None,
+                w_sig=w_sig_sel,
+                reference_measure=a0_ref,
+            )
+            eps_h = np.asarray(eps_h_local, dtype=float)
+            sig_h = np.asarray(sig_h_local, dtype=float)
 
         sim.FinalizeSolutionStep()
 

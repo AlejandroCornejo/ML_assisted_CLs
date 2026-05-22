@@ -39,6 +39,23 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--dataset-dir", type=str, default="stage_8a_mawecm_res_dataset")
     p.add_argument("--out-dir", type=str, default="stage_8b_hprom_mawecm_res_rbf")
     p.add_argument(
+        "--hom-source",
+        type=str,
+        default="full_mesh",
+        choices=["full_mesh", "fixed_ecm"],
+        help=(
+            "Homogenization source in Stage8b payload. "
+            "'full_mesh' => Z_eps/Z_sig=all elements (ones). "
+            "'fixed_ecm' => load Z_eps/Z_sig and weights from --fixed-ecm-file."
+        ),
+    )
+    p.add_argument(
+        "--fixed-ecm-file",
+        type=str,
+        default="stage_6b_hprom_ecm/ecm_weights_all.npz",
+        help="Used only when --hom-source fixed_ecm. Must contain Z_eps/Z_sig and w_eps_full/w_sig_full.",
+    )
+    p.add_argument(
         "--res-bootstrap-ecm-file",
         type=str,
         default="",
@@ -472,8 +489,8 @@ def _load_dataset(dataset_dir):
     }
 
 
-def _load_fixed_ecm(fixed_ecm_dir):
-    ecm_file = os.path.join(fixed_ecm_dir, "ecm_weights_all.npz")
+def _load_fixed_ecm_file(ecm_file, n_elem: int):
+    ecm_file = str(ecm_file).strip()
     if not os.path.exists(ecm_file):
         raise FileNotFoundError(ecm_file)
     ecm = np.load(ecm_file, allow_pickle=True)
@@ -482,6 +499,13 @@ def _load_fixed_ecm(fixed_ecm_dir):
     missing = [k for k in required if k not in out]
     if missing:
         raise RuntimeError(f"Fixed ECM file missing homogenization keys: {missing}")
+    w_eps_full = np.asarray(out["w_eps_full"], dtype=float).reshape(-1)
+    w_sig_full = np.asarray(out["w_sig_full"], dtype=float).reshape(-1)
+    if w_eps_full.size != int(n_elem) or w_sig_full.size != int(n_elem):
+        raise RuntimeError(
+            "Fixed ECM homogenization vector sizes mismatch with current mesh: "
+            f"n_elem={int(n_elem)}, len(w_eps_full)={w_eps_full.size}, len(w_sig_full)={w_sig_full.size}."
+        )
     return out
 
 
@@ -914,13 +938,18 @@ def main():
 
     dataset = _load_dataset(args.dataset_dir)
     n_elem = int(dataset["n_elem"])
-    # Strict Stage-8 mode (requested): residual-only MAW, no graph stage,
-    # and full-mesh homogenization (no hom hyperreduction).
+    # Strict Stage-8 mode (requested): residual-only MAW, no graph stage.
+    # Homogenization source is explicit (full_mesh or fixed_ecm), no fallback.
     maw_mode = "res_only"
-    hom_source = "full_mesh"
-    ecm_fixed = _build_fullmesh_hom_weights(n_elem=n_elem)
-
-    print("  [Stage8b] Homogenization source: full_mesh (strict mode, no hom hyperreduction).")
+    hom_source = str(args.hom_source).strip().lower()
+    if hom_source == "full_mesh":
+        ecm_fixed = _build_fullmesh_hom_weights(n_elem=n_elem)
+        print("  [Stage8b] Homogenization source: full_mesh (strict, explicit).")
+    elif hom_source == "fixed_ecm":
+        ecm_fixed = _load_fixed_ecm_file(args.fixed_ecm_file, n_elem=n_elem)
+        print(f"  [Stage8b] Homogenization source: fixed_ecm file='{args.fixed_ecm_file}' (strict, explicit).")
+    else:
+        raise RuntimeError(f"Unsupported hom_source='{hom_source}'.")
     boot_rsvd_tol = float(args.rsvd_tol_res_bootstrap)
     boot_ecm_tol = float(args.ecm_tol_res_bootstrap)
     bootstrap_ecm_file = str(args.res_bootstrap_ecm_file).strip()
