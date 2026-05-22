@@ -145,6 +145,9 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--hprom-include-weight-tangent", type=int, default=1, choices=[0, 1])
     p.add_argument("--hprom-clip-nonnegative", type=int, default=1, choices=[0, 1])
     p.add_argument("--hprom-renorm-weights", type=int, default=0, choices=[0, 1])
+    p.add_argument("--hprom-sync-modelpart-each-newton-iter", type=int, default=0, choices=[0, 1])
+    p.add_argument("--hprom-call-entity-hooks-each-newton-iter", type=int, default=0, choices=[0, 1])
+    p.add_argument("--hprom-use-analysis-stage-solution-step-hooks", type=int, default=0, choices=[0, 1])
     p.add_argument("--hprom-fail-on-nonconvergence", type=int, default=1, choices=[0, 1])
     p.add_argument("--save-plots", type=int, default=1, choices=[0, 1])
 
@@ -304,6 +307,12 @@ def main() -> None:
             str(int(args.hprom_clip_nonnegative)),
             "--hprom-renorm-weights",
             str(int(args.hprom_renorm_weights)),
+            "--hprom-sync-modelpart-each-newton-iter",
+            str(int(args.hprom_sync_modelpart_each_newton_iter)),
+            "--hprom-call-entity-hooks-each-newton-iter",
+            str(int(args.hprom_call_entity_hooks_each_newton_iter)),
+            "--hprom-use-analysis-stage-solution-step-hooks",
+            str(int(args.hprom_use_analysis_stage_solution_step_hooks)),
             "--hprom-fail-on-nonconvergence",
             str(int(args.hprom_fail_on_nonconvergence)),
             "--save-plots",

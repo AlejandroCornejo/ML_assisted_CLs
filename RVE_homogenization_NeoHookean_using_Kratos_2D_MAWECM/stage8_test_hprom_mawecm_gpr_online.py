@@ -70,6 +70,27 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--hprom-clip-nonnegative", type=int, default=1, choices=[0, 1])
     p.add_argument("--hprom-renorm-weights", type=int, default=0, choices=[0, 1])
     p.add_argument(
+        "--hprom-sync-modelpart-each-newton-iter",
+        type=int,
+        default=0,
+        choices=[0, 1],
+        help="If 1, sync nodal DISPLACEMENT/current coordinates each Newton iter (slower).",
+    )
+    p.add_argument(
+        "--hprom-call-entity-hooks-each-newton-iter",
+        type=int,
+        default=0,
+        choices=[0, 1],
+        help="If 1, call Initialize/FinalizeNonLinearIteration on entities each Newton iter.",
+    )
+    p.add_argument(
+        "--hprom-use-analysis-stage-solution-step-hooks",
+        type=int,
+        default=0,
+        choices=[0, 1],
+        help="If 1, call AnalysisStage Initialize/FinalizeSolutionStep each increment.",
+    )
+    p.add_argument(
         "--hprom-homogenization-mode",
         type=str,
         default="ecm_separate",
@@ -454,6 +475,9 @@ def main():
             renorm_weights=args.hprom_renorm_weights,
             homogenization_mode=args.hprom_homogenization_mode,
             track_q_pod=0,
+            sync_modelpart_each_newton_iter=args.hprom_sync_modelpart_each_newton_iter,
+            call_entity_hooks_each_newton_iter=args.hprom_call_entity_hooks_each_newton_iter,
+            use_analysis_stage_solution_step_hooks=args.hprom_use_analysis_stage_solution_step_hooks,
         )
         t_h = float(time.perf_counter() - t0)
         _write_runtime(tfile_h, t_h, source="new")
@@ -538,6 +562,9 @@ def main():
         "hprom_clip_nonnegative": int(args.hprom_clip_nonnegative),
         "hprom_renorm_weights": int(args.hprom_renorm_weights),
         "hprom_include_weight_tangent": int(args.hprom_include_weight_tangent),
+        "hprom_sync_modelpart_each_newton_iter": int(args.hprom_sync_modelpart_each_newton_iter),
+        "hprom_call_entity_hooks_each_newton_iter": int(args.hprom_call_entity_hooks_each_newton_iter),
+        "hprom_use_analysis_stage_solution_step_hooks": int(args.hprom_use_analysis_stage_solution_step_hooks),
         "hprom_fail_on_nonconvergence": int(args.hprom_fail_on_nonconvergence),
         "hprom_homogenization_mode": str(args.hprom_homogenization_mode),
         "hprom_corrector_dq_abs_tol": float(args.hprom_corrector_dq_abs_tol),

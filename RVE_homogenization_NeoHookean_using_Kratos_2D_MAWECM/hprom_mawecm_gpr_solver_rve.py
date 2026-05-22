@@ -14,6 +14,7 @@ State update uses Joaquin-style master/slave decoder:
 
 import os
 import sys
+import time
 from typing import Dict
 
 import numpy as np
@@ -57,7 +58,63 @@ def _build_free_dof_index_map(n_dof: int, free_dofs: np.ndarray) -> np.ndarray:
     return idx
 
 
-def _assemble_unit_rhs_by_element_free(assembler_unit: VectorizedAssembler, free_dof_index_map: np.ndarray, n_free: int):
+def _prepare_unit_rhs_scatter(assembler_unit: VectorizedAssembler, free_dof_index_map: np.ndarray):
+    ne = int(assembler_unit.n_elems)
+    ndl = int(assembler_unit.n_local_dof)
+    eq_ids = np.asarray(assembler_unit.local_eq_ids, dtype=np.int64).reshape(ne, ndl)
+    free_ids = free_dof_index_map[eq_ids]  # (ne, ndl), -1 for constrained
+    valid = free_ids >= 0
+    if not np.any(valid):
+        return {
+            "ne": ne,
+            "ndl": ndl,
+            "valid": valid,
+            "row_idx": np.zeros(0, dtype=np.int64),
+            "col_idx": np.zeros(0, dtype=np.int64),
+        }
+    row_idx = free_ids[valid]
+    col_idx = np.broadcast_to(np.arange(ne, dtype=np.int64)[:, None], (ne, ndl))[valid]
+    return {
+        "ne": ne,
+        "ndl": ndl,
+        "valid": valid,
+        "row_idx": row_idx,
+        "col_idx": col_idx,
+    }
+
+
+def _scatter_rhs_loc_by_element_free(rhs_loc: np.ndarray, n_free: int, scatter_cache):
+    """
+    Scatter local per-element RHS contributions to free-DOF stacked columns.
+
+    Parameters
+    ----------
+    rhs_loc : ndarray, shape (n_elem_res, n_local_dof)
+        Local RHS contribution per element and local dof.
+    """
+    ne = int(scatter_cache["ne"])
+    ndl = int(scatter_cache["ndl"])
+    valid = scatter_cache["valid"]
+    row_idx = scatter_cache["row_idx"]
+    col_idx = scatter_cache["col_idx"]
+
+    rhs_loc = np.asarray(rhs_loc, dtype=float).reshape(ne, ndl)
+    if row_idx.size == 0:
+        return np.zeros((int(n_free), ne), dtype=float)
+
+    vals = rhs_loc[valid]
+    out = np.zeros((int(n_free), ne), dtype=float)
+    np.add.at(out, (row_idx, col_idx), vals)
+    return out
+
+
+def _assemble_unit_rhs_by_element_free(
+    assembler_unit: VectorizedAssembler,
+    free_dof_index_map: np.ndarray,
+    n_free: int,
+    scatter_cache=None,
+    rhs_loc=None,
+):
     """
     Build per-element unit-weight RHS contributions restricted to free DOFs.
 
@@ -67,19 +124,13 @@ def _assemble_unit_rhs_by_element_free(assembler_unit: VectorizedAssembler, free
         Column e stores the free-DOF RHS contribution of residual element e
         for unit MAW weight.
     """
-    ne = int(assembler_unit.n_elems)
-    ndl = int(assembler_unit.n_local_dof)
-    eq_ids = np.asarray(assembler_unit.local_eq_ids, dtype=np.int64).reshape(ne, ndl)
-    # rhs contribution per local dof is -f_int
-    rhs_loc = -np.asarray(assembler_unit._f_int, dtype=float).reshape(ne, ndl)
-    out = np.zeros((int(n_free), ne), dtype=float)
-    for e in range(ne):
-        ids_e = eq_ids[e]
-        free_ids = free_dof_index_map[ids_e]
-        mask = free_ids >= 0
-        if np.any(mask):
-            out[free_ids[mask], e] += rhs_loc[e, mask]
-    return out
+    if scatter_cache is None:
+        scatter_cache = _prepare_unit_rhs_scatter(assembler_unit, free_dof_index_map)
+    if rhs_loc is None:
+        ne = int(scatter_cache["ne"])
+        ndl = int(scatter_cache["ndl"])
+        rhs_loc = -np.asarray(assembler_unit._f_int, dtype=float).reshape(ne, ndl)
+    return _scatter_rhs_loc_by_element_free(rhs_loc=rhs_loc, n_free=n_free, scatter_cache=scatter_cache)
 
 
 def _stable_unique_preserve_order(idx: np.ndarray) -> np.ndarray:
@@ -342,6 +393,9 @@ def RunHpromMawEcmGprBatchSimulation(
     renorm_weights=0,
     homogenization_mode="full_fom",
     track_q_pod=0,
+    sync_modelpart_each_newton_iter=0,
+    call_entity_hooks_each_newton_iter=0,
+    use_analysis_stage_solution_step_hooks=0,
 ):
     if strain_path is None:
         raise ValueError("strain_path must be provided.")
@@ -460,11 +514,11 @@ def RunHpromMawEcmGprBatchSimulation(
             w_res_support_fixed = w_try[z_res]
     elem_res = [elements_all[int(i)] for i in z_res.tolist()]
     assembler_hom_full = None
-    assembler_hom_eps = None
-    assembler_hom_sig = None
+    assembler_hom_union = None
     w_eps_sel = None
     w_sig_sel = None
     a0_ref = None
+    z_hom_union = None
 
     if hom_mode == "full_fom":
         z_hom_full = np.arange(n_elem, dtype=np.int64)
@@ -491,25 +545,19 @@ def RunHpromMawEcmGprBatchSimulation(
                 "homogenization_mode='ecm_separate' requires non-empty Z_eps and Z_sig."
             )
 
-        elem_hom_eps = [elements_all[int(i)] for i in z_eps.tolist()]
-        elem_hom_sig = [elements_all[int(i)] for i in z_sig.tolist()]
-        w_eps_sel = np.asarray(w_eps_full[z_eps], dtype=float)
-        w_sig_sel = np.asarray(w_sig_full[z_sig], dtype=float)
-        assembler_hom_eps = VectorizedAssembler(
+        # Single homogenization assembler on union support with separate weight vectors
+        # for strain and stress (no residual coupling).
+        z_hom_union = np.union1d(z_eps, z_sig).astype(np.int64)
+        elem_hom_union = [elements_all[int(i)] for i in z_hom_union.tolist()]
+        w_eps_sel = np.asarray(w_eps_full[z_hom_union], dtype=float)
+        w_sig_sel = np.asarray(w_sig_full[z_hom_union], dtype=float)
+        assembler_hom_union = VectorizedAssembler(
             mp,
             n_dof,
             eq_map_runtime,
-            elements=elem_hom_eps,
+            elements=elem_hom_union,
             element_scales=None,
-            log_label="HPROM-MAW-HomAssemblerEPS",
-        )
-        assembler_hom_sig = VectorizedAssembler(
-            mp,
-            n_dof,
-            eq_map_runtime,
-            elements=elem_hom_sig,
-            element_scales=None,
-            log_label="HPROM-MAW-HomAssemblerSIG",
+            log_label="HPROM-MAW-HomAssemblerUnion",
         )
 
     sim._InitializeDomainCenterIfNeeded(mp)
@@ -635,16 +683,10 @@ def RunHpromMawEcmGprBatchSimulation(
         element_scales=np.ones(z_res.size, dtype=float),
         log_label="HPROM-MAW-ResidualAssembler",
     )
-    assembler_hr_unit = None
-    if use_weight_tangent:
-        assembler_hr_unit = VectorizedAssembler(
-            mp,
-            n_dof,
-            eq_map_runtime,
-            elements=elem_res,
-            element_scales=None,
-            log_label="HPROM-MAW-ResidualAssemblerUnit",
-        )
+    unit_rhs_scatter = _prepare_unit_rhs_scatter(
+        assembler_unit=assembler_hr,
+        free_dof_index_map=free_dof_index_map,
+    ) if use_weight_tangent else None
 
     print(
         f"  [HPROM-MAWECM-GPR] Solving trajectory with {n_steps_total} increments "
@@ -664,6 +706,7 @@ def RunHpromMawEcmGprBatchSimulation(
             f"  [HPROM-MAWECM-GPR] Hom support (separate ECM): "
             f"|Z_eps|={z_eps.size} ({100.0*z_eps.size/max(n_elem,1):.1f}%), "
             f"|Z_sig|={z_sig.size} ({100.0*z_sig.size/max(n_elem,1):.1f}%), "
+            f"|Z_union|={z_hom_union.size} ({100.0*z_hom_union.size/max(n_elem,1):.1f}%), "
             f"mesh_mode={mesh_mode}"
         )
     print(
@@ -672,9 +715,26 @@ def RunHpromMawEcmGprBatchSimulation(
     print(f"  [HPROM-MAWECM-GPR] MAW state space: {maw_state_space}")
     print(f"  [HPROM-MAWECM-GPR] Homogenization mode: {hom_mode}")
     print(f"  [HPROM-MAWECM-GPR] Include d(w)/d(q_m) tangent term: {int(use_weight_tangent)}")
+    print(
+        "  [HPROM-MAWECM-GPR] Newton modelpart sync/hooks: "
+        f"sync={int(bool(sync_modelpart_each_newton_iter))}, "
+        f"hooks={int(bool(call_entity_hooks_each_newton_iter))}"
+    )
+    print(
+        f"  [HPROM-MAWECM-GPR] AnalysisStage step hooks: "
+        f"{int(bool(use_analysis_stage_solution_step_hooks))}"
+    )
     if (not update_each_iter) and (w_res_support_fixed is not None):
         print("  [HPROM-MAWECM-GPR] MAW updates disabled: using fixed residual weights from file.")
     print("  [HPROM-MAWECM-GPR] Manifold correction active: N(0)=0 and J(0)=0.")
+
+    t_eval_gpr = 0.0
+    t_eval_maw = 0.0
+    t_sync_newton = 0.0
+    t_res_asm = 0.0
+    t_unit_asm = 0.0
+    t_lin_solve = 0.0
+    t_hom_asm = 0.0
 
     q_m_state = None
     k_red_old = None
@@ -686,7 +746,8 @@ def RunHpromMawEcmGprBatchSimulation(
         mp.ProcessInfo[KM.STEP] = step
 
         sim.time, sim.step, sim.end_time = time_val, step, end_time
-        sim.InitializeSolutionStep()
+        if bool(use_analysis_stage_solution_step_hooks):
+            sim.InitializeSolutionStep()
 
         s = int(np.searchsorted(step_offsets, step, side="left") - 1)
         s = max(0, min(s, n_seg - 1))
@@ -711,7 +772,9 @@ def RunHpromMawEcmGprBatchSimulation(
         w_res_iter = None
         dw_res_iter = None
         if not update_each_iter:
+            t0 = time.perf_counter()
             q_s_phys, _ = evaluate_sparse_gp_map_and_jacobian_qp(q_m, gpr_model, q_m_dim)
+            t_eval_gpr += time.perf_counter() - t0
             q_s_phys = np.asarray(q_s_phys, dtype=float).reshape(-1)
             q_s = q_s_phys - q_s0_raw - (j0_raw @ q_m)
             q_master0 = a_m @ q_m
@@ -722,9 +785,13 @@ def RunHpromMawEcmGprBatchSimulation(
             else:
                 maw_state0 = _state_for_maw(maw_state_space, q_m)
                 if use_weight_tangent:
+                    t1 = time.perf_counter()
                     w_res_iter, dw_res_iter = _eval_maw_weights_and_jac(maw_state0)
+                    t_eval_maw += time.perf_counter() - t1
                 else:
+                    t1 = time.perf_counter()
                     w_res_iter = _eval_maw_weights(maw_state0)
+                    t_eval_maw += time.perf_counter() - t1
             assembler_hr.SetElementScales(w_res_iter)
 
         converged = False
@@ -745,7 +812,9 @@ def RunHpromMawEcmGprBatchSimulation(
         for it in range(n_corr + 1):
             mp.ProcessInfo[KM.NL_ITERATION_NUMBER] = it + 1
 
+            t0 = time.perf_counter()
             q_s_raw, dqs_raw = evaluate_sparse_gp_map_and_jacobian_qp(q_m, gpr_model, q_m_dim)
+            t_eval_gpr += time.perf_counter() - t0
             q_s_raw = np.asarray(q_s_raw, dtype=float).reshape(-1)
             dqs_raw = np.asarray(dqs_raw, dtype=float)
             if q_s_raw.size != q_s_dim:
@@ -771,18 +840,29 @@ def RunHpromMawEcmGprBatchSimulation(
             if update_each_iter:
                 maw_state_iter = _state_for_maw(maw_state_space, q_m)
                 if use_weight_tangent:
+                    t1 = time.perf_counter()
                     w_res_iter, dw_res_iter = _eval_maw_weights_and_jac(maw_state_iter)
+                    t_eval_maw += time.perf_counter() - t1
                 else:
+                    t1 = time.perf_counter()
                     w_res_iter = _eval_maw_weights(maw_state_iter)
+                    t_eval_maw += time.perf_counter() - t1
                 assembler_hr.SetElementScales(w_res_iter)
             w_last = w_res_iter
 
-            SetDisplacementFromEquationVector(u, eq_map_runtime, ta_disp)
-            UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
+            if bool(sync_modelpart_each_newton_iter):
+                t1 = time.perf_counter()
+                SetDisplacementFromEquationVector(u, eq_map_runtime, ta_disp)
+                UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
+                t_sync_newton += time.perf_counter() - t1
 
-            InitializeNonLinearIteration(entities, mp.ProcessInfo)
+            if bool(call_entity_hooks_each_newton_iter):
+                InitializeNonLinearIteration(entities, mp.ProcessInfo)
+            t1 = time.perf_counter()
             k_hr, rhs_hr = assembler_hr.Assemble(u)
-            FinalizeNonLinearIteration(entities, mp.ProcessInfo)
+            t_res_asm += time.perf_counter() - t1
+            if bool(call_entity_hooks_each_newton_iter):
+                FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
             r_f = rhs_hr[free_dofs]
             du_dqm = phi_master_eff + (phi_s @ dqs_dqm)
@@ -805,14 +885,27 @@ def RunHpromMawEcmGprBatchSimulation(
             if use_weight_tangent and (dw_res_iter is not None):
                 # Consistent MAW term: J_u^T [sum_e r_e \otimes d w_e/dq_m]
                 # where r_e are unit-weight element RHS contributions on free DOFs.
-                _, _ = assembler_hr_unit.Assemble(u)
-                r_free_e = _assemble_unit_rhs_by_element_free(
-                    assembler_unit=assembler_hr_unit,
-                    free_dof_index_map=free_dof_index_map,
+                t1 = time.perf_counter()
+                ne = int(z_res.size)
+                ndl = int(assembler_hr.n_local_dof)
+                rhs_scaled_loc = -np.asarray(assembler_hr._f_int, dtype=float).reshape(ne, ndl)
+                scale_vec = np.asarray(w_res_iter, dtype=float).reshape(ne, 1)
+                # Recover unit-weight element RHS from currently assembled scaled residual:
+                # rhs_scaled = w_e * rhs_unit  => rhs_unit = rhs_scaled / w_e.
+                rhs_unit_loc = np.divide(
+                    rhs_scaled_loc,
+                    scale_vec,
+                    out=np.zeros_like(rhs_scaled_loc),
+                    where=np.abs(scale_vec) > 1.0e-14,
+                )
+                r_free_e = _scatter_rhs_loc_by_element_free(
+                    rhs_loc=rhs_unit_loc,
                     n_free=free_dofs.size,
+                    scatter_cache=unit_rhs_scatter,
                 )  # (n_free, n_res)
                 drw_dqm = r_free_e @ dw_res_iter  # (n_free, q_m_dim)
                 k_red = k_red + (du_dqm.T @ drw_dqm)
+                t_unit_asm += time.perf_counter() - t1
             if float(prom_corrector_l2_reg) > 0.0:
                 k_red = k_red + float(prom_corrector_l2_reg) * np.eye(q_m_dim, dtype=float)
             k_red_last = k_red
@@ -875,15 +968,23 @@ def RunHpromMawEcmGprBatchSimulation(
                 used_old = True
 
             try:
+                t1 = time.perf_counter()
                 dq = np.linalg.solve(k_solve, r_red)
+                t_lin_solve += time.perf_counter() - t1
             except np.linalg.LinAlgError:
+                t1 = time.perf_counter()
                 dq = np.linalg.lstsq(k_solve, r_red, rcond=None)[0]
+                t_lin_solve += time.perf_counter() - t1
             if used_old and (not np.all(np.isfinite(dq))):
                 try:
+                    t1 = time.perf_counter()
                     dq = np.linalg.solve(k_red, r_red)
+                    t_lin_solve += time.perf_counter() - t1
                     used_old = False
                 except np.linalg.LinAlgError:
+                    t1 = time.perf_counter()
                     dq = np.linalg.lstsq(k_red, r_red, rcond=None)[0]
+                    t_lin_solve += time.perf_counter() - t1
                     used_old = False
 
             ndq = float(np.linalg.norm(dq))
@@ -962,7 +1063,9 @@ def RunHpromMawEcmGprBatchSimulation(
         else:
             k_red_old = None
 
+        t0 = time.perf_counter()
         q_s_raw_f, _ = evaluate_sparse_gp_map_and_jacobian_qp(q_m, gpr_model, q_m_dim)
+        t_eval_gpr += time.perf_counter() - t0
         q_s_phys = np.asarray(q_s_raw_f, dtype=float).reshape(-1)
         q_s = q_s_phys - q_s0_raw - (j0_raw @ q_m)
         q_master = a_m @ q_m
@@ -971,7 +1074,9 @@ def RunHpromMawEcmGprBatchSimulation(
         u[free_dofs] = u_aff_free + w0_const + (phi_master_eff @ q_m) + (phi_s @ q_s)
         if update_each_iter:
             maw_state_acc = _state_for_maw(maw_state_space, q_m)
+            t1 = time.perf_counter()
             w_last = _eval_maw_weights(maw_state_acc)
+            t_eval_maw += time.perf_counter() - t1
         elif w_res_support_fixed is not None:
             w_last = w_res_support_fixed
 
@@ -979,7 +1084,9 @@ def RunHpromMawEcmGprBatchSimulation(
         UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
         if hom_mode == "full_fom":
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
+            t1 = time.perf_counter()
             _, _ = assembler_hom_full.Assemble(u)
+            t_hom_asm += time.perf_counter() - t1
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
             ref_full = float(np.sum(np.asarray(assembler_hom_full.area_e, dtype=float)))
@@ -991,28 +1098,21 @@ def RunHpromMawEcmGprBatchSimulation(
             )
         else:
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
-            _, _ = assembler_hom_eps.Assemble(u)
+            t1 = time.perf_counter()
+            _, _ = assembler_hom_union.Assemble(u)
+            t_hom_asm += time.perf_counter() - t1
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
-            eps_h_local, _ = CalculateHomogenizedFromAssemblerWithElementWeights(
-                assembler_hom_eps,
+            eps_h, sig_h = CalculateHomogenizedFromAssemblerWithElementWeights(
+                assembler_hom_union,
                 w_eps=w_eps_sel,
-                w_sig=None,
-                reference_measure=a0_ref,
-            )
-
-            InitializeNonLinearIteration(entities, mp.ProcessInfo)
-            _, _ = assembler_hom_sig.Assemble(u)
-            FinalizeNonLinearIteration(entities, mp.ProcessInfo)
-            _, sig_h_local = CalculateHomogenizedFromAssemblerWithElementWeights(
-                assembler_hom_sig,
-                w_eps=None,
                 w_sig=w_sig_sel,
                 reference_measure=a0_ref,
             )
-            eps_h = np.asarray(eps_h_local, dtype=float)
-            sig_h = np.asarray(sig_h_local, dtype=float)
+            eps_h = np.asarray(eps_h, dtype=float)
+            sig_h = np.asarray(sig_h, dtype=float)
 
-        sim.FinalizeSolutionStep()
+        if bool(use_analysis_stage_solution_step_hooks):
+            sim.FinalizeSolutionStep()
 
         results_eps.append(np.asarray(eps_h, dtype=float))
         results_sig.append(np.asarray(sig_h, dtype=float))
@@ -1042,6 +1142,13 @@ def RunHpromMawEcmGprBatchSimulation(
     if track_qpod:
         qpod_hist = np.stack(qpod_hist)
     wres_hist = np.stack(wres_hist)
+
+    print(
+        "  [HPROM-MAWECM-GPR][timing] "
+        f"gpr_eval={t_eval_gpr:.2f}s, maw_eval={t_eval_maw:.2f}s, "
+        f"newton_sync={t_sync_newton:.2f}s, res_asm={t_res_asm:.2f}s, "
+        f"unit_asm={t_unit_asm:.2f}s, lin_solve={t_lin_solve:.2f}s, hom_asm={t_hom_asm:.2f}s"
+    )
 
     if out_dir is not None:
         tag = f"trajectory_{trajectory_index}" if trajectory_index is not None else "hprom_mawecm_gpr_run"
