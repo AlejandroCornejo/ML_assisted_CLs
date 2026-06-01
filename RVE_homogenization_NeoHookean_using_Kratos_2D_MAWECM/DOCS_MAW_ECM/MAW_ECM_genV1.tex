@@ -1,0 +1,4191 @@
+\documentclass[11pt,a4paper]{article}
+
+%===============================================================================
+% PACKAGES
+%===============================================================================
+\usepackage[a4paper,margin=2.5cm]{geometry}
+
+\usepackage{amsmath,amssymb,amsfonts,mathtools}
+\usepackage{bm}
+\usepackage{bbm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{float}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!50!black,
+    citecolor=blue!50!black,
+    urlcolor=blue!50!black
+}
+
+\include{jaho_def_mawecm}
+
+%------------------------------------------------------------------------------
+% MATLAB/file references
+%------------------------------------------------------------------------------
+\newcommand{\MATLAB}[1]{%
+\begin{quote}
+\small\ttfamily #1
+\end{quote}
+}
+
+%===============================================================================
+% DOCUMENT
+%===============================================================================
+
+\title{
+Bivariate Manifold-Adaptive Weights Empirical Cubature Method\\
+\large Construction, Graph-Regularized Pruning, and Weight Regression
+}
+
+\author{Joaqu\'in A. Hern\'andez Ortega}
+
+\date{May 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+
+See shorter version in \href{/home/joaquin/Desktop/CURRENT_TASKS/MATLAB_CODES/TESTING_PROBLEMS_FEHROM/115_PAPER_MAW_ECM/LATEX/02_MAW_ECM.pdf}{02\_MAW\_ECM.pdf}.
+
+
+This document develops, from first principles, the formulation implemented in
+\texttt{MAW\_ECM\_genV1.m}. The method is a manifold-adaptive extension of the
+Empirical Cubature Method (ECM), constructed for nonlinear manifold reduced-order
+models in which the relevant reduced states lie on a low-dimensional latent
+manifold.
+
+The formulation originates from the idea of combining a common reduced
+integration support with manifold-dependent cubature weights. The resulting
+method may be interpreted as a manifold counterpart of subspace-adaptive
+cubature constructions such as SAW--ECM, in which the support is shared across a
+family of reduced representations while the weights are allowed to vary.
+Accordingly, the central object in MAW--ECM is not a single cubature vector, but
+a family of adaptive weights
+\[
+        \wadapt=\wadapt(\qM),
+\]
+where $\qM$ denotes the latent coordinates of the nonlinear manifold.
+
+At the conceptual level, the method may be viewed as a manifold-adaptive
+sparsification problem: one seeks the smallest common support capable of
+reproducing, at every sampled manifold state, a collection of local exactness
+constraints associated with reduced residuals and outputs. However, the direct
+solution of this global support-selection problem is computationally intractable
+because it combines combinatorial sparsity, positivity, local exactness, and
+manifold regularity constraints in a single coupled formulation.
+
+The implemented MAW--ECM construction therefore does not solve the original
+sparsification problem directly. Instead, it proceeds through a feasible pruning
+strategy starting from an already admissible fixed-weight ECM rule. The initial
+ECM support is progressively reduced by removing candidate integration points
+one at a time and redistributing the remaining weights over the manifold while
+preserving the local exactness conditions. In this sense, sparsification defines
+the ideal mathematical objective, whereas pruning defines the practical
+algorithmic route.
+
+The redistribution process operates in two regimes. First, an inexpensive
+least-change stage attempts to eliminate points without explicit positivity
+enforcement. Once this becomes impossible, the method switches to a
+graph-regularized active-set redistribution stage in which positivity is
+enforced while neighboring manifold states are coupled through a graph
+Laplacian. This graph coupling is introduced to moderate the loss of regularity
+caused by local active-set transitions in the adaptive weights.
+
+The retained integration points are common to all sampled manifold states,
+whereas the associated weights vary over the latent manifold. Consequently, the
+method lies between a fully global ECM rule, where both support and weights are
+fixed, and a fully local cubature strategy, where both support and weights would
+be recomputed independently at each state.
+
+The present implementation is specialized to a bivariate latent manifold, in
+which the sampled states lie on a structured two-dimensional grid. This
+assumption is used primarily in the construction of the graph regularization
+operator and in the visualization of the adaptive weight fields. The algebraic
+structure of MAW--ECM itself is more general and extends naturally to latent
+manifolds of dimension $\Nlat>2$, provided that a suitable neighborhood graph or
+discrete manifold connectivity is available.
+\end{abstract}
+
+\tableofcontents
+
+%===============================================================================
+\section{Purpose and scope of the document}
+%===============================================================================
+
+The goal of this note is to fix the mathematical and algorithmic structure of
+the manifold-adaptive weights ECM, abbreviated here as MAW--ECM. The document is
+not intended to be inserted directly into a paper. Its purpose is instead to
+make explicit the ideas implemented in the MATLAB routine
+\[
+        \texttt{MAW\_ECM\_genV1.m},
+\]
+and in the auxiliary routines that it invokes.
+
+The central question addressed by the method is the following. Suppose that a
+fixed ECM rule has already selected a set of integration points
+\[
+        \Zini \subset \Zfull := \{1,\ldots,\Nip\},
+\]
+with associated positive weights $\wini$. This rule is globally valid over the
+training manifold, but it may still contain more points than appear necessary
+from the viewpoint of the latent dimension. Can the support be reduced further
+if the weights are allowed to vary with the manifold coordinate?
+
+MAW--ECM answers this question by replacing a single fixed cubature vector by a
+matrix of adaptive weights,
+\[
+        \Wadapt =
+        \begin{bmatrix}
+        | & | &        & | \\
+        \wadapt^{(1)} & \wadapt^{(2)} & \cdots & \wadapt^{(\Nman)} \\
+        | & | &        & |
+        \end{bmatrix}
+        \in \R^{\Ncand \times \Nman}.
+\]
+Here $\Ncand = |\Zini|$ is the number of current candidate points and $\Nman$ is
+the number of sampled manifold states. The $j$-th column
+$\wadapt^{(j)}$ contains the cubature weights associated with the latent sample
+$\qMj$.
+
+The support is pruned globally: removing one integration point means removing
+one row of $\Wadapt$ for all sampled states. The weights, however, are adapted
+locally in the manifold:
+\[
+        \wadapt^{(j)} \equiv \wadapt(\qMj).
+\]
+The final online approximation is obtained by fitting a regression model to the
+columns of $\Wadapt$, so that the weights can be evaluated at a new latent
+coordinate $\qM$.
+
+%===============================================================================
+\section{Relation with classical ECM}
+%===============================================================================
+
+Let $\Zfull=\{1,\ldots,\Nip\}$ denote the full set of finite element integration
+points and let $\wFE\in\R^{\Nip}$ collect the corresponding finite element
+quadrature weights. For a state-dependent scalar integrand
+$f_i(\qM)$ evaluated at integration point $i$, the full quadrature approximation
+reads
+\[
+        I(\qM)
+        =
+        \sum_{i=1}^{\Nip} f_i(\qM)\,w^{\mathrm{FE}}_i .
+\]
+For several scalar integrands collected in a matrix
+\[
+        \Aint(\qM)\in\R^{\Nip\times m},
+\]
+the full integral vector is
+\[
+        \bm b(\qM)
+        =
+        \Aint(\qM)^T \wFE .
+\]
+
+Classical ECM constructs a fixed subset $\Zred\subset\Zfull$ and a fixed vector
+of positive weights $\wred$ such that
+\[
+        \Aint_{\Zred}({\qM}_j)^T\wred
+        \approx
+        \Aint({\qM}_j)^T\wFE,
+        \qquad
+        j=1,\ldots,\Nman .
+\]
+The same weights must be valid for all sampled states. Consequently, the fixed
+rule must represent the union of all relevant integrand configurations over the
+training manifold. This global requirement is precisely what limits the
+compressibility of a fixed-weight cubature formula.
+
+MAW--ECM modifies only one aspect of this construction. The support remains
+fixed after the offline stage, but the weights are allowed to vary with the
+latent state:
+\[
+        \Aint_{\Zred}(\qM)^T\wred(\qM)
+        \approx
+        \Aint(\qM)^T\wFE .
+\]
+Thus, the method does not abandon the ECM philosophy. It keeps the idea of a
+sparse positive cubature rule defined on selected finite element integration
+points. The difference is that the cubature weights become functions on the
+reduced manifold.
+
+
+%===============================================================================
+\section{Introduction: from adaptive cubature supports to manifold-adaptive weights}
+\label{sec:introduction_history}
+%===============================================================================
+
+The Manifold-Adaptive Weights Empirical Cubature Method (MAW--ECM) was not
+conceived as a direct regression strategy for cubature weights, nor as a purely
+heuristic modification of a standard ECM rule. Its formulation emerged from the
+attempt to reconcile three requirements that are individually natural but
+difficult to satisfy simultaneously:
+\begin{enumerate}[label=(\roman*),leftmargin=1.1cm]
+    \item the cubature rule should use a common reduced set of integration
+    points over a family of reduced states;
+    \item the cubature weights should be allowed to adapt to the position on a
+    nonlinear manifold;
+    \item the resulting weight fields should be sufficiently regular to be used
+    in an online hyper-reduced model.
+\end{enumerate}
+The first requirement is inherited from subspace-adaptive cubature ideas, the
+second from the manifold character of the reduced model, and the third from the
+fact that the adaptive weights are not merely postprocessed quantities: they
+enter the online evaluation of residuals, outputs, and, in nonlinear settings,
+their consistent linearizations.
+
+%-------------------------------------------------------------------------------
+\subsection{Roots in SAW--ECM: common support with adaptive weights}
+%-------------------------------------------------------------------------------
+
+The first conceptual root of MAW--ECM is the Subspace Adaptive Weights Empirical
+Cubature Method (SAW--ECM). In SAW--ECM, one considers several reduced
+subspaces, indexed by $s=1,\ldots,n_s$, and associates with each of them a
+cubature weight vector
+\[
+        \bm\zeta^{(s)}\in\R^{\Nip}.
+\]
+The key point is that sparsity is not imposed independently on each
+$\bm\zeta^{(s)}$. Instead, sparsity is imposed on the union of their supports.
+At the formal level, this can be expressed through an objective involving the
+zero-norm of the aggregate weight vector,
+\[
+        \left\|
+        \sum_{s=1}^{n_s}\bm\zeta^{(s)}
+        \right\|_0.
+\]
+Thus, all subspaces share a common set of selected integration points, while
+the weights are allowed to depend on the subspace.
+
+This idea is central for MAW--ECM. The method keeps the same distinction:
+\[
+        \text{common support}
+        \qquad\text{versus}\qquad
+        \text{state-dependent weights}.
+\]
+What changes is the indexing set. SAW--ECM adapts the weights over a finite
+collection of reduced subspaces. MAW--ECM adapts the weights over a sampled
+nonlinear manifold of latent states.
+
+Let
+\[
+        \Mtrain=\{\qMj\}_{j=1}^{\Nman}
+\]
+be the sampled training manifold. At each sampled state $\qMj$, one introduces
+a cubature weight vector
+\[
+        \bm\zeta^{(j)}\in\R^{\Nip}.
+\]
+The direct manifold analogue of the SAW--ECM support-union objective is then
+\[
+        \left\|
+        \sum_{j=1}^{\Nman}\bm\zeta^{(j)}
+        \right\|_0.
+        \label{eq:intro_support_union_full}
+\]
+The support of this aggregate vector identifies the integration points that are
+used somewhere on the manifold. Since the weights are nonnegative, the support
+of the sum is precisely the union of the supports of the individual rules.
+
+%-------------------------------------------------------------------------------
+\subsection{The full manifold-adaptive sparsification problem}
+%-------------------------------------------------------------------------------
+
+For each sampled manifold state $\qMj$, let
+\[
+        \Uj\in\R^{\Nip\times r_j},
+        \qquad
+        \bj\in\R^{r_j},
+\]
+denote the local exactness operator and the corresponding vector of exact
+integrals. The constraints
+\[
+        {\Uj}^T\bm\zeta^{(j)}=\bj,
+        \qquad
+        j=1,\ldots,\Nman,
+        \label{eq:intro_full_exactness}
+\]
+represent the quantities that the cubature rule must reproduce at each
+manifold point. In a manifold HROM, these quantities may include tangent-space
+projected residual contributions, output quantities such as reactions or
+homogenized stresses, and the volume constraint. The latter prevents the
+degenerate zero-weight solution and preserves the total measure represented by
+the quadrature rule.
+
+A first formal statement of the manifold-adaptive sparsification problem is
+therefore
+\[
+\begin{aligned}
+\min_{\bm\zeta^{(1)},\ldots,\bm\zeta^{(\Nman)}}
+&\quad
+\left\|
+\sum_{j=1}^{\Nman}\bm\zeta^{(j)}
+\right\|_0
+\\
+\text{subject to}
+&\quad
+{\Uj}^T\bm\zeta^{(j)}=\bj,
+\qquad
+j=1,\ldots,\Nman,
+\\
+&\quad
+\bm\zeta^{(j)}\geq 0,
+\qquad
+j=1,\ldots,\Nman.
+\end{aligned}
+\label{eq:intro_full_maw_l0}
+\]
+This is the original, idealized MAW--ECM problem. It is the exact analogue of
+the SAW--ECM sparsification principle, but with the discrete subspace index
+replaced by a sampled manifold index.
+
+However, this formulation is still incomplete for a manifold method. Unlike a
+finite collection of unrelated subspaces, the samples $\qMj$ lie on a
+low-dimensional latent domain. The weights are ultimately intended to define a
+function
+\[
+        \qM\mapsto\wadapt(\qM),
+\]
+to be evaluated online by interpolation or regression. Therefore, the vectors
+$\bm\zeta^{(j)}$ should not vary arbitrarily from one sampled state to its
+neighbors.
+
+This leads to the smoothness-augmented formal problem
+\[
+\begin{aligned}
+\min_{\bm\zeta^{(1)},\ldots,\bm\zeta^{(\Nman)}}
+&\quad
+\left\|
+\sum_{j=1}^{\Nman}\bm\zeta^{(j)}
+\right\|_0
++
+\frac{\alphaG}{2}
+\sum_{i=1}^{\Nip}
+{\bm\zeta_i}^T\Kgraph\bm\zeta_i
+\\
+\text{subject to}
+&\quad
+{\Uj}^T\bm\zeta^{(j)}=\bj,
+\qquad
+j=1,\ldots,\Nman,
+\\
+&\quad
+\bm\zeta^{(j)}\geq 0,
+\qquad
+j=1,\ldots,\Nman.
+\end{aligned}
+\label{eq:intro_full_smooth_l0}
+\]
+Here $\bm\zeta_i\in\R^{\Nman}$ collects the values, over the sampled manifold,
+of the weight associated with integration point $i$, and $\Kgraph$ is a graph
+Laplacian on the sampled latent states. The graph term penalizes lack of
+regularity of the weight fields over the manifold.
+
+Problem~\eqref{eq:intro_full_smooth_l0} is the full conceptual formulation of
+MAW--ECM. It contains, in a single statement, the desired common support, local
+exactness, positivity, and manifold regularity.
+
+%-------------------------------------------------------------------------------
+\subsection{Why the full formulation is not used directly}
+%-------------------------------------------------------------------------------
+
+Although \eqref{eq:intro_full_smooth_l0} is conceptually useful, it is not a
+practical algorithm. Its difficulty is not merely that it contains many
+unknowns. The fundamental obstacle is the combination of a combinatorial support
+selection term with equality constraints, positivity constraints, and a global
+manifold-smoothness penalty.
+
+The zero-norm term encodes the discrete decision of which integration points
+are retained. The equality constraints encode the exactness of the reduced
+integrals at every sampled manifold state. The positivity constraints impose
+admissibility of the cubature weights. The graph term couples the sampled
+states and destroys the complete separability that one would otherwise exploit
+node by node.
+
+Thus, a direct solution of \eqref{eq:intro_full_smooth_l0} would require
+solving, in one monolithic step, the support-selection problem and the
+manifold-coupled constrained redistribution problem. This is not the route
+taken here.
+
+The purpose of \eqref{eq:intro_full_smooth_l0} is instead to clarify the target
+structure of the method. It identifies what the algorithm should approximate:
+a sparse common support, with nonnegative weights that vary over the manifold
+while preserving the local cubature constraints.
+
+%-------------------------------------------------------------------------------
+\subsection{Restriction to an initial ECM support}
+%-------------------------------------------------------------------------------
+
+The first practical simplification is to avoid working on the full set of FE
+integration points. MAW--ECM starts from an already feasible fixed ECM rule,
+with support
+\[
+        \Zini\subset\Zfull,
+        \qquad
+        |\Zini|=\Ncand,
+\]
+and weights
+\[
+        \wini\in\R^{\Ncand}.
+\]
+The adaptive weights are then defined only on this candidate support:
+\[
+        \wadapt^{(j)}\in\R^{\Ncand},
+        \qquad
+        j=1,\ldots,\Nman.
+\]
+This restriction is not merely a computational convenience. It reflects the
+constructive philosophy of the method: the initial ECM rule provides a feasible
+global integration rule, and MAW--ECM attempts to prune it further by exploiting
+state-dependent weights.
+
+The initial adaptive rule is obtained by replication:
+\[
+        \wadapt^{(j)}=\wini,
+        \qquad
+        j=1,\ldots,\Nman.
+        \label{eq:intro_initial_replication}
+\]
+Thus, before pruning begins, the adaptive rule coincides with the fixed ECM
+rule at every sampled manifold state. The weight field is constant over the
+manifold.
+
+The question becomes whether rows of the matrix
+\[
+        \Wadapt =
+        [\wadapt^{(1)},\ldots,\wadapt^{(\Nman)}]
+        \in\R^{\Ncand\times\Nman}
+\]
+can be progressively eliminated while preserving feasibility of the local
+systems.
+
+%-------------------------------------------------------------------------------
+\subsection{CECM influence: pruning instead of direct sparsification}
+%-------------------------------------------------------------------------------
+
+The second practical simplification is inherited from the Continuous Empirical
+Cubature Method (CECM). The relevant lesson from CECM is not that the same
+problem is being solved, but that a difficult sparse cubature construction can
+be approached by a controlled sequence of pruning operations starting from a
+feasible rule.
+
+In the present context, one does not attempt to solve the zero-norm problem
+\eqref{eq:intro_full_smooth_l0} directly. Instead, one proceeds iteratively.
+At a given pruning stage, a candidate integration point is tentatively removed
+from the current support. The corresponding row of $\Wadapt$ is forced to
+vanish for all sampled states. The remaining weights are then redistributed so
+that the local exactness constraints remain satisfied.
+
+If such a redistribution is feasible, the elimination is accepted. If it is not
+feasible, the candidate is rejected and another candidate is tested. The pruning
+sequence stops when no further feasible removal is found, or when a prescribed
+stopping threshold is reached.
+
+This changes the nature of the problem. The original support-selection problem
+is replaced by a sequence of feasibility-preserving local decisions:
+\[
+        \text{remove one point}
+        \quad\longrightarrow\quad
+        \text{restore feasible weights}
+        \quad\longrightarrow\quad
+        \text{accept or reject}.
+\]
+Sparsity is therefore increased monotonically, but only through admissible
+steps.
+
+%-------------------------------------------------------------------------------
+\subsection{From the full global step to the implemented two-regime algorithm}
+%-------------------------------------------------------------------------------
+
+The formal smoothness-augmented single-step redistribution problem would seek,
+after removal of a candidate point, a new weight matrix $\Wnew$ minimizing a
+least-change term plus a graph-smoothness term, subject to local exactness and
+positivity:
+\[
+\begin{aligned}
+\min_{\Wnew}
+&\quad
+\frac{1}{2}\|\Wnew-\Wold\|_F^2
++
+\frac{\alphaG}{2}
+\trace\left[
+(\Wnew-\Wold)\Kgraph(\Wnew-\Wold)^T
+\right]
+\\
+\text{subject to}
+&\quad
+{\Uj}^T{\wnew}^{(j)}=\bj,
+\qquad
+j=1,\ldots,\Nman,
+\\
+&\quad
+{\wnew}^{(j)}\geq 0,
+\qquad
+j=1,\ldots,\Nman,
+\\
+&\quad
+W^{\mathrm{new}}_{pj}=0,
+\qquad
+j=1,\ldots,\Nman .
+\end{aligned}
+\label{eq:intro_single_step_full}
+\]
+This is the clean mathematical form of one graph-regularized pruning step.
+
+Nevertheless, solving \eqref{eq:intro_single_step_full} at every pruning
+iteration is unnecessary during the early part of the reduction. Numerical
+experience shows that many points can be removed by a simpler equality-only
+least-change redistribution. In that regime, positivity is not yet active, and
+the local systems vary smoothly enough over the manifold that smoothness is
+often obtained without explicitly imposing the graph penalty.
+
+This observation shaped the implemented algorithm. The current MAW--ECM
+construction uses two regimes:
+\begin{enumerate}[label=(\roman*),leftmargin=1.1cm]
+    \item a no-enforcement stage, in which candidate eliminations are attempted
+    through inexpensive least-change redistributions without explicit
+    positivity enforcement;
+    \item a graph-regularized active-set stage, activated once positivity
+    enforcement becomes necessary.
+\end{enumerate}
+The first regime is efficient and tends to preserve regularity because it avoids
+active-set clamping. The second regime is more expensive but necessary near the
+feasibility boundary, where nonnegative weights can no longer be recovered by
+unconstrained redistribution alone.
+
+In the current implementation, once explicit enforcement is required, the
+graph-based version is the intended route. The purely local active-set variant
+is useful historically and diagnostically, but the working MAW--ECM formulation
+couples the manifold samples through the graph Laplacian whenever positivity
+must be enforced.
+
+%-------------------------------------------------------------------------------
+\subsection{Role of positivity and active sets}
+%-------------------------------------------------------------------------------
+
+The appearance of negative weights is not a regression failure. It is a
+structural event in the constrained pruning process. As the support shrinks, the
+remaining weights must satisfy the same local exactness constraints with fewer
+degrees of freedom. The equality-only least-change solution may then leave the
+positive orthant.
+
+When this happens, nonnegativity is enforced by an active-set strategy. A
+negative weight is clamped to zero and the redistribution problem is solved
+again on the remaining free variables. In MAW--ECM this clamping is local in
+the manifold direction:
+\[
+        W_{ij}=0
+        \quad\text{may be imposed at one manifold node }j,
+\]
+without imposing the same condition at all other nodes. This is distinct from
+pruning, which is global:
+\[
+        W_{pj}=0
+        \quad\text{for all }j=1,\ldots,\Nman.
+\]
+Keeping these two mechanisms separate is essential. Pruning removes an
+integration point from the common support. Active-set clamping only restores
+nonnegativity at specific entries of the weight field.
+
+This distinction also explains why the resulting map
+\[
+        \qM\mapsto\wred(\qM)
+\]
+may be less regular than the underlying mechanical manifold. The weight map is
+the solution map of a constrained optimization problem. It can change
+nonsmoothly when active sets change. Graph regularization does not remove this
+fact; it only selects, among feasible redistributions, those that introduce
+less roughness across neighboring latent states.
+
+%-------------------------------------------------------------------------------
+\subsection{Current formulation}
+%-------------------------------------------------------------------------------
+
+The final form of the implemented MAW--ECM method can therefore be summarized as
+follows.
+
+First, a fixed ECM rule provides an admissible initial support and weights.
+Second, this rule is lifted to the manifold by assigning the same initial
+weights to every sampled latent state. Third, local exactness systems are built
+at each sampled state, including the constraints required by the HROM residual
+and by the selected outputs. Fourth, points are removed one by one. Each removal
+is accepted only if the remaining weights can be redistributed so as to satisfy
+the local constraints and, when required, positivity. Fifth, once the final
+support has been obtained, the sampled adaptive weights are regressed as
+functions of the latent coordinates.
+
+Thus, the method realizes the original support-union idea of SAW--ECM and the
+constructive pruning philosophy associated with CECM, but adapts both to the
+specific needs of a nonlinear manifold HROM. The result is a fixed-support,
+manifold-adaptive cubature rule:
+\[
+        \int_{\Omega_0} f(x,\qM)\,d\Omega
+        \approx
+        \sum_{i\in\Zred}
+        w_i(\qM)\,
+        f(x_i,\qM).
+\]
+The support $\Zred$ is selected offline and remains fixed online. The weights
+are functions of the latent coordinates. The graph regularization is not an
+independent modeling assumption, but a practical mechanism introduced when
+positivity enforcement would otherwise generate irregular weight fields.
+
+This historical route is important because it clarifies what MAW--ECM is and
+what it is not. It is not a black-box regression of quadrature weights. It is
+not a fully local cubature rule with state-dependent supports. It is not the
+direct solution of the ideal zero-norm formulation. Rather, it is a feasible
+pruning approximation to that formulation, built from a fixed ECM rule, enriched
+with manifold-dependent weights, and regularized only as much as needed to make
+the adaptive rule usable in the online HROM.
+
+
+
+
+
+%===============================================================================
+\section{Training manifold and local exactness systems}
+%===============================================================================
+
+Let the sampled latent manifold be
+\[
+        \Mtrain
+        =
+        \{\qMj\}_{j=1}^{\Nman},
+        \qquad
+        \qMj\in\R^{\Nlat}.
+\]
+In the current implementation,
+\[
+        \Nlat = 2,
+        \qquad
+        \qMj =
+        \begin{bmatrix}
+        q_{\mathrm{M},1}^{(j)} \\
+        q_{\mathrm{M},2}^{(j)}
+        \end{bmatrix}.
+\]
+The matrix used in the code is
+\[
+        \Qman =
+        \begin{bmatrix}
+        | & | &        & | \\
+        \qM^{(1)} & \qM^{(2)} & \cdots & \qM^{(\Nman)} \\
+        | & | &        & |
+        \end{bmatrix}
+        \in\R^{\Nlat\times\Nman}.
+\]
+
+For each sampled latent state $\qMj$, MAW--ECM constructs a local exactness
+operator
+\[
+        \Uj \in \R^{\Ncand\times r_j},
+\]
+restricted to the current candidate support, and a right-hand side
+\[
+        \bj\in\R^{r_j}.
+\]
+The local adaptive weights $\wadapt^{(j)}\in\R^{\Ncand}$ must satisfy
+\[
+        \Uj^T\wadapt^{(j)}=\bj.
+        \label{eq:local_exactness}
+\]
+When positivity is enforced, the additional condition is
+\[
+        \wadapt^{(j)}\geq 0.
+        \label{eq:local_positivity}
+\]
+
+Equations~\eqref{eq:local_exactness}--\eqref{eq:local_positivity} define a
+family of local cubature problems, one for each sampled manifold state. These
+local problems are coupled only through the requirement that the support be
+common to all states and, in the graph-regularized version, through the
+smoothness penalty imposed on the weight fields.
+
+%===============================================================================
+\section{Fixed support and adaptive weights}
+%===============================================================================
+
+The defining structural choice of MAW--ECM is:
+\[
+        \text{fixed support, adaptive weights}.
+\]
+Thus,
+\[
+        \Zred
+        \quad\text{is independent of }\qM,
+\]
+whereas
+\[
+        \wred = \wred(\qM).
+\]
+Equivalently, at the sampled manifold nodes,
+\[
+        \Wadapt_{\mathrm{red}}
+        =
+        \begin{bmatrix}
+        | & | &        & | \\
+        \wred(\qM^{(1)}) &
+        \wred(\qM^{(2)}) &
+        \cdots &
+        \wred(\qM^{(\Nman)}) \\
+        | & | &        & |
+        \end{bmatrix}.
+\]
+
+This distinction is important. MAW--ECM is not an adaptive-support method. The
+same integration points are evaluated online for all states. Therefore, the
+finite element bookkeeping remains simple: the online code only needs the final
+selected points and elements. What changes from state to state is the value of
+the cubature weights.
+
+A fully local cubature method would allow both
+\[
+        \Zred=\Zred(\qM),
+        \qquad
+        \wred=\wred(\qM).
+\]
+Such a strategy may produce even smaller local rules, but it would require
+state-dependent point selection and would complicate online element
+management. MAW--ECM deliberately avoids this route.
+
+%===============================================================================
+\section{Bivariate graph structure}
+%===============================================================================
+
+In the current implementation, the latent samples are assumed to lie on a
+structured two-dimensional grid. The dimensions of the grid are denoted by
+\[
+        n_y,\; n_x,
+        \qquad
+        \Nman=n_y n_x .
+\]
+The two latent coordinate arrays are obtained by reshaping the rows of
+$\Qman$:
+\[
+        Q_1 = \operatorname{reshape}
+        \left(
+        \{q_{\mathrm{M},1}^{(j)}\}_{j=1}^{\Nman},
+        n_y,n_x
+        \right),
+\]
+\[
+        Q_2 = \operatorname{reshape}
+        \left(
+        \{q_{\mathrm{M},2}^{(j)}\}_{j=1}^{\Nman},
+        n_y,n_x
+        \right).
+\]
+A quadrilateral mesh is then built in the latent plane. The nodes of this mesh
+are not physical finite element nodes; they are sampled reduced states. The
+resulting graph is denoted by
+\[
+        \Ggraph=(\Mtrain,\Egraph),
+\]
+where $\Egraph$ contains the edges induced by the structured quadrilateral
+connectivity.
+
+The graph Laplacian, or graph stiffness matrix, is denoted by
+\[
+        \Kgraph\in\R^{\Nman\times\Nman}.
+\]
+For a scalar field $\varphi:\Mtrain\to\R$, collected in a vector
+$\bm\varphi\in\R^{\Nman}$, the quantity
+\[
+        \bm\varphi^T\Kgraph\bm\varphi
+\]
+measures the roughness of the field over the sampled latent graph.
+
+Since each retained integration point defines one scalar weight field over the
+manifold, graph regularity of the adaptive weights can be measured by
+\[
+        \sum_{i=1}^{\Ncand}
+        \bm w_i^T\Kgraph\bm w_i,
+\]
+where $\bm w_i\in\R^{\Nman}$ collects the values of the $i$-th integration-point
+weight over all sampled states.
+
+\paragraph{Specificity of the two-variable implementation.}
+The use of a structured quadrilateral graph is specific to the bivariate
+implementation. It relies on the possibility of reshaping the sampled manifold
+states into a Cartesian-like array. For $\Nlat>2$, or for unstructured sampling
+in any dimension, the same formulation remains valid if $\Kgraph$ is replaced
+by a graph Laplacian constructed from a neighborhood relation in latent space,
+for example using nearest neighbors, Delaunay connectivity, radial kernels, or
+a manifold mesh.
+
+%===============================================================================
+\section{Global MAW--ECM algorithm}
+%===============================================================================
+
+The following pseudo-algorithm summarizes the logic implemented in
+\texttt{MAW\_ECM\_genV1.m}. The individual routines invoked in the algorithm are
+not expanded here; they are identified as separate sections to be developed
+later.
+
+%\input{alg_v1}
+\begin{algorithm}[H]
+\footnotesize
+\caption{Offline construction of MAW--ECM with fixed support and adaptive weights}
+\label{alg:maw_ecm_global}
+\begin{algorithmic}[1]
+
+\Require
+Local integrand data $\{\Aint_j\}_{j=1}^{\Nman}$;
+FE weights $\wFE$;
+initial ECM support $\Zini$;
+initial ECM weights $\wini$;
+latent samples $\Qman$;
+offline parameters.
+
+\Ensure
+Final support $\Zred$;
+adaptive weight samples $\Wadapt_{\mathrm{red}}$;
+regression model $\qM\mapsto\wred(\qM)$.
+
+\vspace{0.2cm}
+
+\State Build the constant scaffold
+\[
+        \Ufixed \gets \mathrm{orth}(\bone).
+\]
+
+\State Construct the latent graph and graph Laplacian
+\[
+        \Kgraph \gets
+        \hyperref[sec:graph_laplacian]
+        {\mathrm{GraphLaplacian}(\Qman)}.
+\]
+
+\State Build the weighted projector
+\[
+       \Qproj \gets \mathrm{WeightedOrthonormalBasis}(\Qall,\wFE).
+\]
+
+\State Construct the local exactness systems
+\[
+        \{\Uj,\bj\}_{j=1}^{\Nman}
+        \gets
+        \hyperref[sec:local_exactness_systems]{\mathrm{LocalBasisBuilder}
+        (\Ufixed,\Zini,\{\Aint_j\},\wFE,\Qproj)}.
+\]
+
+\State Initialize the adaptive weights
+\[
+        \wadapt^{(j)} \gets \wini,
+        \qquad
+        j=1,\ldots,\Nman.
+\]
+Equivalently,
+\[
+        \Wadapt
+        \gets
+        [\wini,\ldots,\wini].
+\]
+
+\State Initialize active and eliminated sets
+\[
+        \Iact \gets \{1,\ldots,|\Zini|\},
+        \qquad
+        \Ielim \gets \emptyset.
+\]
+
+\While{stopping criterion is not satisfied}
+
+    \State Compute aggregate candidate weights
+    \[
+        R_i = \sum_{j=1}^{\Nman} W_{ij}.
+    \]
+
+    \State Define positive candidate set
+    \[
+        \Ipos=\{i\in\Iact: R_i>0\}.
+    \]
+
+    \State Sort candidates in increasing order of $R_i$.
+
+    \State Attempt a no-enforcement pruning step:
+    \[
+        (\Wadapt,\Iact,\Ielim,\mathrm{flag})
+        \gets
+        \hyperref[sec:no_enforcement_stage]{\mathrm{NoEnforcementPruning}
+        (\{\Uj\},\{\bj\},\Wadapt,\Iact,\Ielim)}.
+    \]
+
+    \If{$\mathrm{flag}=\mathrm{success}$}
+
+        \State Commit the accepted elimination.
+
+    \Else
+
+        \If{explicit positivity enforcement is enabled}
+
+            \State Attempt graph-regularized active-set pruning:
+            \[
+                (\Wadapt,\Iact,\Ielim,\mathrm{flag})
+                \gets
+                \hyperref[sec:graph_regularized_stage]{\mathrm{GraphBasedPruning}
+                (\{\Uj\},\{\bj\},\Wadapt,\Iact,\Ielim,\Kgraph)}.
+            \]
+
+        \Else
+
+            \State Set $\mathrm{flag}=\mathrm{failure}$.
+
+        \EndIf
+
+        \If{$\mathrm{flag}=\mathrm{failure}$}
+            \State Stop pruning.
+        \EndIf
+
+    \EndIf
+
+\EndWhile
+
+\State Extract the final support
+\[
+        \Zred \gets \Zini(\Iact).
+\]
+
+\State Extract the final adaptive weights
+\[
+        \Wadapt_{\mathrm{red}}
+        \gets
+        \Wadapt(\Iact,:).
+\]
+
+\State Regress the weight field
+\[
+        \qM \mapsto \wred(\qM)
+\]
+from the data
+\[
+        \left\{
+        \qMj,\;
+        \Wadapt_{\mathrm{red}}(:,j)
+        \right\}_{j=1}^{\Nman}.
+\]
+\[
+        \wred(\cdot)
+        \gets
+        \hyperref[sec:weight_regression]{\mathrm{WeightRegression}
+        (\Qman,\Wadapt_{\mathrm{red}})}.
+\]
+
+\State Validate the adaptive cubature accuracy over the sampled manifold.
+
+\end{algorithmic}
+\end{algorithm}
+
+
+
+
+Algorithm~\ref{alg:maw_ecm_global} summarizes the complete offline
+construction of MAW--ECM. The construction of the local exactness systems is
+detailed in Section~\ref{sec:local_exactness_systems}; the graph Laplacian
+construction is described in Section~\ref{sec:graph_laplacian}; the three
+pruning stages are presented in
+Sections~\ref{sec:no_enforcement_stage},
+\ref{sec:local_active_set_stage}, and
+\ref{sec:graph_regularized_stage}; finally, the regression of the adaptive
+weight fields is discussed in
+Section~\ref{sec:weight_regression}.
+
+%===============================================================================
+\section{Interpretation of the algorithm}
+%===============================================================================
+
+The algorithm can be interpreted as a constrained compression of a family of
+cubature rules. At the beginning, all sampled manifold states share the same
+fixed ECM weights:
+\[
+        \wadapt^{(1)}
+        =
+        \wadapt^{(2)}
+        =
+        \cdots
+        =
+        \wadapt^{(\Nman)}
+        =
+        \wini.
+\]
+As pruning proceeds, the support is reduced, but the equality constraints are
+maintained by allowing the columns of $\Wadapt$ to separate from one another.
+Thus, the algorithm trades a reduction in the number of integration points for
+an increase in the complexity of the weight map
+\[
+        \qM\mapsto\wred(\qM).
+\]
+
+This trade-off is the essential mechanism of MAW--ECM. A fixed ECM rule must
+find one vector of weights that works globally over the whole manifold. MAW--ECM
+instead constructs a family of related cubature rules:
+\[
+        \left\{
+        \Zred,\wred(\qMj)
+        \right\}_{j=1}^{\Nman},
+\]
+with common support but state-dependent weights.
+
+The graph-regularized stage is introduced because the independent local
+redistribution of weights may generate highly irregular weight fields. The graph
+term couples neighboring latent states during the redistribution step and
+discourages sharp jumps. However, it should not be interpreted as a guarantee of
+global smoothness. The map $\qM\mapsto\wred(\qM)$ is the solution map of a
+constrained optimization problem with active-set changes, and such maps are
+generally only piecewise smooth.
+
+%===============================================================================
+\section{Specific and general components}
+%===============================================================================
+
+It is useful to separate the algorithm into components that are intrinsic to
+MAW--ECM and components that are specific to the present bivariate
+implementation.
+
+\subsection{General MAW--ECM components}
+
+The following components are independent of the latent dimension:
+\begin{itemize}[leftmargin=1.2cm]
+    \item the fixed-support/adaptive-weight formulation;
+    \item the local exactness constraints $\Uj^T\wadapt^{(j)}=\bj$;
+    \item the global pruning of integration points;
+    \item the no-enforcement least-change redistribution;
+    \item the positivity-constrained active-set redistribution;
+    \item the final regression of $\wred(\qM)$;
+    \item the validation of the reduced adaptive cubature rule.
+\end{itemize}
+
+\subsection{Components specific to the two-variable implementation}
+
+The following components are specific to the present bivariate implementation:
+\begin{itemize}[leftmargin=1.2cm]
+    \item the assumption that $\Qman$ can be reshaped into an $n_y\times n_x$
+    structured grid;
+    \item the construction of a quadrilateral mesh in the latent plane;
+    \item the finite-element-like graph Laplacian built on this quadrilateral
+    mesh;
+    \item the use of two-dimensional plotting and surface visualization of the
+    adaptive weights;
+    \item any hard-coded interpretation of the two latent variables as axial and
+    shear-like macroscopic parameters.
+\end{itemize}
+
+\subsection{Extension to higher-dimensional latent manifolds}
+
+For $\Nlat>2$, the algebraic structure of the method does not change. The local
+constraints remain
+\[
+        \Uj^T\wadapt^{(j)}=\bj,
+        \qquad
+        j=1,\ldots,\Nman,
+\]
+and the adaptive weights are still stored as
+\[
+        \Wadapt\in\R^{\Ncand\times\Nman}.
+\]
+The only essential modification concerns the construction of $\Kgraph$.
+Instead of a structured quadrilateral mesh in the $(q_{\mathrm{M},1},
+q_{\mathrm{M},2})$ plane, one needs a graph on the sampled latent states in
+$\R^{\Nlat}$. Once such a graph is available, the same graph energy
+\[
+        \sum_{i=1}^{\Ncand}\bm w_i^T\Kgraph\bm w_i
+\]
+can be used without changing the pruning formulation.
+
+Thus, the two-dimensional implementation should be viewed as a convenient
+realization of a more general graph-based MAW--ECM principle.
+
+% %===============================================================================
+% \section{Sections to be expanded next}
+% %===============================================================================
+%
+% The following sections will be developed subsequently:
+% \begin{enumerate}[leftmargin=1.2cm]
+%     \item construction of the local basis matrices $\Uj$ and right-hand sides
+%     $\bj$;
+%     \item weighted projector and role of $\Qproj$;
+%     \item construction of the latent graph and $\Kgraph$;
+%     \item no-enforcement pruning;
+%     \item local active-set positivity enforcement;
+%     \item graph-regularized active-set pruning;
+%     \item candidate ranking criteria;
+%     \item RBF regression of the adaptive weights;
+%     \item online evaluation and accuracy checks.
+% \end{enumerate}
+
+
+%===============================================================================
+\section{Construction of the local exactness systems}
+\label{sec:local_exactness_systems}
+%===============================================================================
+
+The first substantive operation in MAW--ECM is the construction of the local
+linear systems that the adaptive weights must satisfy. These systems are the
+manifold-dependent counterpart of the ECM exactness condition. In the classical
+fixed-weight setting, a single cubature vector is sought so as to integrate a
+global reduced basis of integrands. In MAW--ECM, by contrast, each sampled
+manifold state carries its own local exactness system, while all systems share
+the same candidate support.
+
+Let the initial ECM rule be given by the support
+\[
+        \Zini = \{z_1,\ldots,z_{\Ncand}\}
+        \subset \Zfull,
+\]
+and by the corresponding fixed weights
+\[
+        \wini \in \R^{\Ncand}.
+\]
+At this stage, $\Zini$ is not yet the final MAW--ECM support. It is the
+candidate set from which the adaptive pruning algorithm will remove points.
+
+For each sampled manifold state $\qMj$, let
+\[
+        \Aint_j \in \R^{\Nip\times m_j}
+\]
+denote the local integrand matrix associated with that state. The columns of
+$\Aint_j$ contain the scalar fields over the full integration grid that one
+wishes to integrate accurately at $\qMj$. Depending on the application, these
+columns may represent stress-output integrands, residual integrands projected
+onto a manifold tangent space, or a concatenation of several blocks.
+
+The full finite element integral of these fields is
+\[
+        \Aint_j^T \wFE.
+\]
+However, the MAW--ECM pruning stage acts only on the initial candidate support
+$\Zini$. Therefore, the local basis is restricted to the rows indexed by
+$\Zini$:
+\[
+        \Uj
+        =
+        {\Ufull}_j(\Zini,:)
+        \in \R^{\Ncand\times r_j},
+\]
+where ${\Ufull}_j$ denotes the orthonormalized local basis before restriction,
+and $r_j$ is the number of local constraints retained at node $j$.
+
+The local adaptive weights $\wadapt^{(j)}$ are required to satisfy
+\[
+        \Uj^T \wadapt^{(j)} = \bj,
+        \qquad
+        j=1,\ldots,\Nman.
+        \label{eq:maw_local_system}
+\]
+The pair $(\Uj,\bj)$ is the fundamental local algebraic object used by all
+subsequent pruning routines.
+
+%-------------------------------------------------------------------------------
+\subsection{Fixed scaffold}
+%-------------------------------------------------------------------------------
+
+A fixed scaffold is included in every local basis. Its role is to impose
+constraints that must be preserved independently of the state-dependent
+integrand content. In the present implementation, the most important scaffold
+is the constant function,
+\[
+        \bone =
+        (1,\ldots,1)^T\in\R^{\Nip}.
+\]
+After orthonormalization, this gives
+\[
+        \Ufixed = \operatorname{orth}(\bone).
+\]
+The corresponding constraint enforces preservation of the total measure carried
+by the current cubature rule. In the candidate-support formulation, this means
+that the adaptive weights should preserve the volume represented by the initial
+ECM rule:
+\[
+        \bone_{\Zini}^T \wadapt^{(j)}
+        =
+        \bone_{\Zini}^T \wini,
+        \qquad
+        j=1,\ldots,\Nman.
+\]
+Thus, even if the state-dependent integrand block becomes small or degenerate,
+the adaptive rule is prevented from collapsing to the trivial zero solution.
+
+More general scaffolds are possible. For instance, one may include additional
+low-order functions, elastic modes, or previously identified integration
+constraints. In that case,
+\[
+        \Ufixed
+        =
+        \operatorname{orth}
+        \left(
+        [\Uel\;\;\bone]
+        \right),
+\]
+where $\Uel$ denotes a user-defined fixed block. The present bivariate
+implementation uses only the constant scaffold.
+
+%-------------------------------------------------------------------------------
+\subsection{Weighted projector}
+%-------------------------------------------------------------------------------
+
+The routine also constructs a weighted projector from a precomputed basis
+$\Qall$. This object is used to project or filter the local integrand matrices
+before building the local exactness bases.
+
+Let
+\[
+        \Qall \in \R^{\Nip\times n_Q}
+\]
+denote the input basis. The code forms
+\[
+        \Qproj
+        =
+        \operatorname{orth}
+        \left(
+        \diag(\wFE)^{-1/2}\Qall
+        \right).
+\]
+Equivalently, if
+\[
+        \bm S_{\mathrm{FE}}
+        =
+        \diag(\sqrt{w^{\mathrm{FE}}_1},\ldots,\sqrt{w^{\mathrm{FE}}_{\Nip}}),
+\]
+then
+\[
+        \Qproj
+        =
+        \operatorname{orth}
+        \left(
+        \bm S_{\mathrm{FE}}^{-1}\Qall
+        \right).
+\]
+This transformation is intended to work with a basis compatible with the
+finite-element weighted inner product. In implementation terms, this is the
+operation
+\[
+        \Qproj
+        \leftarrow
+        \operatorname{SVDT}
+        \left(
+        \Qall ./ \sqrt{\wFE}
+        \right).
+\]
+
+When the projection option is active, the local integrand matrix is replaced by
+\[
+        \Aint_j^{\mathrm{proj}}
+        =
+        \Qproj(\Qproj^T\Aint_j).
+\]
+This projected content is then used to construct the local basis. The purpose
+is not to change the cubature philosophy, but to avoid imposing local
+constraints associated with high-frequency or poorly represented components of
+the integrand snapshots.
+
+%-------------------------------------------------------------------------------
+\subsection{Local basis at a sampled manifold state}
+%-------------------------------------------------------------------------------
+
+For each sampled state $j$, one starts from the local integrand block
+$\Aint_j$. If the projection option is active, the projected matrix
+$\Aint_j^{\mathrm{proj}}$ is used instead. For compactness, denote the matrix
+actually used by
+\[
+        \widehat{\Aint}_j.
+\]
+Thus,
+\[
+        \widehat{\Aint}_j =
+        \begin{cases}
+        \Qproj(\Qproj^T\Aint_j),
+        & \text{if projection is active},\\[2mm]
+        \Aint_j,
+        & \text{otherwise}.
+        \end{cases}
+\]
+
+The local full-grid basis is then obtained by orthonormalizing the
+concatenation
+\[
+        {\Ufull}_j
+        =
+        \operatorname{orth}
+        \left(
+        [\Ufixed\;\;\widehat{\Aint}_j]
+        \right).
+\]
+In the implementation this orthonormalization is performed by \texttt{SVDT}.
+Only the rows associated with the initial ECM support are retained:
+\[
+        \Uj = {\Ufull}_j(\Zini,:).
+\]
+
+The local right-hand side depends on whether projection is active. Without
+projection, the natural target is the full FE integral:
+\[
+        \bj
+        =
+        {\Ufull}_j^T\wFE.
+        \label{eq:b_full_fe}
+\]
+With projection, the implementation instead uses the integral induced by the
+current fixed ECM rule:
+\[
+        \bj
+        =
+        \Uj^T\wini.
+        \label{eq:b_projected_ecm}
+\]
+This distinction is important. In the projected case, the local system is made
+consistent with the current candidate rule. The pruning problem then asks
+whether the same projected constraints can still be satisfied after removing
+additional points from $\Zini$.
+
+%-------------------------------------------------------------------------------
+\subsection{Initialization of the adaptive weights}
+%-------------------------------------------------------------------------------
+
+Once the local systems have been constructed, the adaptive weight matrix is
+initialized by copying the fixed ECM weights at every sampled manifold state:
+\[
+        \wadapt^{(j)} = \wini,
+        \qquad
+        j=1,\ldots,\Nman.
+\]
+Equivalently,
+\[
+        \Wadapt
+        =
+        [\wini,\wini,\ldots,\wini]
+        \in\R^{\Ncand\times\Nman}.
+\]
+Thus, the initial MAW--ECM rule is exactly the fixed ECM rule replicated over
+the sampled manifold. Adaptivity is introduced only through the subsequent
+pruning and redistribution steps.
+
+This initialization has two useful consequences. First, feasibility is inherited
+from the initial rule, up to the consistency of the constructed local systems.
+Second, the pruning algorithm starts from a state in which the weight field is
+constant over the manifold:
+\[
+        \wadapt(\qM^{(1)})
+        =
+        \cdots
+        =
+        \wadapt(\qM^{(\Nman)}).
+\]
+All spatial variability of the adaptive weights is therefore generated by the
+need to preserve the local exactness constraints after points are removed.
+
+%-------------------------------------------------------------------------------
+\subsection{Function-level interpretation}
+%-------------------------------------------------------------------------------
+
+The construction described in this section is implemented in
+\[
+        \texttt{MAWecmBasisMATRIX\_LOCAL\_noverlap.m}.
+\]
+Its role is purely preparatory: it does not prune integration points and does
+not regress the adaptive weights. It builds the local systems
+\[
+        \{(\Uj,\bj)\}_{j=1}^{\Nman}
+\]
+and initializes $\Wadapt$.
+
+In pseudo-code, the function performs the following operations.
+
+\begin{algorithm}[H]
+\caption{Construction of local exactness systems}
+\label{alg:local_exactness_systems}
+\begin{algorithmic}[1]
+
+\Require
+Fixed scaffold $\Ufixed$;
+initial support $\Zini$;
+local integrand matrices $\{\Aint_j\}_{j=1}^{\Nman}$;
+initial weights $\wini$;
+FE weights $\wFE$;
+optional projector $\Qproj$.
+
+\Ensure
+Local operators $\{\Uj\}$;
+right-hand sides $\{\bj\}$;
+initial adaptive weights $\Wadapt$.
+
+\For{$j=1,\ldots,\Nman$}
+
+    \If{projection through $\Qproj$ is active}
+        \State Compute
+        \[
+            \widehat{\Aint}_j
+            =
+            \Qproj(\Qproj^T\Aint_j).
+        \]
+    \Else
+        \State Set
+        \[
+            \widehat{\Aint}_j=\Aint_j.
+        \]
+    \EndIf
+
+    \State Build the full local basis
+    \[
+        {\Ufull}_j
+        =
+        \operatorname{orth}
+        \left(
+        [\Ufixed\;\;\widehat{\Aint}_j]
+        \right).
+    \]
+
+    \State Restrict the basis to the current candidate support
+    \[
+        \Uj={\Ufull}_j(\Zini,:).
+    \]
+
+    \If{projection through $\Qproj$ is active}
+        \State Define the right-hand side by the current ECM rule
+        \[
+            \bj=\Uj^T\wini.
+        \]
+    \Else
+        \State Define the right-hand side by the full FE quadrature
+        \[
+            \bj={\Ufull}_j^T\wFE.
+        \]
+    \EndIf
+
+    \State Initialize
+    \[
+        \wadapt^{(j)}=\wini.
+    \]
+
+\EndFor
+
+\State Assemble
+\[
+        \Wadapt =
+        [\wadapt^{(1)},\ldots,\wadapt^{(\Nman)}].
+\]
+
+\end{algorithmic}
+\end{algorithm}
+
+%-------------------------------------------------------------------------------
+\subsection{Specificity and possible generalizations}
+%-------------------------------------------------------------------------------
+
+The construction of the local exactness systems is not specific to a
+two-dimensional latent manifold. The only required input is a collection of
+sampled states indexed by $j=1,\ldots,\Nman$. Therefore, the equations
+\[
+        \Uj^T\wadapt^{(j)}=\bj
+\]
+remain unchanged for any latent dimension $\Nlat$.
+
+What is specific to the present implementation is the organization of the
+samples and the later use of a structured bivariate graph. The local systems
+themselves do not know whether the manifold is one-dimensional, two-dimensional,
+or higher-dimensional. They only require a consistent ordering between:
+\[
+        \qMj,\quad
+        \Aint_j,\quad
+        \Uj,\quad
+        \bj,\quad
+        \wadapt^{(j)}.
+\]
+
+This observation is important for future extensions. In higher-dimensional or
+unstructured latent spaces, the present section would remain essentially
+unchanged. Only the graph construction and visualization tools would need to be
+modified.
+
+
+%===============================================================================
+\section{Graph Laplacian on the sampled latent manifold}
+\label{sec:graph_laplacian}
+%===============================================================================
+
+The graph-based version of MAW--ECM requires a discrete notion of smoothness for
+scalar fields defined over the sampled latent manifold. In the present setting,
+these scalar fields are the adaptive cubature weights associated with the
+retained integration points. For a fixed integration point $i$, the values
+\[
+        W_{i1},W_{i2},\ldots,W_{i\Nman}
+\]
+define a scalar field over the sampled latent states
+\[
+        \{\qMj\}_{j=1}^{\Nman}.
+\]
+The purpose of the graph Laplacian is to measure and penalize nonsmooth
+variations of such fields across neighboring latent states.
+
+The graph construction is independent of the physical finite element mesh. It
+is built in the latent space, not in the spatial domain. The physical mesh
+defines the integration points; the latent graph defines neighborhood relations
+between sampled reduced states.
+
+%-------------------------------------------------------------------------------
+\subsection{Structured bivariate graph}
+%-------------------------------------------------------------------------------
+
+In the current implementation, the latent dimension is two:
+\[
+        \Nlat = 2,
+        \qquad
+        \qM =
+        \begin{bmatrix}
+        q_{\mathrm{M},1}\\
+        q_{\mathrm{M},2}
+        \end{bmatrix}.
+\]
+The sampled states are assumed to be ordered as a structured grid. Let
+\[
+        n_y n_x = \Nman
+\]
+be the number of samples in the two grid directions. The two rows of $\Qman$
+are reshaped into two arrays
+\[
+        \Qone =
+        \operatorname{reshape}
+        \left(
+        q_{\mathrm{M},1}^{(1)},\ldots,q_{\mathrm{M},1}^{(\Nman)};
+        n_y,n_x
+        \right),
+\]
+and
+\[
+        \Qtwo =
+        \operatorname{reshape}
+        \left(
+        q_{\mathrm{M},2}^{(1)},\ldots,q_{\mathrm{M},2}^{(\Nman)};
+        n_y,n_x
+        \right).
+\]
+Each entry $(a,b)$ of these arrays defines one node of the latent graph:
+\[
+        \bm x^{\mathrm{G}}_{ab}
+        =
+        \begin{bmatrix}
+        \Qone(a,b)\\
+        \Qtwo(a,b)
+        \end{bmatrix}.
+\]
+A structured quadrilateral mesh is then built over these nodes. Its
+connectivity is denoted by
+\[
+        \mathcal{T}_{\mathrm{G}}.
+\]
+Again, this is not a finite element mesh in the physical domain. It is an
+auxiliary mesh over the sampled latent states.
+
+%-------------------------------------------------------------------------------
+\subsection{Finite-element-like graph stiffness}
+%-------------------------------------------------------------------------------
+
+The graph Laplacian $\Kgraph$ is assembled as a scalar diffusion stiffness
+matrix on the auxiliary latent mesh. Formally, if $\varphi$ is a scalar field
+defined over the latent manifold, one may view its nodal values as
+\[
+        \bm\varphi =
+        \begin{bmatrix}
+        \varphi(\qM^{(1)}) &
+        \cdots &
+        \varphi(\qM^{(\Nman)})
+        \end{bmatrix}^T .
+\]
+The discrete graph energy is then
+\[
+        \mathcal{E}_{\mathrm{G}}(\bm\varphi)
+        =
+        \bm\varphi^T\Kgraph\bm\varphi.
+        \label{eq:graph_energy_scalar}
+\]
+This quantity is the discrete counterpart of a Dirichlet energy in latent
+space,
+\[
+        \int_{\mathcal{M}}
+        \nabla_{\qM}\varphi\cdot\nabla_{\qM}\varphi
+        \,d\qM.
+\]
+Thus, $\mathcal{E}_{\mathrm{G}}$ is small for slowly varying fields and large
+for fields with strong jumps between neighboring latent states.
+
+In MAW--ECM, the scalar fields of interest are the rows of the adaptive weight
+matrix. Let
+\[
+        \bm w_i =
+        \begin{bmatrix}
+        W_{i1} & W_{i2} & \cdots & W_{i\Nman}
+        \end{bmatrix}^T
+        \in\R^{\Nman}
+\]
+be the weight field associated with integration point $i$. The total graph
+roughness of the adaptive rule is measured by
+\[
+        \mathcal{S}_{\mathrm{G}}(\Wadapt)
+        =
+        \sum_{i=1}^{\Ncand}
+        \bm w_i^T\Kgraph\bm w_i.
+        \label{eq:graph_energy_weights}
+\]
+Equivalently, since the rows of $\Wadapt$ are the weight fields,
+\[
+        \mathcal{S}_{\mathrm{G}}(\Wadapt)
+        =
+        \trace\left(
+        \Wadapt\Kgraph\Wadapt^T
+        \right).
+        \label{eq:graph_energy_trace}
+\]
+
+%-------------------------------------------------------------------------------
+\subsection{Incremental smoothing}
+%-------------------------------------------------------------------------------
+
+In the pruning step, it is usually preferable to regularize the change in the
+weights rather than the absolute value of the weights. Let
+\[
+        \DeltaW = \Wnew-\Wold
+\]
+be the redistribution induced by a tentative point removal. The graph
+regularization term used in the update can then be written as
+\[
+        \mathcal{S}_{\mathrm{G}}(\DeltaW)
+        =
+        \trace\left(
+        \DeltaW\Kgraph\DeltaW^T
+        \right).
+        \label{eq:incremental_graph_energy}
+\]
+This choice has a clear interpretation. The previous feasible weights
+$\Wold$ are taken as a reference state. The update is allowed to change them,
+but abrupt changes over neighboring latent states are penalized.
+
+A representative graph-regularized least-change objective is therefore
+\[
+        \frac{1}{2}\|\Wnew-\Wold\|_F^2
+        +
+        \frac{\alphaG}{2}
+        \trace\left[
+        (\Wnew-\Wold)\Kgraph(\Wnew-\Wold)^T
+        \right],
+        \label{eq:incremental_graph_objective}
+\]
+where $\alphaG\geq 0$ controls the strength of the graph regularization.
+For $\alphaG=0$, one recovers a purely local least-change redistribution. As
+$\alphaG$ increases, rough variations of the redistribution over the latent
+graph become increasingly penalized.
+
+%-------------------------------------------------------------------------------
+\subsection{Stacked-vector form}
+%-------------------------------------------------------------------------------
+
+For the graph-regularized active-set update, it is useful to write
+\eqref{eq:incremental_graph_objective} in vector form. Let
+\[
+        \zvec = \vecop(\Wnew),
+        \qquad
+        \zold = \vecop(\Wold),
+\]
+where the columns of the weight matrix are stacked. Then
+\[
+        \|\Wnew-\Wold\|_F^2
+        =
+        \|\zvec-\zold\|_2^2.
+\]
+Moreover,
+\[
+        \trace\left[
+        (\Wnew-\Wold)\Kgraph(\Wnew-\Wold)^T
+        \right]
+        =
+        (\zvec-\zold)^T
+        (\Kgraph\otimes\bm I_{\Ncand})
+        (\zvec-\zold).
+\]
+Consequently, the incremental graph-regularized objective becomes
+\[
+        \frac{1}{2}
+        (\zvec-\zold)^T
+        \left[
+        \bm I + \alphaG(\Kgraph\otimes\bm I_{\Ncand})
+        \right]
+        (\zvec-\zold).
+        \label{eq:stacked_graph_objective}
+\]
+Define
+\[
+        \Hgraph
+        :=
+        \bm I + \alphaG(\Kgraph\otimes\bm I_{\Ncand}).
+        \label{eq:Hgraph_definition}
+\]
+Then the objective is simply
+\[
+        \frac{1}{2}
+        (\zvec-\zold)^T\Hgraph(\zvec-\zold).
+\]
+
+The structure of the Kronecker product is important. The Laplacian
+$\Kgraph$ acts across manifold samples, whereas $\bm I_{\Ncand}$ acts on the
+integration-point index. Therefore, the graph regularization does not mix
+different integration points. Each weight field is smoothed independently over
+the manifold graph.
+
+%-------------------------------------------------------------------------------
+\subsection{Boundary-weighted graph regularization}
+%-------------------------------------------------------------------------------
+
+The implementation also allows the graph Laplacian to be modified near the
+boundary of the sampled latent domain. This option increases the regularization
+strength close to the boundary, where interpolation and extrapolation effects
+are often more delicate.
+
+Let $d_j$ denote the grid-index distance from node $j$ to the closest boundary
+of the structured latent grid. A nodal amplification factor is defined as
+\[
+        \rho_j
+        =
+        1+\lambda_{\mathrm{B}}
+        \exp\left(-\frac{d_j}{\ell_{\mathrm{B}}}\right),
+        \qquad
+        \rho_j\geq 1.
+\]
+Here $\lambda_{\mathrm{B}}$ controls the strength of the boundary
+amplification, and $\ell_{\mathrm{B}}$ controls its decay length.
+
+For an edge connecting nodes $a$ and $b$, the edge amplification is taken as
+\[
+        \rho_{ab}
+        =
+        \frac{1}{2}(\rho_a+\rho_b).
+\]
+The original graph edge weight is then multiplied by $\rho_{ab}$, and the
+Laplacian is rebuilt from the modified edge weights. The resulting matrix is a
+boundary-weighted graph Laplacian. Its purpose is not to change the exactness
+constraints, but only to alter the smoothness metric used during graph-based
+redistribution.
+
+%-------------------------------------------------------------------------------
+\subsection{Specificity and extension to higher dimensions}
+%-------------------------------------------------------------------------------
+
+The construction based on $\Qone$, $\Qtwo$ and quadrilateral connectivity is
+specific to the bivariate implementation. It requires that the latent samples
+can be reshaped into a structured two-dimensional grid.
+
+The graph-regularized MAW--ECM formulation itself does not require this. For a
+general latent dimension $\Nlat$, one only needs a graph
+\[
+        \Ggraph=(\Mtrain,\Egraph)
+\]
+whose nodes are the sampled latent states. The graph Laplacian can then be
+constructed from any suitable neighborhood relation. Possible choices include:
+\[
+        k\text{-nearest-neighbor graphs},\qquad
+        \varepsilon\text{-graphs},\qquad
+        \text{radial-kernel graphs},\qquad
+        \text{simplicial or manifold meshes}.
+\]
+Once $\Kgraph$ is available, the same graph energy
+\[
+        \trace(\Wadapt\Kgraph\Wadapt^T)
+\]
+and the same stacked operator
+\[
+        \bm I+\alphaG(\Kgraph\otimes\bm I)
+\]
+apply without modification.
+
+Thus, the bivariate graph used in the present implementation should be viewed
+as one convenient realization of a more general graph-based smoothing principle
+for manifold-adaptive cubature weights.
+
+%-------------------------------------------------------------------------------
+\subsection{Function-level interpretation}
+%-------------------------------------------------------------------------------
+
+The construction of the bivariate graph is split into small auxiliary routines.
+The function
+\[
+        \texttt{quadMeshFromXY.m}
+\]
+constructs the nodal coordinate array and quadrilateral connectivity from the
+reshaped latent-coordinate arrays $\Qone$ and $\Qtwo$. The function
+\[
+        \texttt{ComputeK\_scl.m}
+\]
+assembles the scalar finite-element-like graph stiffness matrix $\Kgraph$ on
+this auxiliary latent mesh. If boundary amplification is activated,
+\[
+        \texttt{BoundaryWeightedGraphLaplacian.m}
+\]
+modifies the edge weights and rebuilds the Laplacian.
+
+The resulting matrix $\Kgraph$ is then passed to the graph-based pruning
+routine, where it enters the regularized redistribution of the adaptive
+weights.
+
+
+%===============================================================================
+\section{Pruning strategy and candidate elimination}
+\label{sec:pruning_strategy}
+%===============================================================================
+
+Once the local exactness systems and the graph operator have been constructed,
+MAW--ECM enters the pruning stage. The objective is to reduce the initial
+candidate support $\Zini$ while preserving, at every sampled manifold state,
+the local cubature constraints
+\[
+        \Uj^T\wadapt^{(j)}=\bj,
+        \qquad
+        j=1,\ldots,\Nman.
+\]
+The reduction is performed by eliminating integration points one at a time.
+Each elimination removes one row of the adaptive weight matrix
+\[
+        \Wadapt\in\R^{\Ncand\times\Nman}.
+\]
+Thus, pruning is global with respect to the support: if a point is eliminated,
+it is eliminated for all manifold states.
+
+The adaptive character of the method enters through the redistribution of the
+remaining weights. After a point is removed, each column of $\Wadapt$ is allowed
+to change so that the corresponding local exactness system remains satisfied.
+
+%-------------------------------------------------------------------------------
+\subsection{Active and eliminated sets}
+%-------------------------------------------------------------------------------
+
+Let
+\[
+        \Iact \subset \{1,\ldots,\Ncand\}
+\]
+denote the set of currently active candidate indices, and let
+\[
+        \Ielim
+        =
+        \{1,\ldots,\Ncand\}\setminus\Iact
+\]
+denote the eliminated indices. At the beginning of the pruning stage,
+\[
+        \Iact = \{1,\ldots,\Ncand\},
+        \qquad
+        \Ielim=\emptyset.
+\]
+
+If $p\in\Iact$ is selected for elimination, the updated active set is
+\[
+        \Iact^{+}
+        =
+        \Iact\setminus\{p\},
+\]
+and the eliminated set becomes
+\[
+        \Ielim^{+}
+        =
+        \Ielim\cup\{p\}.
+\]
+In terms of adaptive weights, the elimination means
+\[
+        W_{pj}^{+}=0,
+        \qquad
+        j=1,\ldots,\Nman.
+\]
+The remaining rows of $\Wadapt$ must then be recomputed.
+
+%-------------------------------------------------------------------------------
+\subsection{Candidate ranking by aggregate weight}
+%-------------------------------------------------------------------------------
+
+The first candidate ranking used in the algorithm is based on the aggregate
+contribution of each integration point over the sampled manifold. For a current
+weight matrix $\Wadapt$, define
+\[
+        R_i
+        =
+        \sum_{j=1}^{\Nman} W_{ij},
+        \qquad
+        i=1,\ldots,\Ncand.
+        \label{eq:aggregate_weight}
+\]
+Only candidates with positive aggregate contribution are considered:
+\[
+        \Ipos
+        =
+        \{i\in\Iact : R_i>0\}.
+\]
+The candidates in $\Ipos$ are sorted in increasing order of $R_i$. Hence, the
+algorithm first attempts to remove the integration points that carry the
+smallest total weight over the manifold.
+
+This criterion is intentionally simple. It is the natural extension of the
+greedy intuition used in fixed-weight cubature: points with small cumulative
+weight are expected to be less important. In MAW--ECM, however, a small value of
+$R_i$ does not guarantee that the point can be safely removed. A point may have
+small total weight and still be essential for satisfying one or several local
+exactness systems.
+
+%-------------------------------------------------------------------------------
+\subsection{Single-point elimination trial}
+%-------------------------------------------------------------------------------
+
+Consider a candidate point $p\in\Ipos$. A pruning trial consists of imposing
+\[
+        W_{pj}^{+}=0,
+        \qquad
+        j=1,\ldots,\Nman,
+        \label{eq:global_prune_constraint}
+\]
+and seeking updated weights $\Wnew$ such that
+\[
+        \Uj^T{\wnew}^{(j)}=\bj,
+        \qquad
+        j=1,\ldots,\Nman.
+        \label{eq:post_prune_exactness}
+\]
+If positivity is enforced, one also requires
+\[
+        {\wnew}^{(j)}\geq 0,
+        \qquad
+        j=1,\ldots,\Nman.
+        \label{eq:post_prune_positivity}
+\]
+
+A candidate is accepted only if the redistribution problem is feasible according
+to the active stage of the algorithm. Otherwise, the point is rejected and the
+next candidate in the ordered list is tested.
+
+The important point is that at most one integration point is committed per
+successful pruning pass. This conservative strategy makes the evolution of the
+support easier to monitor and reduces the risk of destroying feasibility by an
+overly aggressive simultaneous elimination.
+
+%-------------------------------------------------------------------------------
+\subsection{Stopping criterion}
+%-------------------------------------------------------------------------------
+
+The pruning loop terminates when either the target number of points has been
+reached or no further feasible elimination can be found. A natural lower bound
+is dictated by the number of local constraints. If
+\[
+        r_j = \dim(\bj),
+\]
+then a necessary condition for local feasibility is that the number of active
+points should not fall below the number of independent constraints at the most
+demanding node. Hence one defines
+\[
+        r_{\max}
+        =
+        \max_{1\leq j\leq\Nman} r_j.
+\]
+In practice, an additional user-prescribed maximum or target number of ECM
+points may also be imposed. Denoting this value by $n_{\mathrm{target}}$, the
+effective stopping threshold can be written as
+\[
+        n_{\mathrm{stop}}
+        =
+        \max(r_{\max},n_{\mathrm{target}}).
+\]
+The pruning loop is not allowed to reduce the support below this threshold.
+
+Even above this threshold, pruning may stop earlier if no candidate produces a
+feasible redistribution. This is a stronger and more meaningful stopping
+criterion than the mere count of active points.
+
+%-------------------------------------------------------------------------------
+\subsection{Two-stage pruning logic}
+%-------------------------------------------------------------------------------
+
+The implementation distinguishes two main redistribution stages.
+
+The first stage attempts a least-change update without explicit positivity
+enforcement. This stage is computationally inexpensive and usually produces
+smooth changes in the adaptive weights. Symbolically, for a candidate point
+$p$, it resembles
+\[
+        \min_{\Wnew}
+        \frac{1}{2}\|\Wnew-\Wold\|_F^2,
+\]
+subject to
+\[
+        \Uj^T{\wnew}^{(j)}=\bj,
+        \qquad
+        W_{pj}^{+}=0,
+        \qquad
+        j=1,\ldots,\Nman.
+\]
+No inequality constraint is imposed at this stage.
+
+If this no-enforcement stage can no longer eliminate points, the algorithm may
+switch to an explicit positivity stage. In that case, the redistribution also
+enforces
+\[
+        {\wnew}^{(j)}\geq 0.
+\]
+This positivity-enforcing stage can be performed either independently at each
+manifold node, or through the graph-regularized coupled formulation described
+later.
+
+The transition between these stages is important. The no-enforcement stage
+usually preserves a relatively regular weight field. The explicit positivity
+stage is more robust from the cubature viewpoint, but it introduces active-set
+changes, and these active-set changes are a primary source of nonsmoothness in
+the mapping
+\[
+        \qM\mapsto\wred(\qM).
+\]
+
+%-------------------------------------------------------------------------------
+\subsection{Pseudo-algorithm for the pruning loop}
+%-------------------------------------------------------------------------------
+
+The pruning loop can be summarized as follows.
+
+\begin{algorithm}[H]
+\caption{MAW--ECM pruning loop}
+\label{alg:maw_pruning_loop}
+\begin{algorithmic}[1]
+
+\Require
+Local systems $\{(\Uj,\bj)\}_{j=1}^{\Nman}$;
+initial adaptive weights $\Wadapt$;
+initial support $\Zini$;
+graph Laplacian $\Kgraph$;
+stopping threshold $n_{\mathrm{stop}}$.
+
+\Ensure
+Reduced support $\Zred$;
+adaptive weights on the reduced support.
+
+\State Initialize
+\[
+        \Iact\gets\{1,\ldots,|\Zini|\},
+        \qquad
+        \Ielim\gets\emptyset.
+\]
+
+\While{$|\Iact|>n_{\mathrm{stop}}$}
+
+    \State Compute aggregate weights
+    \[
+        R_i=\sum_{j=1}^{\Nman}W_{ij}.
+    \]
+
+    \State Define the candidate list
+    \[
+        \Ipos=\{i\in\Iact:R_i>0\}.
+    \]
+
+    \State Sort $\Ipos$ in increasing order of $R_i$.
+
+    \State Attempt no-enforcement pruning over the ordered candidates.
+
+    \If{a feasible candidate is found}
+        \State Commit the elimination:
+        \[
+            \Iact\gets\Iact\setminus\{p\},
+            \qquad
+            \Ielim\gets\Ielim\cup\{p\}.
+        \]
+        \State Update $\Wadapt$.
+    \Else
+        \If{positivity enforcement is disabled}
+            \State Stop.
+        \Else
+            \If{graph-based redistribution is enabled}
+                \State Attempt graph-regularized active-set pruning.
+            \Else
+                \State Attempt local active-set pruning independently at each node.
+            \EndIf
+
+            \If{a feasible candidate is found}
+                \State Commit the elimination and update $\Wadapt$.
+            \Else
+                \State Stop.
+            \EndIf
+        \EndIf
+    \EndIf
+
+\EndWhile
+
+\State Set
+\[
+        \Zred=\Zini(\Iact).
+\]
+
+\State Keep
+\[
+        \Wadapt_{\mathrm{red}}=\Wadapt(\Iact,:).
+\]
+
+\end{algorithmic}
+\end{algorithm}
+
+%-------------------------------------------------------------------------------
+\subsection{Interpretation}
+%-------------------------------------------------------------------------------
+
+The pruning process should not be viewed as simply deleting points with small
+weights. Each deletion changes the feasible set of all local cubature systems.
+A point can be removed only if the remaining support can still reproduce the
+local constraints at every sampled manifold state.
+
+Thus, MAW--ECM performs a constrained sparsification of a family of cubature
+rules. The support is sparse and common, but the weights are allowed to move
+over the manifold. This additional freedom is precisely what allows the support
+to be smaller than in a fixed-weight ECM rule.
+
+At the same time, this freedom introduces a new difficulty. The adaptive weight
+field is the result of repeated constrained redistributions. When positivity is
+enforced, changes of active set may produce kinks, jumps, or localized spikes.
+The graph-based stage is introduced to moderate these effects, but the
+underlying constrained nature of the problem remains.
+
+%-------------------------------------------------------------------------------
+\subsection{Function-level interpretation}
+%-------------------------------------------------------------------------------
+
+The global pruning loop is orchestrated by
+\[
+        \texttt{MAW\_ECM\_genV1.m}.
+\]
+The no-enforcement stage is implemented in
+\[
+        \texttt{Loop\_MAWecmNOENF\_cl.m}.
+\]
+The explicit positivity-enforcing local stage is implemented in
+\[
+        \texttt{Loop\_MAWecmNOENFe.m}.
+\]
+The graph-based positivity-enforcing stage is implemented in
+\[
+        \texttt{GraphBased\_MAW\_ECM\_2v.m},
+\]
+which in turn calls
+\[
+        \texttt{prune\_step\_optionB.m}.
+\]
+
+The detailed mathematical formulation of these redistribution stages is not
+included in the present section. It will be developed in the following sections,
+starting from the no-enforcement least-change update and then moving to the
+active-set and graph-regularized formulations.
+
+
+%===============================================================================
+\section{Stage 1: no-enforcement least-change redistribution}
+\label{sec:no_enforcement_stage}
+%===============================================================================
+
+The first redistribution stage of MAW--ECM attempts to remove integration
+points without explicitly enforcing positivity of the adaptive weights. This
+stage is implemented in
+\[
+        \texttt{Loop\_MAWecmNOENF\_cl.m}.
+\]
+Its role is to perform inexpensive pruning steps while preserving the local
+exactness constraints with minimal perturbation of the current adaptive
+weights.
+
+This stage is important for two reasons. First, it is computationally cheaper
+than the active-set positivity-enforcing stages. Second, and more importantly,
+it tends to preserve smoothness of the adaptive weight field. Since no weights
+are explicitly clamped to zero, the redistribution remains governed only by the
+equality constraints, and the resulting changes in the weights are usually
+relatively gentle over the latent manifold.
+
+The no-enforcement stage should therefore be interpreted as the preferred
+redistribution regime. The explicit positivity stages are activated only when
+the unconstrained redistribution is no longer able to reduce the support.
+
+%-------------------------------------------------------------------------------
+\subsection{Local least-change redistribution}
+%-------------------------------------------------------------------------------
+
+Suppose that the current candidate support contains $\Ncand$ active points and
+that a candidate point $p$ is selected for elimination. The pruning condition
+is
+\[
+        W_{pj}^{+}=0,
+        \qquad
+        j=1,\ldots,\Nman.
+\]
+The remaining adaptive weights must then be redistributed so as to preserve the
+local exactness systems
+\[
+        {\Uj}^T{\wnew}^{(j)}=\bj,
+        \qquad
+        j=1,\ldots,\Nman.
+\]
+At the no-enforcement stage, the redistribution is performed independently at
+each manifold sample.
+
+Let
+\[
+        {\wold}^{(j)}
+\]
+denote the current local adaptive weights at node $j$. The updated local
+weights are obtained by solving a least-change problem of the form
+\[
+        \min_{{\wnew}^{(j)}}
+        \frac{1}{2}
+        \|
+        {\wnew}^{(j)}-{\wold}^{(j)}
+        \|_2^2,
+        \label{eq:no_enforcement_objective}
+\]
+subject to
+\[
+        \Uj^T{\wnew}^{(j)}=\bj,
+        \label{eq:no_enforcement_exactness}
+\]
+and
+\[
+        w_{p,\mathrm{new}}^{(j)}=0.
+        \label{eq:no_enforcement_elimination}
+\]
+No positivity condition is imposed:
+\[
+        {\wnew}^{(j)}
+        \not\geq 0
+        \quad\text{necessarily}.
+\]
+
+Thus, the update seeks the feasible redistribution closest, in Euclidean norm,
+to the previous local weights.
+
+%-------------------------------------------------------------------------------
+\subsection{Reduced local system after elimination}
+%-------------------------------------------------------------------------------
+
+Let
+\[
+        \Irem
+        =
+        \Iact\setminus\{p\}
+\]
+denote the remaining active rows after tentative elimination of point $p$.
+Define the reduced local basis
+\[
+        \widetilde{\Uj}
+        =
+        \Uj(\Irem,:)
+        \in\R^{(\Ncand-1)\times r_j}.
+\]
+Similarly, define the reduced local unknown
+\[
+        \widetilde{\wnew}^{(j)}
+        =
+        {\wnew}^{(j)}(\Irem).
+\]
+Since the eliminated weight is fixed to zero, the local exactness condition
+reduces to
+\[
+        \widetilde{\Uj}^T
+        \widetilde{\wnew}^{(j)}
+        =
+        \bj.
+        \label{eq:reduced_exactness_system}
+\]
+The least-change problem therefore becomes
+\[
+        \min_{\widetilde{\wnew}^{(j)}}
+        \frac{1}{2}
+        \|
+        \widetilde{\wnew}^{(j)}
+        -
+        \widetilde{\wold}^{(j)}
+        \|_2^2,
+\]
+subject to
+\[
+        \widetilde{\Uj}^T
+        \widetilde{\wnew}^{(j)}
+        =
+        \bj.
+        \label{eq:reduced_least_change_problem}
+\]
+
+%-------------------------------------------------------------------------------
+\subsection{Closed-form least-change update}
+%-------------------------------------------------------------------------------
+
+The problem
+\eqref{eq:reduced_least_change_problem} is a standard equality-constrained
+quadratic minimization problem. Introducing Lagrange multipliers
+\[
+        \bm\lambda_j\in\R^{r_j},
+\]
+the local Lagrangian reads
+\[
+        \mathcal{L}
+        =
+        \frac{1}{2}
+        \|
+        \widetilde{\wnew}^{(j)}
+        -
+        \widetilde{\wold}^{(j)}
+        \|_2^2
+        +
+        \bm\lambda_j^T
+        \left(
+        \widetilde{\Uj}^T
+        \widetilde{\wnew}^{(j)}
+        -
+        \bj
+        \right).
+\]
+Stationarity with respect to
+$\widetilde{\wnew}^{(j)}$ gives
+\[
+        \widetilde{\wnew}^{(j)}
+        -
+        \widetilde{\wold}^{(j)}
+        +
+        \widetilde{\Uj}\bm\lambda_j
+        =
+        0.
+\]
+Hence,
+\[
+        \widetilde{\wnew}^{(j)}
+        =
+        \widetilde{\wold}^{(j)}
+        -
+        \widetilde{\Uj}\bm\lambda_j.
+        \label{eq:no_enforcement_update}
+\]
+Substituting into the constraint yields
+\[
+        \widetilde{\Uj}^T
+        \widetilde{\Uj}
+        \bm\lambda_j
+        =
+        \widetilde{\Uj}^T
+        \widetilde{\wold}^{(j)}
+        -
+        \bj.
+        \label{eq:no_enforcement_multiplier}
+\]
+If the Gram matrix
+\[
+        \widetilde{\Uj}^T\widetilde{\Uj}
+\]
+is invertible, one obtains
+\[
+        \bm\lambda_j
+        =
+        \left(
+        \widetilde{\Uj}^T\widetilde{\Uj}
+        \right)^{-1}
+        \left(
+        \widetilde{\Uj}^T
+        \widetilde{\wold}^{(j)}
+        -
+        \bj
+        \right).
+\]
+The least-change correction therefore becomes
+\[
+        \widetilde{\wnew}^{(j)}
+        =
+        \widetilde{\wold}^{(j)}
+        -
+        \widetilde{\Uj}
+        \left(
+        \widetilde{\Uj}^T\widetilde{\Uj}
+        \right)^{-1}
+        \left(
+        \widetilde{\Uj}^T
+        \widetilde{\wold}^{(j)}
+        -
+        \bj
+        \right).
+        \label{eq:orthogonal_projection_update}
+\]
+This expression shows that the update is an orthogonal projection of the
+previous weights onto the affine subspace defined by the reduced exactness
+constraints.
+
+%-------------------------------------------------------------------------------
+\subsection{Interpretation as a minimum redistribution}
+%-------------------------------------------------------------------------------
+
+The no-enforcement stage does not attempt to redesign the local cubature rule.
+Instead, it redistributes as little as possible the weights already present in
+the current feasible rule.
+
+Suppose that point $p$ carries only a small contribution in the current local
+weights. Then the correction required to absorb its removal is also expected to
+be small. In such cases, the redistribution remains localized and smooth. This
+is precisely the regime in which the no-enforcement stage is most effective.
+
+Conversely, when the remaining support is already too sparse, the elimination of
+one point may require large compensatory redistributions. In that regime, the
+unconstrained least-change update may generate:
+\[
+        \text{negative weights},
+        \qquad
+        \text{large oscillations},
+        \qquad
+        \text{loss of feasibility}.
+\]
+At that point, the algorithm transitions to the explicit positivity stage.
+
+%-------------------------------------------------------------------------------
+\subsection{Why smoothness is usually better in this stage}
+%-------------------------------------------------------------------------------
+
+The absence of active-set clamping is one of the main reasons why the
+no-enforcement stage tends to preserve smoothness.
+
+At this stage, the adaptive weights are obtained as solutions of smooth linear
+least-change systems. Therefore, as long as the local operators vary smoothly
+with the manifold coordinate, the resulting weight field
+\[
+        \qM\mapsto\wred(\qM)
+\]
+also tends to vary smoothly.
+
+By contrast, once positivity is enforced, the feasible set becomes polyhedral.
+As the latent coordinate changes, different constraints may become active or
+inactive. These active-set transitions introduce nonsmoothness into the
+solution map.
+
+Thus, even though the no-enforcement stage allows negative weights, it often
+produces more regular adaptive weight fields than the positivity-enforcing
+stages.
+
+%-------------------------------------------------------------------------------
+\subsection{Acceptance and rejection of candidates}
+%-------------------------------------------------------------------------------
+
+The unconstrained redistribution associated with a candidate point $p$ is not
+accepted automatically. The updated weights must satisfy several practical
+criteria.
+
+Typical checks include:
+\begin{itemize}
+    \item satisfaction of the local exactness systems;
+    \item absence of excessive negative weights;
+    \item bounded redistribution magnitude;
+    \item acceptable numerical conditioning.
+\end{itemize}
+
+If the candidate satisfies the prescribed tolerances, the elimination is
+committed:
+\[
+        \Iact
+        \gets
+        \Iact\setminus\{p\},
+\]
+and the updated adaptive weights become the new current solution:
+\[
+        \Wold\gets\Wnew.
+\]
+Otherwise, the candidate is rejected and the next point in the ordered list is
+tested.
+
+The important point is that rejection does not necessarily mean that the point
+is fundamentally indispensable. It only means that the current unconstrained
+redistribution stage cannot remove it while satisfying the prescribed criteria.
+The same point may later become removable once positivity enforcement or
+graph-regularized redistribution is activated.
+
+%-------------------------------------------------------------------------------
+\subsection{Pseudo-algorithm}
+%-------------------------------------------------------------------------------
+
+The no-enforcement redistribution stage can be summarized as follows.
+
+\begin{algorithm}[H]
+\caption{No-enforcement least-change pruning}
+\label{alg:no_enforcement_pruning}
+\begin{algorithmic}[1]
+
+\Require
+Current support $\Iact$;
+adaptive weights $\Wold$;
+local systems $\{(\Uj,\bj)\}_{j=1}^{\Nman}$.
+
+\Ensure
+Updated support and adaptive weights if a feasible elimination is found.
+
+\State Compute aggregate weights
+\[
+        R_i=\sum_{j=1}^{\Nman}W_{ij}.
+\]
+
+\State Sort candidates in increasing order of $R_i$.
+
+\For{candidate point $p$ in the ordered list}
+
+    \State Define
+    \[
+        \Irem=\Iact\setminus\{p\}.
+    \]
+
+    \For{$j=1,\ldots,\Nman$}
+
+        \State Restrict the local basis:
+        \[
+            \widetilde{\Uj}=\Uj(\Irem,:).
+        \]
+
+        \State Compute the least-change redistribution:
+        \[
+            \widetilde{\wnew}^{(j)}
+            =
+            \widetilde{\wold}^{(j)}
+            -
+            \widetilde{\Uj}
+            (\widetilde{\Uj}^T\widetilde{\Uj})^{-1}
+            (\widetilde{\Uj}^T\widetilde{\wold}^{(j)}-\bj).
+        \]
+
+        \State Reconstruct the full local weights with
+        \[
+            w_{p,\mathrm{new}}^{(j)}=0.
+        \]
+
+    \EndFor
+
+    \State Assemble the candidate adaptive weight matrix $\Wnew$.
+
+    \If{$\Wnew$ satisfies the acceptance criteria}
+
+        \State Commit the elimination:
+        \[
+            \Iact\gets\Irem.
+        \]
+
+        \State Update
+        \[
+            \Wold\gets\Wnew.
+        \]
+
+        \State Exit successfully.
+
+    \EndIf
+
+\EndFor
+
+\State Return failure if no candidate is accepted.
+
+\end{algorithmic}
+\end{algorithm}
+
+%-------------------------------------------------------------------------------
+\subsection{Function-level interpretation}
+%-------------------------------------------------------------------------------
+
+The no-enforcement stage is implemented in
+\[
+        \texttt{Loop\_MAWecmNOENF\_cl.m}.
+\]
+The suffix ``NOENF'' refers to the absence of explicit positivity enforcement.
+The suffix ``cl'' refers historically to the least-change redistribution logic.
+
+The function operates on all local systems simultaneously, because the support
+must remain common across the manifold. However, the redistribution itself is
+performed independently at each manifold node. Therefore, the stage is local in
+the manifold direction and does not yet use the graph Laplacian.
+
+Graph coupling enters only in the later graph-regularized active-set stage,
+which is described in the next sections.
+
+
+%===============================================================================
+\section{Stage 2: local positivity enforcement by active sets}
+\label{sec:local_active_set_stage}
+%===============================================================================
+
+The no-enforcement redistribution stage described previously is often capable
+of removing a substantial number of integration points while preserving a
+relatively smooth adaptive weight field. However, as the support becomes
+progressively smaller, the unconstrained least-change redistribution may produce
+negative weights or large oscillatory corrections. At that point, explicit
+positivity enforcement becomes necessary.
+
+The second redistribution stage of MAW--ECM therefore introduces nonnegativity
+constraints into the local redistribution problem. This stage is implemented in
+\[
+        \texttt{Loop\_MAWecmNOENFe.m}.
+\]
+Unlike the graph-based stage described later, the present formulation still
+treats each manifold node independently. The coupling between neighboring latent
+states is not yet introduced.
+
+Thus, the present stage should be viewed as:
+\[
+        \text{local positivity enforcement without graph coupling}.
+\]
+
+%-------------------------------------------------------------------------------
+\subsection{Local constrained redistribution problem}
+%-------------------------------------------------------------------------------
+
+Suppose that a candidate point $p$ is tentatively removed from the support. As
+before, define
+\[
+        \Irem=\Iact\setminus\{p\},
+\]
+and let
+\[
+        \widetilde{\Uj}
+        =
+        \Uj(\Irem,:)
+\]
+be the reduced local basis after elimination of the candidate point.
+
+At manifold node $j$, the redistributed weights must satisfy:
+\[
+        {\widetilde{\Uj}}^T
+        \widetilde{\wnew}^{(j)}
+        =
+        \bj.
+        \label{eq:local_positive_exactness}
+\]
+In contrast with the no-enforcement stage, one now additionally imposes
+\[
+        \widetilde{\wnew}^{(j)}\geq 0.
+        \label{eq:local_positive_inequality}
+\]
+The redistribution problem therefore becomes
+\[
+        \min_{\widetilde{\wnew}^{(j)}}
+        \frac{1}{2}
+        \|
+        \widetilde{\wnew}^{(j)}
+        -
+        \widetilde{\wold}^{(j)}
+        \|_2^2,
+\]
+subject to
+\[
+        {\widetilde{\Uj}}^T
+        \widetilde{\wnew}^{(j)}
+        =
+        \bj,
+\]
+and
+\[
+        \widetilde{\wnew}^{(j)}\geq 0.
+        \label{eq:local_positive_problem}
+\]
+
+Thus, the local adaptive weights are redistributed as little as possible while
+remaining both feasible and nonnegative.
+
+%-------------------------------------------------------------------------------
+\subsection{Geometric interpretation}
+%-------------------------------------------------------------------------------
+
+Without positivity enforcement, the feasible set of the redistribution problem
+is an affine subspace:
+\[
+        \mathcal{A}_j
+        =
+        \left\{
+        \bm w:
+        {\widetilde{\Uj}}^T\bm w=\bj
+        \right\}.
+\]
+The no-enforcement redistribution is simply the orthogonal projection of the
+previous weights onto this affine subspace.
+
+With positivity enforcement, the feasible set becomes
+\[
+        \mathcal{F}_j
+        =
+        \left\{
+        \bm w:
+        {\widetilde{\Uj}}^T\bm w=\bj,
+        \quad
+        \bm w\geq 0
+        \right\}.
+\]
+This set is no longer an affine space, but a convex polyhedron obtained by
+intersecting the affine exactness constraints with the positive orthant.
+
+The redistribution problem therefore becomes a constrained projection onto a
+polyhedral feasible set.
+
+%-------------------------------------------------------------------------------
+\subsection{Active-set philosophy}
+%-------------------------------------------------------------------------------
+
+The implementation adopts an active-set strategy. The idea is simple: whenever
+one component of the redistributed weights becomes negative, that component is
+clamped to zero and treated as an additional equality constraint.
+
+At manifold node $j$, define the local active set
+\[
+        \Dj
+        \subset
+        \{1,\ldots,|\Irem|\}.
+\]
+An index
+\[
+        i\in\Dj
+\]
+means that the corresponding local weight is fixed to zero:
+\[
+        w_i^{(j)}=0.
+\]
+The remaining local weights are free variables.
+
+Thus, the constrained redistribution problem is converted into a sequence of
+equality-constrained least-change problems with progressively larger active
+sets.
+
+%-------------------------------------------------------------------------------
+\subsection{Reduced local variables}
+%-------------------------------------------------------------------------------
+
+Let
+\[
+        {\Ifree}_j
+        =
+        \{1,\ldots,|\Irem|\}\setminus\Dj
+\]
+denote the free local indices at manifold node $j$. Restricting the local basis
+to the free variables gives
+\[
+        \widehat{\Uj}
+        =
+        \widetilde{\Uj}({\Ifree}_j,:).
+\]
+Similarly, define the free local unknown
+\[
+        \widehat{\wnew}^{(j)}
+        =
+        \widetilde{\wnew}^{(j)}({\Ifree}_j).
+\]
+The local constrained redistribution problem then becomes
+\[
+        \min_{\widehat{\wnew}^{(j)}}
+        \frac{1}{2}
+        \|
+        \widehat{\wnew}^{(j)}
+        -
+        \widehat{\wold}^{(j)}
+        \|_2^2,
+\]
+subject to
+\[
+        {\widehat{\Uj}}^T
+        \widehat{\wnew}^{(j)}
+        =
+        \bj.
+        \label{eq:free_active_system}
+\]
+This has exactly the same algebraic structure as the no-enforcement stage, but
+restricted to the free variables.
+
+%-------------------------------------------------------------------------------
+\subsection{Iterative evolution of the active sets}
+%-------------------------------------------------------------------------------
+
+The active-set redistribution proceeds iteratively.
+
+Starting from
+\[
+        \Dj=\emptyset,
+\]
+one computes the least-change redistribution over all remaining variables. If
+all components are nonnegative, the candidate elimination is accepted.
+
+Otherwise, one identifies the negative components:
+\[
+        \mathcal{N}_j
+        =
+        \left\{
+        i:
+        w_i^{(j)}<0
+        \right\}.
+\]
+These indices are added to the active set:
+\[
+        \Dj
+        \gets
+        \Dj\cup\mathcal{N}_j.
+\]
+The redistribution problem is then solved again over the reduced free set.
+
+This process is repeated until:
+\begin{itemize}
+    \item all free variables are nonnegative, or
+    \item the free system becomes infeasible or singular.
+\end{itemize}
+
+Thus, the active sets evolve adaptively during the redistribution process.
+
+%-------------------------------------------------------------------------------
+\subsection{Node-dependent active sets}
+%-------------------------------------------------------------------------------
+
+A crucial aspect of the present implementation is that the active sets are local
+to each manifold node.
+
+Suppose that integration-point weight $i$ becomes negative at manifold node
+$j_1$. Then
+\[
+        i\in{\Dj}_1,
+\]
+but it does not follow that
+\[
+        i\in{\Dj}_2
+\]
+for another node $j_2$.
+
+Thus, positivity enforcement is local in latent space:
+\[
+        {\Dj}_1 \neq {\Dj}_2
+        \quad\text{in general}.
+\]
+This distinction is important. The support itself remains common over the
+manifold, but the local positivity constraints do not.
+
+Consequently, even after the support has been fixed, the local constrained
+redistribution problem may have different active variables at different latent
+states.
+
+This is one of the main mechanisms generating nonsmoothness in the adaptive
+weight field.
+
+%-------------------------------------------------------------------------------
+\subsection{Origin of nonsmoothness}
+%-------------------------------------------------------------------------------
+
+At the no-enforcement stage, the redistribution is obtained from smooth linear
+systems. Therefore, the resulting mapping
+\[
+        \qM\mapsto\wred(\qM)
+\]
+tends to vary smoothly.
+
+Once positivity is enforced, however, the active sets may change abruptly as the
+latent coordinate varies. The adaptive weight field therefore becomes the
+solution map of a piecewise-defined constrained optimization problem.
+
+Whenever the active set changes, the local affine system defining the
+redistribution also changes. As a consequence:
+\[
+        \text{the adaptive weight field is generally only piecewise smooth}.
+\]
+This effect becomes increasingly pronounced as the support becomes more
+compressed.
+
+The graph-based stage introduced later is intended precisely to moderate this
+behavior by coupling neighboring latent states during the redistribution.
+
+%-------------------------------------------------------------------------------
+\subsection{Acceptance and rejection}
+%-------------------------------------------------------------------------------
+
+A candidate point $p$ is accepted only if the positivity-enforcing active-set
+procedure succeeds at every manifold node.
+
+More precisely, for all
+\[
+        j=1,\ldots,\Nman,
+\]
+the final redistributed weights must satisfy:
+\[
+        {\widetilde{\Uj}}^T
+        \widetilde{\wnew}^{(j)}
+        =
+        \bj,
+\]
+and
+\[
+        \widetilde{\wnew}^{(j)}\geq 0,
+\]
+up to the prescribed tolerances.
+
+If the constrained redistribution fails at even one manifold node, the
+candidate elimination is rejected.
+
+Thus, feasibility is global with respect to the sampled manifold, even though
+the redistributions themselves are computed locally.
+
+%-------------------------------------------------------------------------------
+\subsection{Pseudo-algorithm}
+%-------------------------------------------------------------------------------
+
+The local active-set redistribution can be summarized as follows.
+
+\begin{algorithm}[H]
+\caption{Local positivity-enforcing redistribution}
+\label{alg:local_active_set}
+\begin{algorithmic}[1]
+
+\Require
+Candidate point $p$;
+current adaptive weights $\Wold$;
+local systems $\{(\Uj,\bj)\}_{j=1}^{\Nman}$.
+
+\Ensure
+Updated adaptive weights if the candidate is feasible.
+
+\State Define
+\[
+        \Irem=\Iact\setminus\{p\}.
+\]
+
+\For{$j=1,\ldots,\Nman$}
+
+    \State Initialize
+    \[
+        \Dj=\emptyset.
+    \]
+
+    \While{active-set iteration has not converged}
+
+        \State Define the free local indices
+        \[
+            {\Ifree}_j
+            =
+            \{1,\ldots,|\Irem|\}\setminus\Dj.
+        \]
+
+        \State Restrict the basis to the free variables
+        \[
+            \widehat{\Uj}
+            =
+            \widetilde{\Uj}({\Ifree}_j,:).
+        \]
+
+        \State Solve the free least-change redistribution problem.
+
+        \If{all free variables are nonnegative}
+
+            \State Accept the local redistribution.
+            \State Exit the local active-set loop.
+
+        \Else
+
+            \State Detect negative free variables.
+
+            \State Add them to the active set:
+            \[
+                \Dj
+                \gets
+                \Dj\cup\mathcal{N}_j.
+            \]
+
+        \EndIf
+
+    \EndWhile
+
+    \If{the local redistribution failed}
+
+        \State Reject the candidate point $p$ globally.
+        \State Exit with failure.
+
+    \EndIf
+
+\EndFor
+
+\State Accept the candidate point $p$ globally.
+
+\end{algorithmic}
+\end{algorithm}
+
+%-------------------------------------------------------------------------------
+\subsection{Interpretation}
+%-------------------------------------------------------------------------------
+
+The local active-set stage can be viewed as a compromise between two competing
+requirements.
+
+On one hand, the adaptive weights should remain close to the previous feasible
+solution:
+\[
+        \Wnew \approx \Wold.
+\]
+On the other hand, positivity must be enforced:
+\[
+        \Wnew\geq 0.
+\]
+As the support becomes smaller, these two requirements become increasingly
+difficult to reconcile simultaneously.
+
+The resulting constrained redistribution is therefore intrinsically nonlinear
+and nonsmooth. The graph-based stage described next attempts to compensate for
+this by coupling neighboring manifold states and discouraging abrupt local
+redistributions.
+
+%-------------------------------------------------------------------------------
+\subsection{Function-level interpretation}
+%-------------------------------------------------------------------------------
+
+The local positivity-enforcing stage is implemented in
+\[
+        \texttt{Loop\_MAWecmNOENFe.m}.
+\]
+The suffix ``NOENFe'' historically refers to the no-overlap local active-set
+version with explicit enforcement.
+
+The key structural property of this routine is:
+\[
+        \text{local active sets, but common support}.
+\]
+The support elimination is global, but the positivity constraints are enforced
+independently at each manifold node.
+
+This distinction will become important in the graph-based stage, where the
+redistribution is instead performed through a coupled optimization problem over
+all manifold states simultaneously.
+
+
+%===============================================================================
+\section{Stage 3: graph-regularized positivity enforcement}
+\label{sec:graph_regularized_stage}
+%===============================================================================
+
+The local active-set stage enforces positivity, but it treats each manifold
+sample independently. This independence is convenient algebraically, yet it may
+produce weight fields with sharp variations across neighboring latent states.
+The graph-regularized stage is introduced to reduce this effect.
+
+This stage is implemented through
+\[
+        \texttt{GraphBased\_MAW\_ECM\_2v.m},
+\]
+which calls the core redistribution routine
+\[
+        \texttt{prune\_step\_optionB.m}.
+\]
+The essential change with respect to the local active-set stage is that the
+weights at all manifold samples are updated simultaneously. The graph Laplacian
+$\Kgraph$ couples neighboring latent nodes and penalizes rough redistributions.
+
+%-------------------------------------------------------------------------------
+\subsection{Global unknown and constraints}
+%-------------------------------------------------------------------------------
+
+Let the current adaptive weights be
+\[
+        \Wold \in \R^{r\times\Nman},
+\]
+where $r$ denotes the number of currently retained candidate points at this
+stage of the pruning loop. A tentative elimination of point $p$ seeks updated
+weights
+\[
+        \Wnew \in \R^{r\times\Nman}.
+\]
+The pruning condition is imposed globally:
+\[
+        W^{\mathrm{new}}_{pj}=0,
+        \qquad
+        j=1,\ldots,\Nman.
+        \label{eq:graph_pruned_row}
+\]
+For each manifold node $j$, the local exactness condition remains
+\[
+        A_j {\wnew}^{(j)} = \bj,
+        \label{eq:graph_local_exactness}
+\]
+where, in the notation of the implementation,
+\[
+        A_j = {\Uj}^T
+\]
+restricted to the rows currently active in the pruning trial.
+
+The positivity condition is
+\[
+        {\wnew}^{(j)}\geq 0,
+        \qquad
+        j=1,\ldots,\Nman.
+        \label{eq:graph_positivity}
+\]
+
+%-------------------------------------------------------------------------------
+\subsection{Incremental graph-regularized objective}
+%-------------------------------------------------------------------------------
+
+The graph-based update minimizes a least-change functional augmented with a
+smoothness penalty over the latent graph. In incremental form, the objective is
+\[
+        \frac{1}{2}
+        \|\Wnew-\Wold\|_F^2
+        +
+        \frac{\alphaG}{2}
+        \trace\left[
+        (\Wnew-\Wold)
+        \Kgraph
+        (\Wnew-\Wold)^T
+        \right].
+        \label{eq:graph_regularized_objective}
+\]
+The first term keeps the new adaptive weights close to the previous feasible
+weights. The second term penalizes rough variations of the update over the
+sampled latent manifold.
+
+The use of the increment
+\[
+        \DeltaW=\Wnew-\Wold
+\]
+is important. It means that the graph regularization acts on the redistribution
+caused by the pruning step, not necessarily on the absolute value of the
+weights. Thus, a weight field that is already nonsmooth is not directly forced
+to become smooth in one step; rather, the new pruning-induced change is
+discouraged from introducing additional sharp variations.
+
+If the absolute version is used instead, the graph term is applied directly to
+$\Wnew$. The incremental version is usually less invasive and better aligned
+with the idea of progressive pruning.
+
+%-------------------------------------------------------------------------------
+\subsection{Stacked quadratic form}
+%-------------------------------------------------------------------------------
+
+The implementation solves the graph-regularized redistribution in stacked-vector
+form. Define
+\[
+        \zvec=\vecop(\Wnew),
+        \qquad
+        \zold=\vecop(\Wold),
+\]
+with columnwise stacking. Then
+\[
+        \|\Wnew-\Wold\|_F^2
+        =
+        \|\zvec-\zold\|_2^2,
+\]
+and
+\[
+        \trace\left[
+        (\Wnew-\Wold)\Kgraph(\Wnew-\Wold)^T
+        \right]
+        =
+        (\zvec-\zold)^T
+        (\Kgraph\otimes\bm I_r)
+        (\zvec-\zold).
+\]
+Therefore, the objective can be written as
+\[
+        \frac{1}{2}
+        (\zvec-\zold)^T
+        \Hgraph
+        (\zvec-\zold),
+        \label{eq:graph_stacked_incremental}
+\]
+where
+\[
+        \Hgraph
+        =
+        \bm I
+        +
+        \alphaG
+        (\Kgraph\otimes\bm I_r).
+        \label{eq:graph_hessian}
+\]
+Expanding the quadratic form and dropping constants gives
+\[
+        \frac{1}{2}\zvec^T\Hgraph\zvec
+        -
+        \bm g^T\zvec,
+        \label{eq:graph_quadratic_expanded}
+\]
+with
+\[
+        \bm g = \Hgraph\zold
+\]
+in the incremental formulation.
+
+The matrix $\Hgraph$ is symmetric positive definite for $\alphaG\geq 0$, since
+$\Kgraph$ is positive semidefinite and the identity term is present. This is
+important for the robustness of the reduced nullspace solve.
+
+%-------------------------------------------------------------------------------
+\subsection{Node-dependent active sets}
+%-------------------------------------------------------------------------------
+
+The graph-based implementation enforces nonnegativity through node-dependent
+active sets. For each manifold node $j$, define
+\[
+        \Dj \subset \{1,\ldots,r\}.
+\]
+The interpretation is:
+\[
+        i\in\Dj
+        \quad\Longleftrightarrow\quad
+        W^{\mathrm{new}}_{ij}=0.
+\]
+The pruning candidate is clamped at all nodes:
+\[
+        p\in\Dj,
+        \qquad
+        j=1,\ldots,\Nman.
+\]
+Additional indices are added to $\Dj$ only at the nodes where negative weights
+are detected.
+
+This is the key distinction of the option implemented in
+\texttt{prune\_step\_optionB.m}: a weight can be clamped at one manifold node
+without being clamped at all other nodes. Hence, the active set is local in the
+latent direction, even though the update is graph-coupled.
+
+%-------------------------------------------------------------------------------
+\subsection{Nullspace parametrization}
+%-------------------------------------------------------------------------------
+
+For a fixed collection of active sets
+\[
+        \{\Dj\}_{j=1}^{\Nman},
+\]
+the problem contains only equality constraints: local exactness constraints and
+clamping constraints. The implementation solves this equality-constrained
+quadratic problem by nullspace parametrization.
+
+Let
+\[
+        \zvec = \zp + \Nmat\bm y,
+        \label{eq:nullspace_parametrization}
+\]
+where:
+\begin{itemize}
+    \item $\zp$ is one particular vector satisfying all equality constraints;
+    \item $\Nmat$ is a basis for the nullspace of the equality-constraint
+    matrix;
+    \item $\bm y$ contains the reduced unknowns.
+\end{itemize}
+
+Substitution into the expanded quadratic objective gives the reduced system
+\[
+        \Hred \bm y = \fred,
+        \label{eq:reduced_nullspace_system}
+\]
+where
+\[
+        \Hred = \Nmat^T\Hgraph\Nmat,
+\]
+and
+\[
+        \fred =
+        \Nmat^T
+        \left(
+        \bm g-\Hgraph\zp
+        \right).
+\]
+Since $\Hgraph$ is positive definite and $\Nmat$ has full column rank, the
+matrix $\Hred$ is also positive definite. The reduced system can therefore be
+solved directly.
+
+The full updated weight vector is then reconstructed from
+\[
+        \zvec = \zp+\Nmat\bm y,
+\]
+and reshaped into
+\[
+        \Wnew\in\R^{r\times\Nman}.
+\]
+
+%-------------------------------------------------------------------------------
+\subsection{Active-set iterations}
+%-------------------------------------------------------------------------------
+
+After solving the equality-constrained graph-regularized problem for the
+current active sets, the algorithm checks nonnegativity. For each node $j$, the
+free variables are inspected. If
+\[
+        W^{\mathrm{new}}_{ij}<-\varepsilon_{\mathrm{neg}},
+\]
+for some free index $i$, that index is added to the local active set:
+\[
+        \Dj \gets \Dj\cup\{i\}.
+\]
+The graph-coupled problem is then solved again with the enlarged active sets.
+
+The active-set iteration stops when no new negative weights are detected. If the
+maximum number of active-set iterations is reached, or if the constrained system
+becomes infeasible, the pruning candidate is rejected.
+
+Thus, one graph-based pruning trial consists of:
+\[
+        \text{fix candidate }p
+        \;\longrightarrow\;
+        \text{solve graph-coupled equality problem}
+        \;\longrightarrow\;
+        \text{update active sets}
+        \;\longrightarrow\;
+        \text{repeat until feasible or rejected}.
+\]
+
+%-------------------------------------------------------------------------------
+\subsection{Why graph coupling helps}
+%-------------------------------------------------------------------------------
+
+In the local active-set stage, each manifold node redistributes its weights
+independently. If a weight is clamped at one node but not at its neighbors, the
+resulting field may develop a localized jump. The graph-based stage reduces this
+effect by penalizing large differences of the update across neighboring latent
+nodes.
+
+For an edge $(a,b)\in\Egraph$, the update jump associated with integration point
+$i$ is
+\[
+        \Delta W_{ia}-\Delta W_{ib}.
+\]
+The graph energy penalizes such jumps in an averaged quadratic sense. Therefore,
+among the feasible redistributions, the graph-based update favors those with
+more coherent changes across the latent manifold.
+
+This does not eliminate active-set nonsmoothness. If the constraints and
+positivity conditions force a local clamp, the graph penalty cannot remove it.
+It can only choose, among the feasible solutions, the one that is least rough
+according to the chosen graph metric.
+
+%-------------------------------------------------------------------------------
+\subsection{Pseudo-algorithm}
+%-------------------------------------------------------------------------------
+
+\begin{algorithm}[H]
+\caption{Graph-regularized active-set redistribution for one pruning candidate}
+\label{alg:graph_regularized_pruning}
+\begin{algorithmic}[1]
+
+\Require
+Current weights $\Wold$;
+local systems $\{(A_j,\bj)\}_{j=1}^{\Nman}$;
+graph Laplacian $\Kgraph$;
+smoothing parameter $\alphaG$;
+candidate point $p$.
+
+\Ensure
+Updated weights $\Wnew$ if the pruning candidate is feasible.
+
+\State Initialize active sets:
+\[
+        \Dj\gets\{p\},
+        \qquad
+        j=1,\ldots,\Nman.
+\]
+
+\State Build
+\[
+        \Hgraph
+        =
+        \bm I+\alphaG(\Kgraph\otimes\bm I_r).
+\]
+
+\If{incremental smoothing is used}
+    \State Set
+    \[
+        \bm g=\Hgraph\zold.
+    \]
+\Else
+    \State Set
+    \[
+        \bm g=\zold.
+    \]
+\EndIf
+
+\For{active-set iteration $k=1,\ldots,k_{\max}$}
+
+    \State Build the global equality constraints from:
+    \[
+        A_j{\wnew}^{(j)}=\bj,
+        \qquad
+        W^{\mathrm{new}}_{ij}=0
+        \quad
+        \text{for } i\in\Dj.
+    \]
+
+    \State Compute a particular solution $\zp$ and nullspace basis $\Nmat$.
+
+    \State Solve
+    \[
+        \left(\Nmat^T\Hgraph\Nmat\right)\bm y
+        =
+        \Nmat^T(\bm g-\Hgraph\zp).
+    \]
+
+    \State Reconstruct
+    \[
+        \zvec=\zp+\Nmat\bm y,
+        \qquad
+        \Wnew=\operatorname{reshape}(\zvec).
+    \]
+
+    \State Detect negative free weights.
+
+    \If{no new negative weights are detected}
+        \State Accept the candidate and return success.
+    \Else
+        \State Add the negative entries to the corresponding node-dependent
+        active sets $\Dj$.
+    \EndIf
+
+\EndFor
+
+\State Reject the candidate if convergence is not achieved.
+
+\end{algorithmic}
+\end{algorithm}
+
+%-------------------------------------------------------------------------------
+\subsection{Function-level interpretation}
+%-------------------------------------------------------------------------------
+
+At the orchestration level, graph-based pruning is performed by
+\[
+        \texttt{GraphBased\_MAW\_ECM\_2v.m}.
+\]
+This routine tests pruning candidates, calls the graph-regularized update, and
+selects one candidate to commit.
+
+The actual graph-regularized active-set solve for one candidate is implemented
+in
+\[
+        \texttt{prune\_step\_optionB.m}.
+\]
+This routine receives the current weights, the local exactness systems, the
+graph Laplacian, the smoothing parameter, and the candidate index. It returns
+the updated weights and diagnostic information indicating whether the candidate
+was feasible.
+
+The name ``Option B'' refers to the node-dependent active-set strategy:
+negative weights are clamped only at the manifold nodes where they occur, rather
+than globally across all nodes.
+
+
+%===============================================================================
+\section{Regression of the adaptive weight fields}
+\label{sec:weight_regression}
+%===============================================================================
+
+After the pruning stage has terminated, MAW--ECM provides:
+\[
+        \Zred
+        \subset
+        \Zfull,
+\]
+together with the sampled adaptive weights
+\[
+        \Wadapt_{\mathrm{red}}
+        \in
+        \R^{\Nred\times\Nman}.
+\]
+The columns of $\Wadapt_{\mathrm{red}}$ correspond to the sampled latent
+coordinates
+\[
+        \{\qMj\}_{j=1}^{\Nman}.
+\]
+At this stage, the adaptive weights are known only at the sampled manifold
+states used during the offline stage. An additional approximation step is
+therefore required in order to evaluate the adaptive cubature rule at new
+online latent coordinates.
+
+The purpose of the present stage is to construct the mapping
+\[
+        \qM
+        \longmapsto
+        \wred(\qM).
+\]
+This stage is implemented in
+\[
+        \texttt{RegressionViaRBF\_master\_weights.m}.
+\]
+
+%-------------------------------------------------------------------------------
+\subsection{Weight fields over the latent manifold}
+%-------------------------------------------------------------------------------
+
+Each retained integration point defines one scalar field over the latent
+manifold. Let
+\[
+        \bm w_i
+        =
+        \begin{bmatrix}
+        W_{i1} &
+        W_{i2} &
+        \cdots &
+        W_{i\Nman}
+        \end{bmatrix}^T
+        \in\R^{\Nman}
+\]
+collect the adaptive weights associated with retained integration point $i$
+over all sampled manifold states.
+
+Thus, the adaptive cubature rule is not represented by a single vector of
+weights, but by a family of scalar fields:
+\[
+        \{
+        w_i(\qM)
+        \}_{i=1}^{\Nred}.
+\]
+The regression stage approximates these scalar fields from the sampled data
+\[
+        \left\{
+        \qMj,
+        \;
+        W_{ij}
+        \right\}_{j=1}^{\Nman}.
+\]
+
+%-------------------------------------------------------------------------------
+\subsection{Why regression is necessary}
+%-------------------------------------------------------------------------------
+
+The pruning stage operates only on the sampled manifold states available during
+offline training. However, during online evaluation, the latent coordinates
+will generally not coincide with the sampled nodes:
+\[
+        {\qM}_{\mathrm{online}}
+        \notin
+        \{
+        \qMj
+        \}_{j=1}^{\Nman}.
+\]
+Therefore, the adaptive weights must be interpolated or approximated.
+
+The online adaptive cubature rule takes the form
+\[
+        I({\qM}_{\mathrm{online}})
+        \approx
+        \sum_{i\in\Zred}
+        f_i({\qM}_{\mathrm{online}})
+        \,
+        w_i({\qM}_{\mathrm{online}}).
+\]
+Hence, online evaluation requires the ability to compute
+\[
+        \wred({\qM}_{\mathrm{online}}).
+\]
+
+The regression stage should therefore be interpreted as the final step that
+converts the sampled adaptive weights into a continuous surrogate model over
+the latent manifold.
+
+%-------------------------------------------------------------------------------
+\subsection{Choice of radial basis functions}
+%-------------------------------------------------------------------------------
+
+The present implementation uses radial basis functions (RBFs). This choice is
+motivated by several considerations.
+
+First, the latent dimension is very small:
+\[
+        \Nlat=2.
+\]
+Second, the sampled latent manifold is structured and relatively regular.
+Third, the adaptive weights, although not perfectly smooth, usually vary in a
+coherent manner over the manifold after graph regularization.
+
+Under these conditions, RBF interpolation provides:
+\begin{itemize}
+    \item meshfree approximation,
+    \item smooth evaluation,
+    \item simple implementation,
+    \item differentiability of the resulting surrogate,
+    \item flexibility with respect to irregular sampling.
+\end{itemize}
+
+The current implementation uses anisotropic Gaussian kernels.
+
+%-------------------------------------------------------------------------------
+\subsection{RBF approximation of one weight field}
+%-------------------------------------------------------------------------------
+
+Consider one retained integration point $i$. The corresponding scalar weight
+field is approximated as
+\[
+        w_i(\qM)
+        \approx
+        \sum_{k=1}^{n_{\mathrm{RBF}}}
+        \gamma_{ik}
+        \,
+        \phi_k(\qM)
+        +
+        p_i(\qM),
+        \label{eq:rbf_weight_approximation}
+\]
+where:
+\begin{itemize}
+    \item $\phi_k$ are radial basis functions centered at selected latent
+    samples,
+    \item $\gamma_{ik}$ are the regression coefficients,
+    \item $p_i(\qM)$ is a low-order polynomial correction.
+\end{itemize}
+
+For Gaussian kernels,
+\[
+        \phi_k(\qM)
+        =
+        \exp
+        \left(
+        -\frac{1}{2}
+        (\qM-\bm c_k)^T
+        \bm D_k^{-2}
+        (\qM-\bm c_k)
+        \right),
+        \label{eq:gaussian_rbf}
+\]
+where:
+\begin{itemize}
+    \item $\bm c_k$ is the center of the $k$-th RBF,
+    \item $\bm D_k$ defines anisotropic characteristic lengths.
+\end{itemize}
+
+The polynomial correction may include:
+\[
+        p_i(\qM)
+        =
+        a_i,
+        \qquad
+        \text{or}
+        \qquad
+        p_i(\qM)
+        =
+        a_i+\bm b_i^T\qM,
+\]
+depending on the selected approximation order.
+
+%-------------------------------------------------------------------------------
+\subsection{Structured subsampling of RBF centers}
+%-------------------------------------------------------------------------------
+
+Using all sampled manifold states as RBF centers is often unnecessary and may
+lead to large dense interpolation systems. The implementation therefore performs
+structured subsampling of the latent grid.
+
+Let
+\[
+        \{
+        \bm c_k
+        \}_{k=1}^{n_{\mathrm{RBF}}}
+\]
+denote the retained centers. Typically,
+\[
+        n_{\mathrm{RBF}}
+        \ll
+        \Nman.
+\]
+The centers are selected so as to preserve coverage of the latent domain while
+reducing redundancy among nearby samples.
+
+This choice is especially useful because neighboring latent states usually carry
+very similar adaptive weights after graph regularization.
+
+%-------------------------------------------------------------------------------
+\subsection{Matrix form of the regression problem}
+%-------------------------------------------------------------------------------
+
+For one integration point $i$, define the sampled values
+\[
+        \bm w_i
+        =
+        \begin{bmatrix}
+        W_{i1}\\
+        \vdots\\
+        W_{i\Nman}
+        \end{bmatrix}.
+\]
+Define also the interpolation matrix
+\[
+        \bm\Phi
+        \in
+        \R^{\Nman\times n_{\mathrm{RBF}}},
+\]
+with entries
+\[
+        \Phi_{jk}
+        =
+        \phi_k(\qMj).
+\]
+If polynomial correction is included, let
+\[
+        \bm P
+\]
+denote the polynomial basis evaluated at the sampled latent coordinates.
+
+The regression problem can then be written schematically as
+\[
+        \begin{bmatrix}
+        \bm\Phi & \bm P
+        \end{bmatrix}
+        \begin{bmatrix}
+        \bm\gamma_i\\
+        \bm\eta_i
+        \end{bmatrix}
+        \approx
+        \bm w_i.
+        \label{eq:rbf_linear_system}
+\]
+Depending on the selected options, the implementation may use:
+\begin{itemize}
+    \item interpolation,
+    \item least-squares approximation,
+    \item regularized least squares.
+\end{itemize}
+
+The regression is performed independently for each retained integration point.
+
+%-------------------------------------------------------------------------------
+\subsection{Differentiability}
+%-------------------------------------------------------------------------------
+
+One important consequence of the RBF representation is that the adaptive
+weights become differentiable functions of the latent coordinates:
+\[
+        \wred(\qM)
+        \in
+        C^\infty
+\]
+for Gaussian kernels.
+
+Thus, one may compute:
+\[
+        \frac{\partial \wred}{\partial \qM},
+        \qquad
+        \frac{\partial^2 \wred}{\partial \qM^2}.
+\]
+This property may become useful in future extensions involving:
+\begin{itemize}
+    \item tangent-consistent hyperreduction,
+    \item latent-space continuation,
+    \item adaptive online integration,
+    \item reduced Newton schemes,
+    \item sensitivity analysis.
+\end{itemize}
+
+It should be emphasized, however, that the smoothness of the RBF surrogate does
+not imply that the underlying sampled weights are themselves smooth. If the
+offline adaptive weights contain strong active-set transitions, the RBF
+approximation simply produces a smooth interpolation of a piecewise-smooth
+dataset.
+
+%-------------------------------------------------------------------------------
+\subsection{Influence of graph regularization}
+%-------------------------------------------------------------------------------
+
+The graph-regularized pruning stage plays an important role in the quality of
+the regression problem.
+
+Without graph regularization, neighboring manifold samples may carry strongly
+different adaptive weights due to local active-set changes. In that case, the
+mapping
+\[
+        \qM\mapsto\wred(\qM)
+\]
+becomes more difficult to regress accurately.
+
+The graph penalty mitigates this effect by discouraging abrupt redistribution
+patterns across neighboring latent states. Consequently:
+\begin{itemize}
+    \item the sampled adaptive weights become more coherent,
+    \item the regression problem becomes better conditioned,
+    \item fewer RBF centers are generally required,
+    \item online interpolation becomes more stable.
+\end{itemize}
+
+Thus, graph regularization should be viewed not only as a stabilization device
+for pruning, but also as a preprocessing step for the final surrogate model of
+the adaptive weights.
+
+%-------------------------------------------------------------------------------
+\subsection{Online evaluation}
+%-------------------------------------------------------------------------------
+
+Once the regression coefficients have been computed, online evaluation proceeds
+as follows.
+
+Given a latent coordinate
+\[
+        {\qM}_{\mathrm{online}},
+\]
+the RBF surrogate evaluates
+\[
+        \wred({\qM}_{\mathrm{online}})
+        \in
+        \R^{\Nred}.
+\]
+The online adaptive cubature approximation is then
+\[
+        I({\qM}_{\mathrm{online}})
+        \approx
+        \sum_{i\in\Zred}
+        f_i({\qM}_{\mathrm{online}})
+        \,
+        w_i({\qM}_{\mathrm{online}}).
+\]
+Thus, online evaluation requires:
+\begin{itemize}
+    \item evaluation of the reduced set of integrands,
+    \item evaluation of the adaptive weights through the RBF surrogate.
+\end{itemize}
+
+Importantly, the online stage does not solve a new ECM problem. All adaptive
+behavior has already been encoded offline in the learned mapping
+\[
+        \qM\mapsto\wred(\qM).
+\]
+
+%-------------------------------------------------------------------------------
+\subsection{Pseudo-algorithm}
+%-------------------------------------------------------------------------------
+
+\begin{algorithm}[H]
+\caption{Regression of the adaptive weight fields}
+\label{alg:weight_regression}
+\begin{algorithmic}[1]
+
+\Require
+Sampled latent coordinates
+\[
+        \{\qMj\}_{j=1}^{\Nman};
+\]
+sampled adaptive weights
+\[
+        \Wadapt_{\mathrm{red}};
+\]
+RBF parameters and regression options.
+
+\Ensure
+Surrogate model
+\[
+        \qM\mapsto\wred(\qM).
+\]
+
+\State Select the RBF centers
+\[
+        \{
+        \bm c_k
+        \}_{k=1}^{n_{\mathrm{RBF}}}.
+\]
+
+\State Build the interpolation matrix
+\[
+        \Phi_{jk}=\phi_k(\qMj).
+\]
+
+\For{each retained integration point $i=1,\ldots,\Nred$}
+
+    \State Extract the sampled weight field
+    \[
+        \bm w_i=
+        \begin{bmatrix}
+        W_{i1}\\
+        \vdots\\
+        W_{i\Nman}
+        \end{bmatrix}.
+    \]
+
+    \State Solve the RBF regression problem.
+
+    \State Store the coefficients:
+    \[
+        \bm\gamma_i,
+        \qquad
+        \bm\eta_i.
+    \]
+
+\EndFor
+
+\State Return the RBF surrogate model.
+
+\end{algorithmic}
+\end{algorithm}
+
+%-------------------------------------------------------------------------------
+\subsection{Function-level interpretation}
+%-------------------------------------------------------------------------------
+
+The regression stage is implemented in
+\[
+        \texttt{RegressionViaRBF\_master\_weights.m}.
+\]
+This routine receives:
+\begin{itemize}
+    \item the sampled latent coordinates,
+    \item the adaptive weights,
+    \item the RBF interpolation parameters.
+\end{itemize}
+
+The resulting regression structure is then evaluated online through routines of
+the same family as:
+\[
+        \texttt{EvalSlaveRBF\_Online.m},
+\]
+although specialized to the adaptive weight fields.
+
+The present implementation is specifically tuned for:
+\[
+        \Nlat=2,
+\]
+structured latent grids, and visualization of the adaptive weight surfaces.
+However, the regression formulation itself is not restricted to the bivariate
+case. The same approximation strategy extends naturally to higher-dimensional
+latent manifolds, provided that:
+\begin{itemize}
+    \item the latent coordinates remain sufficiently low-dimensional,
+    \item the sampled manifold is adequately covered,
+    \item the adaptive weights vary coherently over the latent space.
+\end{itemize}
+
+
+%===============================================================================
+\section{A physical interpretation of the pruning process}
+\label{sec:physical_interpretation}
+%===============================================================================
+
+Before continuing with the mathematical details of the redistribution and
+active-set procedures, it is useful to pause and develop a more physical and
+perhaps more appealing interpretation of the MAW--ECM mechanism.
+
+The goal of the present section is not mathematical rigor. Rather, the idea is
+to help the reader build an intuitive mental picture of what the algorithm is
+actually doing. In practice, many aspects of the method become much easier to
+understand once one stops thinking in terms of matrices and optimization
+variables and instead imagines a physical structure evolving under multiple
+loading conditions.
+
+The analogy that follows should therefore be understood mainly as a conceptual
+device intended to facilitate understanding of the method without entering
+immediately into all the subtleties of constrained optimization.
+
+%-------------------------------------------------------------------------------
+\subsection{A suspended bridge under many wind conditions}
+%-------------------------------------------------------------------------------
+
+Imagine a very large suspended bridge composed of a dense network of tensile
+cables. Suppose now that the bridge must remain in equilibrium not under one
+single loading condition, but under an entire family of nearby conditions:
+slightly different wind directions, slightly different traffic distributions,
+slightly different deformation states, and so on.
+
+This is the role played by the manifold samples
+\[
+        \qMj.
+\]
+Each manifold point may be interpreted as one loading configuration of the same
+bridge.
+
+Now imagine that, initially, the bridge has been designed in a very conservative
+way. There are many more cables than are truly necessary. The structure is
+highly redundant.
+
+However, not all cables play the same role.
+
+Some cables are absolutely crucial. They carry large portions of the load and
+participate in balancing many equilibrium conditions simultaneously. Others are
+less important and contribute only marginally.
+
+This is precisely what one observes in the initial ECM rule.
+
+Empirically, the ECM weights are highly nonuniform:
+some weights become much larger than others. This is not accidental. It is a
+direct consequence of the greedy nature of ECM. The algorithm progressively
+selects those integration points that are most effective for reproducing the
+reduced equilibrium conditions.
+
+Under the structural analogy, the ECM algorithm has already identified the
+principal load paths of the bridge.
+
+The resulting structure is therefore not homogeneous. Some cables carry large
+tensions, while others play only secondary corrective roles.
+
+%-------------------------------------------------------------------------------
+\subsection{The frozen-force philosophy of standard ECM}
+%-------------------------------------------------------------------------------
+
+At this point, one may imagine the philosophy of a standard fixed-weight ECM
+rule in the following way.
+
+Suppose the engineer designing the bridge imposes the following artificial
+restriction:
+\begin{quote}
+every cable must always carry exactly the same tension pattern for all loading
+configurations.
+\end{quote}
+
+Immediately, the bridge becomes much harder to optimize.
+
+Why?
+
+Because different loading conditions naturally require different stress
+redistributions. A cable that is extremely important under one wind direction
+may become almost irrelevant under another.
+
+Nevertheless, the fixed-weight ECM philosophy forces the same force
+distribution to remain valid everywhere on the manifold.
+
+As a consequence, the bridge requires many more cables than are locally
+necessary under individual loading states.
+
+This is precisely the main limitation of a fixed manifold ECM rule.
+
+%-------------------------------------------------------------------------------
+\subsection{The central idea of MAW--ECM}
+%-------------------------------------------------------------------------------
+
+The central idea of MAW--ECM is almost deceptively simple.
+
+Instead of forcing the cable tensions to remain frozen over all loading
+conditions, one allows the internal force distribution to adapt to the loading
+configuration.
+
+The bridge keeps the same surviving cables:
+\[
+        \text{same support},
+\]
+but the tensions carried by those cables may vary from one loading state to
+another:
+\[
+        \text{adaptive weights}.
+\]
+
+Thus, the adaptive weights
+\[
+        \wadapt^{(j)}
+\]
+may be interpreted as the tensions carried by the surviving cables under the
+loading configuration associated with manifold point $\qMj$.
+
+This immediately introduces additional flexibility into the system.
+
+A cable that is critically important for one loading condition may carry very
+little tension under another. The structure can now reorganize its internal
+forces locally over the manifold.
+
+%-------------------------------------------------------------------------------
+\subsection{Pruning as cutting cables}
+%-------------------------------------------------------------------------------
+
+Now imagine beginning a process of progressive simplification.
+
+One cable is selected and cut.
+
+Immediately, the external loading conditions remain exactly the same. The wind
+does not disappear merely because one cable has been removed. Therefore, the
+remaining cables must reorganize their tensions so as to preserve equilibrium.
+
+At the beginning, this is easy.
+
+The bridge is highly redundant. There are many alternative equilibrium paths.
+When one cable disappears, neighboring cables simply increase their tensions
+slightly and the structure remains perfectly stable.
+
+This is the meaning of the null space in the MAW--ECM formulation.
+
+The null-space directions represent admissible internal force redistributions
+that preserve the same external equilibrium resultants. The structure can
+``wiggle'' its internal stresses while keeping the same global balance.
+
+However, every removed cable reduces the redundancy of the structure.
+
+The remaining bridge becomes progressively more stressed:
+\begin{itemize}
+    \item fewer cables remain;
+    \item each cable carries more responsibility;
+    \item the redistribution freedom decreases;
+    \item the null space shrinks.
+\end{itemize}
+
+Eventually, the bridge approaches a critical regime in which the surviving
+cables are almost uniquely determined by equilibrium.
+
+%-------------------------------------------------------------------------------
+\subsection{Slacking cables and active sets}
+%-------------------------------------------------------------------------------
+
+Now comes the most important part of the analogy.
+
+Suppose that, after removing another cable, the redistribution problem attempts
+to assign a negative tension to one of the surviving members.
+
+Mechanically, this means:
+\begin{quote}
+the structure is asking a cable to push.
+\end{quote}
+
+But a cable cannot push.
+
+A cable can only pull.
+
+This is precisely the meaning of a negative weight in MAW--ECM.
+
+The positivity constraint
+\[
+        W_{ij}\ge0
+\]
+therefore expresses a tension-only admissibility condition.
+
+The active-set mechanism then acquires a completely natural interpretation.
+
+Whenever a cable attempts to enter compression, it simply goes slack:
+\[
+        W_{ij}=0.
+\]
+
+Importantly, this does not necessarily remove the cable globally from the
+bridge. The same cable may:
+\begin{itemize}
+    \item carry tension under some loading configurations,
+    \item become slack under others,
+    \item and reactivate elsewhere on the manifold.
+\end{itemize}
+
+This distinction is fundamental.
+
+Pruning corresponds to permanently cutting a cable from the bridge.
+
+The active set, by contrast, determines which surviving cables are actually
+load-bearing under each local loading configuration.
+
+%-------------------------------------------------------------------------------
+\subsection{Regularization as coherent structural behavior}
+%-------------------------------------------------------------------------------
+
+Finally, the role of regularization also becomes very intuitive.
+
+Neighboring manifold points correspond to nearby loading configurations. One
+therefore expects nearby loading conditions to produce nearby internal stress
+patterns.
+
+Without regularization, however, tiny changes in the loading state may produce
+wildly different redistributions:
+\begin{itemize}
+    \item one cable active here,
+    \item slack nearby,
+    \item active again elsewhere.
+\end{itemize}
+
+The structure would behave erratically.
+
+The regularization discourages this behavior. It favors coherent stress
+evolution throughout the manifold and promotes smoother transitions between
+neighboring loading configurations.
+
+%-------------------------------------------------------------------------------
+\subsection{Final picture}
+%-------------------------------------------------------------------------------
+
+Under this interpretation, MAW--ECM may be viewed as a progressive search for
+the smallest admissible tensile skeleton capable of supporting an entire family
+of neighboring equilibrium states.
+
+The initial ECM rule provides an already compressed bridge obtained through a
+greedy equilibrium process. The pruning stage progressively cuts cables from
+the structure. The remaining cables continuously reorganize their tensions so
+as to preserve equilibrium. The null space measures the remaining redundancy of
+the bridge. The active set describes locally slack cables. The regularization
+promotes coherent structural behavior over the manifold.
+
+Although purely conceptual, this picture captures surprisingly well the true
+mechanism underlying the MAW--ECM redistribution process.
+
+
+\end{document}

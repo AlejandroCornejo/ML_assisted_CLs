@@ -11,8 +11,8 @@ Pipeline per support value:
 By default this script stops at first failure (break-on-fail behavior).
 
 Notes:
-- This sweep is aligned with the current strict Stage8b interface
-  (first-phase local pruning, no graph options).
+- This sweep is aligned with the current Stage8b interface
+  (local or graph-enabled residual MAW stage).
 """
 
 from __future__ import annotations
@@ -104,6 +104,14 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--fixed-ecm-file", type=str, default="stage_6b_hprom_ecm/ecm_weights_all.npz")
     p.add_argument("--res-bootstrap-ecm-file", type=str, default="")
     p.add_argument("--max-number-zeros-active-set-loop-maw-ecm", type=int, default=1)
+    p.add_argument("--use-global-graph-2ndstage", type=int, default=0, choices=[0, 1])
+    p.add_argument("--smooth-laplacian-all-iterations", type=int, default=0, choices=[0, 1])
+    p.add_argument("--alpha-smooth", type=float, default=1.0e4)
+    p.add_argument("--graph-mode", type=str, default="structured_grid", choices=["structured_grid", "knn"])
+    p.add_argument("--graph-knn", type=int, default=8)
+    p.add_argument("--graph-kernel", type=str, default="gaussian", choices=["gaussian", "binary"])
+    p.add_argument("--graph-sigma", type=float, default=-1.0)
+    p.add_argument("--graph-cell-weight-mode", type=str, default="binary", choices=["binary"])
     p.add_argument("--maw-min-support-size-res", type=int, default=-1)
     p.add_argument("--maw-min-support-size-eps", type=int, default=0)
     p.add_argument("--maw-min-support-size-sig", type=int, default=0)
@@ -165,6 +173,11 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+    if int(args.use_global_graph_2ndstage) == 1 and int(args.smooth_laplacian_all_iterations) == 1:
+        raise SystemExit(
+            "Invalid sweep setup: --use-global-graph-2ndstage 1 requires "
+            "--smooth-laplacian-all-iterations 0 (phase-1 first, then graph stage-2)."
+        )
     root_dir = os.path.abspath(args.root_dir)
     supports = _parse_supports(args.supports)
 
@@ -190,6 +203,7 @@ def main() -> None:
     print(f"maw_mode    : {args.maw_mode}")
     print(f"hom_mode    : {args.hprom_homogenization_mode}")
     print(f"hom_source8b: {args.hom_source}")
+    print(f"graph_stage : {int(args.use_global_graph_2ndstage)}")
     print(f"sum(w) local: {int(args.enforce_sum_weights)}")
     print(f"sum(w) boot : {int(args.res_bootstrap_constrain_sum_weights)}")
     print(f"stop_on_fail: {int(stop_on_fail)}")
@@ -222,6 +236,22 @@ def main() -> None:
             str(args.hom_source),
             "--max-number-zeros-active-set-loop-maw-ecm",
             str(int(args.max_number_zeros_active_set_loop_maw_ecm)),
+            "--use-global-graph-2ndstage",
+            str(int(args.use_global_graph_2ndstage)),
+            "--smooth-laplacian-all-iterations",
+            str(int(args.smooth_laplacian_all_iterations)),
+            "--alpha-smooth",
+            str(float(args.alpha_smooth)),
+            "--graph-mode",
+            str(args.graph_mode),
+            "--graph-knn",
+            str(int(args.graph_knn)),
+            "--graph-kernel",
+            str(args.graph_kernel),
+            "--graph-sigma",
+            str(float(args.graph_sigma)),
+            "--graph-cell-weight-mode",
+            str(args.graph_cell_weight_mode),
             "--maw-min-support-size",
             str(int(s)),
             "--maw-min-support-size-res",

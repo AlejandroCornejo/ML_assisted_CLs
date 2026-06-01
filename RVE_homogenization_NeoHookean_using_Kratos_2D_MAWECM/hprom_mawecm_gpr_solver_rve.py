@@ -176,7 +176,11 @@ def _map_support_indices_to_current_mesh(idx_raw, n_elem: int, full_to_local, la
     return _stable_unique_preserve_order(np.asarray(mapped, dtype=np.int64))
 
 
-def _extract_hrom_aligned_maw_arrays(mawecm_data: Dict[str, object], n_elem: int):
+def _extract_hrom_aligned_maw_arrays(
+    mawecm_data: Dict[str, object],
+    n_elem: int,
+    need_hom_support: bool = True,
+):
     """
     Return MAW residual support and homogenization weights aligned with the
     currently loaded mesh.
@@ -186,10 +190,18 @@ def _extract_hrom_aligned_maw_arrays(mawecm_data: Dict[str, object], n_elem: int
     - HROM-aligned data carrying hrom_* metadata and w_*_hrom.
     """
     z_res_raw = np.asarray(mawecm_data["maw_res_z_support"], dtype=np.int64).reshape(-1)
-    z_eps_raw = np.asarray(mawecm_data["Z_eps"], dtype=np.int64).reshape(-1) if "Z_eps" in mawecm_data else None
-    z_sig_raw = np.asarray(mawecm_data["Z_sig"], dtype=np.int64).reshape(-1) if "Z_sig" in mawecm_data else None
-    w_eps_full_raw = np.asarray(mawecm_data["w_eps_full"], dtype=float).reshape(-1)
-    w_sig_full_raw = np.asarray(mawecm_data["w_sig_full"], dtype=float).reshape(-1)
+    z_eps_raw = np.asarray(mawecm_data["Z_eps"], dtype=np.int64).reshape(-1) if ("Z_eps" in mawecm_data) else None
+    z_sig_raw = np.asarray(mawecm_data["Z_sig"], dtype=np.int64).reshape(-1) if ("Z_sig" in mawecm_data) else None
+    if need_hom_support:
+        if ("w_eps_full" not in mawecm_data) or ("w_sig_full" not in mawecm_data):
+            raise RuntimeError(
+                "ECM-separate homogenization requested but MAW file misses w_eps_full / w_sig_full."
+            )
+        w_eps_full_raw = np.asarray(mawecm_data["w_eps_full"], dtype=float).reshape(-1)
+        w_sig_full_raw = np.asarray(mawecm_data["w_sig_full"], dtype=float).reshape(-1)
+    else:
+        w_eps_full_raw = np.zeros(0, dtype=float)
+        w_sig_full_raw = np.zeros(0, dtype=float)
 
     has_hrom_map = ("hrom_element_full_indices" in mawecm_data) and ("hrom_n_elem" in mawecm_data)
     if has_hrom_map:
@@ -203,50 +215,68 @@ def _extract_hrom_aligned_maw_arrays(mawecm_data: Dict[str, object], n_elem: int
     else:
         hrom_full_idx = None
 
+    remap_to_hrom = has_hrom_map and hrom_full_idx.size == int(n_elem)
     using_hrom = (
-        has_hrom_map
-        and hrom_full_idx.size == int(n_elem)
-        and ("w_eps_hrom" in mawecm_data)
-        and ("w_sig_hrom" in mawecm_data)
+        remap_to_hrom
+        and (
+            (not need_hom_support)
+            or (("w_eps_hrom" in mawecm_data) and ("w_sig_hrom" in mawecm_data))
+        )
     )
 
     if using_hrom:
-        w_eps_full = np.asarray(mawecm_data["w_eps_hrom"], dtype=float).reshape(-1)
-        w_sig_full = np.asarray(mawecm_data["w_sig_hrom"], dtype=float).reshape(-1)
-        if w_eps_full.size != n_elem or w_sig_full.size != n_elem:
-            raise RuntimeError(
-                "HROM-projected MAW homogenization weights size mismatch with current mesh. "
-                f"n_elem={n_elem}, len(w_eps_hrom)={w_eps_full.size}, len(w_sig_hrom)={w_sig_full.size}"
-            )
+        if need_hom_support:
+            w_eps_full = np.asarray(mawecm_data["w_eps_hrom"], dtype=float).reshape(-1)
+            w_sig_full = np.asarray(mawecm_data["w_sig_hrom"], dtype=float).reshape(-1)
+            if w_eps_full.size != n_elem or w_sig_full.size != n_elem:
+                raise RuntimeError(
+                    "HROM-projected MAW homogenization weights size mismatch with current mesh. "
+                    f"n_elem={n_elem}, len(w_eps_hrom)={w_eps_full.size}, len(w_sig_hrom)={w_sig_full.size}"
+                )
+        else:
+            w_eps_full = np.zeros(int(n_elem), dtype=float)
+            w_sig_full = np.zeros(int(n_elem), dtype=float)
 
         full_to_local = {int(fid): int(i) for i, fid in enumerate(hrom_full_idx.tolist())}
         z_res = _map_support_indices_to_current_mesh(z_res_raw, n_elem=n_elem, full_to_local=full_to_local, label="maw_res_z_support")
-        if z_eps_raw is not None:
-            z_eps = _map_support_indices_to_current_mesh(z_eps_raw, n_elem=n_elem, full_to_local=full_to_local, label="Z_eps")
+        if need_hom_support:
+            if z_eps_raw is not None:
+                z_eps = _map_support_indices_to_current_mesh(z_eps_raw, n_elem=n_elem, full_to_local=full_to_local, label="Z_eps")
+            else:
+                z_eps = np.flatnonzero(np.abs(w_eps_full) > _W_TOL).astype(np.int64)
+            if z_sig_raw is not None:
+                z_sig = _map_support_indices_to_current_mesh(z_sig_raw, n_elem=n_elem, full_to_local=full_to_local, label="Z_sig")
+            else:
+                z_sig = np.flatnonzero(np.abs(w_sig_full) > _W_TOL).astype(np.int64)
         else:
-            z_eps = np.flatnonzero(np.abs(w_eps_full) > _W_TOL).astype(np.int64)
-        if z_sig_raw is not None:
-            z_sig = _map_support_indices_to_current_mesh(z_sig_raw, n_elem=n_elem, full_to_local=full_to_local, label="Z_sig")
-        else:
-            z_sig = np.flatnonzero(np.abs(w_sig_full) > _W_TOL).astype(np.int64)
+            z_eps = np.zeros(0, dtype=np.int64)
+            z_sig = np.zeros(0, dtype=np.int64)
         mesh_mode = "hrom"
     else:
-        if w_eps_full_raw.size != n_elem or w_sig_full_raw.size != n_elem:
-            raise RuntimeError(
-                "MAW homogenization weights size mismatch with current mesh. "
-                f"n_elem={n_elem}, len(w_eps_full)={w_eps_full_raw.size}, len(w_sig_full)={w_sig_full_raw.size}"
-            )
-        w_eps_full = w_eps_full_raw
-        w_sig_full = w_sig_full_raw
+        if need_hom_support:
+            if w_eps_full_raw.size != n_elem or w_sig_full_raw.size != n_elem:
+                raise RuntimeError(
+                    "MAW homogenization weights size mismatch with current mesh. "
+                    f"n_elem={n_elem}, len(w_eps_full)={w_eps_full_raw.size}, len(w_sig_full)={w_sig_full_raw.size}"
+                )
+            w_eps_full = w_eps_full_raw
+            w_sig_full = w_sig_full_raw
+        else:
+            w_eps_full = np.zeros(int(n_elem), dtype=float)
+            w_sig_full = np.zeros(int(n_elem), dtype=float)
         z_res = _map_support_indices_to_current_mesh(z_res_raw, n_elem=n_elem, full_to_local=None, label="maw_res_z_support")
-        if z_eps_raw is not None:
-            z_eps = _map_support_indices_to_current_mesh(z_eps_raw, n_elem=n_elem, full_to_local=None, label="Z_eps")
+        if need_hom_support:
+            if z_eps_raw is not None:
+                z_eps = _map_support_indices_to_current_mesh(z_eps_raw, n_elem=n_elem, full_to_local=None, label="Z_eps")
+            else:
+                z_eps = np.flatnonzero(np.abs(w_eps_full) > _W_TOL).astype(np.int64)
+            if z_sig_raw is not None:
+                z_sig = _map_support_indices_to_current_mesh(z_sig_raw, n_elem=n_elem, full_to_local=None, label="Z_sig")
+            else:
+                z_sig = np.flatnonzero(np.abs(w_sig_full) > _W_TOL).astype(np.int64)
         else:
-            z_eps = np.flatnonzero(np.abs(w_eps_full) > _W_TOL).astype(np.int64)
-        if z_sig_raw is not None:
-            z_sig = _map_support_indices_to_current_mesh(z_sig_raw, n_elem=n_elem, full_to_local=None, label="Z_sig")
-        else:
-            z_sig = np.flatnonzero(np.abs(w_sig_full) > _W_TOL).astype(np.int64)
+            z_eps = np.zeros(0, dtype=np.int64)
+            z_sig = np.zeros(0, dtype=np.int64)
         mesh_mode = "full"
 
     return z_res, z_eps, z_sig, w_eps_full, w_sig_full, mesh_mode
@@ -515,6 +545,7 @@ def RunHpromMawEcmGprBatchSimulation(
     z_res, z_eps, z_sig, w_eps_full, w_sig_full, mesh_mode = _extract_hrom_aligned_maw_arrays(
         mawecm_data=mawecm_data,
         n_elem=n_elem,
+        need_hom_support=(hom_mode == "ecm_separate"),
     )
     if mesh_mode == "hrom":
         try:

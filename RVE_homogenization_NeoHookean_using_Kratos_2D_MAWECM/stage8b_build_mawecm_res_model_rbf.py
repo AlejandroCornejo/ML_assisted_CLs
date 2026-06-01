@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Stage 8b (2D-MAWECM): MAW model build (first-phase local only, no graph).
+"""Stage 8b (2D-MAWECM): MAW model build.
 
 Modes:
 - res_only: MAW on residual channel only.
@@ -12,6 +12,9 @@ Homogenization source is strict/explicit (no fallback):
 - fixed_ecm: hom channels start from a provided fixed ECM file.
 - ecm_separate: hom channels are built in this stage with separate classic ECM
   for eps/sig (with full ECM progress logs).
+Graph stage is optional and controlled explicitly by CLI flags:
+- --use-global-graph-2ndstage
+- --smooth-laplacian-all-iterations
 """
 
 import argparse
@@ -21,7 +24,12 @@ import numpy as np
 from scipy import sparse
 from scipy.optimize import lsq_linear
 
-from mawecm_graph_utils import edge_jump_metrics
+from mawecm_graph_utils import (
+    build_cell_graph_laplacian,
+    build_knn_graph_laplacian,
+    edge_jump_metrics,
+    edge_list_from_laplacian,
+)
 from mawecm_pruning import run_mawecm_pruning
 from mawecm_rbf_weights import fit_mawecm_rbf, eval_mawecm_rbf
 
@@ -37,8 +45,8 @@ from randomized_singular_value_decomposition import RandomizedSingularValueDecom
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=(
-            "Stage8b strict mode: MAW-ECM first-phase local pruning only "
-            "(no graph). Supports residual-only, res+eps, and separate res/eps/sig MAW."
+            "Stage8b MAW-ECM build. Supports residual-only, res+eps, and "
+            "separate res/eps/sig MAW, with optional graph stage for residual channel."
         )
     )
     p.add_argument("--dataset-dir", type=str, default="stage_8a_mawecm_res_dataset")
@@ -110,6 +118,63 @@ def _parse_args() -> argparse.Namespace:
         default="q_m",
         choices=["q_m"],
         help="State variable used for graph/RBF in MAW-ECM. Fixed to q_m (docs-aligned).",
+    )
+    p.add_argument(
+        "--use-global-graph-2ndstage",
+        type=int,
+        default=0,
+        choices=[0, 1],
+        help=(
+            "If 1, stage-2 positivity enforcement for residual MAW uses "
+            "graph-coupled PruneStep/PruneSweep logic. If 0, uses local active-set only."
+        ),
+    )
+    p.add_argument(
+        "--smooth-laplacian-all-iterations",
+        type=int,
+        default=0,
+        choices=[0, 1],
+        help=(
+            "If 0, phase-1 NOENF runs first and stage-2 is used only when phase-1 stalls. "
+            "If 1, stage-2 is forced every iteration (not allowed with graph stage)."
+        ),
+    )
+    p.add_argument(
+        "--alpha-smooth",
+        type=float,
+        default=1.0e4,
+        help="Graph regularization weight alpha_G used in residual graph stage.",
+    )
+    p.add_argument(
+        "--graph-mode",
+        type=str,
+        default="structured_grid",
+        choices=["structured_grid", "knn"],
+        help=(
+            "Residual graph construction mode when --use-global-graph-2ndstage=1. "
+            "'structured_grid' uses Stage8a grid cells; 'knn' uses q_m kNN graph."
+        ),
+    )
+    p.add_argument("--graph-knn", type=int, default=8, help="k for kNN graph mode.")
+    p.add_argument(
+        "--graph-kernel",
+        type=str,
+        default="gaussian",
+        choices=["gaussian", "binary"],
+        help="Edge weighting kernel for kNN graph mode.",
+    )
+    p.add_argument(
+        "--graph-sigma",
+        type=float,
+        default=-1.0,
+        help="Gaussian sigma for kNN graph. <=0 means automatic median-kNN distance.",
+    )
+    p.add_argument(
+        "--graph-cell-weight-mode",
+        type=str,
+        default="binary",
+        choices=["binary"],
+        help="Weight mode for structured-grid graph.",
     )
     p.add_argument(
         "--max-number-zeros-active-set-loop-maw-ecm",
@@ -1325,7 +1390,65 @@ def _augment_blocks_with_sum_constraint(a_blocks, b_blocks, target_sum):
 
 
 def _build_graph_for_res(dataset, state_train, args):
-    raise RuntimeError("Graph stage is disabled in strict Stage8b mode.")
+    q = np.asarray(state_train, dtype=float)
+    n_nodes = int(q.shape[0])
+    use_graph = bool(int(args.use_global_graph_2ndstage))
+    if not use_graph:
+        return sparse.csr_matrix((n_nodes, n_nodes), dtype=float), {
+            "mode": "disabled",
+            "knn": 0,
+            "kernel": "none",
+            "sigma": np.nan,
+            "n_edges": 0,
+        }
+
+    mode = str(args.graph_mode).strip().lower()
+    if mode == "structured_grid":
+        cells = dataset.get("cells_struct_res", None)
+        if cells is None:
+            raise RuntimeError(
+                "graph_mode='structured_grid' requires Stage8a structured cells "
+                "(structured_mesh_cells_res.npy)."
+            )
+        k_graph = build_cell_graph_laplacian(
+            n_nodes=n_nodes,
+            cells=np.asarray(cells, dtype=np.int64),
+            cell_type="quad4",
+            weight_mode=str(args.graph_cell_weight_mode).strip().lower(),
+        )
+        sigma_out = np.nan
+        knn_out = 0
+        kernel_out = "binary"
+    elif mode == "knn":
+        knn = int(max(1, args.graph_knn))
+        sigma_in = float(args.graph_sigma)
+        sigma = None if sigma_in <= 0.0 else sigma_in
+        k_graph = build_knn_graph_laplacian(
+            q_train=q,
+            knn=knn,
+            metric="euclidean",
+            kernel=str(args.graph_kernel).strip().lower(),
+            sigma=sigma,
+        )
+        sigma_out = np.nan if sigma is None else float(sigma)
+        knn_out = int(knn)
+        kernel_out = str(args.graph_kernel).strip().lower()
+    else:
+        raise RuntimeError(f"Unsupported graph_mode='{mode}'.")
+
+    k_graph = sparse.csr_matrix(k_graph, dtype=float)
+    if k_graph.shape != (n_nodes, n_nodes):
+        raise RuntimeError(
+            f"Residual graph shape mismatch: got {k_graph.shape}, expected {(n_nodes, n_nodes)}."
+        )
+    i_edge, _ = edge_list_from_laplacian(k_graph)
+    return k_graph, {
+        "mode": mode,
+        "knn": int(knn_out),
+        "kernel": str(kernel_out),
+        "sigma": float(sigma_out) if np.isfinite(sigma_out) else np.nan,
+        "n_edges": int(i_edge.size),
+    }
 
 
 def _validate_maw_constraints(
@@ -1528,13 +1651,26 @@ def _resolve_n_stop_res(args):
     return None
 
 
-def _make_prune_opts_base(args, state_train, n_stop, enforce_nonnegativity):
-    k_graph = sparse.csr_matrix((int(state_train.shape[0]), int(state_train.shape[0])), dtype=float)
+def _make_prune_opts_base(
+    args,
+    state_train,
+    n_stop,
+    enforce_nonnegativity,
+    *,
+    k_graph=None,
+    use_global_graph_2ndstage=False,
+    smooth_laplacian_all_iterations=False,
+    alpha_smooth=0.0,
+):
+    if k_graph is None:
+        k_graph = sparse.csr_matrix((int(state_train.shape[0]), int(state_train.shape[0])), dtype=float)
+    else:
+        k_graph = sparse.csr_matrix(k_graph, dtype=float)
     return {
         "K_graph": k_graph,
-        "alpha_smooth": 0.0,
-        "use_global_graph_2ndstage": False,
-        "smooth_laplacian_all_iterations": False,
+        "alpha_smooth": float(alpha_smooth),
+        "use_global_graph_2ndstage": bool(use_global_graph_2ndstage),
+        "smooth_laplacian_all_iterations": bool(smooth_laplacian_all_iterations),
         "max_number_zeros_active_set_loop": int(args.max_number_zeros_active_set_loop_maw_ecm),
         "criterion": int(args.criterion),
         "number_of_candidates_to_try": int(args.n_candidates_to_try) if int(args.n_candidates_to_try) > 0 else None,
@@ -1557,6 +1693,10 @@ def _make_prune_opts_hom(args, state_train, n_stop):
         state_train=state_train,
         n_stop=n_stop,
         enforce_nonnegativity=bool(int(args.maw_hom_enforce_nonnegativity)),
+        k_graph=sparse.csr_matrix((int(state_train.shape[0]), int(state_train.shape[0])), dtype=float),
+        use_global_graph_2ndstage=False,
+        smooth_laplacian_all_iterations=False,
+        alpha_smooth=0.0,
     )
     if bool(int(args.maw_hom_conservative)):
         out["criterion"] = int(args.maw_hom_criterion)
@@ -1575,7 +1715,6 @@ def main():
 
     dataset = _load_dataset(args.dataset_dir)
     n_elem = int(dataset["n_elem"])
-    # Strict Stage-8 mode: first-phase local MAW only (no graph).
     # Homogenization source is explicit (full_mesh or fixed_ecm), no fallback.
     maw_mode = str(args.maw_mode).strip().lower()
     if maw_mode not in {"res_only", "res_eps", "res_eps_sig"}:
@@ -1694,8 +1833,26 @@ def main():
             print(f"maw min |Z_sig| : {int(args.maw_min_support_size_sig)} (hard stop)")
         else:
             print("maw min |Z_sig| : auto (n_stop from local constraints)")
-    print("stage2 mode : local_active_set (Loop_MAWecmNOENFe-like)")
-    print("smooth all iters : 0")
+    res_use_graph = bool(int(args.use_global_graph_2ndstage))
+    res_smooth_all = bool(int(args.smooth_laplacian_all_iterations))
+    if res_use_graph and res_smooth_all:
+        raise RuntimeError(
+            "Invalid schedule: graph stage enabled with smooth-all-iters=1. "
+            "Use --smooth-laplacian-all-iterations 0 so phase-1 (NOENF) runs first."
+        )
+    if res_use_graph:
+        print("stage2 mode : graph_active_set (PruneStep/PruneSweep-like)")
+    else:
+        print("stage2 mode : local_active_set (Loop_MAWecmNOENFe-like)")
+    print(f"smooth all iters : {int(res_smooth_all)}")
+    if res_use_graph:
+        print(
+            "graph config: "
+            f"mode={str(args.graph_mode).strip().lower()}, "
+            f"alpha={float(args.alpha_smooth):.3e}, "
+            f"knn={int(args.graph_knn)}, kernel={str(args.graph_kernel).strip().lower()}, "
+            f"sigma={'auto' if float(args.graph_sigma) <= 0.0 else f'{float(args.graph_sigma):.3e}'}"
+        )
     print(
         "nonnegativity: "
         f"res={'on' if bool(int(args.maw_res_enforce_nonnegativity)) else 'off'}, "
@@ -1743,14 +1900,25 @@ def main():
     state_mode = "q_m"
     state_train = q_m_train
 
-    # Joaquin first phase: no graph stage.
+    k_graph_res, graph_info_res = _build_graph_for_res(
+        dataset=dataset,
+        state_train=state_train,
+        args=args,
+    )
+
     prune_opts = _make_prune_opts_base(
         args,
         state_train=state_train,
         n_stop=n_stop_res_req,
         enforce_nonnegativity=bool(int(args.maw_res_enforce_nonnegativity)),
+        k_graph=k_graph_res,
+        use_global_graph_2ndstage=res_use_graph,
+        smooth_laplacian_all_iterations=res_smooth_all,
+        alpha_smooth=(float(args.alpha_smooth) if res_use_graph else 0.0),
     )
     k_graph = sparse.csr_matrix(prune_opts["K_graph"])
+    if res_use_graph:
+        print(f"  [Stage8b] residual graph edges: {int(graph_info_res['n_edges'])}")
 
     # Docs-aligned feasibility check at initialization:
     # wADAPT(:,j) = wINI must satisfy A_j w_j = b_j for all manifold samples j.
@@ -2034,12 +2202,13 @@ def main():
         "maw_ecm_tol_single_bootstrap": np.array([np.nan], dtype=float),
         "maw_res_candidate_pool": np.array([str(args.res_candidate_pool)]),
         "maw_res_rhs_mode": np.array([str(args.res_target_source)]),
-        "maw_res_graph_mode": np.array(["<disabled_in_strict_res_only>"]),
-        "maw_res_graph_knn": np.array([0], dtype=np.int64),
-        "maw_res_graph_kernel": np.array(["<disabled_in_strict_res_only>"]),
-        "maw_res_graph_sigma": np.array([np.nan], dtype=float),
-        "maw_res_use_global_graph_2ndstage": np.array([0], dtype=np.int64),
-        "maw_res_smooth_laplacian_all_iterations": np.array([0], dtype=np.int64),
+        "maw_res_graph_mode": np.array([str(graph_info_res["mode"])]),
+        "maw_res_graph_knn": np.array([int(graph_info_res["knn"])], dtype=np.int64),
+        "maw_res_graph_kernel": np.array([str(graph_info_res["kernel"])]),
+        "maw_res_graph_sigma": np.array([float(graph_info_res["sigma"])], dtype=float),
+        "maw_res_graph_n_edges": np.array([int(graph_info_res["n_edges"])], dtype=np.int64),
+        "maw_res_use_global_graph_2ndstage": np.array([int(res_use_graph)], dtype=np.int64),
+        "maw_res_smooth_laplacian_all_iterations": np.array([int(res_smooth_all)], dtype=np.int64),
         "maw_res_max_number_zeros_active_set_loop": np.array([int(args.max_number_zeros_active_set_loop_maw_ecm)], dtype=np.int64),
         "maw_res_bootstrap_constrain_sum_weights": np.array(
             [int(args.res_bootstrap_constrain_sum_weights)], dtype=np.int64
@@ -2057,7 +2226,7 @@ def main():
         "maw_res_sum_weights_target": np.array(
             [float(sum_target) if enforce_sum_weights else np.nan], dtype=float
         ),
-        "maw_res_alpha_smooth": np.array([0.0], dtype=float),
+        "maw_res_alpha_smooth": np.array([float(prune_opts["alpha_smooth"])], dtype=float),
         "maw_res_criterion": np.array([int(args.criterion)], dtype=np.int64),
         "maw_res_incremental_smoothing": np.array([int(args.incremental_smoothing)], dtype=np.int64),
         "maw_res_tol_neg": np.array([float(maw["tol_neg"])], dtype=float),

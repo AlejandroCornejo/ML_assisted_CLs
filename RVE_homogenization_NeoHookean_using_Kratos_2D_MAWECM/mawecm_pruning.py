@@ -291,6 +291,7 @@ def _try_graph_pass(W, A_blocks, b_blocks, i_cand, iloc_pos, ind_sort, K_graph, 
     n_try = max(1, min(n_try, len(ind_sort)))
 
     cand_records = []
+    fail_reasons = {}
     tol_neg = float(options["tol_neg"])
 
     for ord_pos, k_loc in enumerate(ind_sort[:n_try]):
@@ -309,6 +310,8 @@ def _try_graph_pass(W, A_blocks, b_blocks, i_cand, iloc_pos, ind_sort, K_graph, 
             opts=options,
         )
         if not info.get("ok", False):
+            rs = str(info.get("reason", "unknown"))
+            fail_reasons[rs] = int(fail_reasons.get(rs, 0)) + 1
             continue
 
         i_cand_new = np.array([i for i in i_cand if int(i) != cand_global], dtype=np.int64)
@@ -341,7 +344,11 @@ def _try_graph_pass(W, A_blocks, b_blocks, i_cand, iloc_pos, ind_sort, K_graph, 
         )
 
     if not cand_records:
-        return False, W, i_cand, None, {"tested": n_try}
+        return False, W, i_cand, None, {
+            "tested": int(n_try),
+            "n_feasible": 0,
+            "fail_reasons": fail_reasons,
+        }
 
     crit = int(options["criterion"])
     if crit == 0:
@@ -355,7 +362,9 @@ def _try_graph_pass(W, A_blocks, b_blocks, i_cand, iloc_pos, ind_sort, K_graph, 
 
     best = order[0]
     return True, best["W_new"], best["i_cand_new"], best["removed"], {
-        "tested": n_try,
+        "tested": int(n_try),
+        "n_feasible": int(len(cand_records)),
+        "fail_reasons": fail_reasons,
         "candidate_metrics": best,
     }
 
@@ -462,6 +471,15 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
     max_zeros_loop = int(opts["max_number_zeros_active_set_loop"])
     enforce_nonnegativity = bool(opts["enforce_nonnegativity"])
 
+    # Phase policy (professor-requested):
+    # stage-1 NOENF must run first; graph regularization can only be used
+    # afterwards as stage-2 fallback, never simultaneously at every iteration.
+    if use_global_graph and smooth_all:
+        raise ValueError(
+            "Invalid MAW-ECM schedule: use_global_graph_2ndstage=1 requires "
+            "smooth_laplacian_all_iterations=0 (phase-1 first, then graph stage-2)."
+        )
+
     if use_global_graph:
         if "K_graph" not in opts:
             raise ValueError(
@@ -485,6 +503,20 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
     no_enf_attempts = 0
     local_as_attempts = 0
     graph_attempts = 0
+    phase1_start_size = int(n_cand)
+    phase1_end_size = int(n_cand)
+    phase2_started = False
+    phase2_mode = "graph_regularization" if use_global_graph else "local_active_set_regularization"
+    phase2_start_size = -1
+    phase2_end_size = -1
+    phase2_attempts = 0
+    phase2_successes = 0
+
+    if opts["verbose"]:
+        print(
+            "[MAW-ECM][Phase1] start (no regularization): "
+            f"|Z|={phase1_start_size}, target n_stop={n_stop}"
+        )
 
     while int(i_cand.size) > int(n_stop):
         if enforce_nonnegativity:
@@ -526,6 +558,7 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
                 removed_history.append(int(removed_idx))
                 stage_history.append("no_enforcement")
                 active_counts.append(int(i_cand.size))
+                phase1_end_size = int(i_cand.size)
                 continue
             # MATLAB convention: if all were tested and failed, kLOC > length(ilocPOS)
             k_loc = int(tested_no + 1)
@@ -538,9 +571,24 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
         if not need_stage2:
             break
 
+        if not phase2_started:
+            phase2_started = True
+            phase1_end_size = int(i_cand.size)
+            phase2_start_size = int(i_cand.size)
+            if opts["verbose"]:
+                print(
+                    "[MAW-ECM][Phase1] end: "
+                    f"|Z|={phase1_end_size}, removed={phase1_start_size - phase1_end_size}"
+                )
+                print(
+                    "[MAW-ECM][Phase2] starting regularization "
+                    f"({phase2_mode}), |Z|={phase2_start_size}"
+                )
+
         if use_global_graph:
             graph_attempts += 1
-            ok_s2, W_new, i_cand_new, removed_idx, _diag = _try_graph_pass(
+            phase2_attempts += 1
+            ok_s2, W_new, i_cand_new, removed_idx, diag = _try_graph_pass(
                 W=W,
                 A_blocks=A_blocks,
                 b_blocks=b_blocks,
@@ -553,7 +601,8 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
             stage_label = "graph_active_set"
         else:
             local_as_attempts += 1
-            ok_s2, W_new, i_cand_new, removed_idx, _diag = _try_local_active_set_pass(
+            phase2_attempts += 1
+            ok_s2, W_new, i_cand_new, removed_idx, diag = _try_local_active_set_pass(
                 W=W,
                 A_blocks=A_blocks,
                 b_blocks=b_blocks,
@@ -565,14 +614,33 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
             stage_label = "local_active_set"
 
         if not ok_s2:
+            if opts["verbose"]:
+                reason_txt = ""
+                fail_reasons = diag.get("fail_reasons", {}) if isinstance(diag, dict) else {}
+                if isinstance(fail_reasons, dict) and fail_reasons:
+                    top = sorted(fail_reasons.items(), key=lambda kv: kv[1], reverse=True)
+                    top_txt = ", ".join([f"{k} x{int(v)}" for k, v in top[:3]])
+                    reason_txt = f" Top fail reasons: {top_txt}."
+                print(
+                    "[MAW-ECM][Phase2] no feasible elimination found; stopping "
+                    f"after {phase2_attempts} phase-2 attempt(s). "
+                    f"Candidates tested in last attempt={int(diag.get('tested', 0))}."
+                    f"{reason_txt}"
+                )
             break
 
         W = W_new
         i_cand = i_cand_new
+        phase2_successes += 1
         removed.append(int(removed_idx))
         removed_history.append(int(removed_idx))
         stage_history.append(stage_label)
         active_counts.append(int(i_cand.size))
+        if opts["verbose"]:
+            print(
+                "[MAW-ECM][Phase2] accepted elimination: "
+                f"removed local idx={int(removed_idx)}, |Z|={int(i_cand.size)}"
+            )
 
     # Ensure strict zeros on removed set.
     if removed:
@@ -583,6 +651,9 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
     else:
         support_mask = np.max(np.abs(W), axis=1) > float(opts["tol_zero"])
     i_support = np.flatnonzero(support_mask).astype(np.int64)
+    if not phase2_started:
+        phase1_end_size = int(i_support.size)
+    phase2_end_size = int(i_support.size) if phase2_started else -1
 
     out = {
         "z_ini": z_ini,
@@ -601,10 +672,29 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
         "no_enforcement_attempts": int(no_enf_attempts),
         "local_active_set_attempts": int(local_as_attempts),
         "graph_attempts": int(graph_attempts),
+        "phase1_start_size": int(phase1_start_size),
+        "phase1_end_size": int(phase1_end_size),
+        "phase2_started": bool(phase2_started),
+        "phase2_mode": str(phase2_mode),
+        "phase2_start_size": int(phase2_start_size),
+        "phase2_end_size": int(phase2_end_size),
+        "phase2_attempts": int(phase2_attempts),
+        "phase2_successes": int(phase2_successes),
         "elapsed_sec": float(time.perf_counter() - t0),
     }
 
     if opts["verbose"]:
+        if phase2_started:
+            print(
+                "[MAW-ECM][Phase2] end: "
+                f"|Z_start|={phase2_start_size} -> |Z_final|={phase2_end_size}, "
+                f"attempts={phase2_attempts}, accepted={phase2_successes}"
+            )
+        else:
+            print(
+                "[MAW-ECM][Phase2] not triggered "
+                f"(phase-1 reached |Z|={phase1_end_size})."
+            )
         print(
             "[MAW-ECM] pruning finished: "
             f"|Z_ini|={n_cand}, |Z_final|={i_support.size}, n_stop={n_stop}, "
