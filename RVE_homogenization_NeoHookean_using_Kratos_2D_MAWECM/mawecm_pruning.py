@@ -125,6 +125,10 @@ def _try_no_enforcement_pass(
 
         for j, (Aj, bj) in enumerate(zip(A_blocks, b_blocks)):
             A_keep = Aj[:, i_cand_new]  # (m, r_keep)
+            if A_keep.shape[0] == 0:
+                # No local constraints at this node after rank compression.
+                # Feasible by construction; keep weights unchanged here.
+                continue
             if A_keep.shape[1] < A_keep.shape[0]:
                 feasible = False
                 break
@@ -192,6 +196,10 @@ def _prune_step_optionb_np(w_old, A_loc_blocks, b_blocks, K_graph, alpha, p_loca
             Aj = np.asarray(A_loc_blocks[j], dtype=float)
             bj = np.asarray(b_blocks[j], dtype=float).reshape(-1)
             m = int(bj.size)
+            if m == 0:
+                # No local constraints at this node; keep wp=0 and empty null-space block.
+                Nj_list.append(sparse.csr_matrix((r, 0), dtype=float))
+                continue
             F_j = ~Dj[j]
             nF = int(np.sum(F_j))
             if nF < m:

@@ -290,6 +290,48 @@ def _build_full_to_local_dof_map(full_mesh_base: str, mp_local, eq_map_local: np
         sim_full.Finalize()
 
 
+def _build_full_to_local_dof_map_from_hrom_metadata(mawecm_data: Dict[str, object], mp_local, eq_map_local: np.ndarray):
+    required = ("hrom_node_ids", "hrom_node_full_eqid_x", "hrom_node_full_eqid_y")
+    missing = [k for k in required if k not in mawecm_data]
+    if missing:
+        raise RuntimeError(
+            "MAW-ECM file missing HROM DOF-map metadata keys "
+            f"{missing}. Re-run stage6c_create_hrom_mdpa.py with --inplace-ecm."
+        )
+
+    node_ids = np.asarray(mawecm_data["hrom_node_ids"], dtype=np.int64).reshape(-1)
+    full_x = np.asarray(mawecm_data["hrom_node_full_eqid_x"], dtype=np.int64).reshape(-1)
+    full_y = np.asarray(mawecm_data["hrom_node_full_eqid_y"], dtype=np.int64).reshape(-1)
+    if not (node_ids.size == full_x.size == full_y.size):
+        raise RuntimeError(
+            "Inconsistent HROM node/full-eqid metadata sizes: "
+            f"len(node_ids)={node_ids.size}, len(full_x)={full_x.size}, len(full_y)={full_y.size}."
+        )
+
+    nid_to_full = {int(nid): (int(fx), int(fy)) for nid, fx, fy in zip(node_ids.tolist(), full_x.tolist(), full_y.tolist())}
+    full_to_local = {}
+    missing_nodes = []
+    for i, node in enumerate(mp_local.Nodes):
+        nid = int(node.Id)
+        if nid not in nid_to_full:
+            missing_nodes.append(nid)
+            continue
+        fx, fy = nid_to_full[nid]
+        lx = int(eq_map_local[i, 0])
+        ly = int(eq_map_local[i, 1])
+        if fx >= 0 and lx >= 0:
+            full_to_local[int(fx)] = int(lx)
+        if fy >= 0 and ly >= 0:
+            full_to_local[int(fy)] = int(ly)
+
+    if missing_nodes:
+        raise RuntimeError(
+            f"Could not map {len(missing_nodes)} local nodes from HROM metadata "
+            f"(example={missing_nodes[:8]})."
+        )
+    return full_to_local
+
+
 def _remap_free_basis_to_local(
     free_dofs_full: np.ndarray,
     phi_m_full: np.ndarray,
@@ -475,16 +517,24 @@ def RunHpromMawEcmGprBatchSimulation(
         n_elem=n_elem,
     )
     if mesh_mode == "hrom":
-        if "hrom_full_mesh_base" not in mawecm_data:
-            raise RuntimeError(
-                "MAW data has HROM-projected weights but missing 'hrom_full_mesh_base' for DOF remapping."
+        try:
+            full_to_local = _build_full_to_local_dof_map_from_hrom_metadata(
+                mawecm_data=mawecm_data,
+                mp_local=mp,
+                eq_map_local=np.asarray(eq_map_runtime, dtype=np.int64),
             )
-        full_mesh_base = str(np.ravel(mawecm_data["hrom_full_mesh_base"])[0])
-        full_to_local = _build_full_to_local_dof_map(
-            full_mesh_base=full_mesh_base,
-            mp_local=mp,
-            eq_map_local=np.asarray(eq_map_runtime, dtype=np.int64),
-        )
+        except Exception:
+            if "hrom_full_mesh_base" not in mawecm_data:
+                raise RuntimeError(
+                    "MAW data has HROM-projected weights but missing both "
+                    "HROM DOF-map metadata and 'hrom_full_mesh_base' fallback."
+                )
+            full_mesh_base = str(np.ravel(mawecm_data["hrom_full_mesh_base"])[0])
+            full_to_local = _build_full_to_local_dof_map(
+                full_mesh_base=full_mesh_base,
+                mp_local=mp,
+                eq_map_local=np.asarray(eq_map_runtime, dtype=np.int64),
+            )
         free_dofs, phi_m, phi_s, n_overlap = _remap_free_basis_to_local(
             free_dofs_full=free_dofs_full,
             phi_m_full=phi_m_full,

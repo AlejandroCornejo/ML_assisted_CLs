@@ -97,6 +97,20 @@ def _parse_args() -> argparse.Namespace:
         choices=["full_fom", "ecm_separate"],
         help="Homogenization backend for HPROM-MAWECM-GPR.",
     )
+    p.add_argument(
+        "--hprom-use-hrom-mdpa",
+        type=int,
+        default=0,
+        choices=[0, 1],
+        help="If 1, run HPROM on the reduced HROM mdpa stored in --mawecm-file.",
+    )
+    p.add_argument(
+        "--hprom-hrom-strict",
+        type=int,
+        default=1,
+        choices=[0, 1],
+        help="If 1 and --hprom-use-hrom-mdpa=1, fail when HROM mesh cannot be resolved.",
+    )
 
     p.add_argument("--stage2a-dir", type=str, default="stage_2a_pod_data")
     p.add_argument("--stage2b-dir", type=str, default="stage_2b_ls_master")
@@ -333,10 +347,18 @@ def main():
 
     mesh_fom = _strip_mdpa_extension(args.mesh)
     mesh_prom = mesh_fom
-    # Strict Stage-8 mode: always run HPROM-MAW on base mesh and compute
-    # homogenization on full mesh (no HROM mdpa branch).
-    mesh_hprom = mesh_fom
-    mesh_hprom_mode = "base_mesh"
+    mesh_hprom, mesh_hprom_mode = _resolve_hprom_mesh(
+        base_mesh=mesh_fom,
+        mawecm_file=args.mawecm_file,
+        enable_hrom=bool(int(args.hprom_use_hrom_mdpa)),
+    )
+    if bool(int(args.hprom_use_hrom_mdpa)) and bool(int(args.hprom_hrom_strict)):
+        if mesh_hprom_mode != "hrom_mesh":
+            raise RuntimeError(
+                "Requested HROM mdpa mode but reduced mesh was not resolved "
+                f"(mode='{mesh_hprom_mode}'). Run stage6c_create_hrom_mdpa.py "
+                "on the same MAW file with --inplace-ecm."
+            )
 
     params_fom = setup_kratos_parameters(mesh_fom)
     params_prom = setup_kratos_parameters(mesh_prom)

@@ -21,7 +21,11 @@ if KRATOS_PATH not in sys.path:
 import KratosMultiphysics as KM
 from KratosMultiphysics import kratos_utilities
 import KratosMultiphysics.RomApplication as KratosROM
-from fom_solver_rve import setup_kratos_parameters, RVEHomogenizationDatasetGenerator
+from fom_solver_rve import (
+    setup_kratos_parameters,
+    RVEHomogenizationDatasetGenerator,
+    SetUpDofEquationIdsAndDisplacementAdaptor,
+)
 
 
 def _strip_mdpa_extension(mesh_name):
@@ -587,6 +591,11 @@ def main():
     sim = RVEHomogenizationDatasetGenerator(model_origin, parameters)
     sim.Initialize()
     origin_mp = sim._GetSolver().GetComputingModelPart()
+    _, eq_map_full, _ = SetUpDofEquationIdsAndDisplacementAdaptor(origin_mp)
+    full_nodeid_to_eqxy = {
+        int(node.Id): (int(eq_map_full[i, 0]), int(eq_map_full[i, 1]))
+        for i, node in enumerate(origin_mp.Nodes)
+    }
 
     origin_elements = list(origin_mp.Elements)
     n_elem_full = len(origin_elements)
@@ -627,6 +636,15 @@ def main():
     hrom_elem_ids_0 = hrom_elem_ids_1 - 1
     hrom_elem_full_indices = np.array([full_elem_id_to_index[int(eid)] for eid in hrom_elem_ids_1], dtype=np.int64)
     hrom_cond_ids_0 = np.array([int(cond.Id) - 1 for cond in hrom_mp.Conditions], dtype=np.int64)
+    hrom_node_ids = np.array([int(node.Id) for node in hrom_mp.Nodes], dtype=np.int64)
+    hrom_node_full_eqid_x = np.array(
+        [int(full_nodeid_to_eqxy[int(nid)][0]) for nid in hrom_node_ids.tolist()],
+        dtype=np.int64,
+    )
+    hrom_node_full_eqid_y = np.array(
+        [int(full_nodeid_to_eqxy[int(nid)][1]) for nid in hrom_node_ids.tolist()],
+        dtype=np.int64,
+    )
     weight_summaries = _compute_selection_weight_summaries(data, hrom_elem_full_indices)
 
     data_out = dict(data)
@@ -637,6 +655,9 @@ def main():
     data_out["hrom_element_full_indices"] = hrom_elem_full_indices
     data_out["hrom_element_ids_0based"] = hrom_elem_ids_0
     data_out["hrom_condition_ids_0based"] = hrom_cond_ids_0
+    data_out["hrom_node_ids"] = hrom_node_ids
+    data_out["hrom_node_full_eqid_x"] = hrom_node_full_eqid_x
+    data_out["hrom_node_full_eqid_y"] = hrom_node_full_eqid_y
     data_out["hrom_n_elem"] = np.array([int(hrom_elem_ids_0.size)], dtype=np.int64)
     data_out["hrom_n_cond"] = np.array([int(hrom_cond_ids_0.size)], dtype=np.int64)
     data_out["w_res_hrom"] = _project_weight_to_hrom(data, "w_res_full", hrom_elem_full_indices)
