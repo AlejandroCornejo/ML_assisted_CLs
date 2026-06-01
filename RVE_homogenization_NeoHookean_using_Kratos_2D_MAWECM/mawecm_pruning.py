@@ -30,6 +30,7 @@ DEFAULT_OPTIONS = {
     "max_active_set_iters": 30,
     "max_reduced_dim": 2500,
     "weight_pos_tol": 0.0,
+    "enforce_nonnegativity": True,
     # Joaquín-style control flags
     "smooth_laplacian_all_iterations": False,
     "use_global_graph_2ndstage": False,
@@ -52,6 +53,7 @@ def _merge_options(options):
     out["use_global_graph_2ndstage"] = bool(out["use_global_graph_2ndstage"])
     out["max_number_zeros_active_set_loop"] = int(out["max_number_zeros_active_set_loop"])
     out["verbose"] = bool(out["verbose"])
+    out["enforce_nonnegativity"] = bool(out["enforce_nonnegativity"])
     return out
 
 
@@ -95,7 +97,17 @@ def _nullspace_basis(A, tol_rel=1.0e-12):
     return Vh[rank:, :].T
 
 
-def _try_no_enforcement_pass(W, A_blocks, b_blocks, i_cand, iloc_pos, ind_sort, tol_neg, tol_rank_rel):
+def _try_no_enforcement_pass(
+    W,
+    A_blocks,
+    b_blocks,
+    i_cand,
+    iloc_pos,
+    ind_sort,
+    tol_neg,
+    tol_rank_rel,
+    enforce_nonnegativity,
+):
     """
     Try candidates (in ind_sort order) using local least-change update + rejection on negatives.
     Returns (ok, W_new, i_cand_new, removed_index, tested_count).
@@ -125,7 +137,7 @@ def _try_no_enforcement_pass(W, A_blocks, b_blocks, i_cand, iloc_pos, ind_sort, 
             rhs = bj - (A_keep @ w_before)
             delta, *_ = np.linalg.lstsq(A_keep, rhs, rcond=None)
             w_after = w_before + delta
-            if np.any(w_after < -tol_neg):
+            if bool(enforce_nonnegativity) and np.any(w_after < -tol_neg):
                 feasible = False
                 break
             W_new[i_cand_new, j] = w_after
@@ -440,6 +452,7 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
     use_global_graph = bool(opts["use_global_graph_2ndstage"])
     smooth_all = bool(opts["smooth_laplacian_all_iterations"])
     max_zeros_loop = int(opts["max_number_zeros_active_set_loop"])
+    enforce_nonnegativity = bool(opts["enforce_nonnegativity"])
 
     if use_global_graph:
         if "K_graph" not in opts:
@@ -451,7 +464,7 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
         # Local NOENFe stage does not use graph coupling.
         K_graph = sparse.csr_matrix((n_nodes, n_nodes), dtype=float)
 
-    tol_neg = _negativity_tolerance(w_ini, opts["tol_neg_factor"])
+    tol_neg = _negativity_tolerance(w_ini, opts["tol_neg_factor"]) if enforce_nonnegativity else 0.0
     opts["tol_neg"] = float(tol_neg)
 
     W = np.tile(w_ini[:, None], (1, n_nodes))
@@ -466,12 +479,23 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
     graph_attempts = 0
 
     while int(i_cand.size) > int(n_stop):
-        R = np.sum(W, axis=1)
-        iloc_pos = np.array([idx for idx in i_cand if R[int(idx)] > float(opts["weight_pos_tol"])], dtype=np.int64)
+        if enforce_nonnegativity:
+            activity = np.sum(W, axis=1)
+            iloc_pos = np.array(
+                [idx for idx in i_cand if activity[int(idx)] > float(opts["weight_pos_tol"])],
+                dtype=np.int64,
+            )
+        else:
+            # Signed-weight mode: use absolute activity to define active rows.
+            activity = np.max(np.abs(W), axis=1)
+            iloc_pos = np.array(
+                [idx for idx in i_cand if activity[int(idx)] > float(opts["tol_zero"])],
+                dtype=np.int64,
+            )
         if iloc_pos.size == 0 or iloc_pos.size <= n_stop:
             break
 
-        ind_sort = np.argsort(R[iloc_pos])
+        ind_sort = np.argsort(activity[iloc_pos])
 
         k_loc = 1
         if not smooth_all:
@@ -484,6 +508,7 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
                 ind_sort=ind_sort,
                 tol_neg=tol_neg,
                 tol_rank_rel=opts["tol_rank_rel"],
+                enforce_nonnegativity=enforce_nonnegativity,
             )
             no_enf_attempts += int(tested_no)
             if ok_no:
@@ -498,6 +523,10 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
             k_loc = int(tested_no + 1)
 
         need_stage2 = ((k_loc > int(iloc_pos.size) and max_zeros_loop > 0) or smooth_all)
+        if not enforce_nonnegativity:
+            # Stage-2 NOENFe / graph step is a positivity-enforcement mechanism.
+            # In signed-weight mode we keep only stage-1 least-change eliminations.
+            need_stage2 = False
         if not need_stage2:
             break
 
@@ -541,7 +570,10 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
     if removed:
         W[np.asarray(removed, dtype=np.int64), :] = 0.0
 
-    support_mask = np.sum(W, axis=1) > float(opts["tol_zero"])
+    if enforce_nonnegativity:
+        support_mask = np.sum(W, axis=1) > float(opts["tol_zero"])
+    else:
+        support_mask = np.max(np.abs(W), axis=1) > float(opts["tol_zero"])
     i_support = np.flatnonzero(support_mask).astype(np.int64)
 
     out = {

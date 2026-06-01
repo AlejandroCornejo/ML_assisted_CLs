@@ -12,7 +12,7 @@ By default this script stops at first failure (break-on-fail behavior).
 
 Notes:
 - This sweep is aligned with the current strict Stage8b interface
-  (residual-only MAW, first-phase local pruning, no graph options).
+  (first-phase local pruning, no graph options).
 """
 
 from __future__ import annotations
@@ -99,10 +99,17 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--root-dir", type=str, default=".")
 
     p.add_argument("--dataset-dir", type=str, default="stage_8a_mawecm_res_dataset")
+    p.add_argument("--maw-mode", type=str, default="res_only", choices=["res_only", "res_eps", "res_eps_sig"])
     p.add_argument("--hom-source", type=str, default="full_mesh", choices=["full_mesh", "fixed_ecm"])
     p.add_argument("--fixed-ecm-file", type=str, default="stage_6b_hprom_ecm/ecm_weights_all.npz")
     p.add_argument("--res-bootstrap-ecm-file", type=str, default="")
     p.add_argument("--max-number-zeros-active-set-loop-maw-ecm", type=int, default=1)
+    p.add_argument("--maw-min-support-size-res", type=int, default=-1)
+    p.add_argument("--maw-min-support-size-eps", type=int, default=0)
+    p.add_argument("--maw-min-support-size-sig", type=int, default=0)
+    p.add_argument("--maw-hom-conservative", type=int, default=1, choices=[0, 1])
+    p.add_argument("--maw-res-enforce-nonnegativity", type=int, default=1, choices=[0, 1])
+    p.add_argument("--maw-hom-enforce-nonnegativity", type=int, default=0, choices=[0, 1])
     p.add_argument("--save-weight-field-plots", type=int, default=1, choices=[0, 1])
     p.add_argument("--show-weight-field-plots", type=int, default=0, choices=[0, 1])
     p.add_argument("--max-weight-field-plots", type=int, default=0)
@@ -180,6 +187,7 @@ def main() -> None:
     print(f"root_dir    : {root_dir}")
     print(f"supports    : {supports} (0 => auto)")
     print(f"logs_root   : {logs_root}")
+    print(f"maw_mode    : {args.maw_mode}")
     print(f"hom_mode    : {args.hprom_homogenization_mode}")
     print(f"hom_source8b: {args.hom_source}")
     print(f"sum(w) local: {int(args.enforce_sum_weights)}")
@@ -208,12 +216,26 @@ def main() -> None:
             "stage8b_build_mawecm_res_model_rbf.py",
             "--dataset-dir",
             args.dataset_dir,
+            "--maw-mode",
+            str(args.maw_mode),
             "--hom-source",
             str(args.hom_source),
             "--max-number-zeros-active-set-loop-maw-ecm",
             str(int(args.max_number_zeros_active_set_loop_maw_ecm)),
             "--maw-min-support-size",
             str(int(s)),
+            "--maw-min-support-size-res",
+            str(int(args.maw_min_support_size_res)),
+            "--maw-min-support-size-eps",
+            str(int(args.maw_min_support_size_eps)),
+            "--maw-min-support-size-sig",
+            str(int(args.maw_min_support_size_sig)),
+            "--maw-hom-conservative",
+            str(int(args.maw_hom_conservative)),
+            "--maw-res-enforce-nonnegativity",
+            str(int(args.maw_res_enforce_nonnegativity)),
+            "--maw-hom-enforce-nonnegativity",
+            str(int(args.maw_hom_enforce_nonnegativity)),
             "--save-weight-field-plots",
             str(int(args.save_weight_field_plots)),
             "--show-weight-field-plots",
