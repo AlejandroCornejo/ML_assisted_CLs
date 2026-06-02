@@ -37,7 +37,7 @@ Load strain and stress from FOM trajectories (10 trajectories from stage_1_train
 Data is loaded as [history, step, component] with shape [10, steps, 3].
 """
 #***********************************************
-min_steps = 4500  # truncate all trajectories to the same length (e.g., 150 steps)
+min_steps = 200  # truncate all trajectories to the same length (e.g., 150 steps)
 #***********************************************
 
 # Path to FOM trajectories folder (relative to script location)
@@ -60,7 +60,7 @@ for i in range(1, 11):  # trajectory_1 to trajectory_10
     print(f"Loaded trajectory_{i}: strain={strain_data.shape}, stress={stress_data.shape}")
 
 # Find minimum number of steps across all trajectories
-min_steps = min(t.shape[0] for t in strain_trajectories)
+# min_steps = min(t.shape[0] for t in strain_trajectories)
 print(f"\nMinimum number of steps across all trajectories: {min_steps}")
 
 # Sample each trajectory at equally spaced intervals to cover the full path
@@ -135,7 +135,7 @@ max_W = 1
 train_W_database /= max_W  # Normalize W to have max absolute value of 1
 
 def L2_relative_error(pred, target):
-    return torch.sqrt(torch.sum((pred - target) ** 2) / torch.sum(target**2))
+    return torch.sqrt(torch.mean((pred - target) ** 2) / torch.mean(target**2))
 
 # ==========================================================================================
 def TRAIN_KAN(
@@ -230,16 +230,18 @@ def TRAIN_KAN(
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 1_000
+n_epochs = 100_000
 learning_rate = 1.0e-2
 
 order_stretches = 1   # Number of orders (can be set to any value)
-k = 3  # Degree of splines
-grid_size = 3  # Number of knots
+k = 2  # Degree of splines
+grid_size = 6  # Number of knots
 
 input_size = 2 * order_stretches + 1
 W_width = [input_size,
-            1,
+            5,
+            5,
+            2,
             1] # output always 1
 
 #*****************************************************************************************************************
@@ -256,8 +258,8 @@ model = surrogate.ICKAN_W_Surrogate(
 # model.UpdateGridFromSamples(train_strain_database)
 
 
-# print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
-# print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
+print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
+print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
 
 
 optimizer_1 = optim.Adam(
