@@ -809,8 +809,9 @@ def RunHpromMawEcmRbfBatchSimulation(
             kff = k_hr[free_dofs][:, free_dofs]
             k_red = du_dqm.T @ (kff @ du_dqm)
             if use_weight_tangent and (dw_res_iter is not None):
-                # Consistent MAW term: J_u^T [sum_e r_e \otimes d w_e/dq_m]
-                # where r_e are unit-weight element RHS contributions on free DOFs.
+                # The Newton solve uses K_alg dq = R with R = rhs = -f_int.
+                # Therefore K_alg = -dR/dq. For R = sum_e w_e(q) R_e(q),
+                # the weight term contributes -sum_e R_e \otimes dw_e/dq.
                 _, _ = assembler_hr_unit.Assemble(u)
                 r_free_e = _assemble_unit_rhs_by_element_free(
                     assembler_unit=assembler_hr_unit,
@@ -818,7 +819,7 @@ def RunHpromMawEcmRbfBatchSimulation(
                     n_free=free_dofs.size,
                 )  # (n_free, n_res)
                 drw_dqm = r_free_e @ dw_res_iter  # (n_free, q_m_dim)
-                k_red = k_red + (du_dqm.T @ drw_dqm)
+                k_red = k_red - (du_dqm.T @ drw_dqm)
             if float(prom_corrector_l2_reg) > 0.0:
                 k_red = k_red + float(prom_corrector_l2_reg) * np.eye(q_m_dim, dtype=float)
             k_red_last = k_red
