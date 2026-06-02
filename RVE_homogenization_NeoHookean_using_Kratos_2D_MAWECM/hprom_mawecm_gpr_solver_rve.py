@@ -548,24 +548,11 @@ def RunHpromMawEcmGprBatchSimulation(
         need_hom_support=(hom_mode == "ecm_separate"),
     )
     if mesh_mode == "hrom":
-        try:
-            full_to_local = _build_full_to_local_dof_map_from_hrom_metadata(
-                mawecm_data=mawecm_data,
-                mp_local=mp,
-                eq_map_local=np.asarray(eq_map_runtime, dtype=np.int64),
-            )
-        except Exception:
-            if "hrom_full_mesh_base" not in mawecm_data:
-                raise RuntimeError(
-                    "MAW data has HROM-projected weights but missing both "
-                    "HROM DOF-map metadata and 'hrom_full_mesh_base' fallback."
-                )
-            full_mesh_base = str(np.ravel(mawecm_data["hrom_full_mesh_base"])[0])
-            full_to_local = _build_full_to_local_dof_map(
-                full_mesh_base=full_mesh_base,
-                mp_local=mp,
-                eq_map_local=np.asarray(eq_map_runtime, dtype=np.int64),
-            )
+        full_to_local = _build_full_to_local_dof_map_from_hrom_metadata(
+            mawecm_data=mawecm_data,
+            mp_local=mp,
+            eq_map_local=np.asarray(eq_map_runtime, dtype=np.int64),
+        )
         free_dofs, phi_m, phi_s, n_overlap = _remap_free_basis_to_local(
             free_dofs_full=free_dofs_full,
             phi_m_full=phi_m_full,
