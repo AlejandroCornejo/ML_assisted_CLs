@@ -11,6 +11,7 @@ MAW-ECM pruning routines:
 from __future__ import annotations
 
 import time
+import warnings
 import numpy as np
 from scipy import sparse
 from scipy.sparse import linalg as spla
@@ -29,6 +30,7 @@ DEFAULT_OPTIONS = {
     "tol_zero": 1.0e-12,
     "max_active_set_iters": 30,
     "max_reduced_dim": 2500,
+    "warn_max_reduced_dim": False,
     "weight_pos_tol": 0.0,
     "enforce_nonnegativity": True,
     # Joaquín-style control flags
@@ -249,13 +251,14 @@ def _prune_step_optionb_np(w_old, A_loc_blocks, b_blocks, K_graph, alpha, p_loca
         if total_d == 0:
             z = z_p
         else:
-            if total_d > max_reduced_dim:
-                return w_old, {
-                    "ok": False,
-                    "reason": f"reduced dim too large ({total_d}>{max_reduced_dim})",
-                    "nASiter": it,
-                    "Dj": Dj,
-                }
+            if total_d > max_reduced_dim and bool(opts.get("warn_max_reduced_dim", False)):
+                warnings.warn(
+                    "MAW-ECM reduced active-set dimension exceeds "
+                    f"--max-reduced-dim ({total_d}>{max_reduced_dim}); "
+                    "continuing with the solve.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
 
             Nmat = sparse.block_diag(Nj_list, format="csc")
             rhs_full = g - (H @ z_p)
@@ -383,6 +386,7 @@ def _try_local_active_set_pass(W, A_blocks, b_blocks, i_cand, iloc_pos, ind_sort
     opts_loc = dict(options)
     opts_loc["alpha_smooth"] = 0.0
 
+    fail_reasons = {}
     for ord_pos, k_loc in enumerate(ind_sort[:n_try]):
         p_local = int(k_loc)
         cand_global = int(iloc_pos[p_local])
@@ -399,6 +403,8 @@ def _try_local_active_set_pass(W, A_blocks, b_blocks, i_cand, iloc_pos, ind_sort
             opts=opts_loc,
         )
         if not info.get("ok", False):
+            reason = str(info.get("reason", "unknown"))
+            fail_reasons[reason] = int(fail_reasons.get(reason, 0)) + 1
             continue
 
         i_cand_new = np.array([i for i in i_cand if int(i) != cand_global], dtype=np.int64)
@@ -407,13 +413,14 @@ def _try_local_active_set_pass(W, A_blocks, b_blocks, i_cand, iloc_pos, ind_sort
         W_new[cand_global, :] = 0.0
         return True, W_new, i_cand_new, cand_global, {
             "tested": int(ord_pos + 1),
+            "fail_reasons": fail_reasons,
             "candidate_metrics": {
                 "tested_rank": int(ord_pos),
                 "info": info,
             },
         }
 
-    return False, W, i_cand, None, {"tested": int(n_try)}
+    return False, W, i_cand, None, {"tested": int(n_try), "fail_reasons": fail_reasons}
 
 
 def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
