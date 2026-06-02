@@ -212,6 +212,17 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--maw-phase1-stop-size-res",
+        type=int,
+        default=0,
+        help=(
+            "Residual support size where phase-1 NOENF is intentionally stopped "
+            "and phase-2 regularization starts. <=0 keeps the default policy: "
+            "phase-2 starts only when phase-1 stalls, or immediately if "
+            "--smooth-laplacian-all-iterations=1."
+        ),
+    )
+    p.add_argument(
         "--maw-min-support-size-eps",
         type=int,
         default=0,
@@ -1661,6 +1672,7 @@ def _make_prune_opts_base(
     use_global_graph_2ndstage=False,
     smooth_laplacian_all_iterations=False,
     alpha_smooth=0.0,
+    phase1_stop_size=None,
 ):
     if k_graph is None:
         k_graph = sparse.csr_matrix((int(state_train.shape[0]), int(state_train.shape[0])), dtype=float)
@@ -1682,6 +1694,11 @@ def _make_prune_opts_base(
         "max_active_set_iters": int(args.max_as_iters),
         "max_reduced_dim": int(args.max_reduced_dim),
         "n_stop": (int(n_stop) if (n_stop is not None and int(n_stop) > 0) else None),
+        "phase1_stop_size": (
+            int(phase1_stop_size)
+            if (phase1_stop_size is not None and int(phase1_stop_size) > 0)
+            else None
+        ),
         "verbose": True,
         "enforce_nonnegativity": bool(enforce_nonnegativity),
     }
@@ -1821,6 +1838,11 @@ def main():
         print(f"maw min |Z_res| : {int(n_stop_res_req)} (hard stop)")
     else:
         print("maw min |Z_res| : auto (n_stop from local constraints)")
+    if int(args.maw_phase1_stop_size_res) > 0:
+        print(
+            "maw phase1 stop |Z_res| : "
+            f"{int(args.maw_phase1_stop_size_res)} (then phase-2 regularization)"
+        )
     if maw_mode in {"res_eps", "res_eps_sig"}:
         if int(args.maw_min_support_size_eps) > 0:
             print(f"maw min |Z_eps| : {int(args.maw_min_support_size_eps)} (hard stop)")
@@ -1916,6 +1938,11 @@ def main():
         use_global_graph_2ndstage=res_use_graph,
         smooth_laplacian_all_iterations=res_smooth_all,
         alpha_smooth=(float(args.alpha_smooth) if res_use_graph else 0.0),
+        phase1_stop_size=(
+            int(args.maw_phase1_stop_size_res)
+            if int(args.maw_phase1_stop_size_res) > 0
+            else None
+        ),
     )
     k_graph = sparse.csr_matrix(prune_opts["K_graph"])
     if res_use_graph:
@@ -2234,6 +2261,9 @@ def main():
         "maw_res_n_stop": np.array([int(maw["n_stop"])], dtype=np.int64),
         "maw_res_requested_min_support_size": np.array(
             [int(n_stop_res_req) if n_stop_res_req is not None else 0], dtype=np.int64
+        ),
+        "maw_res_phase1_stop_size": np.array(
+            [int(args.maw_phase1_stop_size_res)], dtype=np.int64
         ),
         "maw_res_elapsed_sec": np.array([float(maw["elapsed_sec"])], dtype=float),
         "maw_res_recon_rel": np.array([float(rel_recon)], dtype=float),

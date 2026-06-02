@@ -39,6 +39,7 @@ DEFAULT_OPTIONS = {
     "max_number_zeros_active_set_loop": 1,
     "verbose": True,
     "n_stop": None,
+    "phase1_stop_size": None,
 }
 
 
@@ -56,6 +57,8 @@ def _merge_options(options):
     out["max_number_zeros_active_set_loop"] = int(out["max_number_zeros_active_set_loop"])
     out["verbose"] = bool(out["verbose"])
     out["enforce_nonnegativity"] = bool(out["enforce_nonnegativity"])
+    if out.get("phase1_stop_size") is not None:
+        out["phase1_stop_size"] = int(out["phase1_stop_size"])
     return out
 
 
@@ -472,6 +475,11 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
     n_stop_default = int(max(max(m_list), 1))
     n_stop = int(opts["n_stop"]) if opts.get("n_stop") is not None else n_stop_default
     n_stop = max(n_stop_default, n_stop)
+    phase1_stop_size = opts.get("phase1_stop_size", None)
+    if phase1_stop_size is not None and int(phase1_stop_size) > 0:
+        phase1_stop_size = max(int(phase1_stop_size), int(n_stop))
+    else:
+        phase1_stop_size = None
 
     use_global_graph = bool(opts["use_global_graph_2ndstage"])
     smooth_all = bool(opts["smooth_laplacian_all_iterations"])
@@ -523,9 +531,12 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
                 f"target n_stop={n_stop}"
             )
         else:
+            extra = ""
+            if phase1_stop_size is not None:
+                extra = f", phase1_stop={phase1_stop_size}"
             print(
                 "[MAW-ECM][Phase1] start (no regularization): "
-                f"|Z|={phase1_start_size}, target n_stop={n_stop}"
+                f"|Z|={phase1_start_size}, target n_stop={n_stop}{extra}"
             )
 
     while int(i_cand.size) > int(n_stop):
@@ -548,7 +559,10 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
         ind_sort = np.argsort(activity[iloc_pos])
 
         k_loc = 1
-        if not smooth_all:
+        force_stage2_by_phase1_stop = (
+            phase1_stop_size is not None and int(i_cand.size) <= int(phase1_stop_size)
+        )
+        if not smooth_all and not force_stage2_by_phase1_stop:
             ok_no, W_new, i_cand_new, removed_idx, tested_no = _try_no_enforcement_pass(
                 W=W,
                 A_blocks=A_blocks,
@@ -573,7 +587,11 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
             # MATLAB convention: if all were tested and failed, kLOC > length(ilocPOS)
             k_loc = int(tested_no + 1)
 
-        need_stage2 = ((k_loc > int(iloc_pos.size) and max_zeros_loop > 0) or smooth_all)
+        need_stage2 = (
+            (k_loc > int(iloc_pos.size) and max_zeros_loop > 0)
+            or smooth_all
+            or (force_stage2_by_phase1_stop and max_zeros_loop > 0)
+        )
         if not enforce_nonnegativity:
             # Stage-2 NOENFe / graph step is a positivity-enforcement mechanism.
             # In signed-weight mode we keep only stage-1 least-change eliminations.
@@ -678,6 +696,7 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
         "active_counts": np.asarray(active_counts, dtype=np.int64),
         "stage_history": np.asarray(stage_history, dtype="U32"),
         "n_stop": int(n_stop),
+        "phase1_stop_size": (-1 if phase1_stop_size is None else int(phase1_stop_size)),
         "tol_neg": float(tol_neg),
         "options": opts,
         "no_enforcement_attempts": int(no_enf_attempts),
