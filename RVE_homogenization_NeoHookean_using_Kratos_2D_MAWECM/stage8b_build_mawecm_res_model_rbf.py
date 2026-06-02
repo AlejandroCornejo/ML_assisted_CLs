@@ -136,7 +136,7 @@ def _parse_args() -> argparse.Namespace:
         choices=[0, 1],
         help=(
             "If 0, phase-1 NOENF runs first and stage-2 is used only when phase-1 stalls. "
-            "If 1, stage-2 is forced every iteration (not allowed with graph stage)."
+            "If 1, stage-2 regularization/active-set is forced every iteration, including graph stage."
         ),
     )
     p.add_argument(
@@ -1835,15 +1835,16 @@ def main():
             print("maw min |Z_sig| : auto (n_stop from local constraints)")
     res_use_graph = bool(int(args.use_global_graph_2ndstage))
     res_smooth_all = bool(int(args.smooth_laplacian_all_iterations))
-    if res_use_graph and res_smooth_all:
-        raise RuntimeError(
-            "Invalid schedule: graph stage enabled with smooth-all-iters=1. "
-            "Use --smooth-laplacian-all-iterations 0 so phase-1 (NOENF) runs first."
-        )
     if res_use_graph:
-        print("stage2 mode : graph_active_set (PruneStep/PruneSweep-like)")
+        if res_smooth_all:
+            print("stage2 mode : graph_active_set (forced all iterations)")
+        else:
+            print("stage2 mode : graph_active_set (PruneStep/PruneSweep-like)")
     else:
-        print("stage2 mode : local_active_set (Loop_MAWecmNOENFe-like)")
+        if res_smooth_all:
+            print("stage2 mode : local_active_set (forced all iterations)")
+        else:
+            print("stage2 mode : local_active_set (Loop_MAWecmNOENFe-like)")
     print(f"smooth all iters : {int(res_smooth_all)}")
     if res_use_graph:
         print(

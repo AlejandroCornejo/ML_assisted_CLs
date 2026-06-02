@@ -478,14 +478,9 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
     max_zeros_loop = int(opts["max_number_zeros_active_set_loop"])
     enforce_nonnegativity = bool(opts["enforce_nonnegativity"])
 
-    # Phase policy (professor-requested):
-    # stage-1 NOENF must run first; graph regularization can only be used
-    # afterwards as stage-2 fallback, never simultaneously at every iteration.
-    if use_global_graph and smooth_all:
-        raise ValueError(
-            "Invalid MAW-ECM schedule: use_global_graph_2ndstage=1 requires "
-            "smooth_laplacian_all_iterations=0 (phase-1 first, then graph stage-2)."
-        )
+    # Default policy: stage-1 NOENF runs first and stage-2 regularization is
+    # only used after phase-1 stalls. If smooth_all=True, stage-2 is explicitly
+    # forced from the first elimination attempt.
 
     if use_global_graph:
         if "K_graph" not in opts:
@@ -520,10 +515,18 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
     phase2_successes = 0
 
     if opts["verbose"]:
-        print(
-            "[MAW-ECM][Phase1] start (no regularization): "
-            f"|Z|={phase1_start_size}, target n_stop={n_stop}"
-        )
+        if smooth_all:
+            print(
+                "[MAW-ECM][Phase1] skipped "
+                "(smooth_laplacian_all_iterations=1): "
+                f"stage-2 regularization is forced from |Z|={phase1_start_size}, "
+                f"target n_stop={n_stop}"
+            )
+        else:
+            print(
+                "[MAW-ECM][Phase1] start (no regularization): "
+                f"|Z|={phase1_start_size}, target n_stop={n_stop}"
+            )
 
     while int(i_cand.size) > int(n_stop):
         if enforce_nonnegativity:
@@ -583,10 +586,11 @@ def run_mawecm_pruning(A_blocks, b_blocks, z_ini, w_ini, q_train, options=None):
             phase1_end_size = int(i_cand.size)
             phase2_start_size = int(i_cand.size)
             if opts["verbose"]:
-                print(
-                    "[MAW-ECM][Phase1] end: "
-                    f"|Z|={phase1_end_size}, removed={phase1_start_size - phase1_end_size}"
-                )
+                if not smooth_all:
+                    print(
+                        "[MAW-ECM][Phase1] end: "
+                        f"|Z|={phase1_end_size}, removed={phase1_start_size - phase1_end_size}"
+                    )
                 print(
                     "[MAW-ECM][Phase2] starting regularization "
                     f"({phase2_mode}), |Z|={phase2_start_size}"
