@@ -5,6 +5,8 @@
 
 Modes:
 - res_only: MAW on residual channel only.
+- res_eps: MAW on residual + strain, stress remains classical ECM.
+- res_sig: MAW on residual + stress, strain remains classical ECM.
 - res_eps_sig: MAW on residual + strain + stress channels (separate MAW runs).
 
 Homogenization source is strict/explicit (no fallback):
@@ -45,7 +47,7 @@ from randomized_singular_value_decomposition import RandomizedSingularValueDecom
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=(
-            "Stage8b MAW-ECM build. Supports residual-only, res+eps, and "
+            "Stage8b MAW-ECM build. Supports residual-only, res+eps, res+sig, and "
             "separate res/eps/sig MAW, with optional graph stage for residual channel."
         )
     )
@@ -55,11 +57,12 @@ def _parse_args() -> argparse.Namespace:
         "--maw-mode",
         type=str,
         default="res_only",
-        choices=["res_only", "res_eps", "res_eps_sig"],
+        choices=["res_only", "res_eps", "res_sig", "res_eps_sig"],
         help=(
             "MAW channel mode. "
             "'res_only' => only residual channel is pruned adaptively. "
             "'res_eps' => residual/strain are pruned, stress keeps classical ECM. "
+            "'res_sig' => residual/stress are pruned, strain keeps classical ECM. "
             "'res_eps_sig' => residual/strain/stress are pruned in separate MAW runs."
         ),
     )
@@ -229,10 +232,48 @@ def _parse_args() -> argparse.Namespace:
         help="Strain-channel hard lower bound |Z_eps|. <=0 means auto n_stop.",
     )
     p.add_argument(
+        "--maw-phase1-stop-size-eps",
+        type=int,
+        default=0,
+        help=(
+            "Strain-channel support size where phase-1 NOENF is intentionally stopped "
+            "and phase-2 regularization starts. <=0 keeps the default policy."
+        ),
+    )
+    p.add_argument(
+        "--maw-phase2-eps",
+        type=int,
+        default=1,
+        choices=[0, 1],
+        help=(
+            "If 1, strain MAW may enter phase-2 after phase-1 stalls or after "
+            "--maw-phase1-stop-size-eps. If 0, strain MAW is phase-1 only."
+        ),
+    )
+    p.add_argument(
         "--maw-min-support-size-sig",
         type=int,
         default=0,
         help="Stress-channel hard lower bound |Z_sig|. <=0 means auto n_stop.",
+    )
+    p.add_argument(
+        "--maw-phase1-stop-size-sig",
+        type=int,
+        default=0,
+        help=(
+            "Stress-channel support size where phase-1 NOENF is intentionally stopped "
+            "and phase-2 regularization starts. <=0 keeps the default policy."
+        ),
+    )
+    p.add_argument(
+        "--maw-phase2-sig",
+        type=int,
+        default=1,
+        choices=[0, 1],
+        help=(
+            "If 1, stress MAW may enter phase-2 after phase-1 stalls or after "
+            "--maw-phase1-stop-size-sig. If 0, stress MAW is phase-1 only."
+        ),
     )
     p.add_argument(
         "--enforce-sum-weights",
@@ -257,9 +298,9 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--res-bootstrap-rsvd-randomized",
         type=int,
-        default=1,
+        default=0,
         choices=[0, 1],
-        help="Use randomized RSVD in residual bootstrap (0 = deterministic path).",
+        help="Use randomized SVD path in residual/hom bootstrap (default 0 = deterministic path).",
     )
     p.add_argument("--ecm-tol-res-bootstrap", type=float, default=0.0)
     p.add_argument(
@@ -319,9 +360,9 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--maw-hom-enforce-nonnegativity",
         type=int,
-        default=0,
+        default=1,
         choices=[0, 1],
-        help="If 1, eps/sig MAW enforces nonnegative weights. Default OFF (signed weights allowed).",
+        help="If 1, eps/sig MAW enforces nonnegative weights. Required ON when hom MAW is active.",
     )
     p.add_argument(
         "--maw-hom-conservative",
@@ -339,6 +380,32 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--maw-hom-max-as-iters", type=int, default=60)
     p.add_argument("--maw-hom-max-reduced-dim", type=int, default=2500)
     p.add_argument("--maw-hom-criterion", type=int, default=2)
+    p.add_argument(
+        "--maw-hom-use-global-graph-2ndstage",
+        type=int,
+        default=-1,
+        choices=[-1, 0, 1],
+        help=(
+            "Graph phase-2 switch for eps/sig MAW. "
+            "-1 follows --use-global-graph-2ndstage; 0 disables; 1 enables."
+        ),
+    )
+    p.add_argument(
+        "--maw-hom-smooth-laplacian-all-iterations",
+        type=int,
+        default=-1,
+        choices=[-1, 0, 1],
+        help=(
+            "If 1, eps/sig MAW uses graph regularization from the first elimination. "
+            "-1 follows --smooth-laplacian-all-iterations."
+        ),
+    )
+    p.add_argument(
+        "--maw-hom-alpha-smooth",
+        type=float,
+        default=-1.0,
+        help="Graph regularization alpha for eps/sig MAW. Negative follows --alpha-smooth.",
+    )
     p.add_argument(
         "--maw-hom-rowspace-compress",
         type=int,
@@ -1125,8 +1192,8 @@ def _hom_rbf_constraint_cv(
         w_pred = eval_mawecm_rbf(
             q_query=np.asarray(q_train[val_idx, :], dtype=float),
             model=model,
-            clip_nonnegative=bool(int(args.rbf_clip_nonnegative)),
-            renorm_target=(float(renorm_target) if bool(int(args.rbf_renorm)) else None),
+            clip_nonnegative=True,
+            renorm_target=float(renorm_target),
         )
         for iloc, j in enumerate(val_idx.tolist()):
             a = np.asarray(a_blocks_red[int(j)], dtype=float)
@@ -1157,6 +1224,13 @@ def _run_hom_channel_maw(dataset, ecm_fixed, n_elem, args, component, n_stop_req
         rhs_mode=str(args.res_target_source),
         component=comp,
     )
+    hom_sum_target = float(np.sum(w_ini))
+    a_blocks, b_blocks = _augment_blocks_with_sum_constraint(
+        a_blocks=a_blocks,
+        b_blocks=b_blocks,
+        target_sum=hom_sum_target,
+    )
+    print(f"  [Stage8b][{comp}] sum(w) target resolved to {hom_sum_target:.6e}.")
 
     rowspace_info = {
         "n_blocks": len(a_blocks),
@@ -1178,6 +1252,44 @@ def _run_hom_channel_maw(dataset, ecm_fixed, n_elem, args, component, n_stop_req
             label=comp,
         )
 
+    hom_use_graph = (
+        bool(int(args.use_global_graph_2ndstage))
+        if int(args.maw_hom_use_global_graph_2ndstage) < 0
+        else bool(int(args.maw_hom_use_global_graph_2ndstage))
+    )
+    hom_smooth_all = (
+        bool(int(args.smooth_laplacian_all_iterations))
+        if int(args.maw_hom_smooth_laplacian_all_iterations) < 0
+        else bool(int(args.maw_hom_smooth_laplacian_all_iterations))
+    )
+    hom_alpha = (
+        float(args.alpha_smooth)
+        if float(args.maw_hom_alpha_smooth) < 0.0
+        else float(args.maw_hom_alpha_smooth)
+    )
+    hom_phase2_enabled = (
+        bool(int(args.maw_phase2_eps))
+        if comp == "eps"
+        else bool(int(args.maw_phase2_sig))
+    )
+    if not hom_phase2_enabled:
+        hom_use_graph = False
+        hom_smooth_all = False
+        hom_alpha = 0.0
+    k_graph_hom, graph_info_hom = _build_graph_for_res(
+        dataset=dataset,
+        state_train=q_m,
+        args=args,
+        use_graph_override=hom_use_graph,
+    )
+    if not hom_phase2_enabled:
+        print(f"  [Stage8b][{comp}] hom phase-2 disabled: phase-1-only MAW.")
+    elif hom_use_graph:
+        print(
+            f"  [Stage8b][{comp}] hom graph edges: {int(graph_info_hom['n_edges'])}, "
+            f"alpha={float(hom_alpha):.3e}, smooth_all={int(hom_smooth_all)}"
+        )
+
     w_ini_nodes = np.tile(np.asarray(w_ini, dtype=float).reshape(-1, 1), (1, int(q_m.shape[0])))
     val_ini = _validate_maw_constraints(
         a_blocks=a_use,
@@ -1185,7 +1297,7 @@ def _run_hom_channel_maw(dataset, ecm_fixed, n_elem, args, component, n_stop_req
         w_train=w_ini_nodes,
         strict_rel_tol=max(float(args.strict_constraint_rel_tol), 1.0e-14),
         strict_neg_tol=float(args.strict_negative_tol),
-        enforce_nonnegativity=bool(int(args.maw_hom_enforce_nonnegativity)),
+        enforce_nonnegativity=True,
     )
     print(
         f"  [Stage8b][{comp}] init feasibility: max_rel={val_ini['max_rel']:.3e}, "
@@ -1194,6 +1306,12 @@ def _run_hom_channel_maw(dataset, ecm_fixed, n_elem, args, component, n_stop_req
 
     n_cand = int(z_ini.size)
     n_stop_base = int(n_stop_req) if (n_stop_req is not None and int(n_stop_req) > 0) else None
+    phase1_stop_size = (
+        int(args.maw_phase1_stop_size_eps)
+        if comp == "eps"
+        else int(args.maw_phase1_stop_size_sig)
+    )
+    phase1_stop_size = int(phase1_stop_size) if int(phase1_stop_size) > 0 else None
     cv_guard_active = float(args.maw_hom_cv_max_rel) > 0.0
     n_stop_candidates = [n_stop_base]
     if n_stop_base is None and cv_guard_active:
@@ -1211,7 +1329,17 @@ def _run_hom_channel_maw(dataset, ecm_fixed, n_elem, args, component, n_stop_req
     accepted = None
     last_trial = None
     for n_stop_try in n_stop_candidates_unique:
-        prune_opts = _make_prune_opts_hom(args, state_train=q_m, n_stop=n_stop_try)
+        prune_opts = _make_prune_opts_hom(
+            args,
+            state_train=q_m,
+            n_stop=n_stop_try,
+            k_graph=k_graph_hom,
+            use_graph=hom_use_graph,
+            smooth_all=hom_smooth_all,
+            alpha_smooth=hom_alpha,
+            phase1_stop_size=phase1_stop_size,
+            phase2_enabled=hom_phase2_enabled,
+        )
         maw_loc = run_mawecm_pruning(
             A_blocks=a_use,
             b_blocks=b_use,
@@ -1226,7 +1354,7 @@ def _run_hom_channel_maw(dataset, ecm_fixed, n_elem, args, component, n_stop_req
         if z_loc.size == 0:
             raise RuntimeError(f"MAW returned empty {comp} support.")
         a_red = [np.asarray(a[:, i_support_local], dtype=float) for a in a_use]
-        renorm_target = float(np.sum(w_ini))
+        renorm_target = hom_sum_target
         rbf_loc = fit_mawecm_rbf(
             q_train=q_m,
             W_train=w_train_loc,
@@ -1238,8 +1366,8 @@ def _run_hom_channel_maw(dataset, ecm_fixed, n_elem, args, component, n_stop_req
         w_recon_loc = eval_mawecm_rbf(
             q_query=q_m,
             model=rbf_loc,
-            clip_nonnegative=bool(int(args.rbf_clip_nonnegative)),
-            renorm_target=renorm_target if bool(int(args.rbf_renorm)) else None,
+            clip_nonnegative=True,
+            renorm_target=renorm_target,
         )
         rel_recon_loc = float(
             np.linalg.norm(w_recon_loc - w_train_loc) / max(np.linalg.norm(w_train_loc), 1.0e-30)
@@ -1250,7 +1378,7 @@ def _run_hom_channel_maw(dataset, ecm_fixed, n_elem, args, component, n_stop_req
             w_train=w_train_loc,
             strict_rel_tol=float(args.strict_constraint_rel_tol),
             strict_neg_tol=float(args.strict_negative_tol),
-            enforce_nonnegativity=bool(int(args.maw_hom_enforce_nonnegativity)),
+            enforce_nonnegativity=True,
         )
         cv_loc = _hom_rbf_constraint_cv(
             q_train=q_m,
@@ -1297,7 +1425,7 @@ def _run_hom_channel_maw(dataset, ecm_fixed, n_elem, args, component, n_stop_req
             f"(strict={int(args.maw_hom_cv_strict)})."
         )
 
-    smooth = edge_jump_metrics(np.asarray(accepted["w_train"], dtype=float), sparse.csr_matrix((q_m.shape[0], q_m.shape[0])))
+    smooth = edge_jump_metrics(np.asarray(accepted["w_train"], dtype=float), k_graph_hom)
     n_plots = 0
     if bool(int(args.save_weight_field_plots)):
         n_plots = int(
@@ -1310,8 +1438,8 @@ def _run_hom_channel_maw(dataset, ecm_fixed, n_elem, args, component, n_stop_req
                 show_plots=bool(int(args.show_weight_field_plots)),
                 max_plots=int(args.max_weight_field_plots),
                 fmt=str(args.weight_plot_format),
-                clip_nonnegative=bool(int(args.rbf_clip_nonnegative)),
-                renorm=bool(int(args.rbf_renorm)),
+                clip_nonnegative=True,
+                renorm=True,
                 renorm_target=accepted["renorm_target"],
                 channel_tag=comp,
             )
@@ -1335,10 +1463,17 @@ def _run_hom_channel_maw(dataset, ecm_fixed, n_elem, args, component, n_stop_req
         "smooth": dict(smooth),
         "cv": dict(accepted["cv"]),
         "n_stop_used": int(accepted["n_stop_used"]),
+        "phase1_stop_size": int(phase1_stop_size) if phase1_stop_size is not None else 0,
+        "renorm_target": float(accepted["renorm_target"]),
         "w_anchor": np.asarray(w_anchor, dtype=float),
         "w_full": np.asarray(w_full, dtype=float),
         "n_weight_field_plots": int(n_plots),
         "rowspace_info": dict(rowspace_info),
+        "graph_info": dict(graph_info_hom),
+        "use_graph": bool(hom_use_graph),
+        "smooth_all": bool(hom_smooth_all),
+        "alpha_smooth": float(hom_alpha),
+        "phase2_enabled": bool(hom_phase2_enabled),
     }
 
 
@@ -1400,10 +1535,10 @@ def _augment_blocks_with_sum_constraint(a_blocks, b_blocks, target_sum):
     return a_aug, b_aug
 
 
-def _build_graph_for_res(dataset, state_train, args):
+def _build_graph_for_res(dataset, state_train, args, use_graph_override=None):
     q = np.asarray(state_train, dtype=float)
     n_nodes = int(q.shape[0])
-    use_graph = bool(int(args.use_global_graph_2ndstage))
+    use_graph = bool(int(args.use_global_graph_2ndstage)) if use_graph_override is None else bool(use_graph_override)
     if not use_graph:
         return sparse.csr_matrix((n_nodes, n_nodes), dtype=float), {
             "mode": "disabled",
@@ -1704,17 +1839,30 @@ def _make_prune_opts_base(
     }
 
 
-def _make_prune_opts_hom(args, state_train, n_stop):
+def _make_prune_opts_hom(
+    args,
+    state_train,
+    n_stop,
+    k_graph,
+    use_graph,
+    smooth_all,
+    alpha_smooth,
+    phase1_stop_size=None,
+    phase2_enabled=True,
+):
     out = _make_prune_opts_base(
         args,
         state_train=state_train,
         n_stop=n_stop,
-        enforce_nonnegativity=bool(int(args.maw_hom_enforce_nonnegativity)),
-        k_graph=sparse.csr_matrix((int(state_train.shape[0]), int(state_train.shape[0])), dtype=float),
-        use_global_graph_2ndstage=False,
-        smooth_laplacian_all_iterations=False,
-        alpha_smooth=0.0,
+        enforce_nonnegativity=True,
+        k_graph=k_graph,
+        use_global_graph_2ndstage=bool(use_graph) and bool(phase2_enabled),
+        smooth_laplacian_all_iterations=bool(smooth_all) and bool(phase2_enabled),
+        alpha_smooth=(float(alpha_smooth) if bool(use_graph) and bool(phase2_enabled) else 0.0),
+        phase1_stop_size=phase1_stop_size,
     )
+    if not bool(phase2_enabled):
+        out["max_number_zeros_active_set_loop"] = 0
     if bool(int(args.maw_hom_conservative)):
         out["criterion"] = int(args.maw_hom_criterion)
         out["tol_rank_rel"] = float(args.maw_hom_tol_rank_rel)
@@ -1734,8 +1882,16 @@ def main():
     n_elem = int(dataset["n_elem"])
     # Homogenization source is explicit (full_mesh or fixed_ecm), no fallback.
     maw_mode = str(args.maw_mode).strip().lower()
-    if maw_mode not in {"res_only", "res_eps", "res_eps_sig"}:
+    hom_maw_modes = {"res_eps", "res_sig", "res_eps_sig"}
+    eps_maw_modes = {"res_eps", "res_eps_sig"}
+    sig_maw_modes = {"res_sig", "res_eps_sig"}
+    if maw_mode not in {"res_only", "res_eps", "res_sig", "res_eps_sig"}:
         raise RuntimeError(f"Unsupported maw_mode='{maw_mode}'.")
+    if maw_mode in hom_maw_modes and int(args.maw_hom_enforce_nonnegativity) != 1:
+        raise RuntimeError(
+            "Hom MAW requires --maw-hom-enforce-nonnegativity 1. "
+            "Professor constraint: eps/sig weights must remain nonnegative."
+        )
     hom_source = str(args.hom_source).strip().lower()
     if hom_source not in {"full_mesh", "fixed_ecm", "ecm_separate"}:
         raise RuntimeError(f"Unsupported hom_source='{hom_source}'.")
@@ -1774,7 +1930,7 @@ def main():
             rsvd_randomized=bool(int(args.res_bootstrap_rsvd_randomized)),
             ecm_tol=boot_ecm_tol,
             max_unsuccessful_it=int(args.ecm_max_unsuccessful_it),
-            constrain_sum_of_weights=bool(int(args.res_bootstrap_constrain_sum_weights)),
+            constrain_sum_of_weights=True,
         )
         hom_bootstrap_source_tag = "stage8a_hom_classic_ecm"
         hom_bootstrap_source_txt = "stage8a_hom_classic_ecm"
@@ -1783,7 +1939,7 @@ def main():
             "(classic ECM for eps/sig in this Stage8b, strict/explicit)."
         )
     else:
-        if maw_mode in {"res_eps", "res_eps_sig"}:
+        if maw_mode in hom_maw_modes:
             # For hom MAW channels, first build classic ECM rules on eps/sig.
             ecm_fixed = _compute_classic_hom_bootstrap(
                 dataset,
@@ -1791,7 +1947,7 @@ def main():
                 rsvd_randomized=bool(int(args.res_bootstrap_rsvd_randomized)),
                 ecm_tol=boot_ecm_tol,
                 max_unsuccessful_it=int(args.ecm_max_unsuccessful_it),
-                constrain_sum_of_weights=bool(int(args.res_bootstrap_constrain_sum_weights)),
+                constrain_sum_of_weights=True,
             )
             hom_bootstrap_source_tag = "stage8a_hom_classic_ecm"
             hom_bootstrap_source_txt = "stage8a_hom_classic_ecm"
@@ -1799,6 +1955,11 @@ def main():
                 print(
                     "  [Stage8b] Homogenization source: full_mesh + classic ECM bootstrap "
                     "for eps/sig, with MAW only on eps (sig fixed ECM)."
+                )
+            elif maw_mode == "res_sig":
+                print(
+                    "  [Stage8b] Homogenization source: full_mesh + classic ECM bootstrap "
+                    "for eps/sig, with MAW only on sig (eps fixed ECM)."
                 )
             else:
                 print(
@@ -1843,18 +2004,40 @@ def main():
             "maw phase1 stop |Z_res| : "
             f"{int(args.maw_phase1_stop_size_res)} (then phase-2 regularization)"
         )
-    if maw_mode in {"res_eps", "res_eps_sig"}:
+    if maw_mode in eps_maw_modes:
         if int(args.maw_min_support_size_eps) > 0:
             print(f"maw min |Z_eps| : {int(args.maw_min_support_size_eps)} (hard stop)")
         else:
             print("maw min |Z_eps| : auto (n_stop from local constraints)")
-    if maw_mode == "res_eps":
-        print("maw min |Z_sig| : <disabled, classical ECM fixed>")
-    if maw_mode == "res_eps_sig":
+        if int(args.maw_phase1_stop_size_eps) > 0:
+            eps_next = (
+                "then phase-2 regularization"
+                if bool(int(args.maw_phase2_eps))
+                else "phase-1 only, stop there"
+            )
+            print(
+                "maw phase1 stop |Z_eps| : "
+                f"{int(args.maw_phase1_stop_size_eps)} ({eps_next})"
+            )
+    elif maw_mode in sig_maw_modes:
+        print("maw min |Z_eps| : <disabled, classical ECM fixed>")
+    if maw_mode in sig_maw_modes:
         if int(args.maw_min_support_size_sig) > 0:
             print(f"maw min |Z_sig| : {int(args.maw_min_support_size_sig)} (hard stop)")
         else:
             print("maw min |Z_sig| : auto (n_stop from local constraints)")
+        if int(args.maw_phase1_stop_size_sig) > 0:
+            sig_next = (
+                "then phase-2 regularization"
+                if bool(int(args.maw_phase2_sig))
+                else "phase-1 only, stop there"
+            )
+            print(
+                "maw phase1 stop |Z_sig| : "
+                f"{int(args.maw_phase1_stop_size_sig)} ({sig_next})"
+            )
+    elif maw_mode in eps_maw_modes:
+        print("maw min |Z_sig| : <disabled, classical ECM fixed>")
     res_use_graph = bool(int(args.use_global_graph_2ndstage))
     res_smooth_all = bool(int(args.smooth_laplacian_all_iterations))
     if res_use_graph:
@@ -1887,7 +2070,7 @@ def main():
         f"{'on' if bool(int(args.res_bootstrap_constrain_sum_weights)) else 'off'}"
     )
     print(
-        "bootstrap RSVD randomized: "
+        "bootstrap randomized SVD path: "
         f"{'on' if bool(int(args.res_bootstrap_rsvd_randomized)) else 'off'}"
     )
     print(
@@ -2058,39 +2241,63 @@ def main():
     smooth_eps = {"S": np.nan, "R95": np.nan, "Rmax": np.nan, "n_edges": 0}
     smooth_sig = {"S": np.nan, "R95": np.nan, "Rmax": np.nan, "n_edges": 0}
 
-    if maw_mode in {"res_eps", "res_eps_sig"}:
+    if maw_mode in hom_maw_modes:
         if maw_mode == "res_eps":
             print("  [Stage8b] Hom MAW mode: eps pruning only (sig stays classical ECM).")
+        elif maw_mode == "res_sig":
+            print("  [Stage8b] Hom MAW mode: sig pruning only (eps stays classical ECM).")
         else:
             print("  [Stage8b] Hom MAW mode: separate eps/sig pruning (first-phase local, no graph).")
 
-        # --- eps channel ---
-        n_stop_eps_req = int(args.maw_min_support_size_eps) if int(args.maw_min_support_size_eps) > 0 else None
-        eps_out = _run_hom_channel_maw(
-            dataset=dataset,
-            ecm_fixed=ecm_fixed,
-            n_elem=n_elem,
-            args=args,
-            component="eps",
-            n_stop_req=n_stop_eps_req,
-        )
-        maw_eps = eps_out["maw"]
-        z_eps = np.asarray(eps_out["z"], dtype=np.int64)
-        w_train_eps = np.asarray(eps_out["w_train"], dtype=float)
-        q_m_eps = np.asarray(eps_out["q_m"], dtype=float)
-        ids_eps = np.asarray(eps_out["ids"], dtype=np.int64)
-        rbf_eps = eps_out["rbf"]
-        rel_recon_eps = float(eps_out["rel_recon"])
-        val_eps = dict(eps_out["val"])
-        smooth_eps = dict(eps_out["smooth"])
-        w_eps = np.asarray(eps_out["w_anchor"], dtype=float)
-        w_eps_full = np.asarray(eps_out["w_full"], dtype=float)
-        n_weight_field_plots_eps = int(eps_out["n_weight_field_plots"])
-        cv_eps = dict(eps_out["cv"])
-        rowspace_eps = dict(eps_out["rowspace_info"])
+        if maw_mode in eps_maw_modes:
+            n_stop_eps_req = int(args.maw_min_support_size_eps) if int(args.maw_min_support_size_eps) > 0 else None
+            eps_out = _run_hom_channel_maw(
+                dataset=dataset,
+                ecm_fixed=ecm_fixed,
+                n_elem=n_elem,
+                args=args,
+                component="eps",
+                n_stop_req=n_stop_eps_req,
+            )
+            maw_eps = eps_out["maw"]
+            z_eps = np.asarray(eps_out["z"], dtype=np.int64)
+            w_train_eps = np.asarray(eps_out["w_train"], dtype=float)
+            q_m_eps = np.asarray(eps_out["q_m"], dtype=float)
+            ids_eps = np.asarray(eps_out["ids"], dtype=np.int64)
+            rbf_eps = eps_out["rbf"]
+            rel_recon_eps = float(eps_out["rel_recon"])
+            val_eps = dict(eps_out["val"])
+            smooth_eps = dict(eps_out["smooth"])
+            renorm_target_eps = float(eps_out["renorm_target"])
+            w_eps = np.asarray(eps_out["w_anchor"], dtype=float)
+            w_eps_full = np.asarray(eps_out["w_full"], dtype=float)
+            n_weight_field_plots_eps = int(eps_out["n_weight_field_plots"])
+            cv_eps = dict(eps_out["cv"])
+            rowspace_eps = dict(eps_out["rowspace_info"])
+            n_stop_used_eps = int(eps_out["n_stop_used"])
+        else:
+            z_eps = np.asarray(ecm_fixed["Z_eps"], dtype=np.int64).reshape(-1)
+            w_eps = np.asarray(ecm_fixed["w_eps"], dtype=float).reshape(-1)
+            w_eps_full = np.asarray(ecm_fixed["w_eps_full"], dtype=float).reshape(-1)
+            renorm_target_eps = float(np.sum(w_eps))
+            cv_eps = {"enabled": False, "max_rel": np.nan, "mean_rel": np.nan, "p95_rel": np.nan, "n_eval": 0}
+            rowspace_eps = {
+                "n_blocks": 0,
+                "m_full_min": 0,
+                "m_full_max": 0,
+                "rank_min": np.nan,
+                "rank_mean": np.nan,
+                "rank_max": np.nan,
+                "n_rank_zero": 0,
+                "n_row_reduced": 0,
+            }
+            n_stop_used_eps = -2
+            print(
+                f"  [Stage8b][eps] classical ECM fixed: |Z_eps|={z_eps.size}, "
+                "MAW disabled by mode=res_sig."
+            )
 
-        # --- sig channel ---
-        if maw_mode == "res_eps_sig":
+        if maw_mode in sig_maw_modes:
             n_stop_sig_req = int(args.maw_min_support_size_sig) if int(args.maw_min_support_size_sig) > 0 else None
             sig_out = _run_hom_channel_maw(
                 dataset=dataset,
@@ -2102,7 +2309,7 @@ def main():
             )
             q_m_sig = np.asarray(sig_out["q_m"], dtype=float)
             ids_sig = np.asarray(sig_out["ids"], dtype=np.int64)
-            if ids_sig.shape != ids_eps.shape or np.any(ids_sig != ids_eps):
+            if maw_mode in eps_maw_modes and (ids_sig.shape != ids_eps.shape or np.any(ids_sig != ids_eps)):
                 raise RuntimeError("eps/sig structured IDs mismatch; strict mode requires aligned samples.")
             maw_sig = sig_out["maw"]
             z_sig = np.asarray(sig_out["z"], dtype=np.int64)
@@ -2111,11 +2318,13 @@ def main():
             rel_recon_sig = float(sig_out["rel_recon"])
             val_sig = dict(sig_out["val"])
             smooth_sig = dict(sig_out["smooth"])
+            renorm_target_sig = float(sig_out["renorm_target"])
             w_sig = np.asarray(sig_out["w_anchor"], dtype=float)
             w_sig_full = np.asarray(sig_out["w_full"], dtype=float)
             n_weight_field_plots_sig = int(sig_out["n_weight_field_plots"])
             cv_sig = dict(sig_out["cv"])
             rowspace_sig = dict(sig_out["rowspace_info"])
+            n_stop_used_sig = int(sig_out["n_stop_used"])
         else:
             z_sig = np.asarray(ecm_fixed["Z_sig"], dtype=np.int64).reshape(-1)
             w_sig = np.asarray(ecm_fixed["w_sig"], dtype=float).reshape(-1)
@@ -2131,14 +2340,12 @@ def main():
                 "n_rank_zero": 0,
                 "n_row_reduced": 0,
             }
+            renorm_target_sig = float(np.sum(w_sig))
+            n_stop_used_sig = -2
             print(
                 f"  [Stage8b][sig] classical ECM fixed: |Z_sig|={z_sig.size}, "
                 "MAW disabled by mode=res_eps."
             )
-        rowspace_eps = dict(eps_out["rowspace_info"])
-        cv_eps = dict(eps_out["cv"])
-        n_stop_used_eps = int(eps_out["n_stop_used"])
-        n_stop_used_sig = int(sig_out["n_stop_used"]) if maw_mode == "res_eps_sig" else -2
     else:
         z_eps = np.asarray(ecm_fixed["Z_eps"], dtype=np.int64).reshape(-1)
         z_sig = np.asarray(ecm_fixed["Z_sig"], dtype=np.int64).reshape(-1)
@@ -2146,6 +2353,8 @@ def main():
         w_sig = np.asarray(ecm_fixed["w_sig"], dtype=float).reshape(-1)
         w_eps_full = np.asarray(ecm_fixed["w_eps_full"], dtype=float).reshape(-1)
         w_sig_full = np.asarray(ecm_fixed["w_sig_full"], dtype=float).reshape(-1)
+        renorm_target_eps = float(np.sum(w_eps))
+        renorm_target_sig = float(np.sum(w_sig))
         cv_eps = {"enabled": False, "max_rel": np.nan, "mean_rel": np.nan, "p95_rel": np.nan, "n_eval": 0}
         cv_sig = {"enabled": False, "max_rel": np.nan, "mean_rel": np.nan, "p95_rel": np.nan, "n_eval": 0}
         rowspace_eps = {
@@ -2162,9 +2371,9 @@ def main():
         n_stop_used_eps = -2
         n_stop_used_sig = -2
 
-    if maw_mode in {"res_eps", "res_eps_sig"}:
+    if maw_mode in eps_maw_modes:
         hom_fit_eps = float(val_eps["max_rel"])
-    if maw_mode == "res_eps_sig":
+    if maw_mode in sig_maw_modes:
         hom_fit_sig = float(val_sig["max_rel"])
 
     z_union = np.union1d(np.union1d(z_red, z_eps), z_sig).astype(np.int64)
@@ -2185,34 +2394,43 @@ def main():
         "n_elem": np.array([int(n_elem)], dtype=np.int64),
         "nq": np.array([int(dataset["nq"])], dtype=np.int64),
         "Ns_res": np.array([int(dataset["ns_res"])], dtype=np.int64),
-        "Ns_hom": np.array([int(dataset.get("ns_hom", 0) if maw_mode == "res_eps_sig" else 0)], dtype=np.int64),
+        "Ns_hom": np.array([int(dataset.get("ns_hom", 0) if maw_mode in hom_maw_modes else 0)], dtype=np.int64),
         "A0_ref": np.array([_meta_float(dataset["meta"], "A0_ref")], dtype=float),
         "hom_reference_measure": np.array([_meta_float(dataset["meta"], "A0_ref")], dtype=float),
         "ECM_COUPLING_MODE": np.array(
             [
-                "mawecm_residual_only"
-                if maw_mode == "res_only"
-                else ("mawecm_residual_eps" if maw_mode == "res_eps" else "mawecm_residual_eps_sig")
+                {
+                    "res_only": "mawecm_residual_only",
+                    "res_eps": "mawecm_residual_eps",
+                    "res_sig": "mawecm_residual_sig",
+                    "res_eps_sig": "mawecm_residual_eps_sig",
+                }[maw_mode]
             ]
         ),
         "ECM_COUPLING_MODE_INPUT": np.array([str(maw_mode)]),
         "hprom_model_type": np.array(
             [
-                "MAW_ECM_RBF_RES_ONLY"
-                if maw_mode == "res_only"
-                else ("MAW_ECM_RBF_RES_EPS" if maw_mode == "res_eps" else "MAW_ECM_RBF_RES_EPS_SIG")
+                {
+                    "res_only": "MAW_ECM_RBF_RES_ONLY",
+                    "res_eps": "MAW_ECM_RBF_RES_EPS",
+                    "res_sig": "MAW_ECM_RBF_RES_SIG",
+                    "res_eps_sig": "MAW_ECM_RBF_RES_EPS_SIG",
+                }[maw_mode]
             ]
         ),
         "maw_hom_source": np.array([hom_source]),
         "maw_hom_fit_rel_err_eps": np.array([float(hom_fit_eps)], dtype=float),
         "maw_hom_fit_rel_err_sig": np.array([float(hom_fit_sig)], dtype=float),
         "maw_mode": np.array([maw_mode]),
-        "maw_apply_to_hom": np.array([1 if maw_mode in {"res_eps", "res_eps_sig"} else 0], dtype=np.int64),
+        "maw_apply_to_hom": np.array([1 if maw_mode in hom_maw_modes else 0], dtype=np.int64),
         # MAW residual payload
         "maw_targets": np.array(
-            ["res"]
-            if maw_mode == "res_only"
-            else (["res", "eps"] if maw_mode == "res_eps" else ["res", "eps", "sig"])
+            {
+                "res_only": ["res"],
+                "res_eps": ["res", "eps"],
+                "res_sig": ["res", "sig"],
+                "res_eps_sig": ["res", "eps", "sig"],
+            }[maw_mode]
         ),
         "maw_res_state_space": np.array([state_mode]),
         "maw_res_bootstrap_source": np.array([bootstrap_source_tag]),
@@ -2352,6 +2570,10 @@ def main():
                 "maw_sig_cv_n_eval": np.array([int(cv_sig.get("n_eval", 0))], dtype=np.int64),
                 "maw_eps_n_stop_used": np.array([int(n_stop_used_eps)], dtype=np.int64),
                 "maw_sig_n_stop_used": np.array([int(n_stop_used_sig)], dtype=np.int64),
+                "maw_eps_phase1_stop_size": np.array([int(eps_out["phase1_stop_size"])], dtype=np.int64),
+                "maw_sig_phase1_stop_size": np.array([int(sig_out["phase1_stop_size"])], dtype=np.int64),
+                "maw_eps_phase2_enabled": np.array([int(eps_out["phase2_enabled"])], dtype=np.int64),
+                "maw_sig_phase2_enabled": np.array([int(sig_out["phase2_enabled"])], dtype=np.int64),
                 "maw_eps_rowspace_rank_min": np.array([float(rowspace_eps.get("rank_min", np.nan))], dtype=float),
                 "maw_sig_rowspace_rank_min": np.array([float(rowspace_sig.get("rank_min", np.nan))], dtype=float),
                 "maw_eps_rowspace_rank_mean": np.array([float(rowspace_eps.get("rank_mean", np.nan))], dtype=float),
@@ -2362,6 +2584,12 @@ def main():
                 "maw_sig_rowspace_rank0_count": np.array([int(rowspace_sig.get("n_rank_zero", 0))], dtype=np.int64),
                 "maw_eps_weight_min": np.array([float(val_eps["min_weight"])], dtype=float),
                 "maw_sig_weight_min": np.array([float(val_sig["min_weight"])], dtype=float),
+                "maw_eps_renorm_target": np.array([float(renorm_target_eps)], dtype=float),
+                "maw_sig_renorm_target": np.array([float(renorm_target_sig)], dtype=float),
+                "maw_eps_sum_w_min": np.array([float(np.min(np.sum(w_train_eps, axis=0)))], dtype=float),
+                "maw_eps_sum_w_max": np.array([float(np.max(np.sum(w_train_eps, axis=0)))], dtype=float),
+                "maw_sig_sum_w_min": np.array([float(np.min(np.sum(w_train_sig, axis=0)))], dtype=float),
+                "maw_sig_sum_w_max": np.array([float(np.max(np.sum(w_train_sig, axis=0)))], dtype=float),
                 "maw_eps_smooth_S": np.array([float(smooth_eps["S"])], dtype=float),
                 "maw_sig_smooth_S": np.array([float(smooth_sig["S"])], dtype=float),
                 "maw_eps_smooth_R95": np.array([float(smooth_eps["R95"])], dtype=float),
@@ -2413,11 +2641,16 @@ def main():
                 "maw_eps_cv_rel_p95": np.array([float(cv_eps.get("p95_rel", np.nan))], dtype=float),
                 "maw_eps_cv_n_eval": np.array([int(cv_eps.get("n_eval", 0))], dtype=np.int64),
                 "maw_eps_n_stop_used": np.array([int(n_stop_used_eps)], dtype=np.int64),
+                "maw_eps_phase1_stop_size": np.array([int(eps_out["phase1_stop_size"])], dtype=np.int64),
+                "maw_eps_phase2_enabled": np.array([int(eps_out["phase2_enabled"])], dtype=np.int64),
                 "maw_eps_rowspace_rank_min": np.array([float(rowspace_eps.get("rank_min", np.nan))], dtype=float),
                 "maw_eps_rowspace_rank_mean": np.array([float(rowspace_eps.get("rank_mean", np.nan))], dtype=float),
                 "maw_eps_rowspace_rank_max": np.array([float(rowspace_eps.get("rank_max", np.nan))], dtype=float),
                 "maw_eps_rowspace_rank0_count": np.array([int(rowspace_eps.get("n_rank_zero", 0))], dtype=np.int64),
                 "maw_eps_weight_min": np.array([float(val_eps["min_weight"])], dtype=float),
+                "maw_eps_renorm_target": np.array([float(renorm_target_eps)], dtype=float),
+                "maw_eps_sum_w_min": np.array([float(np.min(np.sum(w_train_eps, axis=0)))], dtype=float),
+                "maw_eps_sum_w_max": np.array([float(np.max(np.sum(w_train_eps, axis=0)))], dtype=float),
                 "maw_eps_smooth_S": np.array([float(smooth_eps["S"])], dtype=float),
                 "maw_eps_smooth_R95": np.array([float(smooth_eps["R95"])], dtype=float),
                 "maw_eps_smooth_Rmax": np.array([float(smooth_eps["Rmax"])], dtype=float),
@@ -2435,6 +2668,53 @@ def main():
             }
         )
 
+    if maw_mode == "res_sig":
+        payload.update(
+            {
+                "maw_sig_n_stop_requested": np.array([int(args.maw_min_support_size_sig)], dtype=np.int64),
+                "maw_sig_bootstrap_source": np.array([str(hom_bootstrap_source_tag)]),
+                "maw_sig_z_ini": np.asarray(np.asarray(ecm_fixed["Z_sig"], dtype=np.int64).reshape(-1), dtype=np.int64),
+                "maw_sig_w_ini": np.asarray(np.asarray(ecm_fixed["w_sig"], dtype=float).reshape(-1), dtype=float),
+                "maw_sig_z_support": np.asarray(z_sig, dtype=np.int64),
+                "maw_sig_W_train": np.asarray(w_train_sig, dtype=float),
+                "maw_sig_q_train": np.asarray(q_m_sig, dtype=float),
+                "maw_sig_ids": np.asarray(ids_sig, dtype=np.int64),
+                "maw_sig_elapsed_sec": np.array([float(maw_sig["elapsed_sec"])], dtype=float),
+                "maw_sig_recon_rel": np.array([float(rel_recon_sig)], dtype=float),
+                "maw_sig_constraint_rel_max": np.array([float(val_sig["max_rel"])], dtype=float),
+                "maw_sig_cv_enabled": np.array([int(bool(cv_sig.get("enabled", False)))], dtype=np.int64),
+                "maw_sig_cv_rel_max": np.array([float(cv_sig.get("max_rel", np.nan))], dtype=float),
+                "maw_sig_cv_rel_mean": np.array([float(cv_sig.get("mean_rel", np.nan))], dtype=float),
+                "maw_sig_cv_rel_p95": np.array([float(cv_sig.get("p95_rel", np.nan))], dtype=float),
+                "maw_sig_cv_n_eval": np.array([int(cv_sig.get("n_eval", 0))], dtype=np.int64),
+                "maw_sig_n_stop_used": np.array([int(n_stop_used_sig)], dtype=np.int64),
+                "maw_sig_phase1_stop_size": np.array([int(sig_out["phase1_stop_size"])], dtype=np.int64),
+                "maw_sig_phase2_enabled": np.array([int(sig_out["phase2_enabled"])], dtype=np.int64),
+                "maw_sig_rowspace_rank_min": np.array([float(rowspace_sig.get("rank_min", np.nan))], dtype=float),
+                "maw_sig_rowspace_rank_mean": np.array([float(rowspace_sig.get("rank_mean", np.nan))], dtype=float),
+                "maw_sig_rowspace_rank_max": np.array([float(rowspace_sig.get("rank_max", np.nan))], dtype=float),
+                "maw_sig_rowspace_rank0_count": np.array([int(rowspace_sig.get("n_rank_zero", 0))], dtype=np.int64),
+                "maw_sig_weight_min": np.array([float(val_sig["min_weight"])], dtype=float),
+                "maw_sig_renorm_target": np.array([float(renorm_target_sig)], dtype=float),
+                "maw_sig_sum_w_min": np.array([float(np.min(np.sum(w_train_sig, axis=0)))], dtype=float),
+                "maw_sig_sum_w_max": np.array([float(np.max(np.sum(w_train_sig, axis=0)))], dtype=float),
+                "maw_sig_smooth_S": np.array([float(smooth_sig["S"])], dtype=float),
+                "maw_sig_smooth_R95": np.array([float(smooth_sig["R95"])], dtype=float),
+                "maw_sig_smooth_Rmax": np.array([float(smooth_sig["Rmax"])], dtype=float),
+                "maw_sig_weight_plots_saved": np.array([int(n_weight_field_plots_sig)], dtype=np.int64),
+                "maw_sig_rbf_centers": np.asarray(rbf_sig["centers"], dtype=float),
+                "maw_sig_rbf_center_ids": np.asarray(rbf_sig["center_ids"], dtype=np.int64),
+                "maw_sig_rbf_length_scales": np.asarray(rbf_sig["length_scales"], dtype=float),
+                "maw_sig_rbf_alpha": np.asarray(rbf_sig["Alpha"], dtype=float),
+                "maw_sig_rbf_beta": np.asarray(rbf_sig["Beta"], dtype=float),
+                "maw_sig_rbf_scale": np.asarray(rbf_sig["scale"], dtype=float),
+                "maw_sig_rbf_poly_mode": np.array([int(rbf_sig["poly_mode"])], dtype=np.int64),
+                "maw_sig_rbf_lambda": np.array([float(rbf_sig["lambda_reg"])], dtype=float),
+                "maw_sig_rbf_n_centers": np.array([int(rbf_sig["n_centers"])], dtype=np.int64),
+                "maw_sig_rbf_train_rel_error": np.array([float(rbf_sig["train_rel_error"])], dtype=float),
+            }
+        )
+
     np.savez(out_file, **payload)
 
     print(
@@ -2449,22 +2729,27 @@ def main():
         f"  [MAW-res] validation: max_rel={val['max_rel']:.3e}, "
         f"min_w={val['min_weight']:.3e}, smooth(R95={smooth['R95']:.3e}, Rmax={smooth['Rmax']:.3e})"
     )
-    if maw_mode in {"res_eps", "res_eps_sig"}:
+    if maw_mode in eps_maw_modes:
         print(
             f"  [MAW-eps] |Z_ini|={np.asarray(ecm_fixed['Z_eps']).size} -> |Z_red|={z_eps.size}, "
             f"RBF train-rel={rel_recon_eps:.3e}, max_rel={val_eps['max_rel']:.3e}, "
             f"cv_max_rel={float(cv_eps.get('max_rel', np.nan)):.3e}, n_stop_used={int(n_stop_used_eps)}"
         )
-    if maw_mode == "res_eps":
+    elif maw_mode in sig_maw_modes:
         print(
-            f"  [MAW-sig] classical ECM fixed: |Z_sig|={np.asarray(ecm_fixed['Z_sig']).size}, "
+            f"  [MAW-eps] classical ECM fixed: |Z_eps|={np.asarray(ecm_fixed['Z_eps']).size}, "
             "MAW disabled."
         )
-    if maw_mode == "res_eps_sig":
+    if maw_mode in sig_maw_modes:
         print(
             f"  [MAW-sig] |Z_ini|={np.asarray(ecm_fixed['Z_sig']).size} -> |Z_red|={z_sig.size}, "
             f"RBF train-rel={rel_recon_sig:.3e}, max_rel={val_sig['max_rel']:.3e}, "
             f"cv_max_rel={float(cv_sig.get('max_rel', np.nan)):.3e}, n_stop_used={int(n_stop_used_sig)}"
+        )
+    elif maw_mode in eps_maw_modes:
+        print(
+            f"  [MAW-sig] classical ECM fixed: |Z_sig|={np.asarray(ecm_fixed['Z_sig']).size}, "
+            "MAW disabled."
         )
     if enforce_sum_weights:
         print(

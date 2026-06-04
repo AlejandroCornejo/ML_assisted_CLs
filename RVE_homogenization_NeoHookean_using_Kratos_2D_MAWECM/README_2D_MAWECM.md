@@ -15,26 +15,40 @@ The current working configuration is:
 
 - q_m -> q_s: sparse anisotropic GPR trained in Stage4.
 - residual: MAW-ECM adaptive weights w_res(q_m).
-- homogenization: separate classical ECM rules for eps and sig.
+- homogenization strain: separate MAW-ECM adaptive weights w_eps(q_m).
+- homogenization stress: separate MAW-ECM adaptive weights w_sig(q_m).
 - online residual weights: RBF in q_m, evaluated every Newton iteration.
+- online homogenization weights: independent RBFs in q_m for eps and sig.
 - online tangent: include analytic d(w_res)/d(q_m), with the corrected solver sign.
-- graph regularization: optional Stage8b phase 2. Recommended default is phase 1 first
-  (`--smooth-laplacian-all-iterations 0`); advanced runs may force phase 2 from
-  the first elimination with `--smooth-laplacian-all-iterations 1`.
+- graph regularization: channel-dependent Stage8b policy.
 
-Use this pair for the recommended MAW + ECM-hom case:
+Use this pair for the current validated all-adaptive case:
 
 ```bash
---maw-mode res_only
+--maw-mode res_eps_sig
 --hom-source ecm_separate
 ```
 
 This means:
 
 - Stage8b first computes a classical residual ECM bootstrap zINI/wINI.
-- Stage8b runs MAW-ECM only on the residual channel.
-- Stage8b also computes separate classical ECM rules for eps and sig.
-- Stage8 online uses MAW for residual and fixed ECM for homogenized eps/sig.
+- Stage8b also computes separate classical ECM bootstraps for eps and sig.
+- Stage8b runs three independent MAW-ECM reductions: residual, eps, and sig.
+- Residual MAW uses the staged policy: phase 1 first, then graph phase 2.
+- Eps/sig MAW use graph phase 2 from the first elimination attempt.
+- Stage8 online evaluates three independent RBF weight fields.
+
+The key policy difference is intentional:
+
+```bash
+# residual: phase 1 first, graph phase 2 only after phase 1 stalls
+--use-global-graph-2ndstage 1
+--smooth-laplacian-all-iterations 0
+
+# epsilon/sigma: graph phase 2 from the beginning
+--maw-hom-use-global-graph-2ndstage 1
+--maw-hom-smooth-laplacian-all-iterations 1
+```
 
 Important implementation notes
 ------------------------------
@@ -95,6 +109,22 @@ For Stage8, prefer explicit modes. Avoid silent conceptual mixing:
 - Use `--hom-source fixed_ecm` only when you intentionally provide a previous ECM file.
 - Use `--hprom-homogenization-mode full_fom` only for residual-only MAW diagnostics.
 - Use `--hprom-homogenization-mode ecm_separate` when eps/sig should use fixed ECM weights.
+- Use `--hprom-homogenization-mode maw_separate` only with Stage8b files built with
+  `--maw-mode res_eps_sig`; this evaluates separate adaptive MAW-RBF weights for eps
+  and sig online.
+- Use `--hprom-homogenization-mode sig_maw_eps_ecm` only with Stage8b files built with
+  `--maw-mode res_sig`; this keeps eps on fixed classical ECM and evaluates adaptive
+  MAW-RBF weights only for sig.
+
+For hom MAW (`eps/sig`), Stage8b enforces:
+
+```text
+A_j w_j = b_j,
+1^T w_j = 1^T w_ini,
+w_j >= 0.
+```
+
+This is strict. If hom MAW is active, `--maw-hom-enforce-nonnegativity 0` is rejected.
 
 Full pipeline commands
 ----------------------
@@ -217,29 +247,41 @@ python3 stage8a_build_mawecm_res_dataset.py \
   --out-dir stage_8a_mawecm_res_dataset
 ```
 
-Stage8b recommended: residual MAW-ECM + eps/sig classical ECM
--------------------------------------------------------------
+Stage8b recommended: residual/eps/sig MAW-ECM, all separate
+------------------------------------------------------------
 
-This is the recommended current target.
+This is the current validated target. The residual channel first performs phase 1
+without regularization and then activates graph phase 2. The homogenization
+channels (`eps` and `sig`) use graph phase 2 from the beginning because this was
+the robust configuration observed in the RVE tests.
 
 ```bash
 python3 stage8b_build_mawecm_res_model_rbf.py \
   --dataset-dir stage_8a_mawecm_res_dataset \
-  --maw-mode res_only \
+  --maw-mode res_eps_sig \
   --hom-source ecm_separate \
   --maw-min-support-size-res 0 \
+  --maw-min-support-size-eps 0 \
+  --maw-min-support-size-sig 0 \
   --use-global-graph-2ndstage 1 \
   --smooth-laplacian-all-iterations 0 \
+  --maw-hom-use-global-graph-2ndstage 1 \
+  --maw-hom-smooth-laplacian-all-iterations 1 \
   --alpha-smooth 1e4 \
+  --maw-hom-alpha-smooth 1e4 \
   --graph-mode structured_grid \
   --max-number-zeros-active-set-loop-maw-ecm 1 \
+  --res-bootstrap-rsvd-randomized 0 \
   --res-bootstrap-constrain-sum-weights 1 \
   --enforce-sum-weights 1 \
   --sum-weights-target 990.0 \
   --tol-rank-rel 1e-14 \
+  --maw-hom-enforce-nonnegativity 1 \
+  --maw-hom-conservative 1 \
+  --maw-hom-cv-max-rel 0 \
   --save-weight-field-plots 1 \
   --show-weight-field-plots 0 \
-  --out-dir stage_8b_hprom_mawecm_res_only_auto_ecmhom_sum990_graph
+  --out-dir stage_8b_hprom_mawecm_res_eps_sig_auto_ecmhom_sum990_graph
 ```
 
 Expected Stage8b log markers:
@@ -248,8 +290,9 @@ Expected Stage8b log markers:
 [Stage8b] Hom bootstrap ECM (eps): ...
 [Stage8b] Hom bootstrap ECM (sig): ...
 [MAW-ECM][Phase1] start (no regularization): ...
+[MAW-ECM][Phase1] skipped (smooth_laplacian_all_iterations=1): ...
 [MAW-ECM][Phase2] starting regularization (...): ...
-[MAW] mode=res_only ...
+[MAW] mode=res_eps_sig ...
 ```
 
 Stage8 online recommended test
@@ -260,14 +303,155 @@ python3 stage8_test_hprom_mawecm_gpr_online.py \
   --run-fom \
   --run-prom-gpr \
   --run-hprom-mawecm-gpr \
-  --mawecm-file stage_8b_hprom_mawecm_res_only_auto_ecmhom_sum990_graph/ecm_weights_all.npz \
-  --hprom-homogenization-mode ecm_separate \
+  --mawecm-file stage_8b_hprom_mawecm_res_eps_sig_auto_ecmhom_sum990_graph/ecm_weights_all.npz \
+  --hprom-homogenization-mode maw_separate \
   --hprom-use-hrom-mdpa 0 \
   --hprom-update-maw-each-iter 1 \
   --hprom-include-weight-tangent 1 \
   --hprom-fail-on-nonconvergence 1 \
   --save-plots 1 \
-  --out-dir stage_8_online_hprom_mawecm_gpr_res_only_auto_ecmhom_sum990_graph
+  --out-dir stage_8_online_hprom_mawecm_gpr_res_eps_sig_auto_ecmhom_sum990_graph
+```
+
+Stage8b variant: residual MAW + eps/sig MAW separately
+-------------------------------------------------------
+
+This builds three independent MAW rules:
+
+- `Z_res,w_res(q_m)` for the residual.
+- `Z_eps,w_eps(q_m)` for homogenized strain.
+- `Z_sig,w_sig(q_m)` for homogenized stress.
+
+The hom channels always keep nonnegative weights and preserve their classical ECM
+sum of weights.
+
+```bash
+python3 stage8b_build_mawecm_res_model_rbf.py \
+  --dataset-dir stage_8a_mawecm_res_dataset \
+  --maw-mode res_eps_sig \
+  --hom-source ecm_separate \
+  --maw-min-support-size-res 0 \
+  --maw-min-support-size-eps 0 \
+  --maw-min-support-size-sig 0 \
+  --use-global-graph-2ndstage 1 \
+  --smooth-laplacian-all-iterations 0 \
+  --maw-hom-use-global-graph-2ndstage 1 \
+  --maw-hom-smooth-laplacian-all-iterations 1 \
+  --alpha-smooth 1e4 \
+  --maw-hom-alpha-smooth 1e4 \
+  --graph-mode structured_grid \
+  --max-number-zeros-active-set-loop-maw-ecm 1 \
+  --res-bootstrap-rsvd-randomized 0 \
+  --res-bootstrap-constrain-sum-weights 1 \
+  --enforce-sum-weights 1 \
+  --sum-weights-target 990.0 \
+  --tol-rank-rel 1e-14 \
+  --maw-hom-enforce-nonnegativity 1 \
+  --maw-hom-conservative 1 \
+  --maw-hom-cv-max-rel 0 \
+  --save-weight-field-plots 1 \
+  --show-weight-field-plots 0 \
+  --out-dir stage_8b_hprom_mawecm_res_eps_sig_auto_ecmhom_sum990_graph
+```
+
+Online test with adaptive hom MAW:
+
+```bash
+python3 stage8_test_hprom_mawecm_gpr_online.py \
+  --run-fom \
+  --run-prom-gpr \
+  --run-hprom-mawecm-gpr \
+  --mawecm-file stage_8b_hprom_mawecm_res_eps_sig_auto_ecmhom_sum990_graph/ecm_weights_all.npz \
+  --hprom-homogenization-mode maw_separate \
+  --hprom-use-hrom-mdpa 0 \
+  --hprom-update-maw-each-iter 1 \
+  --hprom-include-weight-tangent 1 \
+  --hprom-fail-on-nonconvergence 1 \
+  --save-plots 1 \
+  --out-dir stage_8_online_hprom_mawecm_gpr_res_eps_sig_auto_ecmhom_sum990_graph
+```
+
+Stage8b variant: residual MAW + sig MAW, eps fixed ECM
+-------------------------------------------------------
+
+This builds two adaptive MAW rules and one fixed hom rule:
+
+- `Z_res,w_res(q_m)` for the residual.
+- `Z_sig,w_sig(q_m)` for homogenized stress.
+- `Z_eps,w_eps` from classical ECM, fixed online.
+
+The stress MAW channel keeps nonnegative weights and preserves its classical ECM
+sum of weights. The validated stress policy is the same as the full hom-MAW
+policy: use graph phase 2 from the first elimination attempt.
+
+```bash
+--maw-hom-use-global-graph-2ndstage 1
+--maw-hom-smooth-laplacian-all-iterations 1
+```
+
+The previous apparent optimum with `--maw-phase1-stop-size-sig 54` was just an
+implicit way of entering phase 2 immediately, because 54 was the initial sigma
+ECM support size.
+
+By default, hom MAW can follow the residual graph settings:
+
+```bash
+--maw-hom-use-global-graph-2ndstage -1
+--maw-hom-smooth-laplacian-all-iterations -1
+--maw-hom-alpha-smooth -1
+```
+
+The remaining difference from residual MAW is the optional hom CV guard. It is useful
+to avoid overly aggressive sigma/epsilon RBF fields, but it is not part of the
+residual workflow. Disable it for residual-like pruning behavior:
+
+```bash
+--maw-hom-cv-max-rel 0
+```
+
+```bash
+python3 stage8b_build_mawecm_res_model_rbf.py \
+  --dataset-dir stage_8a_mawecm_res_dataset \
+  --maw-mode res_sig \
+  --hom-source ecm_separate \
+  --maw-min-support-size-res 0 \
+  --maw-min-support-size-sig 0 \
+  --use-global-graph-2ndstage 1 \
+  --smooth-laplacian-all-iterations 0 \
+  --maw-hom-use-global-graph-2ndstage 1 \
+  --maw-hom-smooth-laplacian-all-iterations 1 \
+  --alpha-smooth 1e4 \
+  --maw-hom-alpha-smooth 1e4 \
+  --graph-mode structured_grid \
+  --max-number-zeros-active-set-loop-maw-ecm 1 \
+  --res-bootstrap-rsvd-randomized 0 \
+  --res-bootstrap-constrain-sum-weights 1 \
+  --enforce-sum-weights 1 \
+  --sum-weights-target 990.0 \
+  --tol-rank-rel 1e-14 \
+  --maw-hom-enforce-nonnegativity 1 \
+  --maw-hom-conservative 1 \
+  --maw-hom-cv-max-rel 0 \
+  --save-weight-field-plots 1 \
+  --show-weight-field-plots 0 \
+  --out-dir stage_8b_hprom_mawecm_res_sig_auto_ecmhom_sum990_graph
+```
+
+Online test with adaptive sig MAW and fixed eps ECM:
+
+```bash
+python3 stage8_test_hprom_mawecm_gpr_online.py \
+  --run-fom \
+  --run-prom-gpr \
+  --run-hprom-mawecm-gpr \
+  --mawecm-file stage_8b_hprom_mawecm_res_sig_auto_ecmhom_sum990_graph/ecm_weights_all.npz \
+  --hprom-homogenization-mode sig_maw_eps_ecm \
+  --hprom-use-hrom-mdpa 0 \
+  --hprom-update-maw-each-iter 1 \
+  --hprom-include-weight-tangent 1 \
+  --hprom-fail-on-nonconvergence 1 \
+  --save-plots 1 \
+  --out-dir stage_8_online_hprom_mawecm_gpr_res_sig_auto_ecmhom_sum990_graph
 ```
 
 Useful Stage8 variants
@@ -364,7 +548,6 @@ python3 stage8b_build_mawecm_res_model_rbf.py \
   --alpha-smooth 1e6 \
   --graph-mode structured_grid \
   --max-number-zeros-active-set-loop-maw-ecm 1 \
-  --res-bootstrap-rsvd-randomized 0 \
   --res-bootstrap-constrain-sum-weights 1 \
   --enforce-sum-weights 1 \
   --sum-weights-target 990.0 \
@@ -387,9 +570,15 @@ python3 stage8_test_hprom_mawecm_gpr_online.py \
   --out-dir stage_8_online_hprom_mawecm_gpr_res_only_auto_ecmhom_sum990_phase1to40_graph
 ```
 
-Use `--res-bootstrap-rsvd-randomized 0` when comparing repeated Stage8b builds.
-Otherwise, the randomized RSVD bootstrap can produce slightly different initial
-ECM supports and therefore slightly different MAW pruning paths.
+Stage8b defaults to deterministic residual/hom bootstrap:
+
+```bash
+--res-bootstrap-rsvd-randomized 0
+```
+
+Use `--res-bootstrap-rsvd-randomized 1` only for randomized SVD experiments. It can
+produce slightly different initial ECM supports and therefore slightly different
+MAW pruning paths.
 
 HROM mdpa mode
 --------------
@@ -400,32 +589,34 @@ The recommended debugging mode is currently:
 --hprom-use-hrom-mdpa 0
 ```
 
-If you want true reduced mdpa execution, build the HROM mdpa after Stage8b. For `ecm_separate`, the mesh must contain all elements used by residual and homogenization; use `Z_union`.
+If you want true reduced mdpa execution, build the HROM mdpa after Stage8b. For
+separate residual/eps/sig supports, the reduced mesh must contain all channel
+supports; use `Z_union`.
 
 ```bash
 python3 stage6c_create_hrom_mdpa.py \
   --base-mesh rve_geometry \
-  --ecm-file stage_8b_hprom_mawecm_res_only_auto_ecmhom_sum990_graph/ecm_weights_all.npz \
+  --ecm-file stage_8b_hprom_mawecm_res_eps_sig_auto_ecmhom_sum990_graph/ecm_weights_all.npz \
   --selection-key Z_union \
   --condition-mode all \
-  --output-mesh rve_geometry_stage8b_maw_res_only_auto_ecmhom_sum990_graph_hrom \
+  --output-mesh rve_geometry_stage8b_maw_res_eps_sig_auto_ecmhom_sum990_graph_hrom \
   --inplace-ecm \
-  --save-selection-image stage_8b_hprom_mawecm_res_only_auto_ecmhom_sum990_graph/Z_union_selected_elements.png \
+  --save-selection-image stage_8b_hprom_mawecm_res_eps_sig_auto_ecmhom_sum990_graph/Z_union_selected_elements.png \
   --save-extra-selection-images 1 \
   --extra-selection-keys Z_res,Z_eps,Z_sig,Z_union \
   --model-label HPROM-MAWECM-GPR
 
 python3 stage8_test_hprom_mawecm_gpr_online.py \
   --run-hprom-mawecm-gpr \
-  --mawecm-file stage_8b_hprom_mawecm_res_only_auto_ecmhom_sum990_graph/ecm_weights_all.npz \
-  --hprom-homogenization-mode ecm_separate \
+  --mawecm-file stage_8b_hprom_mawecm_res_eps_sig_auto_ecmhom_sum990_graph/ecm_weights_all.npz \
+  --hprom-homogenization-mode maw_separate \
   --hprom-use-hrom-mdpa 1 \
   --hprom-hrom-strict 1 \
   --hprom-update-maw-each-iter 1 \
   --hprom-include-weight-tangent 1 \
   --hprom-fail-on-nonconvergence 1 \
   --save-plots 1 \
-  --out-dir stage_8_online_hprom_mawecm_gpr_res_only_auto_ecmhom_sum990_graph
+  --out-dir stage_8_online_hprom_mawecm_gpr_res_eps_sig_auto_ecmhom_sum990_graph_hrom
 ```
 
 `stage6c` necessarily reads the full `rve_geometry.mdpa` once because it creates
@@ -456,13 +647,14 @@ export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 ```
 
-For deterministic residual bootstrap, use:
+Stage8b already defaults to deterministic residual/hom bootstrap. To force it
+explicitly, use:
 
 ```bash
 --res-bootstrap-rsvd-randomized 0
 ```
 
-If HROM mdpa fails with missing `Z_eps` or `Z_sig`, the reduced mesh was built with the wrong selection key. For `ecm_separate`, rebuild with:
+If HROM mdpa fails with missing `Z_eps` or `Z_sig`, the reduced mesh was built with the wrong selection key. For separate hom supports, rebuild with:
 
 ```bash
 --selection-key Z_union

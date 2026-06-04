@@ -1,0 +1,888 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{mathtools}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  urlcolor=blue!60!black,
+  citecolor=blue!60!black
+}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Zset}{\mathcal{Z}}
+\newcommand{\Ikeep}{\mathcal{I}_{\mathrm{keep}}}
+\newcommand{\Egraph}{\mathcal{E}}
+\newcommand{\Kgraph}{K_{\mathrm{graph}}}
+\newcommand{\Wtrain}{W_{\mathrm{train}}}
+\newcommand{\winit}{w_{\mathrm{ini}}}
+\newcommand{\zinit}{Z_{\mathrm{ini}}}
+\newcommand{\zred}{Z_{\mathrm{red}}}
+\newcommand{\bone}{\mathbf{1}}
+\newcommand{\argmin}{\operatorname*{arg\,min}}
+
+\title{
+Portable MAW--ECM Blueprint\\
+\large Algorithmic notes for moving the implementation to another ROM codebase
+}
+\author{RVE 2D MAW--ECM implementation notes}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Purpose}
+
+This document describes the MAW--ECM construction in a form that is intended to be
+copied to another ROM workbench, for example a Burgers 2D ROM code.  The emphasis
+is on the algebra, the data contracts, and the algorithmic sequence.  The concrete
+Kratos stage names are mentioned only as implementation references.
+
+The method starts from a standard, fixed ECM rule and transforms it into a
+manifold-adaptive cubature rule.  Instead of one fixed weight vector, the final
+offline object is
+\[
+  q \longmapsto w(q),
+\]
+where \(q\) is the reduced/manifold coordinate used online.  The support remains
+sparse, but the weights vary over the sampled manifold.
+
+\section{Notation}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Symbol & Meaning\\
+\midrule
+\(n_e\) & number of full mesh elements/cubature entities.\\
+\(N_s\) & number of sampled manifold states/nodes.\\
+\(q_j\in\R^{n_q}\) & reduced/manifold coordinate of sample \(j\).\\
+\(c\) & channel label, e.g. residual, strain, stress, output quantity.\\
+\(\zinit^c\subset\{1,\ldots,n_e\}\) & initial ECM support for channel \(c\).\\
+\(n_c=|\zinit^c|\) & number of initial ECM candidates.\\
+\(\winit^c\in\R^{n_c}\) & initial fixed ECM weights on \(\zinit^c\).\\
+\(A_j^c\in\R^{m_c\times n_c}\) & local constraint matrix at manifold sample \(j\).\\
+\(b_j^c\in\R^{m_c}\) & local target at manifold sample \(j\).\\
+\(W^c\in\R^{n_c\times N_s}\) & adaptive training weights after MAW pruning.\\
+\(\zred^c\) & final MAW support for channel \(c\).\\
+\(\Kgraph\in\R^{N_s\times N_s}\) & graph Laplacian over manifold samples.\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Channel.}
+A channel is any quantity for which we want a cubature rule.  In the 2D RVE code,
+we currently use:
+\[
+  c\in \{\mathrm{res},\mathrm{eps},\mathrm{sig}\}.
+\]
+In a Burgers 2D workbench, typical channels could be:
+\[
+  c=\mathrm{residual},\qquad
+  c=\mathrm{lift},\qquad
+  c=\mathrm{drag},\qquad
+  c=\mathrm{energy},
+\]
+or any other reduced quantity assembled as an element sum.
+
+\section{Required data contract}
+
+For every channel \(c\), MAW--ECM needs:
+\begin{enumerate}[label=\arabic*.]
+  \item A fixed ECM support \(\zinit^c\) and weights \(\winit^c\).
+  \item For each sampled manifold state \(q_j\), a local matrix
+  \[
+      A_j^c \in \R^{m_c\times n_c}.
+  \]
+  Each column corresponds to one element in \(\zinit^c\).
+  \item A target vector \(b_j^c\in\R^{m_c}\).
+  \item Optionally, a graph over the samples, represented by \(\Kgraph\).
+\end{enumerate}
+
+The local MAW exactness condition is:
+\[
+  A_j^c w_j^c = b_j^c,
+  \qquad j=1,\ldots,N_s.
+\]
+
+\paragraph{How \(b_j^c\) is built in the current implementation.}
+The current Stage8b implementation uses the ECM anchor:
+\[
+  b_j^c = A_j^c \winit^c.
+\]
+This means MAW preserves the fixed ECM rule exactly on the initial ECM support.
+If a different codebase has a robust full-order target available, it can instead use:
+\[
+  b_j^c =
+  \sum_{e=1}^{n_e} a_{j,e}^c,
+\]
+or the equivalent full integration vector.  The rest of the MAW pruning algorithm
+does not change.
+
+\section{Classical ECM bootstrap}
+
+The first step is always a standard ECM rule.  MAW--ECM does not start from the
+full mesh; it starts from a fixed compressed ECM rule.
+
+For a channel \(c\), let the global snapshot matrix be
+\[
+  Q^c =
+  \begin{bmatrix}
+  | & | & & |\\
+  q_1^c & q_2^c & \cdots & q_{n_e}^c\\
+  | & | & & |
+  \end{bmatrix}
+  \in\R^{M_c\times n_e},
+\]
+where each column is the contribution of one element/cubature entity to the
+quantity being compressed.  The full target is
+\[
+  b^c_{\mathrm{full}} = Q^c \bone.
+\]
+
+Classical ECM computes a sparse nonnegative approximation
+\[
+  Q^c w_{\mathrm{full}}^c \approx b^c_{\mathrm{full}},
+  \qquad
+  w_{\mathrm{full},e}^c=0\quad\text{for }e\notin \zinit^c.
+\]
+
+In our current code this is handled by:
+\[
+  \texttt{\_compute\_classic\_res\_bootstrap},
+  \qquad
+  \texttt{\_compute\_classic\_hom\_bootstrap}.
+\]
+
+The bootstrap uses deterministic SVD by default:
+\[
+  \texttt{--res-bootstrap-rsvd-randomized 0}.
+\]
+The flag name is historical; the default path is deterministic.  Use randomized
+SVD only for experiments where exact reproducibility is not important.
+
+\subsection{Sum of weights in the bootstrap}
+
+For classical ECM we normally enforce:
+\[
+  \bone^T w = S_c,
+\]
+where \(S_c\) is usually the total number of elements or the full integration
+measure, depending on the channel definition.  In the 2D RVE examples:
+\[
+  S_c = 990.
+\]
+
+This is not only a cosmetic condition.  It fixes the integral of constant fields.
+For many residual/homogenization problems, this removes a global scaling ambiguity.
+
+\section{Building local MAW blocks}
+
+After the fixed ECM rule is known, restrict every local block to the ECM support.
+For sample \(j\) and channel \(c\):
+\[
+  A_j^c =
+  \begin{bmatrix}
+    a_{j,e_1}^c & a_{j,e_2}^c & \cdots & a_{j,e_{n_c}}^c
+  \end{bmatrix},
+  \qquad
+  e_k\in\zinit^c.
+\]
+
+The target is usually:
+\[
+  b_j^c = A_j^c \winit^c.
+\]
+
+\subsection{Optional sum constraint inside MAW}
+
+If the adaptive weights must preserve the sum, augment every local block:
+\[
+  \bar A_j^c =
+  \begin{bmatrix}
+    A_j^c\\
+    \bone^T
+  \end{bmatrix},
+  \qquad
+  \bar b_j^c =
+  \begin{bmatrix}
+    b_j^c\\
+    S_c
+  \end{bmatrix}.
+\]
+
+Then all MAW updates solve:
+\[
+  \bar A_j^c w_j^c = \bar b_j^c.
+\]
+
+This is implemented by:
+\[
+  \texttt{\_augment\_blocks\_with\_sum\_constraint}.
+\]
+
+\paragraph{Rule used for hom channels.}
+For homogenization-like output channels, our current strict policy is:
+\[
+  A_j^c w_j^c = b_j^c,\qquad
+  \bone^T w_j^c = \bone^T \winit^c,\qquad
+  w_j^c\ge 0.
+\]
+This is professor-aligned: positivity and sum preservation are not optional for
+hom channels when MAW is active.
+
+\section{MAW--ECM pruning problem}
+
+At a given pruning state, suppose the current candidate index set is
+\[
+  I \subset \{1,\ldots,n_c\}.
+\]
+We try to remove one candidate \(p\in I\).  The tentative support is
+\[
+  I_{\mathrm{keep}} = I\setminus\{p\}.
+\]
+
+For each sample \(j\), the goal is to find new weights on the remaining support:
+\[
+  A_{j,I_{\mathrm{keep}}}^c w_{j,I_{\mathrm{keep}}}^{c,\mathrm{new}}
+  =
+  b_j^c,
+  \qquad
+  w_{j,I_{\mathrm{keep}}}^{c,\mathrm{new}}\ge 0.
+\]
+
+The algorithm has two phases.
+
+\section{Phase 1: no-regularization least-change pruning}
+
+Phase 1 is local in the manifold samples.  There is no graph coupling and no
+explicit active-set solve.  For a candidate \(p\), and for each sample \(j\), let
+\[
+  w_{j,I_{\mathrm{keep}}}^{\mathrm{before}}
+\]
+be the current weights on the tentative support.  We solve for a correction
+\[
+  \Delta w_j =
+  \argmin_{\Delta\in\R^{|I_{\mathrm{keep}}|}}
+  \|\Delta\|_2
+  \quad\text{s.t.}\quad
+  A_{j,I_{\mathrm{keep}}}\Delta
+  =
+  b_j - A_{j,I_{\mathrm{keep}}}
+  w_{j,I_{\mathrm{keep}}}^{\mathrm{before}}.
+\]
+
+Equivalently, after the update:
+\[
+  w_{j,I_{\mathrm{keep}}}^{\mathrm{after}}
+  =
+  w_{j,I_{\mathrm{keep}}}^{\mathrm{before}}+\Delta w_j,
+  \qquad
+  A_{j,I_{\mathrm{keep}}}w_{j,I_{\mathrm{keep}}}^{\mathrm{after}}=b_j.
+\]
+
+In Python this is:
+\[
+  \Delta w_j =
+  \texttt{np.linalg.lstsq}(A_{j,I_{\mathrm{keep}}},\,
+  b_j-A_{j,I_{\mathrm{keep}}}w_j^{\mathrm{before}}).
+\]
+
+The candidate is accepted if this succeeds for every sample and if the resulting
+weights are nonnegative:
+\[
+  w_{j}^{\mathrm{after}}\ge -\tau_{\mathrm{neg}},
+  \qquad j=1,\ldots,N_s.
+\]
+
+\begin{algorithm}[H]
+\caption{Phase 1 candidate elimination: no regularization}
+\DontPrintSemicolon
+\KwIn{Blocks \(A_j,b_j\), current weights \(W\), current support \(I\), candidate order.}
+\KwOut{Accepted support and weights, or failure.}
+\ForEach{candidate \(p\) in sorted candidate order}{
+  \(I_{\mathrm{keep}}\leftarrow I\setminus\{p\}\)\;
+  feasible \(\leftarrow\) true\;
+  \For{\(j=1,\ldots,N_s\)}{
+    Build \(A_{j,I_{\mathrm{keep}}}\)\;
+    Check full row rank of \(A_{j,I_{\mathrm{keep}}}\)\;
+    Solve the minimum-change least-squares correction \(\Delta w_j\)\;
+    \(w_j^{\mathrm{after}}\leftarrow w_j^{\mathrm{before}}+\Delta w_j\)\;
+    \If{\(w_j^{\mathrm{after}}\) has negative entries}{
+      feasible \(\leftarrow\) false; break\;
+    }
+  }
+  \If{feasible}{
+    Set weight of candidate \(p\) to zero for all samples\;
+    Accept candidate and return\;
+  }
+}
+Return failure\;
+\end{algorithm}
+
+\paragraph{Candidate order.}
+The default order is based on current activity/weight magnitude.  Candidates with
+small total activity are tried first:
+\[
+  \mathrm{activity}_e =
+  \sum_{j=1}^{N_s} W_{e,j}
+  \quad\text{or}\quad
+  \max_j |W_{e,j}|
+\]
+depending on whether signed weights are allowed.
+
+\section{Stopping Phase 1 and starting Phase 2}
+
+There are three ways Phase 2 can start:
+\begin{enumerate}[label=\arabic*.]
+  \item Phase 1 cannot remove any additional candidate.
+  \item \(\texttt{smooth\_laplacian\_all\_iterations}=1\), so Phase 2 is forced from the start.
+  \item A controlled phase-1 stop size is specified:
+  \[
+    |I|\le n_{\mathrm{phase1\_stop}}.
+  \]
+\end{enumerate}
+
+The current flags are:
+\[
+\begin{aligned}
+&\texttt{--maw-phase1-stop-size-res},\\
+&\texttt{--maw-phase1-stop-size-eps},\\
+&\texttt{--maw-phase1-stop-size-sig}.
+\end{aligned}
+\]
+
+For example, for stress:
+\[
+  \texttt{--maw-phase1-stop-size-sig 20}
+\]
+means: use Phase 1 until the stress support reaches 20 candidates, then try Phase 2.
+
+\section{Phase 2: positivity enforcement and graph regularization}
+
+Phase 2 solves a stronger redistribution problem.  It can be local or graph-coupled.
+
+\subsection{Stacked variable}
+
+Let the current support size be \(r\).  Put all sample weights into a matrix
+\[
+  W =
+  \begin{bmatrix}
+  | & | & & |\\
+  w_1 & w_2 & \cdots & w_{N_s}\\
+  | & | & & |
+  \end{bmatrix}
+  \in\R^{r\times N_s}.
+\]
+Vectorize by samples:
+\[
+  z = \operatorname{vec}(W)\in\R^{rN_s}.
+\]
+
+\subsection{Graph regularized least-change objective}
+
+Let \(\Kgraph\) be the graph Laplacian over manifold samples.  The graph Hessian is
+\[
+  H = I_{rN_s}+\alpha\,(\Kgraph\otimes I_r).
+\]
+
+The incremental graph update minimizes
+\[
+  \frac{1}{2}(z-z_{\mathrm{old}})^T
+  H
+  (z-z_{\mathrm{old}})
+\]
+subject to:
+\[
+  A_j z_j = b_j,\qquad
+  z_{\mathrm{candidate},j}=0,\qquad
+  z_{a,j}=0\;\;\text{for active-set clamped entries}.
+\]
+
+When \(\alpha=0\), this reduces to a local least-change active-set solve.  When
+\(\alpha>0\), neighboring manifold nodes are encouraged to have coherent weight
+redistributions.
+
+\subsection{Nullspace solve used in Phase 2}
+
+For a fixed active set, build one particular feasible point \(z_p\) and a nullspace
+basis \(N\) for all equality constraints.  Then:
+\[
+  z = z_p + Ny.
+\]
+
+The reduced quadratic problem is:
+\[
+  \min_y
+  \frac{1}{2}(z_p+Ny)^T H (z_p+Ny)
+  -
+  g^T(z_p+Ny),
+\]
+where, in incremental mode,
+\[
+  g = H z_{\mathrm{old}}.
+\]
+
+The normal equations are:
+\[
+  (N^T H N)y = N^T(g-Hz_p).
+\]
+
+After solving, reconstruct:
+\[
+  z_{\mathrm{new}} = z_p+Ny.
+\]
+
+If any unclamped entry is negative, it is added to the active set and the solve is
+repeated.  This is the explicit positivity-enforcement loop.
+
+\begin{algorithm}[H]
+\caption{Phase 2 graph/local active-set pruning for one candidate}
+\DontPrintSemicolon
+\KwIn{Current local weight matrix \(W\), candidate \(p\), blocks \(A_j,b_j\), graph \(\Kgraph\).}
+\KwOut{Feasible \(W_{\mathrm{new}}\), or failure.}
+Initialize active sets by clamping candidate \(p\) at every sample\;
+\For{active-set iteration \(=1,\ldots,N_{\mathrm{AS,max}}\)}{
+  Build particular solution \(z_p\) satisfying all local equalities and clamps\;
+  Build nullspace basis \(N\)\;
+  Solve \((N^THN)y=N^T(g-Hz_p)\)\;
+  \(z_{\mathrm{new}}\leftarrow z_p+Ny\)\;
+  \If{all free entries of \(z_{\mathrm{new}}\) are nonnegative}{
+    Accept and return \(W_{\mathrm{new}}\)\;
+  }
+  Add negative entries to the active sets\;
+}
+Return failure\;
+\end{algorithm}
+
+\section{Graph construction}
+
+Two graph types are currently useful:
+
+\paragraph{Structured grid graph.}
+If the manifold samples are arranged on a structured grid, use the cell connectivity
+to construct the graph.  This is preferred when available because it respects the
+sampling topology.
+
+\paragraph{KNN graph.}
+If no structured grid exists, build a graph in \(q\)-space using nearest neighbors:
+\[
+  (j,k)\in\Egraph
+  \quad\text{if}\quad
+  q_k\text{ is among the }K\text{ nearest neighbors of }q_j.
+\]
+Weights can be binary or Gaussian:
+\[
+  a_{jk}=\exp\left(-\frac{\|q_j-q_k\|^2}{2\sigma^2}\right).
+\]
+Then
+\[
+  \Kgraph = D-A,
+\]
+where \(D\) is the degree matrix and \(A\) is the adjacency matrix.
+
+\section{RBF surrogate for adaptive weights}
+
+After pruning, we have a reduced support \(\zred\) and training weights
+\[
+  W_{\mathrm{train}}\in\R^{|\zred|\times N_s}.
+\]
+We fit a multi-output RBF map:
+\[
+  q \longmapsto \widehat w(q)\in\R^{|\zred|}.
+\]
+
+\subsection{Gaussian RBF model}
+
+Choose centers \(c_k\in\R^{n_q}\), \(k=1,\ldots,N_c\), and length scales \(\ell\).
+The kernel matrix is:
+\[
+  \Phi(q,c_k)=
+  \exp\left(
+    -\frac{1}{2}
+    \sum_{a=1}^{n_q}
+    \frac{(q_a-c_{k,a})^2}{\ell_a^2}
+  \right).
+\]
+
+The fitted map is:
+\[
+  \widehat w(q)
+  =
+  S\left[
+  \Phi(q)A + P(q)B
+  \right]^T,
+\]
+where:
+\begin{itemize}
+  \item \(S\) is a diagonal output scaling based on the RMS magnitude of each weight.
+  \item \(P(q)\) is an optional polynomial block: none, constant, or affine.
+  \item \(A,B\) are regression coefficients.
+\end{itemize}
+
+\subsection{Regression system}
+
+Let
+\[
+  Y = (S^{-1}W_{\mathrm{train}})^T.
+\]
+The coefficients solve the regularized least-squares system:
+\[
+  \begin{bmatrix}
+    \Phi^T\Phi+\lambda I & \Phi^T P\\
+    P^T\Phi & P^TP
+  \end{bmatrix}
+  \begin{bmatrix}
+    A\\ B
+  \end{bmatrix}
+  =
+  \begin{bmatrix}
+    \Phi^TY\\
+    P^TY
+  \end{bmatrix}.
+\]
+
+This is implemented by:
+\[
+  \texttt{fit\_mawecm\_rbf}.
+\]
+
+\subsection{Online evaluation, clipping, and renormalization}
+
+Online evaluation uses:
+\[
+  \widehat w(q)=\texttt{eval\_mawecm\_rbf}(q).
+\]
+
+If positivity is required:
+\[
+  \widehat w_e(q)\leftarrow\max(\widehat w_e(q),0).
+\]
+
+If sum preservation is required:
+\[
+  \widehat w(q)
+  \leftarrow
+  S_c\,
+  \frac{\widehat w(q)}{\bone^T\widehat w(q)}.
+\]
+
+For Newton tangents, the RBF derivative is analytic:
+\[
+  \frac{\partial \Phi_k}{\partial q_a}
+  =
+  -\Phi_k(q)\frac{q_a-c_{k,a}}{\ell_a^2}.
+\]
+The derivative of the renormalized weights uses the quotient rule:
+\[
+  \frac{\partial}{\partial q_a}
+  \left(
+    S_c\frac{w_e}{\sum_i w_i}
+  \right)
+  =
+  S_c\left[
+    \frac{\partial_a w_e}{\sum_i w_i}
+    -
+    \frac{w_e\sum_i \partial_a w_i}{(\sum_i w_i)^2}
+  \right].
+\]
+
+This is implemented by:
+\[
+  \texttt{eval\_mawecm\_rbf\_with\_jacobian}.
+\]
+
+\section{Offline algorithm}
+
+\begin{algorithm}[H]
+\caption{Portable MAW--ECM offline build for one channel}
+\DontPrintSemicolon
+\KwIn{Full element data \(Q^c\), sample coordinates \(q_j\), optional graph data.}
+\KwOut{Support \(\zred^c\), RBF model for \(w^c(q)\), diagnostics.}
+Build a deterministic classical ECM rule \((\zinit^c,\winit^c)\)\;
+\For{\(j=1,\ldots,N_s\)}{
+  Build local block \(A_j^c\) restricted to \(\zinit^c\)\;
+  Set \(b_j^c=A_j^c\winit^c\) or use the full target if desired\;
+  \If{sum preservation is required}{
+    Augment \(A_j^c,b_j^c\) with the row \(\bone^T w=S_c\)\;
+  }
+}
+Build graph Laplacian \(\Kgraph\) if phase 2 graph regularization is enabled\;
+Run MAW pruning:
+Phase 1 first, then Phase 2 if requested or if Phase 1 stalls\;
+Fit RBF surrogate \(q\mapsto w(q)\) on the remaining support\;
+Validate exactness, positivity, sum of weights, and RBF training error\;
+Save \(\zred^c\), \(W_{\mathrm{train}}^c\), RBF parameters, and diagnostics\;
+\end{algorithm}
+
+\section{Online algorithm}
+
+\begin{algorithm}[H]
+\caption{Online HPROM using MAW--ECM weights}
+\DontPrintSemicolon
+\KwIn{Reduced coordinate \(q\), displacement/state decoder, MAW support and RBF model.}
+\KwOut{Reduced residual and tangent.}
+Evaluate state \(u(q)\) from the ROM/PROM decoder\;
+Evaluate adaptive weights \(w(q)\) from the MAW RBF\;
+Optionally evaluate \(dw/dq\) analytically\;
+\ForEach{selected element \(e\in\zred\)}{
+  Assemble element residual \(r_e(u(q))\) and tangent \(K_e(u(q))\)\;
+  Add \(w_e(q)r_e\) to the hyper-reduced residual\;
+  Add \(w_e(q)K_e\) to the hyper-reduced tangent contribution\;
+}
+If using the weight tangent, add the contribution involving \(dw/dq\)\;
+Solve the reduced Newton correction\;
+\end{algorithm}
+
+\paragraph{Sign convention warning.}
+The extra tangent term from \(dw/dq\) depends on the sign convention used by the
+residual and Newton system in the target codebase.  The formal residual derivative is
+\[
+  \frac{\partial}{\partial q}
+  \sum_{e\in\zred} w_e(q)r_e(q)
+  =
+  \sum_{e\in\zred}
+  \left[
+    w_e(q)\frac{\partial r_e}{\partial q}
+    +
+    r_e(q)\otimes\frac{\partial w_e}{\partial q}
+  \right].
+\]
+When porting to Burgers or another solver, verify the sign by a finite-difference
+test of the assembled reduced residual.
+
+\section{Independent channel strategy}
+
+The current recommended design is to keep channels separate:
+\[
+  \zred^{\mathrm{res}},
+  \qquad
+  \zred^{\mathrm{eps}},
+  \qquad
+  \zred^{\mathrm{sig}}.
+\]
+
+The online reduced mesh can be the union:
+\[
+  \zred^{\mathrm{union}}
+  =
+  \zred^{\mathrm{res}}
+  \cup
+  \zred^{\mathrm{eps}}
+  \cup
+  \zred^{\mathrm{sig}}.
+\]
+
+However, the loops must remain channel-specific:
+\[
+  \text{residual assembly uses } \zred^{\mathrm{res}},
+\]
+\[
+  \text{strain output uses } \zred^{\mathrm{eps}},
+\]
+\[
+  \text{stress output uses } \zred^{\mathrm{sig}}.
+\]
+
+Do not loop blindly over the union for every quantity unless the corresponding
+weights are also defined on the union.  The union is a mesh containment device, not
+necessarily the mathematical cubature rule for every channel.
+
+\section{Current mode mapping}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Stage8b mode & Adaptive MAW channels & Fixed ECM channels\\
+\midrule
+\texttt{res\_only} & residual & eps, sig if \texttt{ecm\_separate}\\
+\texttt{res\_eps} & residual, eps & sig\\
+\texttt{res\_sig} & residual, sig & eps\\
+\texttt{res\_eps\_sig} & residual, eps, sig & none\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The online mode must match the offline file:
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Offline file & Online homogenization mode\\
+\midrule
+\texttt{res\_only} with fixed hom ECM & \texttt{ecm\_separate}\\
+\texttt{res\_sig} & \texttt{sig\_maw\_eps\_ecm}\\
+\texttt{res\_eps\_sig} & \texttt{maw\_separate}\\
+\texttt{res\_only} diagnostic & \texttt{full\_fom}\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Porting checklist for Burgers 2D ROM Workbench}
+
+\begin{enumerate}[label=\arabic*.]
+  \item Decide the channels.  At minimum use residual.  Add output channels only
+  if they are important online.
+  \item For every training sample, compute element-wise contributions for each channel.
+  The data must be expressible as a sum over elements.
+  \item Build a deterministic classical ECM rule for each channel.
+  \item For every channel, build local blocks \(A_j^c\) restricted to the ECM support.
+  \item Set \(b_j^c=A_j^c\winit^c\) for anchor preservation, or set \(b_j^c\) to the
+  full integration target if that is more appropriate.
+  \item Add sum constraints where needed.
+  \item Enforce positivity where physically/theoretically required.
+  \item Run MAW pruning:
+  \begin{itemize}
+    \item Phase 1: no regularization.
+    \item Phase 2: local active-set or graph regularization.
+  \end{itemize}
+  \item Fit RBF weight fields for every adaptive channel.
+  \item Validate:
+  \[
+    \max_j
+    \frac{\|A_j w_j-b_j\|_2}{\max(\|b_j\|_2,1)}
+  \]
+  and check positivity/sum constraints.
+  \item Integrate \(w(q)\) into the online assembler.
+  \item Verify the reduced tangent against finite differences before trusting Newton
+  iteration counts.
+\end{enumerate}
+
+\section{Recommended diagnostics}
+
+Always save:
+\begin{itemize}
+  \item \(|\zinit|\rightarrow|\zred|\).
+  \item Phase 1 start/end support.
+  \item Phase 2 start/end support, attempts, accepted eliminations.
+  \item Top failure reasons for Phase 2.
+  \item RBF train relative error.
+  \item Constraint residual:
+  \[
+    \max_j\frac{\|A_jw_j-b_j\|_2}{\max(\|b_j\|_2,1)}.
+  \]
+  \item Minimum weight.
+  \item Sum-of-weights min/max/mean if sum preservation is active.
+  \item Weight-field plots over the manifold for selected elements.
+  \item Support plots for every channel and for the union.
+\end{itemize}
+
+\section{Minimal command pattern in the current code}
+
+Residual MAW with classical ECM for homogenization:
+\begin{verbatim}
+python3 stage8b_build_mawecm_res_model_rbf.py \
+  --dataset-dir stage_8a_mawecm_res_dataset \
+  --maw-mode res_only \
+  --hom-source ecm_separate \
+  --maw-min-support-size-res 0 \
+  --use-global-graph-2ndstage 1 \
+  --smooth-laplacian-all-iterations 0 \
+  --alpha-smooth 1e6 \
+  --graph-mode structured_grid \
+  --max-number-zeros-active-set-loop-maw-ecm 1 \
+  --res-bootstrap-rsvd-randomized 0 \
+  --res-bootstrap-constrain-sum-weights 1 \
+  --enforce-sum-weights 1 \
+  --sum-weights-target 990.0 \
+  --tol-rank-rel 1e-14 \
+  --save-weight-field-plots 1 \
+  --show-weight-field-plots 0 \
+  --out-dir stage_8b_hprom_mawecm_res_only_auto_ecmhom_sum990_graph
+\end{verbatim}
+
+Residual and stress MAW, strain fixed ECM:
+\begin{verbatim}
+python3 stage8b_build_mawecm_res_model_rbf.py \
+  --dataset-dir stage_8a_mawecm_res_dataset \
+  --maw-mode res_sig \
+  --hom-source ecm_separate \
+  --maw-min-support-size-res 0 \
+  --maw-min-support-size-sig 0 \
+  --maw-phase1-stop-size-sig 20 \
+  --use-global-graph-2ndstage 1 \
+  --smooth-laplacian-all-iterations 0 \
+  --alpha-smooth 1e4 \
+  --graph-mode structured_grid \
+  --max-number-zeros-active-set-loop-maw-ecm 1 \
+  --res-bootstrap-rsvd-randomized 0 \
+  --res-bootstrap-constrain-sum-weights 1 \
+  --enforce-sum-weights 1 \
+  --sum-weights-target 990.0 \
+  --tol-rank-rel 1e-14 \
+  --maw-hom-enforce-nonnegativity 1 \
+  --maw-hom-conservative 1 \
+  --maw-hom-cv-max-rel 0 \
+  --save-weight-field-plots 1 \
+  --show-weight-field-plots 0 \
+  --out-dir stage_8b_hprom_mawecm_res_sig_auto_ecmhom_sum990_graph
+\end{verbatim}
+
+\section{What must change in another codebase}
+
+Only the data-building and online assembly layers are codebase-specific:
+\begin{itemize}
+  \item Replace Kratos element residual extraction by Burgers element residual extraction.
+  \item Replace \(q_m\) source by the Burgers reduced coordinate.
+  \item Replace the Stage8a structured dataset writer.
+  \item Keep the MAW pruning and RBF regression logic almost unchanged.
+  \item Rebuild the online assembler so it evaluates \(w(q)\) and loops only over the
+  selected support of the channel being assembled.
+\end{itemize}
+
+\section{Common failure modes}
+
+\paragraph{No pruning after adding the sum constraint.}
+This usually means the local constraints are too tight for the current support, or
+the rank tolerance is too conservative.  Verify that:
+\[
+  |I_{\mathrm{keep}}|\ge m_j
+\]
+for every local block after augmentation.
+
+\paragraph{Phase 2 does nothing.}
+Check the top fail reasons.  Typical causes are rank deficiency, too many clamped
+variables, or infeasible positivity constraints.  If a phase-1 stop is too aggressive,
+try stopping earlier, e.g. \(40\) instead of \(20\).
+
+\paragraph{Good constraint fit but bad online behavior.}
+Check the RBF weight fields.  Exact offline MAW weights do not guarantee a good
+interpolant if the fields are rough.  Graph regularization and controlled phase-1
+stop sizes are meant to improve this.
+
+\paragraph{The HROM mesh has the right union but wrong results.}
+The mesh union is not enough.  The online code must map full element ids to local
+HROM element ids and must use each channel's own support and weights.
+
+\section{Summary}
+
+The portable MAW--ECM recipe is:
+\[
+\boxed{
+\begin{gathered}
+\text{classic ECM}
+\;\longrightarrow\;
+\text{local MAW blocks}
+\;\longrightarrow\;
+\text{Phase 1 pruning}\\
+\text{Phase 2 regularization}
+\;\longrightarrow\;
+\text{RBF } w(q)
+\;\longrightarrow\;
+\text{online weighted assembly}.
+\end{gathered}
+}
+\]
+
+The key idea is simple: use the nullspace left by a fixed ECM rule to redistribute
+weights differently at different manifold samples, while preserving the local ECM
+targets.  The final RBF is not a replacement for MAW; it is only the smooth online
+surrogate of the offline adaptive weights.
+
+\end{document}

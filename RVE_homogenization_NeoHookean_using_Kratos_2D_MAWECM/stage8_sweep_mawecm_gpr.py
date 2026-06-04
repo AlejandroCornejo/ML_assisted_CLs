@@ -99,8 +99,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--root-dir", type=str, default=".")
 
     p.add_argument("--dataset-dir", type=str, default="stage_8a_mawecm_res_dataset")
-    p.add_argument("--maw-mode", type=str, default="res_only", choices=["res_only", "res_eps", "res_eps_sig"])
-    p.add_argument("--hom-source", type=str, default="full_mesh", choices=["full_mesh", "fixed_ecm"])
+    p.add_argument("--maw-mode", type=str, default="res_only", choices=["res_only", "res_eps", "res_sig", "res_eps_sig"])
+    p.add_argument("--hom-source", type=str, default="full_mesh", choices=["full_mesh", "fixed_ecm", "ecm_separate"])
     p.add_argument("--fixed-ecm-file", type=str, default="stage_6b_hprom_ecm/ecm_weights_all.npz")
     p.add_argument("--res-bootstrap-ecm-file", type=str, default="")
     p.add_argument("--max-number-zeros-active-set-loop-maw-ecm", type=int, default=1)
@@ -114,10 +114,14 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--graph-cell-weight-mode", type=str, default="binary", choices=["binary"])
     p.add_argument("--maw-min-support-size-res", type=int, default=-1)
     p.add_argument("--maw-min-support-size-eps", type=int, default=0)
+    p.add_argument("--maw-phase1-stop-size-eps", type=int, default=0)
+    p.add_argument("--maw-phase2-eps", type=int, default=1, choices=[0, 1])
     p.add_argument("--maw-min-support-size-sig", type=int, default=0)
+    p.add_argument("--maw-phase1-stop-size-sig", type=int, default=0)
+    p.add_argument("--maw-phase2-sig", type=int, default=1, choices=[0, 1])
     p.add_argument("--maw-hom-conservative", type=int, default=1, choices=[0, 1])
     p.add_argument("--maw-res-enforce-nonnegativity", type=int, default=1, choices=[0, 1])
-    p.add_argument("--maw-hom-enforce-nonnegativity", type=int, default=0, choices=[0, 1])
+    p.add_argument("--maw-hom-enforce-nonnegativity", type=int, default=1, choices=[0, 1])
     p.add_argument("--save-weight-field-plots", type=int, default=1, choices=[0, 1])
     p.add_argument("--show-weight-field-plots", type=int, default=0, choices=[0, 1])
     p.add_argument("--max-weight-field-plots", type=int, default=0)
@@ -153,7 +157,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--run-fom", type=int, default=1, choices=[0, 1])
     p.add_argument("--run-prom-gpr", type=int, default=1, choices=[0, 1])
     p.add_argument("--run-hprom-mawecm-gpr", type=int, default=1, choices=[0, 1])
-    p.add_argument("--hprom-homogenization-mode", type=str, default="ecm_separate", choices=["full_fom", "ecm_separate"])
+    p.add_argument("--hprom-homogenization-mode", type=str, default="ecm_separate", choices=["full_fom", "ecm_separate", "maw_separate", "sig_maw_eps_ecm"])
     p.add_argument("--hprom-use-hrom-mdpa", type=int, default=1, choices=[0, 1])
     p.add_argument("--hprom-hrom-strict", type=int, default=1, choices=[0, 1])
     p.add_argument("--hprom-update-maw-each-iter", type=int, default=1, choices=[0, 1])
@@ -258,8 +262,16 @@ def main() -> None:
             str(int(args.maw_min_support_size_res)),
             "--maw-min-support-size-eps",
             str(int(args.maw_min_support_size_eps)),
+            "--maw-phase1-stop-size-eps",
+            str(int(args.maw_phase1_stop_size_eps)),
+            "--maw-phase2-eps",
+            str(int(args.maw_phase2_eps)),
             "--maw-min-support-size-sig",
             str(int(args.maw_min_support_size_sig)),
+            "--maw-phase1-stop-size-sig",
+            str(int(args.maw_phase1_stop_size_sig)),
+            "--maw-phase2-sig",
+            str(int(args.maw_phase2_sig)),
             "--maw-hom-conservative",
             str(int(args.maw_hom_conservative)),
             "--maw-res-enforce-nonnegativity",

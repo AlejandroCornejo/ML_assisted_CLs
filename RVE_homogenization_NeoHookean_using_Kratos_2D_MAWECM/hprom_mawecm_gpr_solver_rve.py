@@ -383,18 +383,24 @@ def _remap_free_basis_to_local(
     return free_local, phi_m_loc, phi_s_loc, int(row_idx.size)
 
 
-def _load_maw_rbf_from_npz(data):
+def _load_maw_rbf_from_npz(data, channel: str = "res"):
+    prefix = f"maw_{str(channel).strip().lower()}_rbf"
     return {
-        "centers": np.asarray(data["maw_res_rbf_centers"], dtype=float),
-        "center_ids": np.asarray(data["maw_res_rbf_center_ids"], dtype=np.int64),
-        "length_scales": np.asarray(data["maw_res_rbf_length_scales"], dtype=float),
-        "Alpha": np.asarray(data["maw_res_rbf_alpha"], dtype=float),
-        "Beta": np.asarray(data["maw_res_rbf_beta"], dtype=float),
-        "scale": np.asarray(data["maw_res_rbf_scale"], dtype=float),
-        "poly_mode": int(np.ravel(data["maw_res_rbf_poly_mode"])[0]),
-        "lambda_reg": float(np.ravel(data["maw_res_rbf_lambda"])[0]),
-        "n_centers": int(np.ravel(data["maw_res_rbf_n_centers"])[0]),
+        "centers": np.asarray(data[f"{prefix}_centers"], dtype=float),
+        "center_ids": np.asarray(data[f"{prefix}_center_ids"], dtype=np.int64),
+        "length_scales": np.asarray(data[f"{prefix}_length_scales"], dtype=float),
+        "Alpha": np.asarray(data[f"{prefix}_alpha"], dtype=float),
+        "Beta": np.asarray(data[f"{prefix}_beta"], dtype=float),
+        "scale": np.asarray(data[f"{prefix}_scale"], dtype=float),
+        "poly_mode": int(np.ravel(data[f"{prefix}_poly_mode"])[0]),
+        "lambda_reg": float(np.ravel(data[f"{prefix}_lambda"])[0]),
+        "n_centers": int(np.ravel(data[f"{prefix}_n_centers"])[0]),
     }
+
+
+def _has_maw_rbf(data, channel: str) -> bool:
+    prefix = f"maw_{str(channel).strip().lower()}_rbf"
+    return all(k in data for k in (f"{prefix}_centers", f"{prefix}_alpha", f"{prefix}_scale"))
 
 
 def LoadHpromMawEcmGprModel(
@@ -431,7 +437,11 @@ def LoadHpromMawEcmGprModel(
         raise RuntimeError(f"MAW-ECM file missing keys: {missing}")
 
     out = {k: data[k] for k in data.files}
-    out["maw_rbf_model"] = _load_maw_rbf_from_npz(data)
+    out["maw_rbf_model"] = _load_maw_rbf_from_npz(data, "res")
+    if _has_maw_rbf(data, "eps"):
+        out["maw_eps_rbf_model"] = _load_maw_rbf_from_npz(data, "eps")
+    if _has_maw_rbf(data, "sig"):
+        out["maw_sig_rbf_model"] = _load_maw_rbf_from_npz(data, "sig")
     return model_pack, out
 
 
@@ -508,11 +518,54 @@ def RunHpromMawEcmGprBatchSimulation(
     need_qpod_state = False
     renorm_target = float(np.ravel(mawecm_data["maw_res_renorm_target"])[0]) if "maw_res_renorm_target" in mawecm_data else None
     hom_mode = str(homogenization_mode).strip().lower()
-    if hom_mode not in {"full_fom", "ecm_separate"}:
+    if hom_mode not in {"full_fom", "ecm_separate", "maw_separate", "sig_maw_eps_ecm"}:
         raise RuntimeError(
             "Unsupported homogenization_mode for HPROM-MAWECM-GPR. "
-            "Use one of: {'full_fom', 'ecm_separate'}."
+            "Use one of: {'full_fom', 'ecm_separate', 'maw_separate', 'sig_maw_eps_ecm'}."
         )
+    if hom_mode == "maw_separate":
+        missing_hom_maw = [
+            k for k in (
+                "maw_eps_rbf_model",
+                "maw_sig_rbf_model",
+                "maw_eps_renorm_target",
+                "maw_sig_renorm_target",
+            )
+            if k not in mawecm_data
+        ]
+        if missing_hom_maw:
+            raise RuntimeError(
+                "homogenization_mode='maw_separate' requires Stage8b output "
+                f"with eps/sig MAW RBF models. Missing: {missing_hom_maw}. "
+                "Build Stage8b with --maw-mode res_eps_sig."
+            )
+        maw_eps_rbf = mawecm_data["maw_eps_rbf_model"]
+        maw_sig_rbf = mawecm_data["maw_sig_rbf_model"]
+        maw_eps_renorm_target = float(np.ravel(mawecm_data["maw_eps_renorm_target"])[0])
+        maw_sig_renorm_target = float(np.ravel(mawecm_data["maw_sig_renorm_target"])[0])
+    elif hom_mode == "sig_maw_eps_ecm":
+        missing_hom_maw = [
+            k for k in (
+                "maw_sig_rbf_model",
+                "maw_sig_renorm_target",
+            )
+            if k not in mawecm_data
+        ]
+        if missing_hom_maw:
+            raise RuntimeError(
+                "homogenization_mode='sig_maw_eps_ecm' requires Stage8b output "
+                f"with sig MAW RBF model and fixed eps ECM. Missing: {missing_hom_maw}. "
+                "Build Stage8b with --maw-mode res_sig."
+            )
+        maw_eps_rbf = None
+        maw_sig_rbf = mawecm_data["maw_sig_rbf_model"]
+        maw_eps_renorm_target = None
+        maw_sig_renorm_target = float(np.ravel(mawecm_data["maw_sig_renorm_target"])[0])
+    else:
+        maw_eps_rbf = None
+        maw_sig_rbf = None
+        maw_eps_renorm_target = None
+        maw_sig_renorm_target = None
 
     dt = parameters["solver_settings"]["time_stepping"]["time_step"].GetDouble()
     e_wp = np.asarray(strain_path, dtype=float)
@@ -545,7 +598,7 @@ def RunHpromMawEcmGprBatchSimulation(
     z_res, z_eps, z_sig, w_eps_full, w_sig_full, mesh_mode = _extract_hrom_aligned_maw_arrays(
         mawecm_data=mawecm_data,
         n_elem=n_elem,
-        need_hom_support=(hom_mode == "ecm_separate"),
+        need_hom_support=(hom_mode in {"ecm_separate", "maw_separate", "sig_maw_eps_ecm"}),
     )
     if mesh_mode == "hrom":
         full_to_local = _build_full_to_local_dof_map_from_hrom_metadata(
@@ -599,18 +652,18 @@ def RunHpromMawEcmGprBatchSimulation(
             element_scales=None,
             log_label="HPROM-MAW-HomAssemblerFull",
         )
-    elif hom_mode == "ecm_separate":
+    elif hom_mode in {"ecm_separate", "maw_separate", "sig_maw_eps_ecm"}:
         if "A0_ref" in mawecm_data:
             a0_ref = float(np.ravel(mawecm_data["A0_ref"])[0])
         elif "hom_reference_measure" in mawecm_data:
             a0_ref = float(np.ravel(mawecm_data["hom_reference_measure"])[0])
         else:
             raise RuntimeError(
-                "MAW-ECM file missing A0_ref / hom_reference_measure required for homogenization_mode='ecm_separate'."
+                "MAW-ECM file missing A0_ref / hom_reference_measure required for reduced homogenization."
             )
         if z_eps.size == 0 or z_sig.size == 0:
             raise RuntimeError(
-                "homogenization_mode='ecm_separate' requires non-empty Z_eps and Z_sig."
+                f"homogenization_mode='{hom_mode}' requires non-empty Z_eps and Z_sig."
             )
 
         # Single homogenization assembler on union support with separate weight vectors
@@ -701,6 +754,21 @@ def RunHpromMawEcmGprBatchSimulation(
             )
         return w, dw
 
+    def _eval_hom_maw_weights(state_vec, model, expected_size, renorm_target_hom, label):
+        q_query = np.asarray(state_vec, dtype=float).reshape(1, -1)
+        w_col = eval_mawecm_rbf(
+            q_query=q_query,
+            model=model,
+            clip_nonnegative=True,
+            renorm_target=float(renorm_target_hom),
+        )
+        w = np.asarray(w_col[:, 0], dtype=float).reshape(-1)
+        if w.size != int(expected_size):
+            raise RuntimeError(
+                f"Adaptive {label} MAW weight size mismatch: got {w.size}, expected {int(expected_size)}."
+            )
+        return w
+
     def _state_for_maw(state_mode: str, q_m_vec: np.ndarray):
         if state_mode != "q_m":
             raise RuntimeError(f"Unsupported MAW state space '{state_mode}'.")
@@ -771,12 +839,23 @@ def RunHpromMawEcmGprBatchSimulation(
         )
     else:
         print(
-            f"  [HPROM-MAWECM-GPR] Hom support (separate ECM): "
+            f"  [HPROM-MAWECM-GPR] Hom support ({hom_mode}): "
             f"|Z_eps|={z_eps.size} ({100.0*z_eps.size/max(n_elem,1):.1f}%), "
             f"|Z_sig|={z_sig.size} ({100.0*z_sig.size/max(n_elem,1):.1f}%), "
             f"|Z_union|={z_hom_union.size} ({100.0*z_hom_union.size/max(n_elem,1):.1f}%), "
             f"mesh_mode={mesh_mode}"
         )
+        if hom_mode == "maw_separate":
+            print(
+                "  [HPROM-MAWECM-GPR] Hom MAW constraints online: "
+                f"sum_eps={maw_eps_renorm_target:.6e}, sum_sig={maw_sig_renorm_target:.6e}, "
+                "nonnegative=on"
+            )
+        elif hom_mode == "sig_maw_eps_ecm":
+            print(
+                "  [HPROM-MAWECM-GPR] Hom mixed constraints online: "
+                f"eps=fixed ECM, sum_sig={maw_sig_renorm_target:.6e}, sig nonnegative=on"
+            )
     print(
         f"  [HPROM-MAWECM-GPR] DOF overlap full->mesh: free_used={n_overlap}/{free_dofs_full.size}"
     )
@@ -1166,6 +1245,48 @@ def RunHpromMawEcmGprBatchSimulation(
                 reference_measure=ref_full,
             )
         else:
+            if hom_mode == "maw_separate":
+                maw_state_hom = _state_for_maw(maw_state_space, q_m)
+                t1 = time.perf_counter()
+                w_eps_support = _eval_hom_maw_weights(
+                    maw_state_hom,
+                    model=maw_eps_rbf,
+                    expected_size=z_eps.size,
+                    renorm_target_hom=maw_eps_renorm_target,
+                    label="eps",
+                )
+                w_sig_support = _eval_hom_maw_weights(
+                    maw_state_hom,
+                    model=maw_sig_rbf,
+                    expected_size=z_sig.size,
+                    renorm_target_hom=maw_sig_renorm_target,
+                    label="sig",
+                )
+                t_eval_maw += time.perf_counter() - t1
+                w_eps_full_step = np.zeros(int(n_elem), dtype=float)
+                w_sig_full_step = np.zeros(int(n_elem), dtype=float)
+                w_eps_full_step[z_eps] = w_eps_support
+                w_sig_full_step[z_sig] = w_sig_support
+                w_eps_use = np.asarray(w_eps_full_step[z_hom_union], dtype=float)
+                w_sig_use = np.asarray(w_sig_full_step[z_hom_union], dtype=float)
+            elif hom_mode == "sig_maw_eps_ecm":
+                maw_state_hom = _state_for_maw(maw_state_space, q_m)
+                t1 = time.perf_counter()
+                w_sig_support = _eval_hom_maw_weights(
+                    maw_state_hom,
+                    model=maw_sig_rbf,
+                    expected_size=z_sig.size,
+                    renorm_target_hom=maw_sig_renorm_target,
+                    label="sig",
+                )
+                t_eval_maw += time.perf_counter() - t1
+                w_sig_full_step = np.zeros(int(n_elem), dtype=float)
+                w_sig_full_step[z_sig] = w_sig_support
+                w_eps_use = w_eps_sel
+                w_sig_use = np.asarray(w_sig_full_step[z_hom_union], dtype=float)
+            else:
+                w_eps_use = w_eps_sel
+                w_sig_use = w_sig_sel
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
             t1 = time.perf_counter()
             _, _ = assembler_hom_union.Assemble(u)
@@ -1173,8 +1294,8 @@ def RunHpromMawEcmGprBatchSimulation(
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
             eps_h, sig_h = CalculateHomogenizedFromAssemblerWithElementWeights(
                 assembler_hom_union,
-                w_eps=w_eps_sel,
-                w_sig=w_sig_sel,
+                w_eps=w_eps_use,
+                w_sig=w_sig_use,
                 reference_measure=a0_ref,
             )
             eps_h = np.asarray(eps_h, dtype=float)

@@ -94,7 +94,7 @@ def _parse_args() -> argparse.Namespace:
         "--hprom-homogenization-mode",
         type=str,
         default="ecm_separate",
-        choices=["full_fom", "ecm_separate"],
+        choices=["full_fom", "ecm_separate", "maw_separate", "sig_maw_eps_ecm"],
         help="Homogenization backend for HPROM-MAWECM-GPR.",
     )
     p.add_argument(
