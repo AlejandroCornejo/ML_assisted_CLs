@@ -84,6 +84,20 @@ def _prepare_unit_rhs_scatter(assembler_unit: VectorizedAssembler, free_dof_inde
     }
 
 
+def _prepare_element_tangent_projection(assembler: VectorizedAssembler, free_dof_index_map: np.ndarray):
+    ne = int(assembler.n_elems)
+    ndl = int(assembler.n_local_dof)
+    eq_ids = np.asarray(assembler.local_eq_ids, dtype=np.int64).reshape(ne, ndl)
+    local_free_ids = free_dof_index_map[eq_ids]  # (ne, ndl), -1 for constrained DOFs
+    valid = local_free_ids >= 0
+    return {
+        "ne": ne,
+        "ndl": ndl,
+        "valid": valid,
+        "local_free_ids_safe": np.where(valid, local_free_ids, 0),
+    }
+
+
 def _scatter_rhs_loc_by_element_free(rhs_loc: np.ndarray, n_free: int, scatter_cache):
     """
     Scatter local per-element RHS contributions to free-DOF stacked columns.
@@ -834,6 +848,10 @@ def RunHpromMawEcmGprBatchSimulation(
         assembler_unit=assembler_hr,
         free_dof_index_map=free_dof_index_map,
     ) if use_weight_tangent else None
+    tangent_projection_cache = _prepare_element_tangent_projection(
+        assembler=assembler_hr,
+        free_dof_index_map=free_dof_index_map,
+    )
 
     print(
         f"  [HPROM-MAWECM-GPR] Solving trajectory with {n_steps_total} increments "
@@ -916,6 +934,8 @@ def RunHpromMawEcmGprBatchSimulation(
     t_decoder_jacobian = 0.0
     t_residual_projection = 0.0
     t_tangent_projection = 0.0
+    t_tangent_local_gather = 0.0
+    t_tangent_element_contract = 0.0
     t_final_state_update = 0.0
     t_final_solution_sync = 0.0
     t_hom_weight_map = 0.0
@@ -961,6 +981,8 @@ def RunHpromMawEcmGprBatchSimulation(
                 "decoder_jacobian": t_decoder_jacobian,
                 "residual_projection": t_residual_projection,
                 "tangent_projection": t_tangent_projection,
+                "tangent_local_gather": t_tangent_local_gather,
+                "tangent_element_contract": t_tangent_element_contract,
                 "final_state_update": t_final_state_update,
                 "final_solution_sync": t_final_solution_sync,
                 "hom_weight_map": t_hom_weight_map,
@@ -1126,7 +1148,7 @@ def RunHpromMawEcmGprBatchSimulation(
             if bool(call_entity_hooks_each_newton_iter):
                 InitializeNonLinearIteration(entities, mp.ProcessInfo)
             t1 = time.perf_counter()
-            k_hr, rhs_hr = assembler_hr.Assemble(u)
+            _, rhs_hr = assembler_hr.Assemble(u)
             t_res_asm += time.perf_counter() - t1
             if bool(call_entity_hooks_each_newton_iter):
                 FinalizeNonLinearIteration(entities, mp.ProcessInfo)
@@ -1152,9 +1174,21 @@ def RunHpromMawEcmGprBatchSimulation(
             t_residual_projection += time.perf_counter() - t1
 
             t1 = time.perf_counter()
-            kff = k_hr[free_dofs][:, free_dofs]
-            k_red = du_dqm.T @ (kff @ du_dqm)
-            t_tangent_projection += time.perf_counter() - t1
+            local_free_ids = tangent_projection_cache["local_free_ids_safe"]
+            local_valid = tangent_projection_cache["valid"]
+            du_loc = du_dqm[local_free_ids, :]
+            if not np.all(local_valid):
+                du_loc = du_loc.copy()
+                du_loc[~local_valid, :] = 0.0
+            dt_block = time.perf_counter() - t1
+            t_tangent_local_gather += dt_block
+            t_tangent_projection += dt_block
+
+            t1 = time.perf_counter()
+            k_red = np.einsum("eia,eij,ejb->ab", du_loc, assembler_hr._K_total, du_loc, optimize=True)
+            dt_block = time.perf_counter() - t1
+            t_tangent_element_contract += dt_block
+            t_tangent_projection += dt_block
             if use_weight_tangent and (dw_res_iter is not None):
                 # The Newton solve uses K_alg dq = R with R = rhs = -f_int.
                 # Therefore K_alg = -dR/dq. For R = sum_e w_e(q) R_e(q),
@@ -1497,6 +1531,8 @@ def RunHpromMawEcmGprBatchSimulation(
                 "decoder_jacobian": float(t_decoder_jacobian - timing_snap["decoder_jacobian"]),
                 "residual_projection": float(t_residual_projection - timing_snap["residual_projection"]),
                 "tangent_projection": float(t_tangent_projection - timing_snap["tangent_projection"]),
+                "tangent_local_gather": float(t_tangent_local_gather - timing_snap["tangent_local_gather"]),
+                "tangent_element_contract": float(t_tangent_element_contract - timing_snap["tangent_element_contract"]),
                 "final_state_update": float(t_final_state_update - timing_snap["final_state_update"]),
                 "final_solution_sync": float(t_final_solution_sync - timing_snap["final_solution_sync"]),
                 "hom_weight_map": float(t_hom_weight_map - timing_snap["hom_weight_map"]),
@@ -1620,6 +1656,8 @@ def RunHpromMawEcmGprBatchSimulation(
         print(f"    decoder Jacobian du/dq         : {t_decoder_jacobian:.3f}s ({_pct(t_decoder_jacobian):.1f}%)")
         print(f"    reduced residual projection    : {t_residual_projection:.3f}s ({_pct(t_residual_projection):.1f}%)")
         print(f"    reduced tangent projection     : {t_tangent_projection:.3f}s ({_pct(t_tangent_projection):.1f}%)")
+        print(f"      - local Phi_e gather         : {t_tangent_local_gather:.3f}s ({_pct(t_tangent_local_gather):.1f}%)")
+        print(f"      - sum Phi_e.T K_e Phi_e      : {t_tangent_element_contract:.3f}s ({_pct(t_tangent_element_contract):.1f}%)")
         print(f"    final state update             : {t_final_state_update:.3f}s ({_pct(t_final_state_update):.1f}%)")
         print(f"    final solution sync            : {t_final_solution_sync:.3f}s ({_pct(t_final_solution_sync):.1f}%)")
         print(f"    hom weight mapping             : {t_hom_weight_map:.3f}s ({_pct(t_hom_weight_map):.1f}%)")
@@ -1671,6 +1709,8 @@ def RunHpromMawEcmGprBatchSimulation(
                 "decoder_jacobian_sec": float(t_decoder_jacobian),
                 "residual_projection_sec": float(t_residual_projection),
                 "tangent_projection_sec": float(t_tangent_projection),
+                "tangent_local_basis_gather_sec": float(t_tangent_local_gather),
+                "tangent_element_projection_sec": float(t_tangent_element_contract),
                 "final_state_update_sec": float(t_final_state_update),
                 "final_solution_sync_sec": float(t_final_solution_sync),
                 "hom_weight_map_sec": float(t_hom_weight_map),
