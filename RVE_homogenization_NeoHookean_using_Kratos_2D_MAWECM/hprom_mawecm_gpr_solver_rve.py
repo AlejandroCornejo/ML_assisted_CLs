@@ -962,6 +962,8 @@ def RunHpromMawEcmGprBatchSimulation(
     n_linear_solve_calls = 0
     n_quasi_converged_steps = 0
     n_rolled_back_steps = 0
+    n_gpr_final_cache_hits = 0
+    n_gpr_final_cache_misses = 0
     timing_step_records = []
 
     def _timed_print(*args, **kwargs):
@@ -1063,6 +1065,8 @@ def RunHpromMawEcmGprBatchSimulation(
 
         w_res_iter = None
         dw_res_iter = None
+        gpr_cache_q_m = None
+        gpr_cache_q_s_raw = None
         if not update_each_iter:
             t0 = time.perf_counter()
             q_s_phys, _ = evaluate_sparse_gp_map_and_jacobian_qp(
@@ -1071,6 +1075,8 @@ def RunHpromMawEcmGprBatchSimulation(
             t_eval_gpr += time.perf_counter() - t0
             t1 = time.perf_counter()
             q_s_phys = np.asarray(q_s_phys, dtype=float).reshape(-1)
+            gpr_cache_q_m = q_m.copy()
+            gpr_cache_q_s_raw = q_s_phys.copy()
             q_s = q_s_phys - q_s0_raw - (j0_raw @ q_m)
             q_master0 = a_m @ q_m
             if track_qpod or need_qpod_state:
@@ -1126,6 +1132,8 @@ def RunHpromMawEcmGprBatchSimulation(
             if (not np.all(np.isfinite(q_s_raw))) or (not np.all(np.isfinite(dqs_raw))):
                 nonfinite_detected = True
                 break
+            gpr_cache_q_m = q_m.copy()
+            gpr_cache_q_s_raw = q_s_raw.copy()
 
             t1 = time.perf_counter()
             q_s_phys = q_s_raw
@@ -1404,11 +1412,20 @@ def RunHpromMawEcmGprBatchSimulation(
         else:
             k_red_old = None
 
-        t0 = time.perf_counter()
-        q_s_raw_f, _ = evaluate_sparse_gp_map_and_jacobian_qp(
-            q_m, gpr_model, q_m_dim, profile=gpr_profile
-        )
-        t_eval_gpr += time.perf_counter() - t0
+        if (
+            gpr_cache_q_m is not None
+            and gpr_cache_q_s_raw is not None
+            and np.array_equal(q_m, gpr_cache_q_m)
+        ):
+            q_s_raw_f = gpr_cache_q_s_raw
+            n_gpr_final_cache_hits += 1
+        else:
+            t0 = time.perf_counter()
+            q_s_raw_f, _ = evaluate_sparse_gp_map_and_jacobian_qp(
+                q_m, gpr_model, q_m_dim, profile=gpr_profile
+            )
+            t_eval_gpr += time.perf_counter() - t0
+            n_gpr_final_cache_misses += 1
         t1 = time.perf_counter()
         q_s_phys = np.asarray(q_s_raw_f, dtype=float).reshape(-1)
         q_s = q_s_phys - q_s0_raw - (j0_raw @ q_m)
@@ -1726,6 +1743,10 @@ def RunHpromMawEcmGprBatchSimulation(
         print(f"      - Jacobian terms             : {gpr_prof.get('jacobian_terms', 0.0):.3f}s ({_pct(gpr_prof.get('jacobian_terms', 0.0)):.1f}%)")
         print(f"      - output unscale             : {gpr_prof.get('output_unscale', 0.0):.3f}s ({_pct(gpr_prof.get('output_unscale', 0.0)):.1f}%)")
         print(f"      - profile accounted          : {gpr_prof_sum:.3f}s / {t_eval_gpr:.3f}s, calls={int(gpr_prof.get('calls', 0))}")
+        print(
+            "      - final-state cache          : "
+            f"reused={n_gpr_final_cache_hits}, recomputed={n_gpr_final_cache_misses}"
+        )
         print(f"    MAW RBF weight evaluations     : {t_eval_maw:.3f}s ({_pct(t_eval_maw):.1f}%)")
         print(f"    Newton modelpart sync          : {t_sync_newton:.3f}s ({_pct(t_sync_newton):.1f}%)")
         print(f"    residual assembly              : {t_res_asm:.3f}s ({_pct(t_res_asm):.1f}%)")
@@ -1791,6 +1812,8 @@ def RunHpromMawEcmGprBatchSimulation(
                     "output_unscale": float(gpr_prof.get("output_unscale", 0.0)),
                     "accounted_total": float(gpr_prof_sum),
                     "calls": int(gpr_prof.get("calls", 0)),
+                    "final_state_cache_reused": int(n_gpr_final_cache_hits),
+                    "final_state_cache_recomputed": int(n_gpr_final_cache_misses),
                 },
                 "maw_eval_sec": float(t_eval_maw),
                 "newton_sync_sec": float(t_sync_newton),
