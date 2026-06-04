@@ -10,24 +10,25 @@ class GaussianFixedOriginNetwork(nn.Module):
         super().__init__()
         self.num_funcs = 18
 
-        # Linear parameters
+        # Per-function Linear parameters (one set of a,b,c,d per symbolic function)
         if init_params is None:
             init_params = {
-                "a": torch.tensor(1.0),
-                "b": torch.tensor(0.0),
-                "c": torch.tensor(1.0),
-                "d": torch.tensor(0.0),
+                "a": torch.rand(self.num_funcs),
+                "b": torch.rand(self.num_funcs),
+                "c": torch.rand(self.num_funcs),
+                "d": torch.rand(self.num_funcs),
             }
-        self.a = nn.Parameter(init_params["a"].float())
-        self.b = nn.Parameter(init_params["b"].float())
-        self.c = nn.Parameter(init_params["c"].float())
-        self.d = nn.Parameter(init_params["d"].float())
+        self.a = nn.Parameter(init_params["a"].float())   # [num_funcs]
+        self.b = nn.Parameter(init_params["b"].float())   # [num_funcs]
+        self.c = nn.Parameter(init_params["c"].float())   # [num_funcs]
+        self.d = nn.Parameter(init_params["d"].float())   # [num_funcs]
 
         # Fixed Gaussian center
         self.mu = torch.tensor([0.5, 0.5])
 
         # Trainable sigma
-        self.sigma = nn.Parameter(torch.tensor(0.5))
+        self.sigma = nn.Parameter(torch.tensor(0.1))
+        # self.sigma = torch.tensor(0.07)
 
         # Trainable positions for each function
         self.positions = nn.Parameter(torch.rand(self.num_funcs, 2))  # random [0,1]
@@ -85,46 +86,75 @@ class GaussianFixedOriginNetwork(nn.Module):
         return torch.stack([funcs[i](x) for i in range(self.num_funcs)], dim=0)
 
     def forward(self, x):
-        input_x = self.a * x + self.b
-        weights = self.EvaluateNormalDistribution2D() # 18x1
-        f_x = self.EvalFunction(input_x) # 18xN
-        F = f_x.T @ weights  # weighted sum
-        return self.c * F + self.d
+        # Per-function input transform: each function gets its own a_i, b_i
+        # a: [num_funcs], x: [N] -> broadcast to [num_funcs, N]
+        input_x = self.a.unsqueeze(1) * x.unsqueeze(0) + self.b.unsqueeze(1)  # [num_funcs, N]
+        
+        weights = self.EvaluateNormalDistribution2D()  # [num_funcs]
+        f_x = self.EvalFunction(input_x)  # [num_funcs, N]
+
+        # Per-function output scale/shift: each function gets its own c_i, d_i
+        # c: [num_funcs], f_x: [num_funcs, N] -> [num_funcs, N]
+        F_per_func = self.c.unsqueeze(1) * f_x + self.d.unsqueeze(1)  # [num_funcs, N]
+
+        # Weighted sum across functions
+        F = (F_per_func * weights.unsqueeze(1)).sum(dim=0)  # [N]
+
+        return F
 
 
 if __name__ == "__main__":
     # Generate synthetic data
-    torch.manual_seed(42)
+    # torch.manual_seed(42)
     X_ref = torch.linspace(0.0, 1.0, 100)
-    Y_ref = torch.sin(X_ref-8.0) # torch.sin(X_ref) torch.log(X_ref+5) torch.exp(X_ref)
+    Y_ref = X_ref * torch.exp(X_ref) # torch.sin(X_ref) torch.log(X_ref+5) torch.exp(X_ref)
     Y_ref = Y_ref / Y_ref.max()
 
     model = GaussianFixedOriginNetwork()
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
     losses = []
+    alpha = 0.001
 
-    max_iter = 20000
-    for it in range(max_iter + 1):
+    max_iter = 100000
+    iter = 0
+    tol = 1e-6
+    # for it in range(max_iter + 1):
+    while iter < max_iter:
+        iter += 1
         optimizer.zero_grad()
         Y_pred = model(X_ref)
-        loss = 0.5 * torch.mean((Y_pred - Y_ref) ** 2)
-        loss += 1.0e-2 * torch.abs(model.sigma)**2  # sigma penalty
+        loss = 0.5 * torch.sum((Y_pred - Y_ref) ** 2) / torch.sum((Y_pred) ** 2)
+        loss += alpha * (model.sigma)**2  # sigma penalty
         loss.backward()
         optimizer.step()
         losses.append(loss.item())
-        if it % 500 == 0:
-            print(f"Iter {it}, Loss {loss.item():.6e}")
+        if iter % 500 == 0:
+            print(f"Iter {iter}, Loss {loss.item():.6e}")
+        if loss.item() < tol:
+            print(f"Converged at iter {iter}, Loss {loss.item():.6e}")
+            break
 
     # Print parameters
-    print(f"\nTrained parameters:")
-    print(f"a={model.a.item():.4f}, b={model.b.item():.4f}, c={model.c.item():.4f}, d={model.d.item():.4f}")
+    print(f"\nTrained parameters (per-function):")
+    for i in range(model.num_funcs):
+        print(f"  func {i} ({model.symbolic_function_labels[i]:>20s}): a={model.a[i].item():.4f}, b={model.b[i].item():.4f}, c={model.c[i].item():.4f}, d={model.d[i].item():.4f}")
     print(f"sigma={model.sigma.item():.4f}")
 
     # Plot fitted function
     plt.figure(figsize=(8,4))
     plt.scatter(X_ref.numpy(), Y_ref.numpy(), label="Target", color="blue")
     with torch.no_grad():
-        plt.plot(X_ref.numpy(), model(X_ref).numpy(), "r-", label="Fitted")
+        Y_pred = model(X_ref)
+        print(f"[DEBUG] X_ref shape: {X_ref.shape}")
+        print(f"[DEBUG] Y_pred shape: {Y_pred.shape}")
+        print(f"[DEBUG] Y_ref shape: {Y_ref.shape}")
+        # Ensure Y_pred is 1D for plotting
+        if Y_pred.dim() == 2:
+            print("[DEBUG] Y_pred is 2D - taking first row for plot")
+            Y_pred_plot = Y_pred[0]
+        else:
+            Y_pred_plot = Y_pred
+        plt.plot(X_ref.numpy(), Y_pred_plot.numpy(), "r-", label="Fitted")
     plt.legend()
     plt.show()
 
