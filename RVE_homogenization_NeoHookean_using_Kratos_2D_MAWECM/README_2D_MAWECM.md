@@ -583,15 +583,16 @@ MAW pruning paths.
 HROM mdpa mode
 --------------
 
-The recommended debugging mode is currently:
+The simplest debugging mode is still full mdpa with reduced assembly loops:
 
 ```bash
 --hprom-use-hrom-mdpa 0
 ```
 
-If you want true reduced mdpa execution, build the HROM mdpa after Stage8b. For
-separate residual/eps/sig supports, the reduced mesh must contain all channel
-supports; use `Z_union`.
+The validated true reduced-mdpa mode is also supported. Build the HROM mdpa after
+Stage8b. For separate residual/eps/sig supports, the reduced mesh must contain all
+channel supports; use `Z_union`. The same command also saves the selection plots
+for `Z_res`, `Z_eps`, `Z_sig`, and `Z_union`.
 
 ```bash
 python3 stage6c_create_hrom_mdpa.py \
@@ -617,6 +618,17 @@ python3 stage8_test_hprom_mawecm_gpr_online.py \
   --hprom-fail-on-nonconvergence 1 \
   --save-plots 1 \
   --out-dir stage_8_online_hprom_mawecm_gpr_res_eps_sig_auto_ecmhom_sum990_graph_hrom
+```
+
+Expected `stage6c` outputs:
+
+```text
+rve_geometry_stage8b_maw_res_eps_sig_auto_ecmhom_sum990_graph_hrom.mdpa
+stage_8b_hprom_mawecm_res_eps_sig_auto_ecmhom_sum990_graph/Z_union_selected_elements.png
+stage_8b_hprom_mawecm_res_eps_sig_auto_ecmhom_sum990_graph/Z_union_selected_elements_Z_res.png
+stage_8b_hprom_mawecm_res_eps_sig_auto_ecmhom_sum990_graph/Z_union_selected_elements_Z_eps.png
+stage_8b_hprom_mawecm_res_eps_sig_auto_ecmhom_sum990_graph/Z_union_selected_elements_Z_sig.png
+stage_8b_hprom_mawecm_res_eps_sig_auto_ecmhom_sum990_graph/Z_union_selected_elements_Z_union.png
 ```
 
 `stage6c` necessarily reads the full `rve_geometry.mdpa` once because it creates
