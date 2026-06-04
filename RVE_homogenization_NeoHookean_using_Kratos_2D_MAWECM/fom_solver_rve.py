@@ -109,6 +109,8 @@ class VectorizedAssembler:
         self.n_dof = n_dof
         self.eq_map = eq_map
         self.log_label = str(log_label)
+        self.profile_enabled = False
+        self.profile_stats = {}
 
         if elements is None:
             elements = list(mp.Elements)
@@ -224,6 +226,32 @@ class VectorizedAssembler:
         print(f"[{self.log_label}] {self.n_elems} elements, {self.n_gauss} GPs, "
               f"total area={np.sum(self.w_detJ):.6e}")
 
+    def SetProfilingEnabled(self, enabled=True):
+        self.profile_enabled = bool(enabled)
+        self.ResetProfile()
+
+    def ResetProfile(self):
+        self.profile_stats = {
+            "calls": 0,
+            "gather_u": 0.0,
+            "kinematics": 0.0,
+            "constitutive": 0.0,
+            "internal_force": 0.0,
+            "tangent_b_matrix": 0.0,
+            "tangent_material": 0.0,
+            "tangent_geometric": 0.0,
+            "tangent_total": 0.0,
+            "rhs_scatter": 0.0,
+            "sparse_matrix_build": 0.0,
+        }
+
+    def GetProfileStats(self):
+        return dict(self.profile_stats)
+
+    def _ProfileAdd(self, key, value):
+        if self.profile_enabled:
+            self.profile_stats[key] = float(self.profile_stats.get(key, 0.0)) + float(value)
+
     def SetElementScales(self, element_scales):
         """Update per-element scaling without rebuilding the assembler."""
         if self.n_elems == 0:
@@ -237,19 +265,33 @@ class VectorizedAssembler:
         self.element_scales = scales
         np.multiply(self._w_detJ_base, self.element_scales[:, None], out=self.w_detJ)
 
-    def Assemble(self, u_global):
+    def Assemble(self, u_global, compute_tangent=True, compute_rhs=True, build_sparse=True):
         """Compute global K (sparse CSR) and RHS from current displacement vector."""
+        compute_tangent = bool(compute_tangent)
+        compute_rhs = bool(compute_rhs)
+        build_sparse = bool(build_sparse)
+        if build_sparse and not compute_tangent:
+            raise ValueError("build_sparse=True requires compute_tangent=True.")
+        do_profile = bool(self.profile_enabled)
+        if do_profile:
+            self.profile_stats["calls"] = int(self.profile_stats.get("calls", 0)) + 1
         if self.n_elems == 0:
-            return csr_matrix((self.n_dof, self.n_dof)), np.zeros(self.n_dof)
+            K_empty = csr_matrix((self.n_dof, self.n_dof)) if build_sparse else None
+            rhs_empty = np.zeros(self.n_dof) if compute_rhs else None
+            return K_empty, rhs_empty
 
         ne, ng, nn = self.n_elems, self.n_gauss, self.n_nodes
         ndl = self.n_local_dof
 
         # 1. Gather nodal displacements -> (ne, nn, 2)
+        t0 = time.perf_counter() if do_profile else None
         self._u_node[..., 0] = u_global[self.eq_map[:, 0]][self.connectivity]
         self._u_node[..., 1] = u_global[self.eq_map[:, 1]][self.connectivity]
+        if do_profile:
+            self._ProfileAdd("gather_u", time.perf_counter() - t0)
 
         # 2. Kinematics
+        t0 = time.perf_counter() if do_profile else None
         # grad_u[e,g,i,j] = sum_a u[e,a,i] * DN[e,g,a,j]
         np.matmul(np.swapaxes(self._u_node[:, None, :, :], 2, 3), self.DN, out=self._grad_u)
         self._F[:] = self._grad_u
@@ -262,8 +304,11 @@ class VectorizedAssembler:
         self._E_voigt[..., 1] = 0.5 * (self._FtF[..., 1, 1] - 1.0)
         self._E_voigt[..., 2] = self._FtF[..., 0, 1]  # 2*E12
         E_flat = self._E_voigt.reshape(-1, 3)
+        if do_profile:
+            self._ProfileAdd("kinematics", time.perf_counter() - t0)
 
         # 3. Constitutive law
+        t0 = time.perf_counter() if do_profile else None
         if self._uniform_material:
             S_flat, CC_flat = _neo_hookean_pk2_2d_vectorized(
                 E_flat, self._young_scalar, self._poisson_scalar)
@@ -287,59 +332,88 @@ class VectorizedAssembler:
         self._St[..., 1, 1] = self._S_voigt[..., 1]
         self._St[..., 0, 1] = self._S_voigt[..., 2]
         self._St[..., 1, 0] = self._S_voigt[..., 2]
+        if do_profile:
+            self._ProfileAdd("constitutive", time.perf_counter() - t0)
 
-        # 4. Internal forces: f_int[e,a,i] = sum_g F_ij S_jk DN_ak * w
-        np.matmul(self._F, self._St, out=self._P)
-        np.matmul(self.DN, np.swapaxes(self._P, 2, 3), out=self._tmp_ag_ai)
-        np.multiply(self._tmp_ag_ai, self.w_detJ[..., None, None], out=self._tmp_ag_ai)
-        np.sum(self._tmp_ag_ai, axis=1, out=self._f_int)
+        if compute_rhs:
+            # 4. Internal forces: f_int[e,a,i] = sum_g F_ij S_jk DN_ak * w
+            t0 = time.perf_counter() if do_profile else None
+            np.matmul(self._F, self._St, out=self._P)
+            np.matmul(self.DN, np.swapaxes(self._P, 2, 3), out=self._tmp_ag_ai)
+            np.multiply(self._tmp_ag_ai, self.w_detJ[..., None, None], out=self._tmp_ag_ai)
+            np.sum(self._tmp_ag_ai, axis=1, out=self._f_int)
+            if do_profile:
+                self._ProfileAdd("internal_force", time.perf_counter() - t0)
 
-        # 5. Tangent stiffness
-        # B-matrix: B[e,g,v,(a*2+i)] for Voigt v, node a, dof i
-        B = self._B
-        B.fill(0.0)
-        F00 = self._F[..., 0, 0]
-        F01 = self._F[..., 0, 1]
-        F10 = self._F[..., 1, 0]
-        F11 = self._F[..., 1, 1]
-        for a in range(nn):
-            c0 = 2 * a
-            c1 = c0 + 1
-            dn0 = self.DN[..., a, 0]
-            dn1 = self.DN[..., a, 1]
-            B[..., 0, c0] = F00 * dn0
-            B[..., 0, c1] = F10 * dn0
-            B[..., 1, c0] = F01 * dn1
-            B[..., 1, c1] = F11 * dn1
-            B[..., 2, c0] = F00 * dn1 + F01 * dn0
-            B[..., 2, c1] = F10 * dn1 + F11 * dn0
+        if compute_tangent:
+            # 5. Tangent stiffness
+            # B-matrix: B[e,g,v,(a*2+i)] for Voigt v, node a, dof i
+            t0 = time.perf_counter() if do_profile else None
+            B = self._B
+            B.fill(0.0)
+            F00 = self._F[..., 0, 0]
+            F01 = self._F[..., 0, 1]
+            F10 = self._F[..., 1, 0]
+            F11 = self._F[..., 1, 1]
+            for a in range(nn):
+                c0 = 2 * a
+                c1 = c0 + 1
+                dn0 = self.DN[..., a, 0]
+                dn1 = self.DN[..., a, 1]
+                B[..., 0, c0] = F00 * dn0
+                B[..., 0, c1] = F10 * dn0
+                B[..., 1, c0] = F01 * dn1
+                B[..., 1, c1] = F11 * dn1
+                B[..., 2, c0] = F00 * dn1 + F01 * dn0
+                B[..., 2, c1] = F10 * dn1 + F11 * dn0
+            if do_profile:
+                self._ProfileAdd("tangent_b_matrix", time.perf_counter() - t0)
 
-        # K_mat = sum_g B^T C B * w_detJ
-        np.matmul(self._CC, B, out=self._CB)
-        np.matmul(np.swapaxes(B, 2, 3), self._CB, out=self._K_gp)
-        np.multiply(self._K_gp, self.w_detJ[..., None, None], out=self._K_gp)
-        np.sum(self._K_gp, axis=1, out=self._K_mat)
+            # K_mat = sum_g B^T C B * w_detJ
+            t0 = time.perf_counter() if do_profile else None
+            np.matmul(self._CC, B, out=self._CB)
+            np.matmul(np.swapaxes(B, 2, 3), self._CB, out=self._K_gp)
+            np.multiply(self._K_gp, self.w_detJ[..., None, None], out=self._K_gp)
+            np.sum(self._K_gp, axis=1, out=self._K_mat)
+            if do_profile:
+                self._ProfileAdd("tangent_material", time.perf_counter() - t0)
 
-        # K_geo: K_geo[(a,i),(b,i)] += sum_g,k,l S_kl DN_ak DN_bl * w_detJ
-        np.matmul(self.DN, self._St, out=self._DNSt)
-        np.matmul(self._DNSt, np.swapaxes(self.DN, 2, 3), out=self._S_DN_DN_gp)
-        np.multiply(self._S_DN_DN_gp, self.w_detJ[..., None, None], out=self._S_DN_DN_gp)
-        np.sum(self._S_DN_DN_gp, axis=1, out=self._S_DN_DN)
+            # K_geo: K_geo[(a,i),(b,i)] += sum_g,k,l S_kl DN_ak DN_bl * w_detJ
+            t0 = time.perf_counter() if do_profile else None
+            np.matmul(self.DN, self._St, out=self._DNSt)
+            np.matmul(self._DNSt, np.swapaxes(self.DN, 2, 3), out=self._S_DN_DN_gp)
+            np.multiply(self._S_DN_DN_gp, self.w_detJ[..., None, None], out=self._S_DN_DN_gp)
+            np.sum(self._S_DN_DN_gp, axis=1, out=self._S_DN_DN)
 
-        self._K_geo.fill(0.0)
-        self._K_geo[:, 0::2, 0::2] = self._S_DN_DN
-        self._K_geo[:, 1::2, 1::2] = self._S_DN_DN
+            self._K_geo.fill(0.0)
+            self._K_geo[:, 0::2, 0::2] = self._S_DN_DN
+            self._K_geo[:, 1::2, 1::2] = self._S_DN_DN
+            if do_profile:
+                self._ProfileAdd("tangent_geometric", time.perf_counter() - t0)
 
-        np.add(self._K_mat, self._K_geo, out=self._K_total)
+            t0 = time.perf_counter() if do_profile else None
+            np.add(self._K_mat, self._K_geo, out=self._K_total)
+            if do_profile:
+                self._ProfileAdd("tangent_total", time.perf_counter() - t0)
 
         # 6. Global assembly
-        self._rhs.fill(0.0)
-        np.add.at(self._rhs, self.rows_R, -self._f_int.reshape(ne, -1).ravel())
+        if compute_rhs:
+            t0 = time.perf_counter() if do_profile else None
+            self._rhs.fill(0.0)
+            np.add.at(self._rhs, self.rows_R, -self._f_int.reshape(ne, -1).ravel())
+            if do_profile:
+                self._ProfileAdd("rhs_scatter", time.perf_counter() - t0)
 
-        K = coo_matrix((self._K_total.ravel(), (self.rows_K, self.cols_K)),
-                        shape=(self.n_dof, self.n_dof)).tocsr()
+        if build_sparse:
+            t0 = time.perf_counter() if do_profile else None
+            K = coo_matrix((self._K_total.ravel(), (self.rows_K, self.cols_K)),
+                            shape=(self.n_dof, self.n_dof)).tocsr()
+            if do_profile:
+                self._ProfileAdd("sparse_matrix_build", time.perf_counter() - t0)
+        else:
+            K = None
 
-        return K, self._rhs
+        return K, self._rhs if compute_rhs else None
 
     def CalculateHomogenizedStressAndStrainFromLastAssembly(self):
         """Compute homogenized response from the most recent Assemble() state."""

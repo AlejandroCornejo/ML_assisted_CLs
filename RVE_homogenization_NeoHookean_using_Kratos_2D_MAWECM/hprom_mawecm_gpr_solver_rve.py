@@ -844,6 +844,12 @@ def RunHpromMawEcmGprBatchSimulation(
         element_scales=np.ones(z_res.size, dtype=float),
         log_label="HPROM-MAW-ResidualAssembler",
     )
+    if profile_timers:
+        assembler_hr.SetProfilingEnabled(True)
+        if assembler_hom_full is not None:
+            assembler_hom_full.SetProfilingEnabled(True)
+        if assembler_hom_union is not None:
+            assembler_hom_union.SetProfilingEnabled(True)
     unit_rhs_scatter = _prepare_unit_rhs_scatter(
         assembler_unit=assembler_hr,
         free_dof_index_map=free_dof_index_map,
@@ -1153,7 +1159,12 @@ def RunHpromMawEcmGprBatchSimulation(
             if bool(call_entity_hooks_each_newton_iter):
                 InitializeNonLinearIteration(entities, mp.ProcessInfo)
             t1 = time.perf_counter()
-            _, rhs_hr = assembler_hr.Assemble(u)
+            _, rhs_hr = assembler_hr.Assemble(
+                u,
+                compute_tangent=True,
+                compute_rhs=True,
+                build_sparse=False,
+            )
             t_res_asm += time.perf_counter() - t1
             if bool(call_entity_hooks_each_newton_iter):
                 FinalizeNonLinearIteration(entities, mp.ProcessInfo)
@@ -1425,7 +1436,12 @@ def RunHpromMawEcmGprBatchSimulation(
         if hom_mode == "full_fom":
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
             t1 = time.perf_counter()
-            _, _ = assembler_hom_full.Assemble(u)
+            _, _ = assembler_hom_full.Assemble(
+                u,
+                compute_tangent=False,
+                compute_rhs=False,
+                build_sparse=False,
+            )
             t_hom_asm += time.perf_counter() - t1
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
@@ -1489,7 +1505,12 @@ def RunHpromMawEcmGprBatchSimulation(
                 t_hom_weight_map += time.perf_counter() - t1
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
             t1 = time.perf_counter()
-            _, _ = assembler_hom_union.Assemble(u)
+            _, _ = assembler_hom_union.Assemble(
+                u,
+                compute_tangent=False,
+                compute_rhs=False,
+                build_sparse=False,
+            )
             t_hom_asm += time.perf_counter() - t1
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
             t1 = time.perf_counter()
@@ -1652,6 +1673,47 @@ def RunHpromMawEcmGprBatchSimulation(
             + gpr_prof.get("jacobian_terms", 0.0)
             + gpr_prof.get("output_unscale", 0.0)
         )
+        asm_keys = (
+            "gather_u",
+            "kinematics",
+            "constitutive",
+            "internal_force",
+            "tangent_b_matrix",
+            "tangent_material",
+            "tangent_geometric",
+            "tangent_total",
+            "rhs_scatter",
+            "sparse_matrix_build",
+        )
+        res_asm_prof = assembler_hr.GetProfileStats()
+        hom_asm_obj = assembler_hom_full if assembler_hom_full is not None else assembler_hom_union
+        hom_asm_prof = hom_asm_obj.GetProfileStats() if hom_asm_obj is not None else {}
+
+        def _asm_sum(prof):
+            return float(sum(float(prof.get(k, 0.0)) for k in asm_keys))
+
+        def _asm_payload(prof):
+            return {
+                "calls": int(prof.get("calls", 0)),
+                "accounted_total": float(_asm_sum(prof)),
+                **{k: float(prof.get(k, 0.0)) for k in asm_keys},
+            }
+
+        def _print_asm_profile(label, prof, reference_time):
+            print(
+                f"      [{label}] accounted          : "
+                f"{_asm_sum(prof):.3f}s / {reference_time:.3f}s, calls={int(prof.get('calls', 0))}"
+            )
+            print(f"      [{label}] gather u           : {prof.get('gather_u', 0.0):.3f}s ({_pct(prof.get('gather_u', 0.0)):.1f}%)")
+            print(f"      [{label}] kinematics         : {prof.get('kinematics', 0.0):.3f}s ({_pct(prof.get('kinematics', 0.0)):.1f}%)")
+            print(f"      [{label}] constitutive       : {prof.get('constitutive', 0.0):.3f}s ({_pct(prof.get('constitutive', 0.0)):.1f}%)")
+            print(f"      [{label}] internal force     : {prof.get('internal_force', 0.0):.3f}s ({_pct(prof.get('internal_force', 0.0)):.1f}%)")
+            print(f"      [{label}] B matrix           : {prof.get('tangent_b_matrix', 0.0):.3f}s ({_pct(prof.get('tangent_b_matrix', 0.0)):.1f}%)")
+            print(f"      [{label}] material tangent   : {prof.get('tangent_material', 0.0):.3f}s ({_pct(prof.get('tangent_material', 0.0)):.1f}%)")
+            print(f"      [{label}] geometric tangent  : {prof.get('tangent_geometric', 0.0):.3f}s ({_pct(prof.get('tangent_geometric', 0.0)):.1f}%)")
+            print(f"      [{label}] K total add        : {prof.get('tangent_total', 0.0):.3f}s ({_pct(prof.get('tangent_total', 0.0)):.1f}%)")
+            print(f"      [{label}] RHS scatter        : {prof.get('rhs_scatter', 0.0):.3f}s ({_pct(prof.get('rhs_scatter', 0.0)):.1f}%)")
+            print(f"      [{label}] sparse K build     : {prof.get('sparse_matrix_build', 0.0):.3f}s ({_pct(prof.get('sparse_matrix_build', 0.0)):.1f}%)")
 
         print("  [HPROM-MAWECM-GPR][timing-profile]")
         print(f"    total solver wall              : {t_total:.3f}s (100.0%)")
@@ -1667,9 +1729,12 @@ def RunHpromMawEcmGprBatchSimulation(
         print(f"    MAW RBF weight evaluations     : {t_eval_maw:.3f}s ({_pct(t_eval_maw):.1f}%)")
         print(f"    Newton modelpart sync          : {t_sync_newton:.3f}s ({_pct(t_sync_newton):.1f}%)")
         print(f"    residual assembly              : {t_res_asm:.3f}s ({_pct(t_res_asm):.1f}%)")
+        _print_asm_profile("res", res_asm_prof, t_res_asm)
         print(f"    d(w)/dq tangent scatter        : {t_unit_asm:.3f}s ({_pct(t_unit_asm):.1f}%)")
         print(f"    reduced linear solves          : {t_lin_solve:.3f}s ({_pct(t_lin_solve):.1f}%)")
         print(f"    homogenization assembly        : {t_hom_asm:.3f}s ({_pct(t_hom_asm):.1f}%)")
+        if hom_asm_prof:
+            _print_asm_profile("hom", hom_asm_prof, t_hom_asm)
         print(f"    step setup/strain path         : {t_step_setup:.3f}s ({_pct(t_step_setup):.1f}%)")
         print(f"      - CloneTimeStep/ProcessInfo  : {t_step_clone:.3f}s ({_pct(t_step_clone):.1f}%)")
         print(f"      - strain interpolation       : {t_step_strain_interp:.3f}s ({_pct(t_step_strain_interp):.1f}%)")
@@ -1730,9 +1795,11 @@ def RunHpromMawEcmGprBatchSimulation(
                 "maw_eval_sec": float(t_eval_maw),
                 "newton_sync_sec": float(t_sync_newton),
                 "residual_assembly_sec": float(t_res_asm),
+                "residual_assembler_profile_sec": _asm_payload(res_asm_prof),
                 "weight_tangent_scatter_sec": float(t_unit_asm),
                 "linear_solve_sec": float(t_lin_solve),
                 "homogenization_assembly_sec": float(t_hom_asm),
+                "homogenization_assembler_profile_sec": _asm_payload(hom_asm_prof),
                 "step_setup_sec": float(t_step_setup),
                 "step_clone_processinfo_sec": float(t_step_clone),
                 "step_strain_interpolation_sec": float(t_step_strain_interp),
