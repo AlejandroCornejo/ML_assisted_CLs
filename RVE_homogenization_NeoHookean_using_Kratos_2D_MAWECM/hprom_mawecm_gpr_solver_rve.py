@@ -964,6 +964,8 @@ def RunHpromMawEcmGprBatchSimulation(
     n_rolled_back_steps = 0
     n_gpr_final_cache_hits = 0
     n_gpr_final_cache_misses = 0
+    n_maw_final_cache_hits = 0
+    n_maw_final_cache_misses = 0
     timing_step_records = []
 
     def _timed_print(*args, **kwargs):
@@ -1067,6 +1069,8 @@ def RunHpromMawEcmGprBatchSimulation(
         dw_res_iter = None
         gpr_cache_q_m = None
         gpr_cache_q_s_raw = None
+        maw_cache_q_m = None
+        maw_cache_w_res = None
         if not update_each_iter:
             t0 = time.perf_counter()
             q_s_phys, _ = evaluate_sparse_gp_map_and_jacobian_qp(
@@ -1094,6 +1098,8 @@ def RunHpromMawEcmGprBatchSimulation(
                     t1 = time.perf_counter()
                     w_res_iter = _eval_maw_weights(maw_state0)
                     t_eval_maw += time.perf_counter() - t1
+                maw_cache_q_m = q_m.copy()
+                maw_cache_w_res = w_res_iter.copy()
             assembler_hr.SetElementScales(w_res_iter)
 
         converged = False
@@ -1155,6 +1161,8 @@ def RunHpromMawEcmGprBatchSimulation(
                     t1 = time.perf_counter()
                     w_res_iter = _eval_maw_weights(maw_state_iter)
                     t_eval_maw += time.perf_counter() - t1
+                maw_cache_q_m = q_m.copy()
+                maw_cache_w_res = w_res_iter.copy()
                 assembler_hr.SetElementScales(w_res_iter)
             w_last = w_res_iter
 
@@ -1435,10 +1443,19 @@ def RunHpromMawEcmGprBatchSimulation(
         u[free_dofs] = u_aff_free + w0_const + (phi_master_eff @ q_m) + (phi_s @ q_s)
         t_final_state_update += time.perf_counter() - t1
         if update_each_iter:
-            maw_state_acc = _state_for_maw(maw_state_space, q_m)
-            t1 = time.perf_counter()
-            w_last = _eval_maw_weights(maw_state_acc)
-            t_eval_maw += time.perf_counter() - t1
+            if (
+                maw_cache_q_m is not None
+                and maw_cache_w_res is not None
+                and np.array_equal(q_m, maw_cache_q_m)
+            ):
+                w_last = maw_cache_w_res
+                n_maw_final_cache_hits += 1
+            else:
+                maw_state_acc = _state_for_maw(maw_state_space, q_m)
+                t1 = time.perf_counter()
+                w_last = _eval_maw_weights(maw_state_acc)
+                t_eval_maw += time.perf_counter() - t1
+                n_maw_final_cache_misses += 1
         elif w_res_support_fixed is not None:
             w_last = w_res_support_fixed
 
@@ -1748,6 +1765,10 @@ def RunHpromMawEcmGprBatchSimulation(
             f"reused={n_gpr_final_cache_hits}, recomputed={n_gpr_final_cache_misses}"
         )
         print(f"    MAW RBF weight evaluations     : {t_eval_maw:.3f}s ({_pct(t_eval_maw):.1f}%)")
+        print(
+            "      - residual final-state cache : "
+            f"reused={n_maw_final_cache_hits}, recomputed={n_maw_final_cache_misses}"
+        )
         print(f"    Newton modelpart sync          : {t_sync_newton:.3f}s ({_pct(t_sync_newton):.1f}%)")
         print(f"    residual assembly              : {t_res_asm:.3f}s ({_pct(t_res_asm):.1f}%)")
         _print_asm_profile("res", res_asm_prof, t_res_asm)
@@ -1816,6 +1837,8 @@ def RunHpromMawEcmGprBatchSimulation(
                     "final_state_cache_recomputed": int(n_gpr_final_cache_misses),
                 },
                 "maw_eval_sec": float(t_eval_maw),
+                "maw_residual_final_state_cache_reused": int(n_maw_final_cache_hits),
+                "maw_residual_final_state_cache_recomputed": int(n_maw_final_cache_misses),
                 "newton_sync_sec": float(t_sync_newton),
                 "residual_assembly_sec": float(t_res_asm),
                 "residual_assembler_profile_sec": _asm_payload(res_asm_prof),
