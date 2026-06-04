@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 
 
@@ -167,8 +169,18 @@ def evaluate_sparse_gp_map(input_vec, model):
     return out_scaled * m["y_std"] + m["y_mean"]
 
 
-def evaluate_sparse_gp_map_and_jacobian_qp(input_vec, model, n_primary):
+def _profile_add(profile, key, value):
+    if profile is not None:
+        profile[key] = float(profile.get(key, 0.0)) + float(value)
+
+
+def evaluate_sparse_gp_map_and_jacobian_qp(input_vec, model, n_primary, profile=None):
+    t0 = time.perf_counter() if profile is not None else None
     m = _normalize_model_shapes(dict(model))
+    if profile is not None:
+        _profile_add(profile, "normalize_model", time.perf_counter() - t0)
+
+    t0 = time.perf_counter() if profile is not None else None
     x = np.asarray(input_vec, dtype=float).reshape(-1)
     if x.size != int(m["input_dim"]):
         raise ValueError(f"Input size mismatch: got {x.size}, expected {m['input_dim']}.")
@@ -179,23 +191,34 @@ def evaluate_sparse_gp_map_and_jacobian_qp(input_vec, model, n_primary):
     x_scaled = (x - m["x_mean"]) / m["x_std"]
     out_scaled = np.zeros(int(m["output_dim"]), dtype=float)
     jac_scaled_xscaled = np.zeros((int(m["output_dim"]), int(m["input_dim"])), dtype=float)
+    if profile is not None:
+        _profile_add(profile, "input_scale_and_alloc", time.perf_counter() - t0)
 
-    for j in range(int(m["output_dim"])):
-        z = m["inducing_points"][j, :, :]
-        alpha_j = m["alpha"][j, :]
-        k, diff, inv_l2 = _evaluate_sparse_gp_kernel(
-            x_scaled,
-            z,
-            m["lengthscales"][j, :],
-            m["outputscales"][j],
-        )
-        out_scaled[j] = float(np.dot(k, alpha_j))
-        # d k / d x_scaled = -k * (x-z)/l^2
-        grad_terms = (-k[:, None]) * diff * inv_l2[None, :]
-        jac_scaled_xscaled[j, :] = np.einsum("m,md->d", alpha_j, grad_terms)
+    t0 = time.perf_counter() if profile is not None else None
+    diff = x_scaled[None, None, :] - m["inducing_points"]
+    inv_l2 = 1.0 / (m["lengthscales"] * m["lengthscales"])
+    scaled_sq = np.sum(diff * diff * inv_l2[:, None, :], axis=2)
+    k = m["outputscales"][:, None] * np.exp(-0.5 * scaled_sq)
+    if profile is not None:
+        _profile_add(profile, "kernel_eval", time.perf_counter() - t0)
 
+    t0 = time.perf_counter() if profile is not None else None
+    alpha_k = m["alpha"] * k
+    out_scaled[:] = np.sum(alpha_k, axis=1)
+    if profile is not None:
+        _profile_add(profile, "mean_dot", time.perf_counter() - t0)
+
+    # d k / d x_scaled = -k * (x-z)/l^2
+    t0 = time.perf_counter() if profile is not None else None
+    jac_scaled_xscaled[:] = -np.einsum("om,omd->od", alpha_k, diff, optimize=True) * inv_l2
+    if profile is not None:
+        _profile_add(profile, "jacobian_terms", time.perf_counter() - t0)
+
+    t0 = time.perf_counter() if profile is not None else None
     out = out_scaled * m["y_std"] + m["y_mean"]
     jac_out_xscaled = m["y_std"][:, None] * jac_scaled_xscaled
     jac_out_x = jac_out_xscaled / m["x_std"][None, :]
+    if profile is not None:
+        _profile_add(profile, "output_unscale", time.perf_counter() - t0)
+        profile["calls"] = int(profile.get("calls", 0)) + 1
     return out, jac_out_x[:, :n_p]
-

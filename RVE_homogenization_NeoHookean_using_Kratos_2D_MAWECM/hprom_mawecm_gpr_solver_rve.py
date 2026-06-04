@@ -948,6 +948,7 @@ def RunHpromMawEcmGprBatchSimulation(
     t_step_qm_init = 0.0
     t_step_affine = 0.0
     t_step_u_init = 0.0
+    gpr_profile = {} if profile_timers else None
     t_setup = time.perf_counter() - t_run_start
     t_loop_start = time.perf_counter()
     n_newton_iters_total = 0
@@ -1058,7 +1059,9 @@ def RunHpromMawEcmGprBatchSimulation(
         dw_res_iter = None
         if not update_each_iter:
             t0 = time.perf_counter()
-            q_s_phys, _ = evaluate_sparse_gp_map_and_jacobian_qp(q_m, gpr_model, q_m_dim)
+            q_s_phys, _ = evaluate_sparse_gp_map_and_jacobian_qp(
+                q_m, gpr_model, q_m_dim, profile=gpr_profile
+            )
             t_eval_gpr += time.perf_counter() - t0
             t1 = time.perf_counter()
             q_s_phys = np.asarray(q_s_phys, dtype=float).reshape(-1)
@@ -1100,7 +1103,9 @@ def RunHpromMawEcmGprBatchSimulation(
             mp.ProcessInfo[KM.NL_ITERATION_NUMBER] = it + 1
 
             t0 = time.perf_counter()
-            q_s_raw, dqs_raw = evaluate_sparse_gp_map_and_jacobian_qp(q_m, gpr_model, q_m_dim)
+            q_s_raw, dqs_raw = evaluate_sparse_gp_map_and_jacobian_qp(
+                q_m, gpr_model, q_m_dim, profile=gpr_profile
+            )
             t_eval_gpr += time.perf_counter() - t0
             q_s_raw = np.asarray(q_s_raw, dtype=float).reshape(-1)
             dqs_raw = np.asarray(dqs_raw, dtype=float)
@@ -1389,7 +1394,9 @@ def RunHpromMawEcmGprBatchSimulation(
             k_red_old = None
 
         t0 = time.perf_counter()
-        q_s_raw_f, _ = evaluate_sparse_gp_map_and_jacobian_qp(q_m, gpr_model, q_m_dim)
+        q_s_raw_f, _ = evaluate_sparse_gp_map_and_jacobian_qp(
+            q_m, gpr_model, q_m_dim, profile=gpr_profile
+        )
         t_eval_gpr += time.perf_counter() - t0
         t1 = time.perf_counter()
         q_s_phys = np.asarray(q_s_raw_f, dtype=float).reshape(-1)
@@ -1636,10 +1643,27 @@ def RunHpromMawEcmGprBatchSimulation(
         def _pct(v):
             return 100.0 * float(v) / max(float(t_total), 1.0e-30)
 
+        gpr_prof = gpr_profile if gpr_profile is not None else {}
+        gpr_prof_sum = float(
+            gpr_prof.get("normalize_model", 0.0)
+            + gpr_prof.get("input_scale_and_alloc", 0.0)
+            + gpr_prof.get("kernel_eval", 0.0)
+            + gpr_prof.get("mean_dot", 0.0)
+            + gpr_prof.get("jacobian_terms", 0.0)
+            + gpr_prof.get("output_unscale", 0.0)
+        )
+
         print("  [HPROM-MAWECM-GPR][timing-profile]")
         print(f"    total solver wall              : {t_total:.3f}s (100.0%)")
         print(f"    setup/pre-loop                 : {t_setup:.3f}s ({_pct(t_setup):.1f}%)")
         print(f"    GPR map/Jacobian evaluations   : {t_eval_gpr:.3f}s ({_pct(t_eval_gpr):.1f}%)")
+        print(f"      - normalize model/shapes     : {gpr_prof.get('normalize_model', 0.0):.3f}s ({_pct(gpr_prof.get('normalize_model', 0.0)):.1f}%)")
+        print(f"      - input scaling/allocation   : {gpr_prof.get('input_scale_and_alloc', 0.0):.3f}s ({_pct(gpr_prof.get('input_scale_and_alloc', 0.0)):.1f}%)")
+        print(f"      - RBF kernel evaluations     : {gpr_prof.get('kernel_eval', 0.0):.3f}s ({_pct(gpr_prof.get('kernel_eval', 0.0)):.1f}%)")
+        print(f"      - mean dot products          : {gpr_prof.get('mean_dot', 0.0):.3f}s ({_pct(gpr_prof.get('mean_dot', 0.0)):.1f}%)")
+        print(f"      - Jacobian terms             : {gpr_prof.get('jacobian_terms', 0.0):.3f}s ({_pct(gpr_prof.get('jacobian_terms', 0.0)):.1f}%)")
+        print(f"      - output unscale             : {gpr_prof.get('output_unscale', 0.0):.3f}s ({_pct(gpr_prof.get('output_unscale', 0.0)):.1f}%)")
+        print(f"      - profile accounted          : {gpr_prof_sum:.3f}s / {t_eval_gpr:.3f}s, calls={int(gpr_prof.get('calls', 0))}")
         print(f"    MAW RBF weight evaluations     : {t_eval_maw:.3f}s ({_pct(t_eval_maw):.1f}%)")
         print(f"    Newton modelpart sync          : {t_sync_newton:.3f}s ({_pct(t_sync_newton):.1f}%)")
         print(f"    residual assembly              : {t_res_asm:.3f}s ({_pct(t_res_asm):.1f}%)")
@@ -1693,6 +1717,16 @@ def RunHpromMawEcmGprBatchSimulation(
                 "setup_pre_loop_sec": float(t_setup),
                 "loop_wall_sec": float(t_loop),
                 "gpr_eval_sec": float(t_eval_gpr),
+                "gpr_profile_sec": {
+                    "normalize_model": float(gpr_prof.get("normalize_model", 0.0)),
+                    "input_scale_and_alloc": float(gpr_prof.get("input_scale_and_alloc", 0.0)),
+                    "kernel_eval": float(gpr_prof.get("kernel_eval", 0.0)),
+                    "mean_dot": float(gpr_prof.get("mean_dot", 0.0)),
+                    "jacobian_terms": float(gpr_prof.get("jacobian_terms", 0.0)),
+                    "output_unscale": float(gpr_prof.get("output_unscale", 0.0)),
+                    "accounted_total": float(gpr_prof_sum),
+                    "calls": int(gpr_prof.get("calls", 0)),
+                },
                 "maw_eval_sec": float(t_eval_maw),
                 "newton_sync_sec": float(t_sync_newton),
                 "residual_assembly_sec": float(t_res_asm),
