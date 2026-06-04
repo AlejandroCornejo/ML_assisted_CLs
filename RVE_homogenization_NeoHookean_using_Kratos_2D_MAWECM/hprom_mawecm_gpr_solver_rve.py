@@ -13,6 +13,7 @@ State update uses Joaquin-style master/slave decoder:
 """
 
 import os
+import json
 import sys
 import time
 from typing import Dict
@@ -478,12 +479,22 @@ def RunHpromMawEcmGprBatchSimulation(
     sync_modelpart_each_newton_iter=0,
     call_entity_hooks_each_newton_iter=0,
     use_analysis_stage_solution_step_hooks=0,
+    profile_timers=1,
+    profile_timers_every=0,
+    verbose_newton=1,
+    log_every=1,
 ):
     if strain_path is None:
         raise ValueError("strain_path must be provided.")
 
     if out_dir is not None:
         os.makedirs(out_dir, exist_ok=True)
+
+    t_run_start = time.perf_counter()
+    profile_timers = bool(int(profile_timers))
+    profile_timers_every = int(profile_timers_every)
+    verbose_newton = bool(int(verbose_newton))
+    log_every = int(log_every)
 
     phi_m_full = np.asarray(model_pack["phi_m"], dtype=float)
     phi_s_full = np.asarray(model_pack["phi_s"], dtype=float)
@@ -871,6 +882,15 @@ def RunHpromMawEcmGprBatchSimulation(
         f"  [HPROM-MAWECM-GPR] AnalysisStage step hooks: "
         f"{int(bool(use_analysis_stage_solution_step_hooks))}"
     )
+    print(
+        "  [HPROM-MAWECM-GPR] Timing profile: "
+        f"{'on' if profile_timers else 'off'}"
+        + (f", every {profile_timers_every} step(s)" if profile_timers and profile_timers_every > 0 else "")
+    )
+    print(
+        "  [HPROM-MAWECM-GPR] Online logging: "
+        f"verbose_newton={int(verbose_newton)}, log_every={log_every}"
+    )
     if (not update_each_iter) and (w_res_support_fixed is not None):
         print("  [HPROM-MAWECM-GPR] MAW updates disabled: using fixed residual weights from file.")
     print("  [HPROM-MAWECM-GPR] Manifold correction active: N(0)=0 and J(0)=0.")
@@ -882,10 +902,62 @@ def RunHpromMawEcmGprBatchSimulation(
     t_unit_asm = 0.0
     t_lin_solve = 0.0
     t_hom_asm = 0.0
+    t_step_setup = 0.0
+    t_state_decode = 0.0
+    t_decoder_jacobian = 0.0
+    t_residual_projection = 0.0
+    t_tangent_projection = 0.0
+    t_final_state_update = 0.0
+    t_final_solution_sync = 0.0
+    t_hom_weight_map = 0.0
+    t_hom_post = 0.0
+    t_history_store = 0.0
+    t_stack_history = 0.0
+    t_loop_print = 0.0
+    t_setup = time.perf_counter() - t_run_start
+    t_loop_start = time.perf_counter()
+    n_newton_iters_total = 0
+    n_newton_residual_evals_total = 0
+    n_linear_solve_calls = 0
+    n_quasi_converged_steps = 0
+    n_rolled_back_steps = 0
+    timing_step_records = []
+
+    def _timed_print(*args, **kwargs):
+        nonlocal t_loop_print
+        t0_print = time.perf_counter()
+        print(*args, **kwargs)
+        t_loop_print += time.perf_counter() - t0_print
 
     q_m_state = None
     k_red_old = None
     for step in range(1, n_steps_total + 1):
+        t_step_start = time.perf_counter()
+        if profile_timers:
+            timing_snap = {
+                "gpr_eval": t_eval_gpr,
+                "maw_eval": t_eval_maw,
+                "newton_sync": t_sync_newton,
+                "res_asm": t_res_asm,
+                "unit_asm": t_unit_asm,
+                "lin_solve": t_lin_solve,
+                "hom_asm": t_hom_asm,
+                "step_setup": t_step_setup,
+                "state_decode": t_state_decode,
+                "decoder_jacobian": t_decoder_jacobian,
+                "residual_projection": t_residual_projection,
+                "tangent_projection": t_tangent_projection,
+                "final_state_update": t_final_state_update,
+                "final_solution_sync": t_final_solution_sync,
+                "hom_weight_map": t_hom_weight_map,
+                "hom_post": t_hom_post,
+                "history_store": t_history_store,
+                "loop_print": t_loop_print,
+            }
+        else:
+            timing_snap = None
+
+        t1 = time.perf_counter()
         time_val = float(step) * float(dt)
         mp.CloneTimeStep(time_val)
         mp.ProcessInfo[KM.DELTA_TIME] = dt
@@ -915,6 +987,7 @@ def RunHpromMawEcmGprBatchSimulation(
         u_aff_dir = _affine_component(e, x_dir, y_dir, is_x_dir)
         u = np.zeros(n_dof, dtype=float)
         u[dir_dofs] = u_aff_dir
+        t_step_setup += time.perf_counter() - t1
 
         w_res_iter = None
         dw_res_iter = None
@@ -922,11 +995,13 @@ def RunHpromMawEcmGprBatchSimulation(
             t0 = time.perf_counter()
             q_s_phys, _ = evaluate_sparse_gp_map_and_jacobian_qp(q_m, gpr_model, q_m_dim)
             t_eval_gpr += time.perf_counter() - t0
+            t1 = time.perf_counter()
             q_s_phys = np.asarray(q_s_phys, dtype=float).reshape(-1)
             q_s = q_s_phys - q_s0_raw - (j0_raw @ q_m)
             q_master0 = a_m @ q_m
             if track_qpod or need_qpod_state:
                 q_pod = (c_m @ q_master0) + (c_s @ q_s_phys)
+            t_state_decode += time.perf_counter() - t1
             if w_res_support_fixed is not None:
                 w_res_iter = w_res_support_fixed.copy()
             else:
@@ -976,6 +1051,7 @@ def RunHpromMawEcmGprBatchSimulation(
                 nonfinite_detected = True
                 break
 
+            t1 = time.perf_counter()
             q_s_phys = q_s_raw
             q_s = q_s_phys - q_s0_raw - (j0_raw @ q_m)
             dqs_dqm = dqs_raw - j0_raw
@@ -983,6 +1059,7 @@ def RunHpromMawEcmGprBatchSimulation(
             if track_qpod or need_qpod_state:
                 q_pod = (c_m @ q_master) + (c_s @ q_s_phys)
             u[free_dofs] = u_aff_free + w0_const + (phi_master_eff @ q_m) + (phi_s @ q_s)
+            t_state_decode += time.perf_counter() - t1
 
             if update_each_iter:
                 maw_state_iter = _state_for_maw(maw_state_space, q_m)
@@ -1011,8 +1088,11 @@ def RunHpromMawEcmGprBatchSimulation(
             if bool(call_entity_hooks_each_newton_iter):
                 FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
+            t1 = time.perf_counter()
             r_f = rhs_hr[free_dofs]
             du_dqm = phi_master_eff + (phi_s @ dqs_dqm)
+            t_decoder_jacobian += time.perf_counter() - t1
+            t1 = time.perf_counter()
             r_red = du_dqm.T @ r_f
             nr = float(np.linalg.norm(r_red))
             if not np.isfinite(nr):
@@ -1026,9 +1106,12 @@ def RunHpromMawEcmGprBatchSimulation(
                 nr_best = nr
                 rrel_best = r_rel
                 q_m_best = q_m.copy()
+            t_residual_projection += time.perf_counter() - t1
 
+            t1 = time.perf_counter()
             kff = k_hr[free_dofs][:, free_dofs]
             k_red = du_dqm.T @ (kff @ du_dqm)
+            t_tangent_projection += time.perf_counter() - t1
             if use_weight_tangent and (dw_res_iter is not None):
                 # The Newton solve uses K_alg dq = R with R = rhs = -f_int.
                 # Therefore K_alg = -dR/dq. For R = sum_e w_e(q) R_e(q),
@@ -1060,8 +1143,9 @@ def RunHpromMawEcmGprBatchSimulation(
 
             if nr <= float(prom_corrector_abs_tol):
                 converged = True
-                print(f"  > It {it:02d}: ||R_r|| = {nr:.3e}, rel = {r_rel:.3e}")
-                print(f"  > Converged in {it} iterations.")
+                if verbose_newton:
+                    _timed_print(f"  > It {it:02d}: ||R_r|| = {nr:.3e}, rel = {r_rel:.3e}")
+                    _timed_print(f"  > Converged in {it} iterations.")
                 break
 
             if (
@@ -1071,11 +1155,12 @@ def RunHpromMawEcmGprBatchSimulation(
                 and nr <= float(prom_corrector_res_floor_for_dq)
             ):
                 converged = True
-                print(
-                    f"  > It {it:02d}: ||R_r|| = {nr:.3e}, rel = {r_rel:.3e}, "
-                    f"||dq_m|| = {ndq_last:.3e} -> converged(small-dq+rel)"
-                )
-                print(f"  > Converged in {it} iterations.")
+                if verbose_newton:
+                    _timed_print(
+                        f"  > It {it:02d}: ||R_r|| = {nr:.3e}, rel = {r_rel:.3e}, "
+                        f"||dq_m|| = {ndq_last:.3e} -> converged(small-dq+rel)"
+                    )
+                    _timed_print(f"  > Converged in {it} iterations.")
                 break
 
             if nr_prev is not None:
@@ -1086,18 +1171,20 @@ def RunHpromMawEcmGprBatchSimulation(
                     and nr <= float(prom_corrector_res_floor_for_dq)
                 ):
                     converged = True
-                    print(
-                        f"  > It {it:02d}: ||R_r|| = {nr:.3e}, rel = {r_rel:.3e}, "
-                        f"rel_drop={rel_drop:.3e} -> converged(stagnation)"
-                    )
-                    print(f"  > Converged in {it} iterations.")
+                    if verbose_newton:
+                        _timed_print(
+                            f"  > It {it:02d}: ||R_r|| = {nr:.3e}, rel = {r_rel:.3e}, "
+                            f"rel_drop={rel_drop:.3e} -> converged(stagnation)"
+                        )
+                        _timed_print(f"  > Converged in {it} iterations.")
                     break
             nr_prev = nr
 
             if r_rel <= float(prom_corrector_rel_tol) and nr <= float(prom_corrector_res_floor_for_dq):
                 converged = True
-                print(f"  > It {it:02d}: ||R_r|| = {nr:.3e}, rel = {r_rel:.3e} -> converged(rel)")
-                print(f"  > Converged in {it} iterations.")
+                if verbose_newton:
+                    _timed_print(f"  > It {it:02d}: ||R_r|| = {nr:.3e}, rel = {r_rel:.3e} -> converged(rel)")
+                    _timed_print(f"  > Converged in {it} iterations.")
                 break
 
             if it >= n_corr:
@@ -1119,20 +1206,24 @@ def RunHpromMawEcmGprBatchSimulation(
                 t1 = time.perf_counter()
                 dq = np.linalg.solve(k_solve, r_red)
                 t_lin_solve += time.perf_counter() - t1
+                n_linear_solve_calls += 1
             except np.linalg.LinAlgError:
                 t1 = time.perf_counter()
                 dq = np.linalg.lstsq(k_solve, r_red, rcond=None)[0]
                 t_lin_solve += time.perf_counter() - t1
+                n_linear_solve_calls += 1
             if used_old and (not np.all(np.isfinite(dq))):
                 try:
                     t1 = time.perf_counter()
                     dq = np.linalg.solve(k_red, r_red)
                     t_lin_solve += time.perf_counter() - t1
+                    n_linear_solve_calls += 1
                     used_old = False
                 except np.linalg.LinAlgError:
                     t1 = time.perf_counter()
                     dq = np.linalg.lstsq(k_red, r_red, rcond=None)[0]
                     t_lin_solve += time.perf_counter() - t1
+                    n_linear_solve_calls += 1
                     used_old = False
 
             ndq = float(np.linalg.norm(dq))
@@ -1158,22 +1249,29 @@ def RunHpromMawEcmGprBatchSimulation(
             dq_rel = ndq / ndq0
             dq_rel_last = dq_rel
             q_m = q_m + dq_step
-            if used_old:
-                print("    > using previous reduced stiffness (K_old) at first iteration")
-            if alpha < 1.0:
-                print(f"    > reduced-step damping alpha={alpha:.3f}")
+            if verbose_newton and used_old:
+                _timed_print("    > using previous reduced stiffness (K_old) at first iteration")
+            if verbose_newton and alpha < 1.0:
+                _timed_print(f"    > reduced-step damping alpha={alpha:.3f}")
 
             dq_ok = (ndq <= float(prom_corrector_dq_abs_tol)) or (dq_rel <= float(prom_corrector_dq_rel_tol))
             if dq_ok and nr <= float(prom_corrector_res_floor_for_dq):
                 converged = True
-                print(
-                    f"  > It {it:02d}: ||R_r|| = {nr:.3e}, rel = {r_rel:.3e}, "
-                    f"||dq_m|| = {ndq:.3e} (rel {dq_rel:.3e}) -> converged(dq)"
-                )
-                print(f"  > Converged in {it} iterations.")
+                if verbose_newton:
+                    _timed_print(
+                        f"  > It {it:02d}: ||R_r|| = {nr:.3e}, rel = {r_rel:.3e}, "
+                        f"||dq_m|| = {ndq:.3e} (rel {dq_rel:.3e}) -> converged(dq)"
+                    )
+                    _timed_print(f"  > Converged in {it} iterations.")
                 break
 
-            print(f"  > It {it:02d}: ||R_r|| = {nr:.3e}, rel = {r_rel:.3e}")
+            if verbose_newton:
+                _timed_print(f"  > It {it:02d}: ||R_r|| = {nr:.3e}, rel = {r_rel:.3e}")
+
+        step_newton_iters = int(it)
+        step_newton_residual_evals = int(it) + 1
+        n_newton_iters_total += step_newton_iters
+        n_newton_residual_evals_total += step_newton_residual_evals
 
         if not converged:
             quasi_converged = (
@@ -1185,6 +1283,7 @@ def RunHpromMawEcmGprBatchSimulation(
             if quasi_converged:
                 q_m = q_m_best.copy()
                 converged = True
+                n_quasi_converged_steps += 1
                 print(
                     "  [HPROM-MAWECM-GPR] Step accepted as quasi-converged: "
                     f"best ||R_r||={nr_best:.3e}, rel={rrel_best:.3e}"
@@ -1202,6 +1301,7 @@ def RunHpromMawEcmGprBatchSimulation(
                     q_m = q_m_best.copy()
                 else:
                     q_m = q_m_step_start.copy()
+                n_rolled_back_steps += 1
                 print(f"  [HPROM-MAWECM-GPR][WARN] {msg}")
                 if nonfinite_detected:
                     print("  [HPROM-MAWECM-GPR][WARN] non-finite state detected; rolled back to best finite iterate.")
@@ -1214,12 +1314,14 @@ def RunHpromMawEcmGprBatchSimulation(
         t0 = time.perf_counter()
         q_s_raw_f, _ = evaluate_sparse_gp_map_and_jacobian_qp(q_m, gpr_model, q_m_dim)
         t_eval_gpr += time.perf_counter() - t0
+        t1 = time.perf_counter()
         q_s_phys = np.asarray(q_s_raw_f, dtype=float).reshape(-1)
         q_s = q_s_phys - q_s0_raw - (j0_raw @ q_m)
         q_master = a_m @ q_m
         if track_qpod or need_qpod_state:
             q_pod = (c_m @ q_master) + (c_s @ q_s_phys)
         u[free_dofs] = u_aff_free + w0_const + (phi_master_eff @ q_m) + (phi_s @ q_s)
+        t_final_state_update += time.perf_counter() - t1
         if update_each_iter:
             maw_state_acc = _state_for_maw(maw_state_space, q_m)
             t1 = time.perf_counter()
@@ -1228,8 +1330,14 @@ def RunHpromMawEcmGprBatchSimulation(
         elif w_res_support_fixed is not None:
             w_last = w_res_support_fixed
 
-        SetDisplacementFromEquationVector(u, eq_map_runtime, ta_disp)
-        UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
+        if bool(use_analysis_stage_solution_step_hooks):
+            # The HPROM vectorized assemblers consume the equation-vector `u`
+            # directly. Sync nodal Kratos fields only when AnalysisStage hooks
+            # are explicitly enabled, because those hooks may inspect nodal data.
+            t1 = time.perf_counter()
+            SetDisplacementFromEquationVector(u, eq_map_runtime, ta_disp)
+            UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
+            t_final_solution_sync += time.perf_counter() - t1
         if hom_mode == "full_fom":
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
             t1 = time.perf_counter()
@@ -1237,6 +1345,7 @@ def RunHpromMawEcmGprBatchSimulation(
             t_hom_asm += time.perf_counter() - t1
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
+            t1 = time.perf_counter()
             ref_full = float(np.sum(np.asarray(assembler_hom_full.area_e, dtype=float)))
             eps_h, sig_h = CalculateHomogenizedFromAssemblerWithElementWeights(
                 assembler_hom_full,
@@ -1244,6 +1353,7 @@ def RunHpromMawEcmGprBatchSimulation(
                 w_sig=None,
                 reference_measure=ref_full,
             )
+            t_hom_post += time.perf_counter() - t1
         else:
             if hom_mode == "maw_separate":
                 maw_state_hom = _state_for_maw(maw_state_space, q_m)
@@ -1263,12 +1373,14 @@ def RunHpromMawEcmGprBatchSimulation(
                     label="sig",
                 )
                 t_eval_maw += time.perf_counter() - t1
+                t1 = time.perf_counter()
                 w_eps_full_step = np.zeros(int(n_elem), dtype=float)
                 w_sig_full_step = np.zeros(int(n_elem), dtype=float)
                 w_eps_full_step[z_eps] = w_eps_support
                 w_sig_full_step[z_sig] = w_sig_support
                 w_eps_use = np.asarray(w_eps_full_step[z_hom_union], dtype=float)
                 w_sig_use = np.asarray(w_sig_full_step[z_hom_union], dtype=float)
+                t_hom_weight_map += time.perf_counter() - t1
             elif hom_mode == "sig_maw_eps_ecm":
                 maw_state_hom = _state_for_maw(maw_state_space, q_m)
                 t1 = time.perf_counter()
@@ -1280,18 +1392,23 @@ def RunHpromMawEcmGprBatchSimulation(
                     label="sig",
                 )
                 t_eval_maw += time.perf_counter() - t1
+                t1 = time.perf_counter()
                 w_sig_full_step = np.zeros(int(n_elem), dtype=float)
                 w_sig_full_step[z_sig] = w_sig_support
                 w_eps_use = w_eps_sel
                 w_sig_use = np.asarray(w_sig_full_step[z_hom_union], dtype=float)
+                t_hom_weight_map += time.perf_counter() - t1
             else:
+                t1 = time.perf_counter()
                 w_eps_use = w_eps_sel
                 w_sig_use = w_sig_sel
+                t_hom_weight_map += time.perf_counter() - t1
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
             t1 = time.perf_counter()
             _, _ = assembler_hom_union.Assemble(u)
             t_hom_asm += time.perf_counter() - t1
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
+            t1 = time.perf_counter()
             eps_h, sig_h = CalculateHomogenizedFromAssemblerWithElementWeights(
                 assembler_hom_union,
                 w_eps=w_eps_use,
@@ -1300,10 +1417,12 @@ def RunHpromMawEcmGprBatchSimulation(
             )
             eps_h = np.asarray(eps_h, dtype=float)
             sig_h = np.asarray(sig_h, dtype=float)
+            t_hom_post += time.perf_counter() - t1
 
         if bool(use_analysis_stage_solution_step_hooks):
             sim.FinalizeSolutionStep()
 
+        t1 = time.perf_counter()
         results_eps.append(np.asarray(eps_h, dtype=float))
         results_sig.append(np.asarray(sig_h, dtype=float))
         u_hist.append(u.copy())
@@ -1314,15 +1433,79 @@ def RunHpromMawEcmGprBatchSimulation(
             qpod_hist.append(q_pod.copy())
         wres_hist.append(np.asarray(w_last if w_last is not None else np.zeros(z_res.size), dtype=float).copy())
         q_m_state = q_m.copy()
+        t_history_store += time.perf_counter() - t1
 
-        print(
-            f"  [HPROM-MAWECM-GPR] Step {step:03d}/{n_steps_total}: "
-            f"||q_m||={np.linalg.norm(q_m):.3e}, ||q_s||={np.linalg.norm(q_s_phys):.3e}, "
-            f"sum(w_res)={float(np.sum(wres_hist[-1])):.3e}"
-        )
+        if profile_timers:
+            step_wall = time.perf_counter() - t_step_start
+            rec = {
+                "step": int(step),
+                "wall": float(step_wall),
+                "newton_iters": int(step_newton_iters),
+                "residual_evals": int(step_newton_residual_evals),
+                "gpr_eval": float(t_eval_gpr - timing_snap["gpr_eval"]),
+                "maw_eval": float(t_eval_maw - timing_snap["maw_eval"]),
+                "newton_sync": float(t_sync_newton - timing_snap["newton_sync"]),
+                "res_asm": float(t_res_asm - timing_snap["res_asm"]),
+                "unit_asm": float(t_unit_asm - timing_snap["unit_asm"]),
+                "lin_solve": float(t_lin_solve - timing_snap["lin_solve"]),
+                "hom_asm": float(t_hom_asm - timing_snap["hom_asm"]),
+                "step_setup": float(t_step_setup - timing_snap["step_setup"]),
+                "state_decode": float(t_state_decode - timing_snap["state_decode"]),
+                "decoder_jacobian": float(t_decoder_jacobian - timing_snap["decoder_jacobian"]),
+                "residual_projection": float(t_residual_projection - timing_snap["residual_projection"]),
+                "tangent_projection": float(t_tangent_projection - timing_snap["tangent_projection"]),
+                "final_state_update": float(t_final_state_update - timing_snap["final_state_update"]),
+                "final_solution_sync": float(t_final_solution_sync - timing_snap["final_solution_sync"]),
+                "hom_weight_map": float(t_hom_weight_map - timing_snap["hom_weight_map"]),
+                "hom_post": float(t_hom_post - timing_snap["hom_post"]),
+                "history_store": float(t_history_store - timing_snap["history_store"]),
+                "loop_print": float(t_loop_print - timing_snap["loop_print"]),
+            }
+            rec_accounted = (
+                rec["gpr_eval"]
+                + rec["maw_eval"]
+                + rec["newton_sync"]
+                + rec["res_asm"]
+                + rec["unit_asm"]
+                + rec["lin_solve"]
+                + rec["hom_asm"]
+                + rec["step_setup"]
+                + rec["state_decode"]
+                + rec["decoder_jacobian"]
+                + rec["residual_projection"]
+                + rec["tangent_projection"]
+                + rec["final_state_update"]
+                + rec["final_solution_sync"]
+                + rec["hom_weight_map"]
+                + rec["hom_post"]
+                + rec["history_store"]
+                + rec["loop_print"]
+            )
+            rec["other"] = float(max(rec["wall"] - rec_accounted, 0.0))
+            timing_step_records.append(rec)
+            if profile_timers_every > 0 and (step % profile_timers_every == 0 or step == n_steps_total):
+                _timed_print(
+                    "  [HPROM-MAWECM-GPR][timing-step] "
+                    f"step={step:03d}, wall={rec['wall']:.3f}s, "
+                    f"iters={step_newton_iters}, residual_evals={step_newton_residual_evals}, "
+                    f"gpr={rec['gpr_eval']:.3f}s, maw={rec['maw_eval']:.3f}s, "
+                    f"res={rec['res_asm']:.3f}s, unit={rec['unit_asm']:.3f}s, "
+                    f"lin={rec['lin_solve']:.3f}s, hom={rec['hom_asm']:.3f}s, "
+                    f"decode={rec['state_decode'] + rec['decoder_jacobian']:.3f}s, "
+                    f"proj={rec['residual_projection'] + rec['tangent_projection']:.3f}s, "
+                    f"sync={rec['final_solution_sync']:.3f}s, other={rec['other']:.3f}s"
+                )
+
+        if log_every > 0 and (step % log_every == 0 or step == n_steps_total):
+            _timed_print(
+                f"  [HPROM-MAWECM-GPR] Step {step:03d}/{n_steps_total}: "
+                f"||q_m||={np.linalg.norm(q_m):.3e}, ||q_s||={np.linalg.norm(q_s_phys):.3e}, "
+                f"sum(w_res)={float(np.sum(wres_hist[-1])):.3e}"
+            )
 
     sim.Finalize()
 
+    t1 = time.perf_counter()
     strain_hist = np.stack(results_eps)
     stress_hist = np.stack(results_sig)
     u_hist = np.stack(u_hist)
@@ -1332,6 +1515,32 @@ def RunHpromMawEcmGprBatchSimulation(
     if track_qpod:
         qpod_hist = np.stack(qpod_hist)
     wres_hist = np.stack(wres_hist)
+    t_stack_history += time.perf_counter() - t1
+
+    t_total = time.perf_counter() - t_run_start
+    t_loop = time.perf_counter() - t_loop_start
+    t_accounted = (
+        t_eval_gpr
+        + t_eval_maw
+        + t_sync_newton
+        + t_res_asm
+        + t_unit_asm
+        + t_lin_solve
+        + t_hom_asm
+        + t_step_setup
+        + t_state_decode
+        + t_decoder_jacobian
+        + t_residual_projection
+        + t_tangent_projection
+        + t_final_state_update
+        + t_final_solution_sync
+        + t_hom_weight_map
+        + t_hom_post
+        + t_history_store
+        + t_stack_history
+        + t_loop_print
+    )
+    t_other = max(t_loop - t_accounted, 0.0)
 
     print(
         "  [HPROM-MAWECM-GPR][timing] "
@@ -1339,6 +1548,42 @@ def RunHpromMawEcmGprBatchSimulation(
         f"newton_sync={t_sync_newton:.2f}s, res_asm={t_res_asm:.2f}s, "
         f"unit_asm={t_unit_asm:.2f}s, lin_solve={t_lin_solve:.2f}s, hom_asm={t_hom_asm:.2f}s"
     )
+    if profile_timers:
+        def _pct(v):
+            return 100.0 * float(v) / max(float(t_total), 1.0e-30)
+
+        print("  [HPROM-MAWECM-GPR][timing-profile]")
+        print(f"    total solver wall              : {t_total:.3f}s (100.0%)")
+        print(f"    setup/pre-loop                 : {t_setup:.3f}s ({_pct(t_setup):.1f}%)")
+        print(f"    GPR map/Jacobian evaluations   : {t_eval_gpr:.3f}s ({_pct(t_eval_gpr):.1f}%)")
+        print(f"    MAW RBF weight evaluations     : {t_eval_maw:.3f}s ({_pct(t_eval_maw):.1f}%)")
+        print(f"    Newton modelpart sync          : {t_sync_newton:.3f}s ({_pct(t_sync_newton):.1f}%)")
+        print(f"    residual assembly              : {t_res_asm:.3f}s ({_pct(t_res_asm):.1f}%)")
+        print(f"    d(w)/dq tangent scatter        : {t_unit_asm:.3f}s ({_pct(t_unit_asm):.1f}%)")
+        print(f"    reduced linear solves          : {t_lin_solve:.3f}s ({_pct(t_lin_solve):.1f}%)")
+        print(f"    homogenization assembly        : {t_hom_asm:.3f}s ({_pct(t_hom_asm):.1f}%)")
+        print(f"    step setup/strain path         : {t_step_setup:.3f}s ({_pct(t_step_setup):.1f}%)")
+        print(f"    state decode/reconstruct u     : {t_state_decode:.3f}s ({_pct(t_state_decode):.1f}%)")
+        print(f"    decoder Jacobian du/dq         : {t_decoder_jacobian:.3f}s ({_pct(t_decoder_jacobian):.1f}%)")
+        print(f"    reduced residual projection    : {t_residual_projection:.3f}s ({_pct(t_residual_projection):.1f}%)")
+        print(f"    reduced tangent projection     : {t_tangent_projection:.3f}s ({_pct(t_tangent_projection):.1f}%)")
+        print(f"    final state update             : {t_final_state_update:.3f}s ({_pct(t_final_state_update):.1f}%)")
+        print(f"    final solution sync            : {t_final_solution_sync:.3f}s ({_pct(t_final_solution_sync):.1f}%)")
+        print(f"    hom weight mapping             : {t_hom_weight_map:.3f}s ({_pct(t_hom_weight_map):.1f}%)")
+        print(f"    hom postprocess                : {t_hom_post:.3f}s ({_pct(t_hom_post):.1f}%)")
+        print(f"    history append/copy            : {t_history_store:.3f}s ({_pct(t_history_store):.1f}%)")
+        print(f"    final stack/save prep          : {t_stack_history:.3f}s ({_pct(t_stack_history):.1f}%)")
+        print(f"    online printing                : {t_loop_print:.3f}s ({_pct(t_loop_print):.1f}%)")
+        print(f"    other loop/Python overhead     : {t_other:.3f}s ({_pct(t_other):.1f}%)")
+        print(
+            "    counts                         : "
+            f"steps={n_steps_total}, newton_iters={n_newton_iters_total}, "
+            f"avg_iters/step={n_newton_iters_total/max(n_steps_total,1):.2f}, "
+            f"residual_evals={n_newton_residual_evals_total}, "
+            f"avg_residual_evals/step={n_newton_residual_evals_total/max(n_steps_total,1):.2f}, "
+            f"linear_solves={n_linear_solve_calls}, quasi={n_quasi_converged_steps}, "
+            f"rolled_back={n_rolled_back_steps}"
+        )
 
     if out_dir is not None:
         tag = f"trajectory_{trajectory_index}" if trajectory_index is not None else "hprom_mawecm_gpr_run"
@@ -1351,5 +1596,44 @@ def RunHpromMawEcmGprBatchSimulation(
         if track_qpod:
             np.save(os.path.join(out_dir, f"{tag}_q_pod.npy"), qpod_hist)
         np.save(os.path.join(out_dir, f"{tag}_w_res.npy"), wres_hist)
+        if profile_timers:
+            timing_payload = {
+                "total_solver_wall_sec": float(t_total),
+                "setup_pre_loop_sec": float(t_setup),
+                "loop_wall_sec": float(t_loop),
+                "gpr_eval_sec": float(t_eval_gpr),
+                "maw_eval_sec": float(t_eval_maw),
+                "newton_sync_sec": float(t_sync_newton),
+                "residual_assembly_sec": float(t_res_asm),
+                "weight_tangent_scatter_sec": float(t_unit_asm),
+                "linear_solve_sec": float(t_lin_solve),
+                "homogenization_assembly_sec": float(t_hom_asm),
+                "step_setup_sec": float(t_step_setup),
+                "state_decode_sec": float(t_state_decode),
+                "decoder_jacobian_sec": float(t_decoder_jacobian),
+                "residual_projection_sec": float(t_residual_projection),
+                "tangent_projection_sec": float(t_tangent_projection),
+                "final_state_update_sec": float(t_final_state_update),
+                "final_solution_sync_sec": float(t_final_solution_sync),
+                "hom_weight_map_sec": float(t_hom_weight_map),
+                "hom_postprocess_sec": float(t_hom_post),
+                "history_store_sec": float(t_history_store),
+                "stack_history_sec": float(t_stack_history),
+                "online_printing_sec": float(t_loop_print),
+                "other_loop_overhead_sec": float(t_other),
+                "n_steps": int(n_steps_total),
+                "n_newton_iterations": int(n_newton_iters_total),
+                "avg_newton_iterations_per_step": float(n_newton_iters_total / max(n_steps_total, 1)),
+                "n_newton_residual_evaluations": int(n_newton_residual_evals_total),
+                "avg_newton_residual_evaluations_per_step": float(
+                    n_newton_residual_evals_total / max(n_steps_total, 1)
+                ),
+                "n_linear_solve_calls": int(n_linear_solve_calls),
+                "n_quasi_converged_steps": int(n_quasi_converged_steps),
+                "n_rolled_back_steps": int(n_rolled_back_steps),
+                "per_step": timing_step_records,
+            }
+            with open(os.path.join(out_dir, "hprom_mawecm_timing_profile.json"), "w", encoding="utf-8") as f:
+                json.dump(timing_payload, f, indent=2)
 
     return strain_hist, stress_hist

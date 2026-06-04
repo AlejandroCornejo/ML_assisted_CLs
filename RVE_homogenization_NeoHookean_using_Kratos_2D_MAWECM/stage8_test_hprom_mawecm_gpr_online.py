@@ -91,6 +91,32 @@ def _parse_args() -> argparse.Namespace:
         help="If 1, call AnalysisStage Initialize/FinalizeSolutionStep each increment.",
     )
     p.add_argument(
+        "--hprom-profile-timers",
+        type=int,
+        default=1,
+        choices=[0, 1],
+        help="If 1, print and save a detailed HPROM-MAWECM timing profile.",
+    )
+    p.add_argument(
+        "--hprom-profile-timers-every",
+        type=int,
+        default=0,
+        help="If >0, also print per-step timing every N HPROM increments.",
+    )
+    p.add_argument(
+        "--hprom-verbose-newton",
+        type=int,
+        default=1,
+        choices=[0, 1],
+        help="If 0, suppress per-Newton HPROM residual lines without changing the solve.",
+    )
+    p.add_argument(
+        "--hprom-log-every",
+        type=int,
+        default=1,
+        help="Print HPROM step summary every N increments. Use 0 to suppress step summaries.",
+    )
+    p.add_argument(
         "--hprom-homogenization-mode",
         type=str,
         default="ecm_separate",
@@ -500,6 +526,10 @@ def main():
             sync_modelpart_each_newton_iter=args.hprom_sync_modelpart_each_newton_iter,
             call_entity_hooks_each_newton_iter=args.hprom_call_entity_hooks_each_newton_iter,
             use_analysis_stage_solution_step_hooks=args.hprom_use_analysis_stage_solution_step_hooks,
+            profile_timers=args.hprom_profile_timers,
+            profile_timers_every=args.hprom_profile_timers_every,
+            verbose_newton=args.hprom_verbose_newton,
+            log_every=args.hprom_log_every,
         )
         t_h = float(time.perf_counter() - t0)
         _write_runtime(tfile_h, t_h, source="new")
@@ -587,6 +617,10 @@ def main():
         "hprom_sync_modelpart_each_newton_iter": int(args.hprom_sync_modelpart_each_newton_iter),
         "hprom_call_entity_hooks_each_newton_iter": int(args.hprom_call_entity_hooks_each_newton_iter),
         "hprom_use_analysis_stage_solution_step_hooks": int(args.hprom_use_analysis_stage_solution_step_hooks),
+        "hprom_profile_timers": int(args.hprom_profile_timers),
+        "hprom_profile_timers_every": int(args.hprom_profile_timers_every),
+        "hprom_verbose_newton": int(args.hprom_verbose_newton),
+        "hprom_log_every": int(args.hprom_log_every),
         "hprom_fail_on_nonconvergence": int(args.hprom_fail_on_nonconvergence),
         "hprom_homogenization_mode": str(args.hprom_homogenization_mode),
         "hprom_corrector_dq_abs_tol": float(args.hprom_corrector_dq_abs_tol),
