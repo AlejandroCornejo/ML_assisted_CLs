@@ -882,6 +882,15 @@ def RunHpromMawEcmGprBatchSimulation(
         f"  [HPROM-MAWECM-GPR] AnalysisStage step hooks: "
         f"{int(bool(use_analysis_stage_solution_step_hooks))}"
     )
+    clone_time_step_each_step = bool(
+        int(use_analysis_stage_solution_step_hooks)
+        or int(sync_modelpart_each_newton_iter)
+        or int(call_entity_hooks_each_newton_iter)
+    )
+    print(
+        "  [HPROM-MAWECM-GPR] Kratos CloneTimeStep each increment: "
+        f"{int(clone_time_step_each_step)}"
+    )
     print(
         "  [HPROM-MAWECM-GPR] Timing profile: "
         f"{'on' if profile_timers else 'off'}"
@@ -914,6 +923,11 @@ def RunHpromMawEcmGprBatchSimulation(
     t_history_store = 0.0
     t_stack_history = 0.0
     t_loop_print = 0.0
+    t_step_clone = 0.0
+    t_step_strain_interp = 0.0
+    t_step_qm_init = 0.0
+    t_step_affine = 0.0
+    t_step_u_init = 0.0
     t_setup = time.perf_counter() - t_run_start
     t_loop_start = time.perf_counter()
     n_newton_iters_total = 0
@@ -953,13 +967,19 @@ def RunHpromMawEcmGprBatchSimulation(
                 "hom_post": t_hom_post,
                 "history_store": t_history_store,
                 "loop_print": t_loop_print,
+                "step_clone": t_step_clone,
+                "step_strain_interp": t_step_strain_interp,
+                "step_qm_init": t_step_qm_init,
+                "step_affine": t_step_affine,
+                "step_u_init": t_step_u_init,
             }
         else:
             timing_snap = None
 
-        t1 = time.perf_counter()
         time_val = float(step) * float(dt)
-        mp.CloneTimeStep(time_val)
+        t1 = time.perf_counter()
+        if clone_time_step_each_step:
+            mp.CloneTimeStep(time_val)
         mp.ProcessInfo[KM.DELTA_TIME] = dt
         mp.ProcessInfo[KM.TIME] = time_val
         mp.ProcessInfo[KM.STEP] = step
@@ -967,27 +987,50 @@ def RunHpromMawEcmGprBatchSimulation(
         sim.time, sim.step, sim.end_time = time_val, step, end_time
         if bool(use_analysis_stage_solution_step_hooks):
             sim.InitializeSolutionStep()
+        dt_block = time.perf_counter() - t1
+        t_step_clone += dt_block
+        t_step_setup += dt_block
 
+        t1 = time.perf_counter()
         s = int(np.searchsorted(step_offsets, step, side="left") - 1)
         s = max(0, min(s, n_seg - 1))
         xi = float(step - step_offsets[s]) / float(max(seg_steps[s], 1))
         e = (1.0 - xi) * e_wp[s, :] + xi * e_wp[s + 1, :]
+        dt_block = time.perf_counter() - t1
+        t_step_strain_interp += dt_block
+        t_step_setup += dt_block
 
+        t1 = time.perf_counter()
         mu = _recover_mu_from_E(e, mapping=mapping, mu_space=mu_space)
         if q_m_state is None:
             q_m = _initial_qm_from_mu(mu, model_pack=model_pack)
         else:
             q_m = np.asarray(q_m_state, dtype=float).reshape(-1).copy()
+        dt_block = time.perf_counter() - t1
+        t_step_qm_init += dt_block
+        t_step_setup += dt_block
 
+        t1 = time.perf_counter()
         q_s = np.zeros(q_s_dim, dtype=float)
         q_s_phys = np.zeros(q_s_dim, dtype=float)
         q_pod = np.zeros(q_pod_dim, dtype=float) if (track_qpod or need_qpod_state) else None
+        dt_block = time.perf_counter() - t1
+        t_step_u_init += dt_block
+        t_step_setup += dt_block
 
+        t1 = time.perf_counter()
         u_aff_free = _affine_component(e, x_free, y_free, is_x_free)
         u_aff_dir = _affine_component(e, x_dir, y_dir, is_x_dir)
+        dt_block = time.perf_counter() - t1
+        t_step_affine += dt_block
+        t_step_setup += dt_block
+
+        t1 = time.perf_counter()
         u = np.zeros(n_dof, dtype=float)
         u[dir_dofs] = u_aff_dir
-        t_step_setup += time.perf_counter() - t1
+        dt_block = time.perf_counter() - t1
+        t_step_u_init += dt_block
+        t_step_setup += dt_block
 
         w_res_iter = None
         dw_res_iter = None
@@ -1460,6 +1503,11 @@ def RunHpromMawEcmGprBatchSimulation(
                 "hom_post": float(t_hom_post - timing_snap["hom_post"]),
                 "history_store": float(t_history_store - timing_snap["history_store"]),
                 "loop_print": float(t_loop_print - timing_snap["loop_print"]),
+                "step_clone": float(t_step_clone - timing_snap["step_clone"]),
+                "step_strain_interp": float(t_step_strain_interp - timing_snap["step_strain_interp"]),
+                "step_qm_init": float(t_step_qm_init - timing_snap["step_qm_init"]),
+                "step_affine": float(t_step_affine - timing_snap["step_affine"]),
+                "step_u_init": float(t_step_u_init - timing_snap["step_u_init"]),
             }
             rec_accounted = (
                 rec["gpr_eval"]
@@ -1563,6 +1611,11 @@ def RunHpromMawEcmGprBatchSimulation(
         print(f"    reduced linear solves          : {t_lin_solve:.3f}s ({_pct(t_lin_solve):.1f}%)")
         print(f"    homogenization assembly        : {t_hom_asm:.3f}s ({_pct(t_hom_asm):.1f}%)")
         print(f"    step setup/strain path         : {t_step_setup:.3f}s ({_pct(t_step_setup):.1f}%)")
+        print(f"      - CloneTimeStep/ProcessInfo  : {t_step_clone:.3f}s ({_pct(t_step_clone):.1f}%)")
+        print(f"      - strain interpolation       : {t_step_strain_interp:.3f}s ({_pct(t_step_strain_interp):.1f}%)")
+        print(f"      - q_m predictor/init         : {t_step_qm_init:.3f}s ({_pct(t_step_qm_init):.1f}%)")
+        print(f"      - affine displacement        : {t_step_affine:.3f}s ({_pct(t_step_affine):.1f}%)")
+        print(f"      - per-step vector init       : {t_step_u_init:.3f}s ({_pct(t_step_u_init):.1f}%)")
         print(f"    state decode/reconstruct u     : {t_state_decode:.3f}s ({_pct(t_state_decode):.1f}%)")
         print(f"    decoder Jacobian du/dq         : {t_decoder_jacobian:.3f}s ({_pct(t_decoder_jacobian):.1f}%)")
         print(f"    reduced residual projection    : {t_residual_projection:.3f}s ({_pct(t_residual_projection):.1f}%)")
@@ -1609,6 +1662,11 @@ def RunHpromMawEcmGprBatchSimulation(
                 "linear_solve_sec": float(t_lin_solve),
                 "homogenization_assembly_sec": float(t_hom_asm),
                 "step_setup_sec": float(t_step_setup),
+                "step_clone_processinfo_sec": float(t_step_clone),
+                "step_strain_interpolation_sec": float(t_step_strain_interp),
+                "step_qm_predictor_init_sec": float(t_step_qm_init),
+                "step_affine_displacement_sec": float(t_step_affine),
+                "step_vector_init_sec": float(t_step_u_init),
                 "state_decode_sec": float(t_state_decode),
                 "decoder_jacobian_sec": float(t_decoder_jacobian),
                 "residual_projection_sec": float(t_residual_projection),
