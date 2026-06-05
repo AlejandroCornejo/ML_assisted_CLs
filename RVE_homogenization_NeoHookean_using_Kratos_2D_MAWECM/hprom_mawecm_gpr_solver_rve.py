@@ -497,6 +497,7 @@ def RunHpromMawEcmGprBatchSimulation(
     profile_timers_every=0,
     verbose_newton=1,
     log_every=1,
+    predictor_only=0,
 ):
     if strain_path is None:
         raise ValueError("strain_path must be provided.")
@@ -825,6 +826,216 @@ def RunHpromMawEcmGprBatchSimulation(
     qs_hist = [np.zeros(q_s_dim, dtype=float)]
     qpod_hist = [np.zeros(q_pod_dim, dtype=float)] if track_qpod else None
     wres_hist = [np.zeros(z_res.size, dtype=float)]
+
+    if bool(int(predictor_only)):
+        print(
+            f"  [HPROM-MAWECM-GPR][predictor-only] Evaluating {n_steps_total} increments "
+            "with q_m predicted independently from the strain parameter."
+        )
+        print("  [HPROM-MAWECM-GPR][predictor-only] Newton/residual assembly: off.")
+        if hom_mode == "full_fom":
+            print(
+                f"  [HPROM-MAWECM-GPR][predictor-only] Hom support: full current mesh "
+                f"({n_elem}/{n_elem}, 100.0%), mesh_mode={mesh_mode}"
+            )
+        else:
+            print(
+                f"  [HPROM-MAWECM-GPR][predictor-only] Hom support ({hom_mode}): "
+                f"|Z_eps|={z_eps.size}, |Z_sig|={z_sig.size}, |Z_union|={z_hom_union.size}, "
+                f"mesh_mode={mesh_mode}"
+            )
+
+        t_eval_gpr = 0.0
+        t_eval_maw = 0.0
+        t_hom_asm = 0.0
+        t_hom_post = 0.0
+        t_loop_start = time.perf_counter()
+
+        for step in range(1, n_steps_total + 1):
+            time_val = float(step) * float(dt)
+            mp.ProcessInfo[KM.DELTA_TIME] = dt
+            mp.ProcessInfo[KM.TIME] = time_val
+            mp.ProcessInfo[KM.STEP] = step
+            sim.time, sim.step, sim.end_time = time_val, step, end_time
+
+            s = int(np.searchsorted(step_offsets, step, side="left") - 1)
+            s = max(0, min(s, n_seg - 1))
+            xi = float(step - step_offsets[s]) / float(max(seg_steps[s], 1))
+            e = (1.0 - xi) * e_wp[s, :] + xi * e_wp[s + 1, :]
+
+            mu = _recover_mu_from_E(e, mapping=mapping, mu_space=mu_space)
+            q_m = _initial_qm_from_mu(mu, model_pack=model_pack)
+
+            t1 = time.perf_counter()
+            q_s_raw, _ = evaluate_sparse_gp_map_and_jacobian_qp(q_m, gpr_model, q_m_dim)
+            t_eval_gpr += time.perf_counter() - t1
+            q_s_phys = np.asarray(q_s_raw, dtype=float).reshape(-1)
+            if q_s_phys.size != q_s_dim:
+                raise RuntimeError(
+                    f"Sparse-GPR output size mismatch: got {q_s_phys.size}, expected {q_s_dim}."
+                )
+            q_s = q_s_phys - q_s0_raw - (j0_raw @ q_m)
+            q_master = a_m @ q_m
+            q_pod = (c_m @ q_master) + (c_s @ q_s_phys) if track_qpod else None
+
+            u_aff_free = _affine_component(e, x_free, y_free, is_x_free)
+            u_aff_dir = _affine_component(e, x_dir, y_dir, is_x_dir)
+            u = np.zeros(n_dof, dtype=float)
+            u[dir_dofs] = u_aff_dir
+            u[free_dofs] = u_aff_free + w0_const + (phi_master_eff @ q_m) + (phi_s @ q_s)
+
+            if hom_mode == "full_fom":
+                InitializeNonLinearIteration(entities, mp.ProcessInfo)
+                t1 = time.perf_counter()
+                _, _ = assembler_hom_full.Assemble(
+                    u,
+                    compute_tangent=False,
+                    compute_rhs=False,
+                    build_sparse=False,
+                )
+                t_hom_asm += time.perf_counter() - t1
+                FinalizeNonLinearIteration(entities, mp.ProcessInfo)
+
+                t1 = time.perf_counter()
+                ref_full = float(np.sum(np.asarray(assembler_hom_full.area_e, dtype=float)))
+                eps_h, sig_h = CalculateHomogenizedFromAssemblerWithElementWeights(
+                    assembler_hom_full,
+                    w_eps=None,
+                    w_sig=None,
+                    reference_measure=ref_full,
+                )
+                t_hom_post += time.perf_counter() - t1
+            else:
+                if hom_mode == "maw_separate":
+                    maw_state_hom = _state_for_maw(maw_state_space, q_m)
+                    t1 = time.perf_counter()
+                    w_eps_support = _eval_hom_maw_weights(
+                        maw_state_hom,
+                        model=maw_eps_rbf,
+                        expected_size=z_eps.size,
+                        renorm_target_hom=maw_eps_renorm_target,
+                        label="eps",
+                    )
+                    w_sig_support = _eval_hom_maw_weights(
+                        maw_state_hom,
+                        model=maw_sig_rbf,
+                        expected_size=z_sig.size,
+                        renorm_target_hom=maw_sig_renorm_target,
+                        label="sig",
+                    )
+                    t_eval_maw += time.perf_counter() - t1
+                    w_eps_full_step = np.zeros(int(n_elem), dtype=float)
+                    w_sig_full_step = np.zeros(int(n_elem), dtype=float)
+                    w_eps_full_step[z_eps] = w_eps_support
+                    w_sig_full_step[z_sig] = w_sig_support
+                    w_eps_use = np.asarray(w_eps_full_step[z_hom_union], dtype=float)
+                    w_sig_use = np.asarray(w_sig_full_step[z_hom_union], dtype=float)
+                elif hom_mode == "sig_maw_eps_ecm":
+                    maw_state_hom = _state_for_maw(maw_state_space, q_m)
+                    t1 = time.perf_counter()
+                    w_sig_support = _eval_hom_maw_weights(
+                        maw_state_hom,
+                        model=maw_sig_rbf,
+                        expected_size=z_sig.size,
+                        renorm_target_hom=maw_sig_renorm_target,
+                        label="sig",
+                    )
+                    t_eval_maw += time.perf_counter() - t1
+                    w_sig_full_step = np.zeros(int(n_elem), dtype=float)
+                    w_sig_full_step[z_sig] = w_sig_support
+                    w_eps_use = w_eps_sel
+                    w_sig_use = np.asarray(w_sig_full_step[z_hom_union], dtype=float)
+                else:
+                    w_eps_use = w_eps_sel
+                    w_sig_use = w_sig_sel
+
+                InitializeNonLinearIteration(entities, mp.ProcessInfo)
+                t1 = time.perf_counter()
+                _, _ = assembler_hom_union.Assemble(
+                    u,
+                    compute_tangent=False,
+                    compute_rhs=False,
+                    build_sparse=False,
+                )
+                t_hom_asm += time.perf_counter() - t1
+                FinalizeNonLinearIteration(entities, mp.ProcessInfo)
+
+                t1 = time.perf_counter()
+                eps_h, sig_h = CalculateHomogenizedFromAssemblerWithElementWeights(
+                    assembler_hom_union,
+                    w_eps=w_eps_use,
+                    w_sig=w_sig_use,
+                    reference_measure=a0_ref,
+                )
+                eps_h = np.asarray(eps_h, dtype=float)
+                sig_h = np.asarray(sig_h, dtype=float)
+                t_hom_post += time.perf_counter() - t1
+
+            results_eps.append(np.asarray(eps_h, dtype=float))
+            results_sig.append(np.asarray(sig_h, dtype=float))
+            u_hist.append(u.copy())
+            e_applied_hist.append(e.copy())
+            qm_hist.append(q_m.copy())
+            qs_hist.append(q_s_phys.copy())
+            if track_qpod:
+                qpod_hist.append(q_pod.copy())
+            wres_hist.append(np.zeros(z_res.size, dtype=float))
+
+            if log_every > 0 and (step % log_every == 0 or step == n_steps_total):
+                print(
+                    f"  [HPROM-MAWECM-GPR][predictor-only] Step {step:03d}/{n_steps_total}: "
+                    f"||q_m||={np.linalg.norm(q_m):.3e}, ||q_s||={np.linalg.norm(q_s_phys):.3e}"
+                )
+
+        sim.Finalize()
+
+        strain_hist = np.stack(results_eps)
+        stress_hist = np.stack(results_sig)
+        u_hist = np.stack(u_hist)
+        e_applied_hist = np.stack(e_applied_hist)
+        qm_hist = np.stack(qm_hist)
+        qs_hist = np.stack(qs_hist)
+        if track_qpod:
+            qpod_hist = np.stack(qpod_hist)
+        wres_hist = np.stack(wres_hist)
+
+        t_total = time.perf_counter() - t_run_start
+        t_loop = time.perf_counter() - t_loop_start
+        print(
+            "  [HPROM-MAWECM-GPR][predictor-only][timing] "
+            f"total={t_total:.3f}s, loop={t_loop:.3f}s, "
+            f"gpr_eval={t_eval_gpr:.3f}s, maw_eval={t_eval_maw:.3f}s, "
+            f"hom_asm={t_hom_asm:.3f}s, hom_post={t_hom_post:.3f}s"
+        )
+
+        if out_dir is not None:
+            tag = f"trajectory_{trajectory_index}" if trajectory_index is not None else "hprom_mawecm_gpr_direct_predictor"
+            np.save(os.path.join(out_dir, f"{tag}_strain.npy"), strain_hist)
+            np.save(os.path.join(out_dir, f"{tag}_stress.npy"), stress_hist)
+            np.save(os.path.join(out_dir, f"{tag}_U.npy"), u_hist)
+            np.save(os.path.join(out_dir, f"{tag}_applied_strain.npy"), e_applied_hist)
+            np.save(os.path.join(out_dir, f"{tag}_q_m.npy"), qm_hist)
+            np.save(os.path.join(out_dir, f"{tag}_q_s.npy"), qs_hist)
+            if track_qpod:
+                np.save(os.path.join(out_dir, f"{tag}_q_pod.npy"), qpod_hist)
+            np.save(os.path.join(out_dir, f"{tag}_w_res.npy"), wres_hist)
+            timing_payload = {
+                "mode": "predictor_only",
+                "total_solver_wall_sec": float(t_total),
+                "loop_wall_sec": float(t_loop),
+                "gpr_eval_sec": float(t_eval_gpr),
+                "maw_eval_sec": float(t_eval_maw),
+                "homogenization_assembly_sec": float(t_hom_asm),
+                "hom_postprocess_sec": float(t_hom_post),
+                "n_steps": int(n_steps_total),
+                "homogenization_mode": str(hom_mode),
+                "mesh_mode": str(mesh_mode),
+                "q_m_source": "mu_to_q_m_each_step",
+            }
+            with open(os.path.join(out_dir, f"{tag}_direct_predictor_timing.json"), "w", encoding="utf-8") as f:
+                json.dump(timing_payload, f, indent=2)
+
+        return strain_hist, stress_hist
 
     n_corr = max(0, int(prom_corrector_max_iters))
     damp_after = int(prom_corrector_damping_after_iter)

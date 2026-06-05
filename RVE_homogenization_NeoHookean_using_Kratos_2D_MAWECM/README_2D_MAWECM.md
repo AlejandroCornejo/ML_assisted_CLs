@@ -580,6 +580,68 @@ Use `--res-bootstrap-rsvd-randomized 1` only for randomized SVD experiments. It 
 produce slightly different initial ECM supports and therefore slightly different
 MAW pruning paths.
 
+Stage9: direct GPR predictor baseline
+-------------------------------------
+
+Stage9 compares the corrected models against a no-solve predictor:
+
+```text
+strain/parameter -> q_m predictor -> sparse GPR q_s(q_m) -> u -> homogenization
+```
+
+This path does not run Newton, does not assemble residual elements, and does not
+use residual MAW weights. It is useful to quantify how much the residual
+corrector actually improves over the direct parameter-to-solution map.
+
+Important interpretation:
+
+- This is not "HPROM with zero Newton iterations".
+- It predicts `q_m` independently from the strain/parameter at every step.
+- It still uses the selected homogenization backend, for example `maw_separate`,
+  so eps/sig MAW weights can be evaluated for postprocessing.
+- Use the same output directory as a previous Stage8 run if you want FOM/PROM/HPROM
+  read from cache and only the direct predictor computed.
+
+Example using the validated HROM mdpa + adaptive eps/sig MAW setup:
+
+```bash
+python3 stage9_compare_direct_gpr_predictor.py \
+  --run-direct-gpr \
+  --mawecm-file stage_8b_hprom_mawecm_res_eps_sig_auto_ecmhom_sum990_graph/ecm_weights_all.npz \
+  --hprom-homogenization-mode maw_separate \
+  --hprom-use-hrom-mdpa 1 \
+  --hprom-hrom-strict 1 \
+  --hprom-update-maw-each-iter 1 \
+  --hprom-include-weight-tangent 1 \
+  --hprom-profile-timers 0 \
+  --hprom-verbose-newton 0 \
+  --hprom-log-every 100 \
+  --save-plots 1 \
+  --out-dir stage_8_online_hprom_mawecm_gpr_res_eps_sig_auto_ecmhom_sum990_graph_hrom_profiled
+```
+
+Stage9 writes:
+
+```text
+stage9_online_summary.json
+stage9_online_compare_arrays.npz
+trajectory_direct_gpr_predictor_*.npy
+stage9_compare_*.png
+stage9_timing_comparison.png
+```
+
+Representative validated result on the unseen trajectory:
+
+```text
+rel stress error HPROM-MAW  vs FOM    : 8.179e-04
+rel stress error DIRECT-GPR vs FOM    : 1.020e-03
+rel strain error HPROM-MAW  vs FOM    : 7.265e-04
+rel strain error DIRECT-GPR vs FOM    : 5.100e-04
+runtime HPROM-MAW [s]                 : 2.485
+runtime DIRECT-GPR [s]                : 0.831
+speedup FOM/DIRECT-GPR                : 186.60x
+```
+
 HROM mdpa mode
 --------------
 
