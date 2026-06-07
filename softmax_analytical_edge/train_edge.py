@@ -10,11 +10,12 @@ def main():
     model = smae.SoftMaxAnalyticalEdge()
 
     # Create dummy dataset: y = x**2
-    X = np.linspace(0, 1.0, 100, dtype=np.float32)
+    X = np.linspace(0, 1.0, 500)
 
-    Y = ((X) ** 1.5).astype(np.float32)
+    # Y = X*np.log(X + 1)
     # Y = np.log(X**2 + 1)
     # Y = np.sin(X*2)
+    Y = 2.5*X**2
 
     X_t = torch.from_numpy(X)
     Y_t = torch.from_numpy(Y)
@@ -22,7 +23,7 @@ def main():
     criterion = torch.nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-    epochs = 100_000
+    epochs = 25000
     for epoch in range(1, epochs + 1):
         optimizer.zero_grad()
         y_pred = model(X_t)
@@ -41,12 +42,10 @@ def main():
     # print("w_i:", model.w_i.detach().numpy())
 
     # compute final PI (softmax of w_i)
-    with torch.no_grad():
-        exp_w = torch.sum(torch.exp(model.w_i))
-        PI = torch.exp(model.w_i) / exp_w
-        print("Expert probability:", PI.detach().numpy())
+    PI = model.GetExpertProbabilities()
+    print("Expert probability [X, X^2, x^3] :", PI.detach().numpy())
 
-        Y_pred = model(X_t).numpy()
+    Y_pred = model(X_t).detach().numpy()
 
     # Print final loss
     final_loss = float(((Y_pred - Y) ** 2).mean())

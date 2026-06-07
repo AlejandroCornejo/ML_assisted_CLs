@@ -19,29 +19,27 @@ class SoftMaxAnalyticalEdge(nn.Module):
     def __init__(self):
         super().__init__()
 
-        # self.a_i = nn.Parameter(torch.ones(3))
-        # self.b_i = nn.Parameter(torch.zeros(3))
-        # self.c_i = nn.Parameter(torch.ones(3))
-        # self.d_i = nn.Parameter(torch.zeros(3))
-        # multiples abcd induce cheating between experts
-
         self.a_i = nn.Parameter(torch.tensor(1.0))
         self.b_i = nn.Parameter(torch.tensor(0.0))
         self.c_i = nn.Parameter(torch.tensor(1.0))
         self.d_i = nn.Parameter(torch.tensor(0.0))
+        
+        self.temperature = 10.0
 
-        # w_i = nn.Parameter(torch.ones(3)) # weights
         self.w_i = nn.Parameter(torch.zeros(3)) # weights
+        
+        self.w_i.data[0] = 0.0
+        self.w_i.data[1] = 0.0
+        self.w_i.data[2] = 1.0
+        
+    def GetExpertProbabilities(self):
+        exp_w = torch.sum(torch.exp(self.w_i / self.temperature))
+        PI = torch.exp(self.w_i / self.temperature) / exp_w
+        return PI
 
     def EvalFunctions(self, X):
-        PI = torch.zeros(3)
-        exp_w = torch.sum(torch.exp(self.w_i))
-        PI = torch.exp(self.w_i) / exp_w
-
+        PI = self.GetExpertProbabilities()
         return torch.vstack((
-            # PI[0] * ((self.a_i[0]*X + self.b_i[0]) * self.c_i[0] + self.d_i[0]),
-            # PI[1] * ((self.a_i[1]*X + self.b_i[1])**2 * self.c_i[1] + self.d_i[1]),
-            # PI[2] * ((self.a_i[2]*X + self.b_i[2])**3 * self.c_i[2] + self.d_i[2])
 
             PI[0] * ((self.a_i*X + self.b_i)    * self.c_i + self.d_i),
             PI[1] * ((self.a_i*X + self.b_i)**2 * self.c_i + self.d_i),
