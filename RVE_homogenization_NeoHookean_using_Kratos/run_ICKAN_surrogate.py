@@ -234,13 +234,13 @@ n_epochs = 10_000
 learning_rate = 0.01
 
 order_stretches = 1   # Number of orders (can be set to any value)
-k = 3  # Degree of splines
-grid_size = 10  # Number of knots
+k = 4  # Degree of splines
+grid_size = 12  # Number of knots
 
 input_size = 2 * order_stretches + 1
 W_width = [input_size,
-            3,
-            3,
+            4,
+            4,
             1] # output always 1
 
 #*****************************************************************************************************************
@@ -264,7 +264,7 @@ print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zer
 optimizer_1 = optim.AdamW(
     model.parameters(),
     lr=learning_rate,
-    weight_decay=1.0e-3,
+    weight_decay=1.0e-4,
     # amsgrad = True
 )
 

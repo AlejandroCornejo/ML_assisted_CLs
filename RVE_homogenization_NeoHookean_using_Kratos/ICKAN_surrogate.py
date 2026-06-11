@@ -40,13 +40,13 @@ class ICKAN_W_Surrogate(nn.Module):
 
         # Initialize some extra parameters
         self.ki = nn.ParameterList([
-            p + 1 for p in range(self.order_stretches + 1)
-            # nn.Parameter(torch.tensor(p + 1.0)) for p in range(self.order_stretches + 1)
+            # p + 1 for p in range(self.order_stretches + 1)
+            nn.Parameter(torch.tensor(p + 1.0)) for p in range(self.order_stretches + 1)
         ])
 
         # The parameter multiplying the log(J) is initially set to 1.0
-        self.ki[-1] = 1.0
-        # self.ki[-1] = nn.Parameter(torch.tensor(1.0))
+        # self.ki[-1] = 1.0
+        self.ki[-1] = nn.Parameter(torch.tensor(1.0))
         
         # for k in self.ki:
         #     print(f"Initial ki: {k.item()}")
