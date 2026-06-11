@@ -10,6 +10,8 @@ class SoftMaxAnalyticalEdge(nn.Module):
         x
         x**2
         x**3
+        tanh(x)
+        sin(x)
 
     f(x) = SUM PI_i * (c_i * funct(a_i * x + b_i) + d_i)
 
@@ -19,19 +21,18 @@ class SoftMaxAnalyticalEdge(nn.Module):
     def __init__(self):
         super().__init__()
 
+        self.num_experts = 5
+
         self.a_i = nn.Parameter(torch.tensor(1.0))
         self.b_i = nn.Parameter(torch.tensor(0.0))
         self.c_i = nn.Parameter(torch.tensor(1.0))
         self.d_i = nn.Parameter(torch.tensor(0.0))
-        
-        self.temperature = 10.0
 
-        self.w_i = nn.Parameter(torch.zeros(3)) # weights
-        
-        self.w_i.data[0] = 0.0
-        self.w_i.data[1] = 0.0
-        self.w_i.data[2] = 1.0
-        
+        self.temperature = 1.0
+
+        # self.w_i = nn.Parameter(torch.zeros(self.num_experts)) # weights
+        self.w_i = nn.Parameter(torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0])) # weights
+
     def GetExpertProbabilities(self):
         exp_w = torch.sum(torch.exp(self.w_i / self.temperature))
         PI = torch.exp(self.w_i / self.temperature) / exp_w
@@ -40,10 +41,11 @@ class SoftMaxAnalyticalEdge(nn.Module):
     def EvalFunctions(self, X):
         PI = self.GetExpertProbabilities()
         return torch.vstack((
-
             PI[0] * ((self.a_i*X + self.b_i)    * self.c_i + self.d_i),
             PI[1] * ((self.a_i*X + self.b_i)**2 * self.c_i + self.d_i),
-            PI[2] * ((self.a_i*X + self.b_i)**3 * self.c_i + self.d_i)
+            PI[2] * ((self.a_i*X + self.b_i)**3 * self.c_i + self.d_i),
+            PI[3] * (torch.tanh(self.a_i*X + self.b_i) * self.c_i + self.d_i),
+            PI[4] * (torch.sin(self.a_i*X + self.b_i) * self.c_i + self.d_i)
         ))
 
     def forward(self, X):

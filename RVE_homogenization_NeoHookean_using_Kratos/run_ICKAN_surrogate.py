@@ -37,7 +37,7 @@ Load strain and stress from FOM trajectories (10 trajectories from stage_1_train
 Data is loaded as [history, step, component] with shape [10, steps, 3].
 """
 #***********************************************
-min_steps = 200  # truncate all trajectories to the same length (e.g., 150 steps)
+min_steps = 500  # truncate all trajectories to the same length (e.g., 150 steps)
 #***********************************************
 
 # Path to FOM trajectories folder (relative to script location)
@@ -230,18 +230,17 @@ def TRAIN_KAN(
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 100_000
-learning_rate = 1.0e-2
+n_epochs = 10_000
+learning_rate = 0.01
 
 order_stretches = 1   # Number of orders (can be set to any value)
-k = 2  # Degree of splines
-grid_size = 6  # Number of knots
+k = 3  # Degree of splines
+grid_size = 10  # Number of knots
 
 input_size = 2 * order_stretches + 1
 W_width = [input_size,
-            5,
-            5,
-            2,
+            3,
+            3,
             1] # output always 1
 
 #*****************************************************************************************************************
@@ -262,7 +261,7 @@ print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
 print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
 
 
-optimizer_1 = optim.Adam(
+optimizer_1 = optim.AdamW(
     model.parameters(),
     lr=learning_rate,
     weight_decay=1.0e-3,
@@ -293,9 +292,9 @@ TRAIN_KAN(
     patience                    = 25,
     reduce_lr_factor            = 0.5,
     minimum_lr                  = 1.0e-4,
-    train_W                     = True,
+    train_W                     = False,
     early_stopping_threshold    = 1.0e-4,
-    mixed_sovolev_training      = True,
+    mixed_sovolev_training      = False,
     mixed_sovolev_W_loss_weight = 0.01 # 1 is only W loss, 0 is only S loss
 )
 #------------------------------------------------------------------------------------
