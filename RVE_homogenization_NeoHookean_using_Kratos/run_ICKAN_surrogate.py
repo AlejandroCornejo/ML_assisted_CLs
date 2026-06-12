@@ -135,7 +135,7 @@ max_W = 1
 train_W_database /= max_W  # Normalize W to have max absolute value of 1
 
 def L2_relative_error(pred, target):
-    return torch.sqrt(torch.sum(((pred - target)) ** 2) / torch.sum(target**2))
+    return torch.sqrt(torch.mean(((pred - target)) ** 2) / torch.mean(target**2))
 
 # ==========================================================================================
 def TRAIN_KAN(
@@ -157,7 +157,8 @@ def TRAIN_KAN(
     verbose_interval = 100,
     update_grid=False,
     grid_update_interval = 500,
-    initial_step_grid_update = 1000
+    initial_step_grid_update = 1000,
+    final_step_grid_update = 2000
     ):
 
     best_loss = float('inf')
@@ -174,7 +175,9 @@ def TRAIN_KAN(
                 loss_W = L2_relative_error(predicted_w, ref_W_database)  # Relative W loss
 
                 normalized_stress = model.CalculateNormalizedStress(ref_strain_database) * max_W
-                loss_S = L2_relative_error(normalized_stress, ref_stress_database)  # Relative S loss
+                loss_S = L2_relative_error(normalized_stress[:, 0], ref_stress_database[:, 0])
+                loss_S += L2_relative_error(normalized_stress[:, 1], ref_stress_database[:, 1])
+                loss_S += L2_relative_error(normalized_stress[:, 2], ref_stress_database[:, 2])
 
                 loss = mixed_sovolev_W_loss_weight * (loss_W) + (1.0 - mixed_sovolev_W_loss_weight) * (loss_S)
             else:
@@ -183,7 +186,9 @@ def TRAIN_KAN(
                     loss = L2_relative_error(predicted_w, ref_W_database)  # Relative W loss
                 else:
                     normalized_stress = model.CalculateNormalizedStress(ref_strain_database) * max_W
-                    loss = L2_relative_error(normalized_stress, ref_stress_database)
+                    loss = L2_relative_error(normalized_stress[:, 0], ref_stress_database[:, 0])
+                    loss += L2_relative_error(normalized_stress[:, 1], ref_stress_database[:, 1])
+                    loss += L2_relative_error(normalized_stress[:, 2], ref_stress_database[:, 2])
 
             loss.backward()
             return loss
@@ -232,8 +237,9 @@ def TRAIN_KAN(
                     print(f"Final model is the best model with loss {loss.item():.6E}")
                     model.load_state_dict(best_parameters)  # Revert to best parameters
 
-        if update_grid and epoch >= initial_step_grid_update and grid_update_counter >= grid_update_interval:
+        if update_grid and epoch >= initial_step_grid_update and epoch <= final_step_grid_update and grid_update_counter >= grid_update_interval:
             model.UpdateGridFromSamples(ref_strain_database)
+            print(f"\t Grid updated from samples at epoch {epoch}")
             grid_update_counter = 0
 
 # ==========================================================================================
@@ -242,16 +248,16 @@ def TRAIN_KAN(
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 10_000
-learning_rate = 0.01
+n_epochs = 5_000
+learning_rate = 0.001
 
 order_stretches = 1   # Number of orders (can be set to any value)
 k = 3  # Degree of splines
-grid_size = 6  # Number of knots
+grid_size = 7  # Number of knots
 
 input_size = 2 * order_stretches + 1
 W_width = [input_size,
-            5,
+            4,
             1] # output always 1
 
 #*****************************************************************************************************************
@@ -271,19 +277,12 @@ print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
 print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
 
 
-optimizer_1 = optim.AdamW(
+optimizer_1 = optim.Adam(
     model.parameters(),
     lr=learning_rate,
     weight_decay=1.0e-2,
     # amsgrad = True
 )
-
-# optimizer_1 = optim.LBFGS(
-#     model.parameters(),
-#     lr=learning_rate,
-#     max_iter=10,
-#     history_size=20
-# )
 
 print(20*"=")
 print("\nStarting stress based optimization...")
@@ -298,14 +297,22 @@ TRAIN_KAN(
     ref_stress_database         = train_stress_database,
     n_epochs                    = n_epochs,
     max_W                       = max_W,
+
     is_patient                  = True,
     patience                    = 15,
     reduce_lr_factor            = 0.75,
     minimum_lr                  = 1.0e-6,
+
     train_W                     = False,
     early_stopping_threshold    = 1.0e-4,
     mixed_sovolev_training      = False,
-    mixed_sovolev_W_loss_weight = 0.01 # 1 is only W loss, 0 is only S loss
+    mixed_sovolev_W_loss_weight = 0.1, # 1 is only W loss, 0 is only S loss
+
+    update_grid = True,
+    grid_update_interval = 100,
+    initial_step_grid_update = 10,
+    final_step_grid_update = 500,
+    verbose_interval = 10,
 )
 #------------------------------------------------------------------------------------
 

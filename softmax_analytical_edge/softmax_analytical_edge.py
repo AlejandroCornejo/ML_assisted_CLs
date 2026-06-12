@@ -18,7 +18,7 @@ class SoftMaxAnalyticalEdge(nn.Module):
     PI is a softmax regularization
     We will train the parameters a_i, b_i, c_i, d_i and w_i (for PI)
     """
-    def __init__(self):
+    def __init__(self, temperature=1.0):
         super().__init__()
 
         self.num_experts = 5
@@ -28,7 +28,7 @@ class SoftMaxAnalyticalEdge(nn.Module):
         self.c_i = nn.Parameter(torch.tensor(1.0))
         self.d_i = nn.Parameter(torch.tensor(0.0))
 
-        self.temperature = 1.0
+        self.temperature = temperature
 
         # self.w_i = nn.Parameter(torch.zeros(self.num_experts)) # weights
         self.w_i = nn.Parameter(torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0])) # weights
