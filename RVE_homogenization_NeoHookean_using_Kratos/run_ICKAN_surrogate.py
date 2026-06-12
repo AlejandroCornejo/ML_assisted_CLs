@@ -245,12 +245,12 @@ def TRAIN_KAN(
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 10000
-learning_rate = 0.001
+n_epochs = 5000
+learning_rate = 1.0e-2
 
 order_stretches = 1   # Number of orders (can be set to any value)
 k = 3  # Degree of splines
-grid_size = 15  # Number of knots
+grid_size = 4  # Number of knots
 
 input_size = 2 * order_stretches + 1
 W_width = [input_size,
@@ -306,7 +306,7 @@ TRAIN_KAN(
 
     train_W                     = False,
     early_stopping_threshold    = 1.0e-3,
-    mixed_sovolev_training      = True,
+    mixed_sovolev_training      = False,
     mixed_sovolev_W_loss_weight = 0.1, # 1 is only W loss, 0 is only S loss
 
     update_grid = False,
