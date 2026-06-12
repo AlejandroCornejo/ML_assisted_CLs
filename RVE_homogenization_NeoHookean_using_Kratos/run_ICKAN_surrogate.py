@@ -135,7 +135,7 @@ max_W = 1
 train_W_database /= max_W  # Normalize W to have max absolute value of 1
 
 def L2_relative_error(pred, target):
-    return torch.sqrt(torch.mean((pred - target) ** 2) / torch.mean(target**2))
+    return torch.sqrt(torch.sum(((pred - target)) ** 2) / torch.sum(target**2))
 
 # ==========================================================================================
 def TRAIN_KAN(
@@ -147,16 +147,22 @@ def TRAIN_KAN(
     n_epochs, max_W,
     patience=10, 
     reduce_lr_factor=0.5,
+    reset_model_after_patience=False,
     is_patient=True,
     train_W = False,
     mixed_sovolev_training = False,
     mixed_sovolev_W_loss_weight = 0.5,
     early_stopping_threshold = 1e-4,
     minimum_lr = 1.0e-4,
+    verbose_interval = 100,
+    update_grid=False,
+    grid_update_interval = 500,
+    initial_step_grid_update = 1000
     ):
 
     best_loss = float('inf')
     patience_counter = 0
+    grid_update_counter = 0
 
     for epoch in range(n_epochs):
         def closure():
@@ -184,6 +190,8 @@ def TRAIN_KAN(
 
         loss = optimizer.step(closure)
 
+        grid_update_counter += 1
+
         # Check for very low loss (absolute early stopping)
         if loss.item() < early_stopping_threshold:
             print(f"Early stopping at epoch {epoch} with loss {loss.item():.8E}")
@@ -193,7 +201,8 @@ def TRAIN_KAN(
         if loss.item() < best_loss:
             best_loss = loss.item()
             patience_counter = 0
-            best_parameters = {k: v.clone() for k, v in model.state_dict().items()}  # Save best model parameters
+            if reset_model_after_patience:
+                best_parameters = {k: v.clone() for k, v in model.state_dict().items()}  # Save best model parameters
         else:
             patience_counter += 1
             # Reduce learning rate when patience is exhausted
@@ -206,12 +215,14 @@ def TRAIN_KAN(
 
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = new_lr
+                print(f"\tReducing learning rate from {current_lr:.7E} to {new_lr:.7E} at epoch {epoch}")
+
+                if reset_model_after_patience:
                     model.load_state_dict(best_parameters)  # Revert to best parameters
-                print(f"\t\tReducing learning rate from {current_lr:.3E} to {new_lr:.3E} at epoch {epoch}")
-                print(f"\t\tReverting to best model parameters with loss {best_loss:.4E}")
+                    print(f"\t\tReverting to best model parameters with loss {best_loss:.4E}")
                 patience_counter = 0  # Reset patience counter
 
-        if epoch % 100 == 0:
+        if epoch % verbose_interval == 0:
             print(f"Epoch {epoch}, Loss: {loss.item():.8E}, Best Loss: {best_loss:.6E}, Patience: {patience_counter}/{patience}")
         
         if epoch == n_epochs - 1:
@@ -220,9 +231,10 @@ def TRAIN_KAN(
                 if loss.item() < best_loss:
                     print(f"Final model is the best model with loss {loss.item():.6E}")
                     model.load_state_dict(best_parameters)  # Revert to best parameters
-                    
-        # if epoch > 50:
-        #     model.UpdateGridFromSamples(ref_strain_database)
+
+        if update_grid and epoch >= initial_step_grid_update and grid_update_counter >= grid_update_interval:
+            model.UpdateGridFromSamples(ref_strain_database)
+            grid_update_counter = 0
 
 # ==========================================================================================
 
@@ -234,13 +246,12 @@ n_epochs = 10_000
 learning_rate = 0.01
 
 order_stretches = 1   # Number of orders (can be set to any value)
-k = 4  # Degree of splines
-grid_size = 12  # Number of knots
+k = 3  # Degree of splines
+grid_size = 6  # Number of knots
 
 input_size = 2 * order_stretches + 1
 W_width = [input_size,
-            4,
-            4,
+            5,
             1] # output always 1
 
 #*****************************************************************************************************************
@@ -254,8 +265,7 @@ model = surrogate.ICKAN_W_Surrogate(
     W_width=W_width
 )
 
-# model.UpdateGridFromSamples(train_strain_database)
-
+model.UpdateGridFromSamples(train_strain_database)
 
 print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
 print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
@@ -264,7 +274,7 @@ print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zer
 optimizer_1 = optim.AdamW(
     model.parameters(),
     lr=learning_rate,
-    weight_decay=1.0e-4,
+    weight_decay=1.0e-2,
     # amsgrad = True
 )
 
@@ -289,9 +299,9 @@ TRAIN_KAN(
     n_epochs                    = n_epochs,
     max_W                       = max_W,
     is_patient                  = True,
-    patience                    = 25,
-    reduce_lr_factor            = 0.5,
-    minimum_lr                  = 1.0e-4,
+    patience                    = 15,
+    reduce_lr_factor            = 0.75,
+    minimum_lr                  = 1.0e-6,
     train_W                     = False,
     early_stopping_threshold    = 1.0e-4,
     mixed_sovolev_training      = False,
@@ -304,9 +314,14 @@ torch.save(model.state_dict(), "ICKAN_predictions/ICKAN_model_weights.pth")
 model.KAN_W.save_act = True
 kan_input = model._compute_kan_input_for_strain(train_strain_database) 
 predicted_w = model.KAN_W.forward(kan_input)
+
+# model.KAN_W.update_grid(kan_input)
+
 model.KAN_W.plot(
                 folder="./ICKAN_predictions/splines",
-                tick=True
+                tick=True,
+                scale=10.0,
+                varscale=0.25
                 )
 # plt.show()
 plt.savefig("./ICKAN_predictions/ICKAN.eps")
