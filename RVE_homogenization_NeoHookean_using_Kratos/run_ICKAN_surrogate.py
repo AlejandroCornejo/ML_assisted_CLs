@@ -245,17 +245,17 @@ def TRAIN_KAN(
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 15000
-learning_rate = 0.01
+n_epochs = 10000
+learning_rate = 0.001
 
 order_stretches = 1   # Number of orders (can be set to any value)
-k = 5  # Degree of splines
-grid_size = 10  # Number of knots
+k = 3  # Degree of splines
+grid_size = 15  # Number of knots
 
 input_size = 2 * order_stretches + 1
 W_width = [input_size,
-            10,
-            10,
+            2,
+            1,
             1] # output always 1
 
 #*****************************************************************************************************************
@@ -271,8 +271,10 @@ model = surrogate.ICKAN_W_Surrogate(
 
 print("\nInitial KAN grid update:")
 model.UpdateGridFromSamples(train_strain_database)
-model.KAN_W.plot(tick=True)
-plt.show()
+
+
+# model.KAN_W.plot(tick=True)
+# plt.show()
 
 print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
 print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
@@ -280,9 +282,7 @@ print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zer
 
 optimizer_1 = optim.Adam(
     model.parameters(),
-    lr=learning_rate,
-    weight_decay=1.0e-2,
-    # amsgrad = True
+    lr=learning_rate
 )
 
 print(20*"=")
@@ -299,14 +299,14 @@ TRAIN_KAN(
     n_epochs                    = n_epochs,
     max_W                       = max_W,
 
-    is_patient                  = True,
-    patience                    = 15,
+    is_patient                  = False,
+    patience                    = 50,
     reduce_lr_factor            = 0.75,
     minimum_lr                  = 1.0e-6,
 
     train_W                     = False,
-    early_stopping_threshold    = 1.0e-4,
-    mixed_sovolev_training      = False,
+    early_stopping_threshold    = 1.0e-3,
+    mixed_sovolev_training      = True,
     mixed_sovolev_W_loss_weight = 0.1, # 1 is only W loss, 0 is only S loss
 
     update_grid = False,

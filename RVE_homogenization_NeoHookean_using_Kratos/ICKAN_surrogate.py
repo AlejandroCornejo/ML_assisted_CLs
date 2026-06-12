@@ -88,20 +88,15 @@ class ICKAN_W_Surrogate(nn.Module):
         max_log_J = torch.max(kan_input[:, -1]).item()
         min_log_J = torch.min(kan_input[:, -1]).item()
 
-        # print(f"KAN input ranges from samples:")
-        # print(f"  lambda_1: [{min_lambda_1:.6g}, {max_lambda_1:.6g}]")
-        # print(f"  lambda_2: [{min_lambda_2:.6g}, {max_lambda_2:.6g}]")
-        # print(f"  log_J: [{min_log_J:.6g}, {max_log_J:.6g}]")
-
-        steps = 100
-        input_1 = torch.linspace(0.7*min_lambda_1, 1.25*max_lambda_1, steps)
-        input_2 = torch.linspace(0.7*min_lambda_2, 1.25*max_lambda_2, steps)
-        input_3 = torch.linspace(0.7*min_log_J+1.0e-8, 1.25*max_log_J, steps)
+        steps = 5000
+        input_1 = torch.linspace(0.9*min_lambda_1    , 1.1*max_lambda_1, steps)
+        input_2 = torch.linspace(0.9*min_lambda_2    , 1.1*max_lambda_2, steps)
+        input_3 = torch.linspace(0.9*min_log_J+1.0e-8, 1.1*max_log_J, steps)
         # input_1 = torch.linspace(0, 2, steps)
         # input_2 = torch.linspace(0, 2, steps)
         # input_3 = torch.linspace(0, 2, steps)
         kan_input_for_grid = torch.stack((input_1, input_2, input_3), dim=1)  # Shape: (steps, 3), stacked along columns
-        
+
         # kan_input_for_grid = torch.tensor([
         #     [min_lambda_1, min_lambda_2, min_log_J],
         #     [max_lambda_1, max_lambda_2, max_log_J]
