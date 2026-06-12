@@ -22,13 +22,13 @@ class ICKAN_W_Surrogate(nn.Module):
         # KAN definition for the energy density potential W
         self.KAN_W = KAN.MultKAN(
             # base_fun = "zero",
-            grid_eps = 1.0, # 1 grid is uniformly spaced in the range [grid_range[0], grid_range[1]]
+            grid_eps = 0.5, # 1 grid is uniformly spaced in the range [grid_range[0], grid_range[1]]
             width=W_width,  # output of size 1: W
             grid=self.grid_size,
             k=self.k,
             
-            affine_trainable = True,
-            sparse_init = True,
+            # affine_trainable = True,
+            # sparse_init = True,
 
             # grid_range=grid_range,
             # grid_range_0=grid_range,
@@ -38,9 +38,11 @@ class ICKAN_W_Surrogate(nn.Module):
 
             sp_trainable = True,
             sb_trainable = True,
+            
+            noise_scale=0.0
         )
 
-        self.KAN_W.speed()
+        # self.KAN_W.speed()
 
         # Initialize some extra parameters
         self.ki = nn.ParameterList([
@@ -78,6 +80,7 @@ class ICKAN_W_Surrogate(nn.Module):
 
     def UpdateGridFromSamples(self, strain_database):
         kan_input = self._compute_kan_input_for_strain(strain_database)  # Shape: (batches*steps, input_size) --> lambda_1, lambda_2, log_J
+
         max_lambda_1 = torch.max(kan_input[:, 0]).item()
         min_lambda_1 = torch.min(kan_input[:, 0]).item()
         max_lambda_2 = torch.max(kan_input[:, 1]).item()
@@ -94,6 +97,9 @@ class ICKAN_W_Surrogate(nn.Module):
         input_1 = torch.linspace(0.7*min_lambda_1, 1.25*max_lambda_1, steps)
         input_2 = torch.linspace(0.7*min_lambda_2, 1.25*max_lambda_2, steps)
         input_3 = torch.linspace(0.7*min_log_J+1.0e-8, 1.25*max_log_J, steps)
+        # input_1 = torch.linspace(0, 2, steps)
+        # input_2 = torch.linspace(0, 2, steps)
+        # input_3 = torch.linspace(0, 2, steps)
         kan_input_for_grid = torch.stack((input_1, input_2, input_3), dim=1)  # Shape: (steps, 3), stacked along columns
         
         # kan_input_for_grid = torch.tensor([
@@ -101,7 +107,7 @@ class ICKAN_W_Surrogate(nn.Module):
         #     [max_lambda_1, max_lambda_2, max_log_J]
         # ])
 
-        self.KAN_W.update_grid(kan_input_for_grid)
+        self.KAN_W.update_grid_from_samples(kan_input_for_grid)
 
 
     # ==========================================================================================

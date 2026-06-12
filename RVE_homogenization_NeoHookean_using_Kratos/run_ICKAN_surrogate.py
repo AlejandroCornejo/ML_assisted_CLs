@@ -135,7 +135,8 @@ max_W = 1
 train_W_database /= max_W  # Normalize W to have max absolute value of 1
 
 def L2_relative_error(pred, target):
-    return torch.sqrt(torch.mean(((pred - target)) ** 2) / torch.mean(target**2))
+    # return torch.sqrt(torch.mean(((pred - target) / (target + 1.0e-12)) ** 2))
+    return (torch.mean((pred - target) ** 2)) / ((torch.mean(target ** 2)) + 1.0e-12)
 
 # ==========================================================================================
 def TRAIN_KAN(
@@ -175,9 +176,7 @@ def TRAIN_KAN(
                 loss_W = L2_relative_error(predicted_w, ref_W_database)  # Relative W loss
 
                 normalized_stress = model.CalculateNormalizedStress(ref_strain_database) * max_W
-                loss_S = L2_relative_error(normalized_stress[:, 0], ref_stress_database[:, 0])
-                loss_S += L2_relative_error(normalized_stress[:, 1], ref_stress_database[:, 1])
-                loss_S += L2_relative_error(normalized_stress[:, 2], ref_stress_database[:, 2])
+                loss_S = L2_relative_error(normalized_stress, ref_stress_database)
 
                 loss = mixed_sovolev_W_loss_weight * (loss_W) + (1.0 - mixed_sovolev_W_loss_weight) * (loss_S)
             else:
@@ -186,9 +185,7 @@ def TRAIN_KAN(
                     loss = L2_relative_error(predicted_w, ref_W_database)  # Relative W loss
                 else:
                     normalized_stress = model.CalculateNormalizedStress(ref_strain_database) * max_W
-                    loss = L2_relative_error(normalized_stress[:, 0], ref_stress_database[:, 0])
-                    loss += L2_relative_error(normalized_stress[:, 1], ref_stress_database[:, 1])
-                    loss += L2_relative_error(normalized_stress[:, 2], ref_stress_database[:, 2])
+                    loss = L2_relative_error(normalized_stress, ref_stress_database)
 
             loss.backward()
             return loss
@@ -248,16 +245,17 @@ def TRAIN_KAN(
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 5_000
-learning_rate = 0.001
+n_epochs = 15000
+learning_rate = 0.01
 
 order_stretches = 1   # Number of orders (can be set to any value)
-k = 3  # Degree of splines
-grid_size = 7  # Number of knots
+k = 5  # Degree of splines
+grid_size = 10  # Number of knots
 
 input_size = 2 * order_stretches + 1
 W_width = [input_size,
-            4,
+            10,
+            10,
             1] # output always 1
 
 #*****************************************************************************************************************
@@ -271,7 +269,10 @@ model = surrogate.ICKAN_W_Surrogate(
     W_width=W_width
 )
 
+print("\nInitial KAN grid update:")
 model.UpdateGridFromSamples(train_strain_database)
+model.KAN_W.plot(tick=True)
+plt.show()
 
 print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
 print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
@@ -308,11 +309,11 @@ TRAIN_KAN(
     mixed_sovolev_training      = False,
     mixed_sovolev_W_loss_weight = 0.1, # 1 is only W loss, 0 is only S loss
 
-    update_grid = True,
+    update_grid = False,
     grid_update_interval = 100,
     initial_step_grid_update = 10,
     final_step_grid_update = 500,
-    verbose_interval = 10,
+    verbose_interval = 10
 )
 #------------------------------------------------------------------------------------
 
@@ -328,7 +329,7 @@ model.KAN_W.plot(
                 folder="./ICKAN_predictions/splines",
                 tick=True,
                 scale=10.0,
-                varscale=0.25
+                varscale=0.05
                 )
 # plt.show()
 plt.savefig("./ICKAN_predictions/ICKAN.eps")
