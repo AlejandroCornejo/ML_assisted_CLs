@@ -15,26 +15,31 @@ class ICKAN_W_Surrogate(nn.Module):
         self.input_size = 2 * self.order_stretches + 1  # Total inputs: 2 * reg_eigenvalues for each order + 1 * log(J)
         self.grid_size = grid_size
         self.k = k
-        self.W_width = W_width
 
         # Define the spline grid range for all inputs
-        grid_range = [-0.1, 2.0]
+        # grid_range = [-1.0, 1.0]
 
         # KAN definition for the energy density potential W
         self.KAN_W = KAN.MultKAN(
-            base_fun = "zero",
-            grid_eps = 0.25,
-            width=self.W_width,  # output of size 1: W
+            # base_fun = "zero",
+            grid_eps = 0.02, # 1 grid is uniformly spaced in the range [grid_range[0], grid_range[1]]
+            width=W_width,  # output of size 1: W
             grid=self.grid_size,
             k=self.k,
+            
+            # affine_trainable = True,
+            # sparse_init = True,
 
             # grid_range=grid_range,
             # grid_range_0=grid_range,
-            grid_range=[grid_range,grid_range,grid_range, grid_range, grid_range],
-            grid_range_0=[grid_range,grid_range,grid_range, grid_range, grid_range],
+
+            # grid_range=[grid_range,grid_range,grid_range, grid_range, grid_range],
+            # grid_range_0=[grid_range,grid_range,grid_range, grid_range, grid_range],
+
+            # sp_trainable = False,
+            # sb_trainable = False,
             
-            # sp_trainable = True,
-            sb_trainable = False,
+            noise_scale=0.001
         )
 
         # self.KAN_W.speed()
@@ -74,8 +79,23 @@ class ICKAN_W_Surrogate(nn.Module):
     # ==========================================================================================
 
     def UpdateGridFromSamples(self, strain_database):
-        kan_input = self._compute_kan_input_for_strain(strain_database)  # Shape: (batches*steps, input_size)
-        self.KAN_W.update_grid(kan_input)
+        kan_input = self._compute_kan_input_for_strain(strain_database)  # Shape: (batches*steps, input_size) --> lambda_1, lambda_2, log_J
+
+        max_lambda_1 = torch.max(kan_input[:, 0]).item()
+        min_lambda_1 = torch.min(kan_input[:, 0]).item()
+        max_lambda_2 = torch.max(kan_input[:, 1]).item()
+        min_lambda_2 = torch.min(kan_input[:, 1]).item()
+        max_log_J = torch.max(kan_input[:, -1]).item()
+        min_log_J = torch.min(kan_input[:, -1]).item()
+
+        steps = 5000
+        input_1 = torch.linspace(0.9*min_lambda_1    , 1.1*max_lambda_1, steps)
+        input_2 = torch.linspace(0.9*min_lambda_2    , 1.1*max_lambda_2, steps)
+        input_3 = torch.linspace(0.9*min_log_J       , 1.1*max_log_J   , steps)
+
+        kan_input_for_grid = torch.stack((input_1, input_2, input_3), dim=1)  # Shape: (steps, 3), stacked along columns
+
+        self.KAN_W.update_grid_from_samples(kan_input_for_grid)
 
 
     # ==========================================================================================
@@ -97,9 +117,9 @@ class ICKAN_W_Surrogate(nn.Module):
         E[:, 1, 0] = 0.5 * strain[:, 2]
 
         C = 2.0 * E + torch.eye(2)
-        J = torch.linalg.det(C) ** 0.5
+        J = torch.linalg.det(C)**0.5
         # log_J = torch.log(J + 1.0e-12)
-        log_J = (J - 1)**2
+        log_J = (J - 1.0)**2
 
         square_eigenvalues = torch.linalg.eigvalsh(C)
         eigenvalues = torch.sqrt(square_eigenvalues)
@@ -170,6 +190,5 @@ class ICKAN_W_Surrogate(nn.Module):
                     grad_outputs=torch.ones_like(W),
                     create_graph=True
                     )[0]
-
 
         return predicted_stress - stress_0

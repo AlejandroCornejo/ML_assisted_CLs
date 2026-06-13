@@ -135,7 +135,8 @@ max_W = 1
 train_W_database /= max_W  # Normalize W to have max absolute value of 1
 
 def L2_relative_error(pred, target):
-    return torch.sqrt(torch.sum((pred - target) ** 2) / torch.sum(target**2))
+    # return torch.sqrt(torch.mean(((pred - target) / (target + 1.0e-12)) ** 2))
+    return (torch.mean((pred - target) ** 2)) / ((torch.mean(target ** 2)) + 1.0e-12)
 
 # ==========================================================================================
 def TRAIN_KAN(
@@ -147,16 +148,23 @@ def TRAIN_KAN(
     n_epochs, max_W,
     patience=10, 
     reduce_lr_factor=0.5,
+    reset_model_after_patience=False,
     is_patient=True,
     train_W = False,
     mixed_sovolev_training = False,
     mixed_sovolev_W_loss_weight = 0.5,
     early_stopping_threshold = 1e-4,
     minimum_lr = 1.0e-4,
+    verbose_interval = 100,
+    update_grid=False,
+    grid_update_interval = 500,
+    initial_step_grid_update = 1000,
+    final_step_grid_update = 2000
     ):
 
     best_loss = float('inf')
     patience_counter = 0
+    grid_update_counter = 0
 
     for epoch in range(n_epochs):
         def closure():
@@ -168,8 +176,7 @@ def TRAIN_KAN(
                 loss_W = L2_relative_error(predicted_w, ref_W_database)  # Relative W loss
 
                 normalized_stress = model.CalculateNormalizedStress(ref_strain_database) * max_W
-                # loss_S = torch.sum(((normalized_stress - ref_stress_database) ** 2) / (ref_stress_database**2 + 1e-12))  # Relative S loss
-                loss_S = L2_relative_error(normalized_stress, ref_stress_database)  # Relative S loss
+                loss_S = L2_relative_error(normalized_stress, ref_stress_database)
 
                 loss = mixed_sovolev_W_loss_weight * (loss_W) + (1.0 - mixed_sovolev_W_loss_weight) * (loss_S)
             else:
@@ -185,6 +192,8 @@ def TRAIN_KAN(
 
         loss = optimizer.step(closure)
 
+        grid_update_counter += 1
+
         # Check for very low loss (absolute early stopping)
         if loss.item() < early_stopping_threshold:
             print(f"Early stopping at epoch {epoch} with loss {loss.item():.8E}")
@@ -194,7 +203,8 @@ def TRAIN_KAN(
         if loss.item() < best_loss:
             best_loss = loss.item()
             patience_counter = 0
-            best_parameters = {k: v.clone() for k, v in model.state_dict().items()}  # Save best model parameters
+            if reset_model_after_patience:
+                best_parameters = {k: v.clone() for k, v in model.state_dict().items()}  # Save best model parameters
         else:
             patience_counter += 1
             # Reduce learning rate when patience is exhausted
@@ -207,12 +217,14 @@ def TRAIN_KAN(
 
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = new_lr
+                print(f"\tReducing learning rate from {current_lr:.7E} to {new_lr:.7E} at epoch {epoch}")
+
+                if reset_model_after_patience:
                     model.load_state_dict(best_parameters)  # Revert to best parameters
-                print(f"\t\tReducing learning rate from {current_lr:.3E} to {new_lr:.3E} at epoch {epoch}")
-                print(f"\t\tReverting to best model parameters with loss {best_loss:.4E}")
+                    print(f"\t\tReverting to best model parameters with loss {best_loss:.4E}")
                 patience_counter = 0  # Reset patience counter
 
-        if epoch % 50 == 0:
+        if epoch % verbose_interval == 0:
             print(f"Epoch {epoch}, Loss: {loss.item():.8E}, Best Loss: {best_loss:.6E}, Patience: {patience_counter}/{patience}")
         
         if epoch == n_epochs - 1:
@@ -221,9 +233,11 @@ def TRAIN_KAN(
                 if loss.item() < best_loss:
                     print(f"Final model is the best model with loss {loss.item():.6E}")
                     model.load_state_dict(best_parameters)  # Revert to best parameters
-                    
-        # if epoch > 50:
-        #     model.UpdateGridFromSamples(ref_strain_database)
+
+        if update_grid and epoch >= initial_step_grid_update and epoch <= final_step_grid_update and grid_update_counter >= grid_update_interval:
+            model.UpdateGridFromSamples(ref_strain_database)
+            print(f"\t Grid updated from samples at epoch {epoch}")
+            grid_update_counter = 0
 
 # ==========================================================================================
 
@@ -231,16 +245,17 @@ def TRAIN_KAN(
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 150
+n_epochs = 5000
 learning_rate = 1.0e-2
 
-order_stretches = 2   # Number of orders (can be set to any value)
+order_stretches = 1   # Number of orders (can be set to any value)
 k = 3  # Degree of splines
-grid_size = 8  # Number of knots
+grid_size = 4  # Number of knots
 
 input_size = 2 * order_stretches + 1
 W_width = [input_size,
             2,
+            1,
             1] # output always 1
 
 #*****************************************************************************************************************
@@ -254,26 +269,21 @@ model = surrogate.ICKAN_W_Surrogate(
     W_width=W_width
 )
 
-# model.UpdateGridFromSamples(train_strain_database)
+print("\nInitial KAN grid update:")
+model.UpdateGridFromSamples(train_strain_database)
 
 
-# print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
-# print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
+# model.KAN_W.plot(tick=True)
+# plt.show()
+
+print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
+print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
 
 
-optimizer_1 = optim.AdamW(
+optimizer_1 = optim.Adam(
     model.parameters(),
-    lr=learning_rate,
-    weight_decay=1.0e-3,
-    # amsgrad = True
+    lr=learning_rate
 )
-
-# optimizer_1 = optim.LBFGS(
-#     model.parameters(),
-#     lr=learning_rate,
-#     max_iter=10,
-#     history_size=20
-# )
 
 print(20*"=")
 print("\nStarting stress based optimization...")
@@ -288,14 +298,22 @@ TRAIN_KAN(
     ref_stress_database         = train_stress_database,
     n_epochs                    = n_epochs,
     max_W                       = max_W,
-    is_patient                  = True,
-    patience                    = 25,
-    reduce_lr_factor            = 0.5,
-    minimum_lr                  = 1.0e-4,
-    train_W                     = True,
-    early_stopping_threshold    = 1.0e-4,
-    mixed_sovolev_training      = True,
-    mixed_sovolev_W_loss_weight = 0.9 # 1 is only W loss, 0 is only S loss
+
+    is_patient                  = False,
+    patience                    = 50,
+    reduce_lr_factor            = 0.75,
+    minimum_lr                  = 1.0e-6,
+
+    train_W                     = False,
+    early_stopping_threshold    = 1.0e-3,
+    mixed_sovolev_training      = False,
+    mixed_sovolev_W_loss_weight = 0.1, # 1 is only W loss, 0 is only S loss
+
+    update_grid = False,
+    grid_update_interval = 100,
+    initial_step_grid_update = 10,
+    final_step_grid_update = 500,
+    verbose_interval = 10
 )
 #------------------------------------------------------------------------------------
 
@@ -304,9 +322,14 @@ torch.save(model.state_dict(), "ICKAN_predictions/ICKAN_model_weights.pth")
 model.KAN_W.save_act = True
 kan_input = model._compute_kan_input_for_strain(train_strain_database) 
 predicted_w = model.KAN_W.forward(kan_input)
+
+# model.KAN_W.update_grid(kan_input)
+
 model.KAN_W.plot(
                 folder="./ICKAN_predictions/splines",
-                tick=True
+                tick=True,
+                scale=10.0,
+                varscale=0.05
                 )
 # plt.show()
 plt.savefig("./ICKAN_predictions/ICKAN.eps")
@@ -321,8 +344,30 @@ plt.xlabel('Strain XX')
 plt.ylabel('Elastic Energy Density W')
 plt.legend()
 plt.grid()
-plt.savefig("./ICKAN_predictions/W_history.eps")
-plt.savefig("./ICKAN_predictions/W_history.png")
+plt.savefig("./ICKAN_predictions/W_history_x.eps")
+plt.savefig("./ICKAN_predictions/W_history_x.png")
+# plt.show()
+plt.close()
+
+plt.plot(train_strain_database[:,1].detach().numpy(), train_W_database[:,0].detach().numpy(), '--', label='Reference W')
+plt.plot(train_strain_database[:,1].detach().numpy(), predicted_w[:,0].detach().numpy(), '-', label='ICKAN W')
+plt.xlabel('Strain YY')
+plt.ylabel('Elastic Energy Density W')
+plt.legend()
+plt.grid()
+plt.savefig("./ICKAN_predictions/W_history_y.eps")
+plt.savefig("./ICKAN_predictions/W_history_y.png")
+# plt.show()
+plt.close()
+
+plt.plot(train_strain_database[:,2].detach().numpy(), train_W_database[:,0].detach().numpy(), '--', label='Reference W')
+plt.plot(train_strain_database[:,2].detach().numpy(), predicted_w[:,0].detach().numpy(), '-', label='ICKAN W')
+plt.xlabel('Strain XY')
+plt.ylabel('Elastic Energy Density W')
+plt.legend()
+plt.grid()
+plt.savefig("./ICKAN_predictions/W_history_xy.eps")
+plt.savefig("./ICKAN_predictions/W_history_xy.png")
 # plt.show()
 plt.close()
 
