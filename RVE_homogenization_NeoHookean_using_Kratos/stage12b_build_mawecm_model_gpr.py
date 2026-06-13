@@ -8,8 +8,8 @@ Default behavior follows the residual-centric MAW setup:
   - Stage12b first computes classical split ECM (self-contained) from Stage12a data.
   - MAW is then trained only for residual support/weights.
   - Homogenization supports/weights are kept classical (no MAW) unless requested.
-  - Residual RHS targets come from the dataset (b_full), not from anchor reconstruction.
-  - Graph regularization defaults to structured Stage12 mesh connectivity when available.
+  - Every local MAW target is anchored at the classical ECM rule: b_j=A_j*w_ini.
+  - Phase 1 is unregularized; phase 2 is enabled only through explicit flags.
 """
 
 from __future__ import annotations
@@ -18,7 +18,10 @@ import os
 import argparse
 import numpy as np
 
-from mawecm_graph_utils import build_knn_graph_laplacian, build_cell_graph_laplacian
+from mawecm_graph_utils import (
+    build_knn_graph_laplacian,
+    filter_degenerate_tetrahedra,
+)
 from mawecm_pruning import run_mawecm_pruning
 from mawecm_rbf_weights import fit_mawecm_rbf, eval_mawecm_rbf
 from empirical_cubature_method import EmpiricalCubatureMethod
@@ -53,41 +56,49 @@ def _load_stage12a_dataset(dataset_dir, require_hom=False, load_hom=True):
     b_file = os.path.join(dataset_dir, "b_full.dat")
     c_file = os.path.join(dataset_dir, "C_hom.dat")
     bh_file = os.path.join(dataset_dir, "b_hom.dat")
-    qh_file = os.path.join(dataset_dir, "q_p_hom.npy")
+    qm_res_file = os.path.join(dataset_dir, "q_m_res.npy")
+    qh_file = os.path.join(dataset_dir, "q_m_hom.npy")
     muh_file = os.path.join(dataset_dir, "mu_hom.npy")
     idh_file = os.path.join(dataset_dir, "sample_ids_hom.npy")
 
-    for p in (q_file, b_file):
+    for p in (q_file, b_file, qm_res_file):
         if not os.path.exists(p):
             raise FileNotFoundError(p)
 
     q_res_mm = np.memmap(q_file, dtype=np.float64, mode="r", shape=(nq * ns_res, n_elem))
     b_res_mm = np.memmap(b_file, dtype=np.float64, mode="r", shape=(nq * ns_res,))
-    q_p_res = np.asarray(np.load(os.path.join(dataset_dir, "q_p_res.npy")), dtype=float)
+    q_m_res = np.asarray(np.load(qm_res_file), dtype=float)
     mu_res = np.asarray(np.load(os.path.join(dataset_dir, "mu_res.npy")), dtype=float)
     ids_res = np.asarray(np.load(os.path.join(dataset_dir, "sample_ids_res.npy")), dtype=np.int64)
-    cells_struct_file = os.path.join(dataset_dir, "structured_mesh_cells_res.npy")
+    cells_struct_file = os.path.join(dataset_dir, "parameter_mesh_cells_res.npy")
     grid_struct_file = os.path.join(dataset_dir, "structured_mesh_grid_shape_res.npy")
     cells_struct_res = (
         np.asarray(np.load(cells_struct_file), dtype=np.int64)
         if os.path.exists(cells_struct_file)
         else None
     )
+    if cells_struct_res is not None and (
+        cells_struct_res.ndim != 2 or cells_struct_res.shape[1] != 4
+    ):
+        raise RuntimeError(
+            "Stage12b requires parameter_mesh_cells_res.npy with tet4 Delaunay "
+            f"connectivity; got shape {cells_struct_res.shape}. Rebuild Stage7a and Stage12a."
+        )
     grid_struct_res = (
         np.asarray(np.load(grid_struct_file), dtype=np.int64)
         if os.path.exists(grid_struct_file)
         else None
     )
 
-    if q_p_res.shape != (ns_res, nq):
-        raise RuntimeError(f"q_p_res shape {q_p_res.shape} != ({ns_res},{nq})")
+    if q_m_res.shape != (ns_res, nq):
+        raise RuntimeError(f"q_m_res shape {q_m_res.shape} != ({ns_res},{nq})")
     q_res = np.asarray(q_res_mm, dtype=float)
     b_res = np.asarray(b_res_mm, dtype=float)
     q_ok_rows = np.isfinite(q_res).all(axis=1)
     b_ok_rows = np.isfinite(b_res)
     row_ok = q_ok_rows & b_ok_rows
     sample_ok = row_ok.reshape(ns_res, nq).all(axis=1)
-    sample_ok &= np.isfinite(q_p_res).all(axis=1)
+    sample_ok &= np.isfinite(q_m_res).all(axis=1)
     sample_ok &= np.isfinite(mu_res).all(axis=1)
     n_bad = int(np.sum(~sample_ok))
     if n_bad > 0:
@@ -95,7 +106,7 @@ def _load_stage12a_dataset(dataset_dir, require_hom=False, load_hom=True):
         raise RuntimeError(
             "Stage12a dataset contains non-finite residual samples. "
             f"Bad samples: {n_bad}/{ns_res}, first ids={bad_ids.tolist()}. "
-            "Rebuild Stage12a with the latest structured admissibility fix."
+            "Rebuild Stage12a from the actual-sample Delaunay parameter mesh."
         )
 
     hom_files = (c_file, bh_file, qh_file, muh_file, idh_file)
@@ -103,17 +114,17 @@ def _load_stage12a_dataset(dataset_dir, require_hom=False, load_hom=True):
     ns_hom = int(ns_hom_meta)
     c_hom = None
     b_hom = None
-    q_p_hom = np.zeros((0, nq), dtype=float)
+    q_m_hom = np.zeros((0, nq), dtype=float)
     mu_hom = np.zeros((0, 3), dtype=float)
     ids_hom = np.zeros((0, 2), dtype=np.int64)
     if bool(load_hom) and ns_hom > 0 and hom_ready:
         c_hom = np.memmap(c_file, dtype=np.float64, mode="r", shape=(6 * ns_hom, n_elem))
         b_hom = np.memmap(bh_file, dtype=np.float64, mode="r", shape=(6 * ns_hom,))
-        q_p_hom = np.asarray(np.load(qh_file), dtype=float)
+        q_m_hom = np.asarray(np.load(qh_file), dtype=float)
         mu_hom = np.asarray(np.load(muh_file), dtype=float)
         ids_hom = np.asarray(np.load(idh_file), dtype=np.int64)
-        if q_p_hom.shape != (ns_hom, nq):
-            raise RuntimeError(f"q_p_hom shape {q_p_hom.shape} != ({ns_hom},{nq})")
+        if q_m_hom.shape != (ns_hom, nq):
+            raise RuntimeError(f"q_m_hom shape {q_m_hom.shape} != ({ns_hom},{nq})")
     else:
         if bool(load_hom) and ns_hom > 0 and bool(require_hom):
             missing = [p for p in hom_files if not os.path.exists(p)]
@@ -135,8 +146,8 @@ def _load_stage12a_dataset(dataset_dir, require_hom=False, load_hom=True):
         "b_res": b_res,
         "C_hom": c_hom,
         "b_hom": b_hom,
-        "q_p_res": q_p_res,
-        "q_p_hom": q_p_hom,
+        "q_m_res": q_m_res,
+        "q_m_hom": q_m_hom,
         "mu_res": mu_res,
         "mu_hom": mu_hom,
         "ids_res": ids_res,
@@ -160,22 +171,32 @@ def _rel_error(a, b):
     return float(np.linalg.norm(aa - bb) / max(np.linalg.norm(bb), 1.0e-30))
 
 
-def _run_rsvd_on_transpose(M_T, rsvd_tol, label=""):
+def _run_rsvd_on_transpose(M_T, rsvd_tol, label="", use_randomization=True):
     A = np.ascontiguousarray(M_T)
     rsvd = RandomizedSingularValueDecomposition(
         COMPUTE_U=True,
         COMPUTE_V=False,
         RELATIVE_SVD=True,
-        USE_RANDOMIZATION=True,
+        USE_RANDOMIZATION=bool(use_randomization),
     )
     U, s, _, eSVD = rsvd.Calculate(A, truncation_tolerance=float(rsvd_tol))
     if U.size == 0:
-        raise RuntimeError(f"[{label}] RSVD returned empty basis")
-    print(f"  [Classic-{label}] RSVD kept={s.size}, eSVD={float(eSVD):.3e}")
+        svd_label = "RSVD" if bool(use_randomization) else "SVD"
+        raise RuntimeError(f"[{label}] {svd_label} returned empty basis")
+    svd_label = "RSVD" if bool(use_randomization) else "SVD"
+    print(f"  [Classic-{label}] {svd_label} kept={s.size}, eSVD={float(eSVD):.3e}")
     return np.asarray(U, dtype=float), np.asarray(s, dtype=float), float(eSVD)
 
 
-def _run_ecm(U_basis, n_elem, ecm_tol, init_candidates, label="", max_unsuccessful_it=200):
+def _run_ecm(
+    U_basis,
+    n_elem,
+    ecm_tol,
+    init_candidates,
+    label="",
+    max_unsuccessful_it=200,
+    constrain_sum_of_weights=True,
+):
     ecm = EmpiricalCubatureMethod(
         ECM_tolerance=float(ecm_tol),
         Filter_tolerance=0.0,
@@ -185,7 +206,7 @@ def _run_ecm(U_basis, n_elem, ecm_tol, init_candidates, label="", max_unsuccessf
     ecm.SetUp(
         ResidualsBasis=np.asarray(U_basis, dtype=float),
         InitialCandidatesSet=init_candidates,
-        constrain_sum_of_weights=False,
+        constrain_sum_of_weights=bool(constrain_sum_of_weights),
         constrain_conditions=False,
         number_of_conditions=0,
     )
@@ -197,7 +218,8 @@ def _run_ecm(U_basis, n_elem, ecm_tol, init_candidates, label="", max_unsuccessf
     w_full[z] = w_sel
     print(
         f"  [Classic-{label}] |Z|={z.size} "
-        f"({100.0 * z.size / max(int(n_elem), 1):.1f}% of {int(n_elem)})"
+        f"({100.0 * z.size / max(int(n_elem), 1):.1f}% of {int(n_elem)}), "
+        f"sum(w)={float(np.sum(w_sel)):.6e}"
     )
     return z, w_sel, w_full
 
@@ -228,8 +250,12 @@ def _compute_classic_ecm_from_dataset(dataset, args, include_homogenization=True
     print(f"  coupling mode={args.classic_ecm_coupling_mode}")
     print(f"  include homogenization={bool(include_homogenization)}")
 
+    use_classic_randomized_svd = bool(int(args.classic_rsvd_randomized))
     u_res, _, e_res = _run_rsvd_on_transpose(
-        q_res.T, float(args.classic_rsvd_tol_res), label="RES"
+        q_res.T,
+        float(args.classic_rsvd_tol_res),
+        label="RES",
+        use_randomization=use_classic_randomized_svd,
     )
     e_eps = np.nan
     e_sig = np.nan
@@ -252,10 +278,16 @@ def _compute_classic_ecm_from_dataset(dataset, args, include_homogenization=True
         c_sig = c_blk[:, 3:6, :].reshape(3 * ns_hom, n_elem)
         b_sig = b_blk[:, 3:6].reshape(3 * ns_hom)
         u_eps, _, e_eps = _run_rsvd_on_transpose(
-            c_eps.T, float(args.classic_rsvd_tol_eps), label="EPS"
+            c_eps.T,
+            float(args.classic_rsvd_tol_eps),
+            label="EPS",
+            use_randomization=use_classic_randomized_svd,
         )
         u_sig, _, e_sig = _run_rsvd_on_transpose(
-            c_sig.T, float(args.classic_rsvd_tol_sig), label="SIG"
+            c_sig.T,
+            float(args.classic_rsvd_tol_sig),
+            label="SIG",
+            use_randomization=use_classic_randomized_svd,
         )
 
     z_res, w_res, w_res_full = _run_ecm(
@@ -265,6 +297,7 @@ def _compute_classic_ecm_from_dataset(dataset, args, include_homogenization=True
         init_candidates=None,
         label="RES",
         max_unsuccessful_it=int(args.classic_max_unsuccessful_it),
+        constrain_sum_of_weights=bool(int(args.classic_constrain_sum_weights)),
     )
     if bool(include_homogenization):
         eps_init = np.asarray(z_res, dtype=np.int64) if coupling == "cascade" else None
@@ -275,6 +308,7 @@ def _compute_classic_ecm_from_dataset(dataset, args, include_homogenization=True
             init_candidates=eps_init,
             label="EPS",
             max_unsuccessful_it=int(args.classic_max_unsuccessful_it),
+            constrain_sum_of_weights=bool(int(args.classic_constrain_sum_weights)),
         )
         sig_init = np.asarray(z_eps, dtype=np.int64) if coupling == "cascade" else None
         z_sig, w_sig, w_sig_full = _run_ecm(
@@ -284,6 +318,7 @@ def _compute_classic_ecm_from_dataset(dataset, args, include_homogenization=True
             init_candidates=sig_init,
             label="SIG",
             max_unsuccessful_it=int(args.classic_max_unsuccessful_it),
+            constrain_sum_of_weights=bool(int(args.classic_constrain_sum_weights)),
         )
     else:
         z_eps = np.zeros(0, dtype=np.int64)
@@ -327,6 +362,7 @@ def _compute_classic_ecm_from_dataset(dataset, args, include_homogenization=True
         "RSVD_TOL_RES": np.array([float(args.classic_rsvd_tol_res)], dtype=float),
         "RSVD_TOL_EPS": np.array([float(args.classic_rsvd_tol_eps)], dtype=float),
         "RSVD_TOL_SIG": np.array([float(args.classic_rsvd_tol_sig)], dtype=float),
+        "CLASSIC_RSVD_RANDOMIZED": np.array([int(args.classic_rsvd_randomized)], dtype=np.int64),
         "eSVD_res": np.array([float(e_res)], dtype=float),
         "eSVD_eps": np.array([float(e_eps)], dtype=float),
         "eSVD_sig": np.array([float(e_sig)], dtype=float),
@@ -366,7 +402,7 @@ def _build_blocks_res(dataset, z_ini, w_ini, rhs_mode="dataset"):
             raise ValueError(f"Unsupported residual rhs mode '{rhs_mode}'.")
         A_blocks.append(A)
         b_blocks.append(b)
-    q_train = np.asarray(dataset["q_p_res"], dtype=float)
+    q_train = np.asarray(dataset["q_m_res"], dtype=float)
     mu_train = np.asarray(dataset["mu_res"], dtype=float)
     ids = np.asarray(dataset["ids_res"], dtype=np.int64)
     return A_blocks, b_blocks, q_train, mu_train, ids
@@ -393,7 +429,7 @@ def _build_blocks_eps(dataset, z_ini, w_ini, rhs_mode="anchor"):
             raise ValueError(f"Unsupported eps rhs mode '{rhs_mode}'.")
         A_blocks.append(A)
         b_blocks.append(b)
-    q_train = np.asarray(dataset["q_p_hom"], dtype=float)
+    q_train = np.asarray(dataset["q_m_hom"], dtype=float)
     mu_train = np.asarray(dataset["mu_hom"], dtype=float)
     ids = np.asarray(dataset["ids_hom"], dtype=np.int64)
     return A_blocks, b_blocks, q_train, mu_train, ids
@@ -420,31 +456,272 @@ def _build_blocks_sig(dataset, z_ini, w_ini, rhs_mode="anchor"):
             raise ValueError(f"Unsupported sig rhs mode '{rhs_mode}'.")
         A_blocks.append(A)
         b_blocks.append(b)
-    q_train = np.asarray(dataset["q_p_hom"], dtype=float)
+    q_train = np.asarray(dataset["q_m_hom"], dtype=float)
     mu_train = np.asarray(dataset["mu_hom"], dtype=float)
     ids = np.asarray(dataset["ids_hom"], dtype=np.int64)
     return A_blocks, b_blocks, q_train, mu_train, ids
 
 
+def _augment_blocks_with_sum_constraint(A_blocks, b_blocks, target_sum):
+    target = float(target_sum)
+    A_aug = []
+    b_aug = []
+    for A, b in zip(A_blocks, b_blocks):
+        Aj = np.asarray(A, dtype=float)
+        bj = np.asarray(b, dtype=float).reshape(-1)
+        A_aug.append(np.vstack([Aj, np.ones((1, int(Aj.shape[1])), dtype=float)]))
+        b_aug.append(np.concatenate([bj, np.array([target], dtype=float)]))
+    return A_aug, b_aug
+
+
+def _validate_maw_constraints(
+    A_blocks,
+    b_blocks,
+    W_train,
+    strict_rel_tol,
+    strict_negative_tol,
+):
+    W = np.asarray(W_train, dtype=float)
+    if W.ndim != 2 or W.shape[1] != len(A_blocks):
+        raise RuntimeError(
+            f"Invalid MAW weight field shape {W.shape}; expected (*,{len(A_blocks)})."
+        )
+
+    rel_errors = np.zeros(len(A_blocks), dtype=float)
+    for j, (A, b) in enumerate(zip(A_blocks, b_blocks)):
+        Aj = np.asarray(A, dtype=float)
+        bj = np.asarray(b, dtype=float).reshape(-1)
+        residual = Aj @ W[:, j] - bj
+        rel_errors[j] = np.linalg.norm(residual) / max(np.linalg.norm(bj), 1.0e-30)
+
+    max_rel = float(np.max(rel_errors)) if rel_errors.size else 0.0
+    min_weight = float(np.min(W)) if W.size else 0.0
+    if max_rel > float(strict_rel_tol):
+        raise RuntimeError(
+            f"MAW local constraints failed: max_rel={max_rel:.3e} > {strict_rel_tol:.3e}."
+        )
+    if min_weight < -float(strict_negative_tol):
+        raise RuntimeError(
+            f"MAW non-negativity failed: min_weight={min_weight:.3e} "
+            f"< -{strict_negative_tol:.3e}."
+        )
+    return {"max_rel": max_rel, "min_weight": min_weight}
+
+
+def _plot_maw_weight_fields_3d(
+    q_train,
+    W_train,
+    z_red,
+    rbf_model,
+    out_dir,
+    target,
+    max_plots,
+    fmt,
+    clip_nonnegative,
+    renorm_target,
+):
+    """Plot w(q1,q2;q3) as three surfaces at representative fixed q3 values."""
+    q = np.asarray(q_train, dtype=float)
+    w = np.asarray(W_train, dtype=float)
+    z = np.asarray(z_red, dtype=np.int64).reshape(-1)
+    tag = str(target).strip().lower()
+
+    if q.ndim != 2 or q.shape[1] < 3:
+        print(
+            f"  [MAW-plots][{tag}][WARN] q_train shape {q.shape} is not a 3D state domain."
+        )
+        return 0
+    if w.ndim != 2 or w.shape != (z.size, q.shape[0]):
+        print(
+            f"  [MAW-plots][{tag}][WARN] incompatible W_train/q/support shapes: "
+            f"{w.shape}, {q.shape}, {z.shape}."
+        )
+        return 0
+
+    save_dir = os.path.join(out_dir, f"maw_weight_fields_{tag}")
+    os.makedirs(save_dir, exist_ok=True)
+    os.environ.setdefault("MPLCONFIGDIR", os.path.join(save_dir, ".mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+    import matplotlib as mpl
+    import matplotlib.pyplot as plt
+
+    mpl.rcParams["text.usetex"] = False
+    mpl.rcParams["font.size"] = 10
+    mpl.rcParams["axes.titlesize"] = 10
+    mpl.rcParams["axes.labelsize"] = 10
+    mpl.rcParams["xtick.labelsize"] = 9
+    mpl.rcParams["ytick.labelsize"] = 9
+
+    q_dim = int(q.shape[1])
+    n_q1, n_q2 = 70, 55
+    q1_vec = np.linspace(float(np.min(q[:, 0])), float(np.max(q[:, 0])), n_q1)
+    q2_vec = np.linspace(float(np.min(q[:, 1])), float(np.max(q[:, 1])), n_q2)
+    q1_grid, q2_grid = np.meshgrid(q1_vec, q2_vec, indexing="xy")
+    q3_values = np.quantile(q[:, 2], [0.10, 0.50, 0.90])
+
+    # Evaluate in bounded-memory batches because a full Stage12 RBF may contain
+    # thousands of centers.
+    slice_weights = []
+    batch_size = 256
+    for q3 in q3_values:
+        query = np.zeros((q1_grid.size, q_dim), dtype=float)
+        query[:, 0] = q1_grid.ravel()
+        query[:, 1] = q2_grid.ravel()
+        query[:, 2] = float(q3)
+        if q_dim > 3:
+            query[:, 3:] = np.median(q[:, 3:], axis=0)[None, :]
+        parts = []
+        for i0 in range(0, query.shape[0], batch_size):
+            parts.append(
+                eval_mawecm_rbf(
+                    q_query=query[i0 : i0 + batch_size],
+                    model=rbf_model,
+                    clip_nonnegative=bool(clip_nonnegative),
+                    renorm_target=renorm_target,
+                )
+            )
+        slice_weights.append(np.hstack(parts))
+
+    n_all = int(z.size)
+    n_do = n_all if int(max_plots) <= 0 else min(n_all, int(max_plots))
+    summary_rows = []
+    q3_band = max(float(np.ptp(q[:, 2])) / 20.0, 1.0e-12)
+
+    for k in range(n_do):
+        fields = [
+            np.asarray(weights[k], dtype=float).reshape(n_q2, n_q1)
+            for weights in slice_weights
+        ]
+        value_min = min(float(np.min(field)) for field in fields)
+        value_max = max(float(np.max(field)) for field in fields)
+        value_mean = float(np.mean([np.mean(field) for field in fields]))
+        rel_range = (value_max - value_min) / max(abs(value_mean), 1.0e-30)
+        z_pad = 0.03 * max(value_max - value_min, abs(value_mean), 1.0e-12)
+        curvature = []
+        for field in fields:
+            d2_q1 = np.gradient(np.gradient(field, axis=1), axis=1)
+            d2_q2 = np.gradient(np.gradient(field, axis=0), axis=0)
+            curvature.append(
+                float(
+                    np.sqrt(np.mean((d2_q1 + d2_q2) ** 2))
+                    / max(abs(value_mean), value_max - value_min, 1.0e-30)
+                )
+            )
+
+        fig, axes = plt.subplots(
+            1,
+            3,
+            figsize=(15.8, 5.0),
+            constrained_layout=True,
+            subplot_kw={"projection": "3d"},
+        )
+        for j, (ax, field, q3) in enumerate(zip(axes, fields, q3_values)):
+            ax.plot_surface(
+                q1_grid,
+                q2_grid,
+                field,
+                color="#2f7f9f",
+                alpha=0.90,
+                linewidth=0.0,
+                antialiased=True,
+                rcount=n_q2,
+                ccount=n_q1,
+            )
+            near = np.abs(q[:, 2] - q3) <= q3_band
+            if np.any(near):
+                ax.scatter(
+                    q[near, 0],
+                    q[near, 1],
+                    w[k, near],
+                    c="black",
+                    s=7,
+                    alpha=0.35,
+                    linewidths=0.0,
+                    depthshade=False,
+                )
+            ax.set_xlabel(r"$q_1$")
+            ax.set_ylabel(r"$q_2$")
+            ax.set_zlabel(r"$w_e$")
+            ax.set_zlim(value_min - z_pad, value_max + z_pad)
+            ax.view_init(elev=28.0, azim=-58.0)
+            ax.set_title(
+                rf"$q_3={q3:.3e}$ | curvature={curvature[j]:.2e}",
+                fontsize=10,
+            )
+        elem_id = int(z[k])
+        fig.suptitle(
+            f"MAW-{tag} weight surfaces, element index {elem_id} | "
+            f"relative range={rel_range:.2e}",
+            fontsize=12,
+        )
+        out_file = os.path.join(
+            save_dir,
+            f"weight_surfaces_elem_{elem_id:05d}.{str(fmt).strip('.')}",
+        )
+        fig.savefig(out_file, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        summary_rows.append(
+            [elem_id, value_min, value_max, value_mean, rel_range, *curvature]
+        )
+
+    summary_file = os.path.join(save_dir, "weight_surface_smoothness.csv")
+    header = (
+        "element_index,min,max,mean,relative_range,"
+        "curvature_q3_p10,curvature_q3_p50,curvature_q3_p90"
+    )
+    np.savetxt(
+        summary_file,
+        np.asarray(summary_rows, dtype=float),
+        delimiter=",",
+        header=header,
+        comments="",
+    )
+    print(
+        f"  [MAW-plots][{tag}] saved {n_do} three-surface weight-field plots in "
+        f"{save_dir}"
+    )
+    return n_do
+
+
 def _build_graph_for_target(dataset, q_train, target, args):
     mode = str(args.graph_mode).strip().lower()
-    if mode == "structured_stage12":
+    if mode == "parameter_mesh_stage12":
         if str(target).strip().lower() != "res":
             raise RuntimeError(
-                "graph-mode=structured_stage12 is currently supported only for residual target."
+                "The Stage12 parameter-mesh graph is currently supported only for residual target."
             )
         cells = dataset.get("cells_struct_res", None)
         if cells is None:
             raise RuntimeError(
-                "structured_mesh_cells_res.npy not found in dataset. "
-                "Rebuild Stage12a with --residual-state-source stage7_structured_mesh."
+                "parameter_mesh_cells_res.npy not found in dataset. "
+                "Rebuild Stage12a from the Stage7 Delaunay parameter mesh."
             )
-        return build_cell_graph_laplacian(
-            n_nodes=int(q_train.shape[0]),
+        mu_train = np.asarray(dataset["mu_res"], dtype=float)
+        if mu_train.shape != (int(q_train.shape[0]), 3):
+            raise RuntimeError(
+                "Stage12 parameter graph requires mu_res aligned with q_m_res; "
+                f"got mu_res={mu_train.shape}, q_m_res={q_train.shape}."
+            )
+        _, laplacian, graph_stats = filter_degenerate_tetrahedra(
+            points=mu_train,
             cells=np.asarray(cells, dtype=np.int64),
-            cell_type="auto",
-            weight_mode="binary",
+            normalized_det_tol=1.0e-14,
+            require_all_nodes=True,
+            require_connected=True,
         )
+        print(
+            "  [MAW-graph] Stage12 parameter tetrahedra: "
+            f"kept={graph_stats['n_cells_kept']}/"
+            f"{graph_stats['n_cells_total']}, "
+            f"removed_degenerate={graph_stats['n_cells_removed']}, "
+            f"edges={graph_stats['n_graph_edges']}, "
+            f"components={graph_stats['n_components']}, "
+            f"isolated={graph_stats['n_isolated_nodes']} "
+            f"(normalized |det J_mu| > "
+            f"{graph_stats['normalized_det_tol']:.1e})."
+        )
+        return laplacian
     if mode == "knn":
         sigma = None if float(args.graph_sigma) <= 0.0 else float(args.graph_sigma)
         return build_knn_graph_laplacian(
@@ -511,7 +788,7 @@ def _run_target_maw(
             n_elem=n_elem,
             candidate_pool=str(args.res_candidate_pool),
         )
-        rhs_mode = str(args.res_target_source)
+        rhs_mode = "anchor"
     else:
         z_ini, w_ini = _select_initial_support_and_weights(
             ecm_fixed,
@@ -537,16 +814,40 @@ def _run_target_maw(
         )
         n_centers = int(args.rbf_centers_sig)
 
-    K_graph = _build_graph_for_target(
-        dataset=dataset,
-        q_train=q_train,
-        target=target,
-        args=args,
-    )
+    sum_target = float(args.sum_weights_target)
+    if sum_target <= 0.0:
+        sum_target = float(np.sum(w_ini))
+    if bool(int(args.enforce_sum_weights)):
+        A_blocks, b_blocks = _augment_blocks_with_sum_constraint(
+            A_blocks=A_blocks,
+            b_blocks=b_blocks,
+            target_sum=sum_target,
+        )
+        print(f"  [MAW-{target}] enforcing sum(w)={sum_target:.6e} in each local block.")
+
+    use_global_graph = bool(int(args.use_global_graph_2ndstage))
+    K_graph = None
+    if use_global_graph:
+        K_graph = _build_graph_for_target(
+            dataset=dataset,
+            q_train=q_train,
+            target=target,
+            args=args,
+        )
+
+    min_support = {
+        "res": int(args.maw_min_support_size_res),
+        "eps": int(args.maw_min_support_size_eps),
+        "sig": int(args.maw_min_support_size_sig),
+    }[target]
+    phase1_stop_size = {
+        "res": int(args.maw_phase1_stop_size_res),
+        "eps": int(args.maw_phase1_stop_size_eps),
+        "sig": int(args.maw_phase1_stop_size_sig),
+    }[target]
 
     prune_opts = {
-        "K_graph": K_graph,
-        "alpha_smooth": float(args.alpha_smooth),
+        "alpha_smooth": float(args.alpha_smooth) if use_global_graph else 0.0,
         "criterion": int(args.criterion),
         "number_of_candidates_to_try": int(args.n_candidates_to_try) if int(args.n_candidates_to_try) > 0 else None,
         "incremental_smoothing": bool(int(args.incremental_smoothing)),
@@ -556,8 +857,33 @@ def _run_target_maw(
         "tol_zero": float(args.tol_zero),
         "max_active_set_iters": int(args.max_as_iters),
         "max_reduced_dim": int(args.max_reduced_dim),
+        "warn_max_reduced_dim": False,
+        "enforce_nonnegativity": True,
+        "use_global_graph_2ndstage": use_global_graph,
+        "smooth_laplacian_all_iterations": bool(int(args.smooth_laplacian_all_iterations)),
+        "max_number_zeros_active_set_loop": int(args.max_number_zeros_active_set_loop_maw_ecm),
         "verbose": True,
     }
+    if K_graph is not None:
+        prune_opts["K_graph"] = K_graph
+    if min_support > 0:
+        prune_opts["n_stop"] = min_support
+    if phase1_stop_size > 0:
+        prune_opts["phase1_stop_size"] = phase1_stop_size
+
+    W_ini = np.tile(np.asarray(w_ini, dtype=float)[:, None], (1, len(A_blocks)))
+    validation_ini = _validate_maw_constraints(
+        A_blocks=A_blocks,
+        b_blocks=b_blocks,
+        W_train=W_ini,
+        strict_rel_tol=max(float(args.strict_constraint_rel_tol), 1.0e-14),
+        strict_negative_tol=float(args.strict_negative_tol),
+    )
+    print(
+        f"  [MAW-{target}] init feasibility: "
+        f"max_rel={validation_ini['max_rel']:.3e}, "
+        f"min_w={validation_ini['min_weight']:.3e}"
+    )
 
     maw = run_mawecm_pruning(
         A_blocks=A_blocks,
@@ -572,6 +898,15 @@ def _run_target_maw(
     z_red = np.asarray(maw["Z_support"], dtype=np.int64)
     if z_red.size == 0:
         raise RuntimeError(f"MAW returned empty support for target={target}.")
+    support_local = np.asarray(maw["i_support_local"], dtype=np.int64)
+    A_blocks_red = [np.asarray(A[:, support_local], dtype=float) for A in A_blocks]
+    validation = _validate_maw_constraints(
+        A_blocks=A_blocks_red,
+        b_blocks=b_blocks,
+        W_train=W_train,
+        strict_rel_tol=float(args.strict_constraint_rel_tol),
+        strict_negative_tol=float(args.strict_negative_tol),
+    )
 
     renorm_target = float(np.sum(w_ini))
     rbf = fit_mawecm_rbf(
@@ -598,7 +933,8 @@ def _run_target_maw(
 
     print(
         f"  [MAW-{target}] rhs={rhs_mode} |Z_ini|={z_ini.size} -> |Z_red|={z_red.size}, "
-        f"RBF train-rel={rel_recon:.3e}, prune-elapsed={maw['elapsed_sec']:.2f}s"
+        f"RBF train-rel={rel_recon:.3e}, max_rel={validation['max_rel']:.3e}, "
+        f"min_w={validation['min_weight']:.3e}, prune-elapsed={maw['elapsed_sec']:.2f}s"
     )
 
     return {
@@ -619,6 +955,8 @@ def _run_target_maw(
         "renorm_target": float(renorm_target),
         "recon_rel": rel_recon,
         "rhs_mode": np.array([rhs_mode]),
+        "sum_target": float(sum_target),
+        "sum_constraint": int(bool(int(args.enforce_sum_weights))),
     }
 
 
@@ -627,13 +965,13 @@ def _build_fixed_hom_target_result(dataset, ecm_fixed, target):
     if t == "eps":
         z = np.asarray(ecm_fixed["Z_eps"], dtype=np.int64).reshape(-1)
         w = np.asarray(ecm_fixed["w_eps"], dtype=float).reshape(-1)
-        q_train = np.asarray(dataset["q_p_hom"], dtype=float)
+        q_train = np.asarray(dataset["q_m_hom"], dtype=float)
         mu_train = np.asarray(dataset["mu_hom"], dtype=float)
         ids = np.asarray(dataset["ids_hom"], dtype=np.int64)
     elif t == "sig":
         z = np.asarray(ecm_fixed["Z_sig"], dtype=np.int64).reshape(-1)
         w = np.asarray(ecm_fixed["w_sig"], dtype=float).reshape(-1)
-        q_train = np.asarray(dataset["q_p_hom"], dtype=float)
+        q_train = np.asarray(dataset["q_m_hom"], dtype=float)
         mu_train = np.asarray(dataset["mu_hom"], dtype=float)
         ids = np.asarray(dataset["ids_hom"], dtype=np.int64)
     else:
@@ -752,7 +1090,7 @@ def _save_stage12b_file(out_file, dataset, ecm_fixed, results, args):
         "fixed_ecm_dir": np.array([fixed_dir_tag]),
         "classic_ecm_source": np.array([str(args.classic_ecm_source)]),
         "MAW_VERSION": np.array(["v1"]),
-        "maw_q_dim": np.array([int(dataset["q_p_res"].shape[1])], dtype=np.int64),
+        "maw_q_dim": np.array([int(dataset["q_m_res"].shape[1])], dtype=np.int64),
         "maw_targets": np.array([",".join(maw_enabled_targets)]),
         "maw_hom_mode": np.array(
             ["disabled" if bool(int(args.disable_homogenization)) else str(args.hom_mode)]
@@ -764,9 +1102,31 @@ def _save_stage12b_file(out_file, dataset, ecm_fixed, results, args):
         "maw_graph_kernel": np.array([str(args.graph_kernel)]),
         "maw_graph_sigma": np.array([float(args.graph_sigma)], dtype=float),
         "maw_alpha_smooth": np.array([float(args.alpha_smooth)], dtype=float),
+        "maw_use_global_graph_2ndstage": np.array(
+            [int(args.use_global_graph_2ndstage)], dtype=np.int64
+        ),
+        "maw_smooth_laplacian_all_iterations": np.array(
+            [int(args.smooth_laplacian_all_iterations)], dtype=np.int64
+        ),
+        "maw_min_support_size_res": np.array([int(args.maw_min_support_size_res)], dtype=np.int64),
+        "maw_max_number_zeros_active_set_loop": np.array(
+            [int(args.max_number_zeros_active_set_loop_maw_ecm)], dtype=np.int64
+        ),
+        "maw_enforce_sum_weights": np.array([int(args.enforce_sum_weights)], dtype=np.int64),
+        "maw_sum_weights_target_input": np.array([float(args.sum_weights_target)], dtype=float),
+        "classic_constrain_sum_weights": np.array(
+            [int(args.classic_constrain_sum_weights)], dtype=np.int64
+        ),
         "maw_stage2_criterion": np.array([int(args.criterion)], dtype=np.int64),
         "maw_incremental_smoothing": np.array([int(args.incremental_smoothing)], dtype=np.int64),
-        "maw_postprocess_mode": np.array(["clip+renorm" if int(args.rbf_renorm) else "clip"]),
+        "maw_rbf_clip_nonnegative": np.array([int(args.rbf_clip_nonnegative)], dtype=np.int64),
+        "maw_rbf_renorm": np.array([int(args.rbf_renorm)], dtype=np.int64),
+        "maw_postprocess_mode": np.array(
+            [
+                ("clip+" if int(args.rbf_clip_nonnegative) else "")
+                + ("renorm" if int(args.rbf_renorm) else "none")
+            ]
+        ),
     }
     if dataset.get("grid_struct_res", None) is not None:
         payload["maw_res_structured_grid_shape"] = np.asarray(
@@ -789,6 +1149,8 @@ def _save_stage12b_file(out_file, dataset, ecm_fixed, results, args):
         payload[prefix + "m_constraints"] = np.array([int(rec["A_m"])], dtype=np.int64)
         payload[prefix + "recon_rel"] = np.array([float(rec["recon_rel"])], dtype=float)
         payload[prefix + "rhs_mode"] = np.array([str(np.ravel(rec["rhs_mode"])[0])])
+        payload[prefix + "sum_constraint"] = np.array([int(rec.get("sum_constraint", 0))], dtype=np.int64)
+        payload[prefix + "sum_target"] = np.array([float(rec.get("sum_target", rec["renorm_target"]))], dtype=float)
         payload[prefix + "is_fixed_classic"] = np.array(
             [1 if bool(rec.get("fixed_classic", False)) else 0],
             dtype=np.int64,
@@ -810,6 +1172,28 @@ def _save_stage12b_file(out_file, dataset, ecm_fixed, results, args):
                 [int(maw["options"]["criterion"])], dtype=np.int64
             )
             payload[prefix + "elapsed_sec"] = np.array([float(maw["elapsed_sec"])], dtype=float)
+            payload[prefix + "phase1_start_size"] = np.array(
+                [int(maw["phase1_start_size"])], dtype=np.int64
+            )
+            payload[prefix + "phase1_end_size"] = np.array(
+                [int(maw["phase1_end_size"])], dtype=np.int64
+            )
+            payload[prefix + "phase2_started"] = np.array(
+                [int(bool(maw["phase2_started"]))], dtype=np.int64
+            )
+            payload[prefix + "phase2_start_size"] = np.array(
+                [int(maw["phase2_start_size"])], dtype=np.int64
+            )
+            payload[prefix + "phase2_end_size"] = np.array(
+                [int(maw["phase2_end_size"])], dtype=np.int64
+            )
+            payload[prefix + "phase2_attempts"] = np.array(
+                [int(maw["phase2_attempts"])], dtype=np.int64
+            )
+            payload[prefix + "phase2_successes"] = np.array(
+                [int(maw["phase2_successes"])], dtype=np.int64
+            )
+            payload[prefix + "stage_history"] = np.asarray(maw["stage_history"])
 
             payload[prefix + "rbf_centers"] = np.asarray(rbf["centers"], dtype=float)
             payload[prefix + "rbf_center_ids"] = np.asarray(rbf["center_ids"], dtype=np.int64)
@@ -904,10 +1288,24 @@ def parse_args():
     p.add_argument("--classic-rsvd-tol-res", type=float, default=1.0e-5)
     p.add_argument("--classic-rsvd-tol-eps", type=float, default=1.0e-5)
     p.add_argument("--classic-rsvd-tol-sig", type=float, default=1.0e-5)
+    p.add_argument(
+        "--classic-rsvd-randomized",
+        type=int,
+        default=0,
+        choices=[0, 1],
+        help="If 0, use deterministic numpy SVD for the classical ECM bootstrap basis.",
+    )
     p.add_argument("--classic-ecm-tol-res", type=float, default=0.0)
     p.add_argument("--classic-ecm-tol-eps", type=float, default=0.0)
     p.add_argument("--classic-ecm-tol-sig", type=float, default=0.0)
     p.add_argument("--classic-max-unsuccessful-it", type=int, default=200)
+    p.add_argument(
+        "--classic-constrain-sum-weights",
+        type=int,
+        default=1,
+        choices=[0, 1],
+        help="If 1, enforce the classical ECM bootstrap sum-of-weights constraint.",
+    )
     p.add_argument(
         "--disable-homogenization",
         type=int,
@@ -919,15 +1317,15 @@ def parse_args():
         "--res-candidate-pool",
         type=str,
         default="fixed_support",
-        choices=["fixed_support", "full_mesh"],
-        help="Initial candidate pool for residual MAW.",
+        choices=["fixed_support"],
+        help="MAW starts from the classical residual ECM support z_ini.",
     )
     p.add_argument(
         "--res-target-source",
         type=str,
-        default="dataset",
-        choices=["dataset", "anchor"],
-        help="Residual RHS target source for MAW pruning.",
+        default="anchor",
+        choices=["anchor"],
+        help="Local targets are b_j=A_j*w_ini, matching the validated 2D workflow.",
     )
     p.add_argument(
         "--preserve-hrom-metadata",
@@ -940,16 +1338,70 @@ def parse_args():
     p.add_argument(
         "--graph-mode",
         type=str,
-        default="structured_stage12",
-        choices=["structured_stage12", "knn"],
-        help="Graph operator used in MAW pruning.",
+        default="parameter_mesh_stage12",
+        choices=["parameter_mesh_stage12", "knn"],
+        help=(
+            "Graph operator used in MAW pruning. parameter_mesh_stage12 uses the "
+            "Delaunay tetrahedra of actual Stage7 states."
+        ),
     )
     p.add_argument("--graph-knn", type=int, default=8)
     p.add_argument("--graph-kernel", type=str, default="gaussian", choices=["gaussian", "binary"])
     p.add_argument("--graph-sigma", type=float, default=0.0)
     p.add_argument("--alpha-smooth", type=float, default=0.1)
+    p.add_argument(
+        "--use-global-graph-2ndstage",
+        type=int,
+        default=0,
+        choices=[0, 1],
+        help="Enable graph-coupled phase 2. Default 0 uses local active-set phase 2.",
+    )
+    p.add_argument(
+        "--smooth-laplacian-all-iterations",
+        type=int,
+        default=0,
+        choices=[0, 1],
+        help="If 1, phase 2 is forced from the first deletion attempt.",
+    )
+    p.add_argument(
+        "--maw-min-support-size-res",
+        type=int,
+        default=0,
+        help="Hard lower bound for residual MAW support. <=0 uses the algebraic minimum.",
+    )
+    p.add_argument("--maw-min-support-size-eps", type=int, default=0)
+    p.add_argument("--maw-min-support-size-sig", type=int, default=0)
+    p.add_argument(
+        "--maw-phase1-stop-size-res",
+        type=int,
+        default=0,
+        help="Residual support size where phase 1 intentionally hands control to phase 2.",
+    )
+    p.add_argument("--maw-phase1-stop-size-eps", type=int, default=0)
+    p.add_argument("--maw-phase1-stop-size-sig", type=int, default=0)
+    p.add_argument(
+        "--max-number-zeros-active-set-loop-maw-ecm",
+        type=int,
+        default=1,
+        help=(
+            "Enable phase-2 active-set elimination when >0. Use 0 for phase-1 only."
+        ),
+    )
+    p.add_argument(
+        "--enforce-sum-weights",
+        type=int,
+        default=1,
+        choices=[0, 1],
+        help="If 1, append sum(w)=target to every MAW local constraint block.",
+    )
+    p.add_argument(
+        "--sum-weights-target",
+        type=float,
+        default=-1.0,
+        help="Target sum(w) for MAW local constraints. <=0 uses sum(w_ini).",
+    )
     p.add_argument("--criterion", type=int, default=2, choices=[0, 1, 2])
-    p.add_argument("--n-candidates-to-try", type=int, default=20)
+    p.add_argument("--n-candidates-to-try", type=int, default=0)
     p.add_argument("--incremental-smoothing", type=int, default=1, choices=[0, 1])
     p.add_argument("--use-total-as-criterion", type=int, default=0, choices=[0, 1])
     p.add_argument("--tol-rank-rel", type=float, default=1.0e-12)
@@ -957,6 +1409,8 @@ def parse_args():
     p.add_argument("--tol-zero", type=float, default=1.0e-12)
     p.add_argument("--max-as-iters", type=int, default=30)
     p.add_argument("--max-reduced-dim", type=int, default=2500)
+    p.add_argument("--strict-constraint-rel-tol", type=float, default=1.0e-8)
+    p.add_argument("--strict-negative-tol", type=float, default=1.0e-12)
 
     p.add_argument("--rbf-centers-res", type=int, default=0)
     p.add_argument("--rbf-centers-eps", type=int, default=0)
@@ -966,6 +1420,20 @@ def parse_args():
     p.add_argument("--rbf-length-scale-factor", type=float, default=1.0)
     p.add_argument("--rbf-clip-nonnegative", type=int, default=1, choices=[0, 1])
     p.add_argument("--rbf-renorm", type=int, default=1, choices=[0, 1])
+    p.add_argument(
+        "--save-weight-field-plots",
+        type=int,
+        default=1,
+        choices=[0, 1],
+        help="Save three-view 3D state-space plots of each adaptive MAW weight field.",
+    )
+    p.add_argument(
+        "--max-weight-field-plots",
+        type=int,
+        default=0,
+        help="Maximum plots per MAW target. 0 saves all selected-element fields.",
+    )
+    p.add_argument("--weight-plot-format", type=str, default="png")
     return p.parse_args()
 
 
@@ -1052,6 +1520,26 @@ def main():
                 print(
                     f"  [MAW-{t}] fixed classical homogenization support kept: |Z|={results[t]['z_red'].size}"
                 )
+
+    if bool(int(args.save_weight_field_plots)):
+        for t in ("res", "eps", "sig"):
+            rec = results[t]
+            if rec["maw"] is None or rec["rbf"] is None:
+                continue
+            rec["n_weight_field_plots"] = _plot_maw_weight_fields_3d(
+                q_train=rec["q_train"],
+                W_train=rec["W_train"],
+                z_red=rec["z_red"],
+                rbf_model=rec["rbf"],
+                out_dir=args.out_dir,
+                target=t,
+                max_plots=int(args.max_weight_field_plots),
+                fmt=str(args.weight_plot_format),
+                clip_nonnegative=bool(int(args.rbf_clip_nonnegative)),
+                renorm_target=(
+                    float(rec["renorm_target"]) if bool(int(args.rbf_renorm)) else None
+                ),
+            )
 
     _save_stage12b_file(
         out_file=out_file,

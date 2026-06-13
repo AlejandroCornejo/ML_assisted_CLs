@@ -319,13 +319,20 @@ def RunHpromGprBatchSimulation(
     Kr_old = None
     J_full = np.zeros((n_total_dof, n_primary), dtype=float)
     q0_const, J0_const = _evaluate_qs_and_jac(np.zeros(n_primary, dtype=float), np.zeros(3, dtype=float))
-    phi_p_eff = phi_p + phi_s @ J0_const
+    a_m = np.asarray(gpr_model["A_m"], dtype=float)
+    if a_m.shape != (n_primary, n_primary):
+        raise RuntimeError(
+            f"[HPROM-GPR] A_m shape mismatch: got {a_m.shape}, "
+            f"expected {(n_primary, n_primary)}."
+        )
+    phi_master = phi_p @ a_m
+    phi_p_eff = phi_master + phi_s @ J0_const
     w0_const = phi_s @ q0_const
 
     print(f"  [HPROM-GPR] Solving for {n_steps_total} dynamic increments...")
     print(f"  [HPROM-GPR] Active mesh elements: {len(elements)} (reference full mesh: {n_elem_reference})")
     print("  [HPROM-GPR] Manifold correction active: N(0)=0 and J(0)=0.")
-    print(f"  [HPROM-GPR] q_p initializer mode: {qp_init_mode}")
+    print(f"  [HPROM-GPR] q_m initializer mode: {qp_init_mode}")
     if predictor_only_mode:
         print("  [HPROM-GPR] Predictor-only mode enabled (max_its <= 0): no Newton correction.")
     if qp_init_mode == "mu_affine" and qp_aff is not None:
@@ -396,7 +403,7 @@ def RunHpromGprBatchSimulation(
             J_gpr = J_gpr_raw - J0_const
 
             if verbose_step:
-                print(f"    > q_p norm: {np.linalg.norm(q_p):.3e} | q_s norm: {np.linalg.norm(q_s):.3e}")
+                print(f"    > q_m norm: {np.linalg.norm(q_p):.3e} | q_s norm: {np.linalg.norm(q_s):.3e}")
             if (not _is_finite(q_p)) or (not _is_finite(q_s)):
                 print("  [HPROM-GPR] WARNING: non-finite reduced state detected.")
                 nonfinite_detected = True

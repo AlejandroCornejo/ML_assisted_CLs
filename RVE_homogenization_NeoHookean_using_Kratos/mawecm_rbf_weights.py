@@ -167,3 +167,74 @@ def eval_mawecm_rbf(q_query, model, clip_nonnegative=True, renorm_target=None):
             W[:, good] *= (target / sw[good])[None, :]
 
     return W
+
+
+def eval_mawecm_rbf_with_jacobian(q_query, model, clip_nonnegative=True, renorm_target=None):
+    """
+    Evaluate MAW-RBF weights and analytic Jacobian dW/dq.
+
+    Returns
+    -------
+    W : ndarray, shape (n_weights, n_query)
+        Weight values.
+    dW_dq : ndarray, shape (n_weights, n_query, q_dim)
+        Analytic derivatives of each weight with respect to each query coordinate.
+    """
+    q = _as_2d(q_query, "q_query")
+
+    centers = _as_2d(model["centers"], "model.centers")
+    l = np.asarray(model["length_scales"], dtype=float).reshape(-1)
+    Alpha = np.asarray(model["Alpha"], dtype=float)
+    Beta = np.asarray(model["Beta"], dtype=float)
+    s = np.asarray(model["scale"], dtype=float).reshape(-1)
+    poly_mode = int(model["poly_mode"])
+
+    m_query = int(q.shape[0])
+    q_dim = int(q.shape[1])
+    n_weights = int(s.size)
+
+    Phi_q = _gaussian_kernel(q, centers, l)  # (M, Nc)
+    Yh = Phi_q @ Alpha  # (M, n_weights)
+
+    # dPhi/dq_a = Phi * (-(q_a-c_a)/l_a^2)
+    diff = q[:, None, :] - centers[None, :, :]  # (M, Nc, q_dim)
+    inv_l2 = 1.0 / np.maximum(l * l, 1.0e-30)  # (q_dim,)
+    dPhi_dq = -Phi_q[:, :, None] * (diff * inv_l2[None, None, :])  # (M, Nc, q_dim)
+    dYh_dq = np.einsum("mca,cn->mna", dPhi_dq, Alpha)  # (M, n_weights, q_dim)
+
+    Pq = _poly_block(q, poly_mode)
+    if Pq.shape[1] > 0:
+        Yh = Yh + Pq @ Beta
+        if poly_mode == 2:
+            dP_dq = np.zeros((m_query, Pq.shape[1], q_dim), dtype=float)
+            for a in range(q_dim):
+                if 1 + a < Pq.shape[1]:
+                    dP_dq[:, 1 + a, a] = 1.0
+            dYh_dq += np.einsum("mpa,pn->mna", dP_dq, Beta)
+
+    W_tilde = Yh.T * s[:, None]  # (n_weights, M)
+    dW_tilde = np.transpose(dYh_dq, (1, 0, 2)) * s[:, None, None]
+
+    W = W_tilde.copy()
+    dW = dW_tilde.copy()
+
+    if bool(clip_nonnegative):
+        mask_pos = W > 0.0
+        W = np.maximum(W, 0.0)
+        dW = dW * mask_pos[:, :, None]
+
+    if renorm_target is not None:
+        target = float(renorm_target)
+        for m in range(m_query):
+            wm = W[:, m]
+            sw = float(np.sum(wm))
+            if sw <= 1.0e-30:
+                W[:, m] = 0.0
+                dW[:, m, :] = 0.0
+                continue
+            dsw = np.sum(dW[:, m, :], axis=0)
+            fac = target / sw
+            dW[:, m, :] = fac * dW[:, m, :] - (target / (sw * sw)) * wm[:, None] * dsw[None, :]
+            W[:, m] = fac * wm
+
+    return W, dW

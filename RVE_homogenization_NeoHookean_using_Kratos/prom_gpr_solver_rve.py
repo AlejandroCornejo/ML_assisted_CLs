@@ -33,7 +33,8 @@ from sparse_gp_manifold_model import (
 
 
 def _load_optional_mu_affine_initializer(gpr_data_dir, n_primary):
-    init_path = os.path.join(gpr_data_dir, "qp_init_mu_affine.npz")
+    qm_path = os.path.join(gpr_data_dir, "qm_init_mu_affine.npz")
+    init_path = qm_path if os.path.exists(qm_path) else os.path.join(gpr_data_dir, "qp_init_mu_affine.npz")
     if not os.path.exists(init_path):
         return None
     data = np.load(init_path, allow_pickle=True)
@@ -46,11 +47,11 @@ def _load_optional_mu_affine_initializer(gpr_data_dir, n_primary):
     mu_dim = int(np.ravel(data["mu_dim"])[0]) if "mu_dim" in data else int(b_aff.shape[0] - 1)
     if qp_dim != int(n_primary):
         raise RuntimeError(
-            f"[PROM-GPR] qp_init_mu_affine qp_dim={qp_dim} incompatible with n_primary={n_primary}."
+            f"[PROM-GPR] q_m initializer dimension={qp_dim} incompatible with n_primary={n_primary}."
         )
     if mu_dim != int(b_aff.shape[0] - 1):
         raise RuntimeError(
-            f"[PROM-GPR] qp_init_mu_affine mu_dim metadata mismatch ({mu_dim} vs {b_aff.shape[0] - 1})."
+            f"[PROM-GPR] q_m initializer mu_dim metadata mismatch ({mu_dim} vs {b_aff.shape[0] - 1})."
         )
     return {
         "path": init_path,
@@ -61,13 +62,24 @@ def _load_optional_mu_affine_initializer(gpr_data_dir, n_primary):
 
 
 def LoadPromGprModel(basis_dir="stage_2_pod_rve", gpr_data_dir="stage_7_gpr_data"):
-    phi_p = np.load(os.path.join(gpr_data_dir, "phi_p.npy"))
+    phi_m_path = os.path.join(gpr_data_dir, "phi_m.npy")
+    if not os.path.exists(phi_m_path):
+        raise FileNotFoundError(
+            f"{phi_m_path} is required by the Joaquin-style LS decoder. Rebuild Stage 7a/7b."
+        )
+    phi_p = np.load(phi_m_path)
     phi_s = np.load(os.path.join(gpr_data_dir, "phi_s.npy"))
     free_dofs = np.load(os.path.join(basis_dir, "free_dofs.npy"))
     dir_dofs = np.load(os.path.join(basis_dir, "dirichlet_dofs.npy"))
     eq_map = np.load(os.path.join(basis_dir, "eq_map.npy"))
 
     gpr_model = load_sparse_gp_model(os.path.join(gpr_data_dir, "sparse_gp_model.npz"))
+    a_m_path = os.path.join(gpr_data_dir, "A_m.npy")
+    if not os.path.exists(a_m_path):
+        raise FileNotFoundError(
+            f"{a_m_path} is required by the Joaquin-style LS decoder. Rebuild Stage 7a/7b."
+        )
+    a_m = np.asarray(np.load(a_m_path), dtype=float)
 
     n_p = int(phi_p.shape[1])
     n_s = int(phi_s.shape[1])
@@ -98,6 +110,9 @@ def LoadPromGprModel(basis_dir="stage_2_pod_rve", gpr_data_dir="stage_7_gpr_data
         raise ValueError(
             f"GPR metadata n_secondary={int(gpr_model['n_secondary'])} does not match phi_s ({n_s})."
         )
+    if a_m.shape != (n_p, n_p):
+        raise RuntimeError(f"A_m shape mismatch: got {a_m.shape}, expected {(n_p, n_p)}.")
+    gpr_model["A_m"] = a_m
     gpr_model["qp_init_mu_affine"] = _load_optional_mu_affine_initializer(gpr_data_dir, n_primary=n_p)
 
     return (
@@ -136,8 +151,9 @@ def RunPromGprBatchSimulation(
     reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
     use_old_stiffness_in_first_iteration=USE_OLD_STIFFNESS_IN_FIRST_ITERATION,
     verbose_iterations=False,
-    qp_init_mode="previous",
+    qp_init_mode="continuation",
     evaluate_homogenization=True,
+    fail_on_nonconvergence=True,
 ):
     t_wall_total_start = time.perf_counter()
 
@@ -221,14 +237,15 @@ def RunPromGprBatchSimulation(
             f"but solver was configured for {expected_input_dim}."
         )
     qp_init_mode = str(qp_init_mode).strip().lower()
-    if qp_init_mode not in ("previous", "zero", "mu_affine"):
+    if qp_init_mode not in ("continuation", "previous", "zero", "mu_affine"):
         raise ValueError(
-            f"Unsupported qp_init_mode='{qp_init_mode}'. Use one of: previous, zero, mu_affine."
+            f"Unsupported qp_init_mode='{qp_init_mode}'. "
+            "Use one of: continuation, previous, zero, mu_affine."
         )
     qp_aff = gpr_model.get("qp_init_mu_affine", None)
-    if qp_init_mode == "mu_affine" and qp_aff is None:
+    if qp_init_mode in ("continuation", "mu_affine") and qp_aff is None:
         raise RuntimeError(
-            "[PROM-GPR] qp_init_mode='mu_affine' requested but qp_init_mu_affine.npz is missing "
+            f"[PROM-GPR] qp_init_mode='{qp_init_mode}' requires qp_init_mu_affine.npz, but it is missing "
             f"in model directory."
         )
 
@@ -277,7 +294,9 @@ def RunPromGprBatchSimulation(
         q_s_map, j_qs_qp = evaluate_sparse_gp_map_and_jacobian_qp(x_in, gpr_model, n_primary)
         return np.asarray(q_s_map, dtype=float).reshape(-1), np.asarray(j_qs_qp, dtype=float)
 
-    def _initial_qp_guess(e_vec, q_prev):
+    def _initial_qp_guess(e_vec, q_prev, step_index):
+        if qp_init_mode == "continuation" and int(step_index) > 1:
+            return np.asarray(q_prev, dtype=float).copy()
         if qp_init_mode == "previous":
             return np.asarray(q_prev, dtype=float).copy()
         if qp_init_mode == "zero":
@@ -311,14 +330,16 @@ def RunPromGprBatchSimulation(
     Kr_old = None
     J_full = np.zeros((n_total_dof, n_primary), dtype=float)
     q0_const, J0_const = _evaluate_qs_and_jac(np.zeros(n_primary, dtype=float), np.zeros(3, dtype=float))
-    phi_p_eff = phi_p + phi_s @ J0_const
+    a_m = np.asarray(gpr_model["A_m"], dtype=float)
+    phi_master = phi_p @ a_m
+    phi_p_eff = phi_master + phi_s @ J0_const
     w0_const = phi_s @ q0_const
 
     print(f"  [PROM-GPR] Solving for {n_steps_total} dynamic increments...")
     print(f"  [PROM-GPR] Full elements assembled each Newton step: {len(elements)} / {len(elements)}")
     print("  [PROM-GPR] Manifold correction active: N(0)=0 and J(0)=0.")
-    print(f"  [PROM-GPR] q_p initializer mode: {qp_init_mode}")
-    if qp_init_mode == "mu_affine" and qp_aff is not None:
+    print(f"  [PROM-GPR] q_m initializer mode: {qp_init_mode}")
+    if qp_init_mode in ("continuation", "mu_affine") and qp_aff is not None:
         print(f"  [PROM-GPR] Using affine initializer: {qp_aff['path']}")
     t_map = 0.0
     t_assembly = 0.0
@@ -354,7 +375,7 @@ def RunPromGprBatchSimulation(
             print(f"\n[PROM-GPR] Step {step:04d}/{n_steps_total} | E={E}")
         verbose_step = bool(verbose_iterations)
 
-        q_p = _initial_qp_guess(E, q_p)
+        q_p = _initial_qp_guess(E, q_p, step)
         it = 0
         res_norm_0 = None
         converged = False
@@ -378,7 +399,7 @@ def RunPromGprBatchSimulation(
             if verbose_step:
                 qp_norm = float(np.linalg.norm(q_p))
                 qs_norm = float(np.linalg.norm(q_s))
-                print(f"    > q_p norm: {qp_norm:.3e} | q_s norm: {qs_norm:.3e}")
+                print(f"    > q_m norm: {qp_norm:.3e} | q_s norm: {qs_norm:.3e}")
 
             if (not _is_finite(q_p)) or (not _is_finite(q_s)):
                 print("  [PROM-GPR] WARNING: non-finite reduced state detected.")
@@ -536,7 +557,13 @@ def RunPromGprBatchSimulation(
                 )
                 Kr_old = None
             else:
-                print(f"  [PROM-GPR] WARNING: step {step} did not converge in {max_its} iterations.")
+                msg = (
+                    f"[PROM-GPR] Step {step}/{n_steps_total} did not converge in "
+                    f"{max_its} iterations. best ||R_r||={best_res:.3e}, rel={best_rel:.3e}."
+                )
+                if bool(fail_on_nonconvergence):
+                    raise RuntimeError(msg)
+                print(f"  [PROM-GPR] WARNING: {msg}")
                 if nonfinite_detected:
                     print("  [PROM-GPR] WARNING: non-finite state encountered; rolling back to best finite iterate.")
                 if np.isfinite(best_res):

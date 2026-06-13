@@ -43,7 +43,7 @@ from hprom_solver_rve import (
 )
 from prom_gpr_solver_rve import LoadPromGprModel
 from sparse_gp_manifold_model import evaluate_sparse_gp_map_and_jacobian_qp
-from mawecm_rbf_weights import eval_mawecm_rbf
+from mawecm_rbf_weights import eval_mawecm_rbf, eval_mawecm_rbf_with_jacobian
 
 
 WEIGHT_ZERO_TOL = 1.0e-14
@@ -83,7 +83,17 @@ def _build_maw_target_model(ecm_data, target, required=True):
 
     renorm_target = None
     rk = prefix + "renorm_target"
-    if rk in ecm_data:
+    renorm_enabled = (
+        bool(_as_int_scalar(ecm_data, "maw_rbf_renorm"))
+        if "maw_rbf_renorm" in ecm_data
+        else True
+    )
+    clip_nonnegative = (
+        bool(_as_int_scalar(ecm_data, "maw_rbf_clip_nonnegative"))
+        if "maw_rbf_clip_nonnegative" in ecm_data
+        else True
+    )
+    if rk in ecm_data and renorm_enabled:
         renorm_target = float(np.ravel(ecm_data[rk])[0])
 
     model = {
@@ -111,6 +121,7 @@ def _build_maw_target_model(ecm_data, target, required=True):
         "z_support_full": z_support_full,
         "rbf_model": model,
         "renorm_target": renorm_target,
+        "clip_nonnegative": clip_nonnegative,
     }
 
 
@@ -164,10 +175,25 @@ def _evaluate_support_weights(q_p, target_model):
     w = eval_mawecm_rbf(
         q_query=q_vec,
         model=target_model["rbf_model"],
-        clip_nonnegative=True,
+        clip_nonnegative=bool(target_model.get("clip_nonnegative", True)),
         renorm_target=renorm_target,
     )
     return np.asarray(w, dtype=float).reshape(-1)
+
+
+def _evaluate_support_weights_and_jacobian(q_p, target_model):
+    q_vec = np.asarray(q_p, dtype=float).reshape(1, -1)
+    renorm_target = target_model.get("renorm_target", None)
+    w, dw = eval_mawecm_rbf_with_jacobian(
+        q_query=q_vec,
+        model=target_model["rbf_model"],
+        clip_nonnegative=bool(target_model.get("clip_nonnegative", True)),
+        renorm_target=renorm_target,
+    )
+    return (
+        np.asarray(w, dtype=float).reshape(-1),
+        np.asarray(dw[:, 0, :], dtype=float),
+    )
 
 
 def _support_weights_to_full(z_support_full, w_support, n_elem_ref):
@@ -194,6 +220,51 @@ def _project_full_weights_to_current(w_full, n_cur, full_to_local):
     for full_idx, local_idx in full_to_local.items():
         if 0 <= int(full_idx) < wf.size:
             out[int(local_idx)] = wf[int(full_idx)]
+    return out
+
+
+def _build_free_dof_index_map(n_dof, free_dofs):
+    idx = -np.ones(int(n_dof), dtype=np.int64)
+    f = np.asarray(free_dofs, dtype=np.int64).reshape(-1)
+    idx[f] = np.arange(f.size, dtype=np.int64)
+    return idx
+
+
+def _prepare_unit_rhs_scatter(assembler_unit, free_dof_index_map):
+    ne = int(assembler_unit.n_elems)
+    ndl = int(assembler_unit.n_local_dof)
+    eq_ids = np.asarray(assembler_unit.local_eq_ids, dtype=np.int64).reshape(ne, ndl)
+    free_ids = np.asarray(free_dof_index_map, dtype=np.int64)[eq_ids]
+    valid = free_ids >= 0
+    if not np.any(valid):
+        return {
+            "ne": ne,
+            "ndl": ndl,
+            "valid": valid,
+            "row_idx": np.zeros(0, dtype=np.int64),
+            "col_idx": np.zeros(0, dtype=np.int64),
+        }
+    row_idx = free_ids[valid]
+    col_idx = np.broadcast_to(np.arange(ne, dtype=np.int64)[:, None], (ne, ndl))[valid]
+    return {
+        "ne": ne,
+        "ndl": ndl,
+        "valid": valid,
+        "row_idx": row_idx,
+        "col_idx": col_idx,
+    }
+
+
+def _scatter_rhs_loc_by_element_free(rhs_loc, n_free, scatter_cache):
+    ne = int(scatter_cache["ne"])
+    ndl = int(scatter_cache["ndl"])
+    rhs = np.asarray(rhs_loc, dtype=float).reshape(ne, ndl)
+    row_idx = np.asarray(scatter_cache["row_idx"], dtype=np.int64)
+    col_idx = np.asarray(scatter_cache["col_idx"], dtype=np.int64)
+    if row_idx.size == 0:
+        return np.zeros((int(n_free), ne), dtype=float)
+    out = np.zeros((int(n_free), ne), dtype=float)
+    np.add.at(out, (row_idx, col_idx), rhs[scatter_cache["valid"]])
     return out
 
 
@@ -297,10 +368,13 @@ def RunHpromMawEcmGprBatchSimulation(
     Xc=None,
     Yc=None,
     return_stats=False,
-    qp_init_mode="previous",
+    qp_init_mode="continuation",
     dynamic_residual_weights=True,
+    include_weight_tangent=True,
     dynamic_homogenization_weights=False,
     evaluate_homogenization=True,
+    homogenization_mode="full_fom",
+    fail_on_nonconvergence=True,
 ):
     t_wall_total_start = time.perf_counter()
 
@@ -387,6 +461,15 @@ def RunHpromMawEcmGprBatchSimulation(
         elements=elements,
         selected_indices=z_res_local,
     )
+    use_weight_tangent = bool(dynamic_residual_weights) and bool(include_weight_tangent)
+    unit_rhs_scatter = (
+        _prepare_unit_rhs_scatter(
+            assembler_unit=dyn_res_assembler._assembler,
+            free_dof_index_map=_build_free_dof_index_map(n_total_dof, free_dofs),
+        )
+        if use_weight_tangent
+        else None
+    )
 
     w_res_anchor = np.asarray(ecm_data["w_res"], dtype=float).reshape(-1) if "w_res" in ecm_data else None
     if w_res_anchor is None or w_res_anchor.size != maw_res["z_support_full"].size:
@@ -406,6 +489,28 @@ def RunHpromMawEcmGprBatchSimulation(
     w_eps_fixed_cur = None
     w_sig_fixed_cur = None
     hom_reference_measure = None
+    hom_mode = str(homogenization_mode).strip().lower()
+    hom_mode_alias = {
+        "full": "full_fom",
+        "full_mesh": "full_fom",
+        "full_fom": "full_fom",
+        "full_reference": "full_fom",
+        "ecm": "ecm_fixed",
+        "ecm_fixed": "ecm_fixed",
+        "fixed": "ecm_fixed",
+        "fixed_classic": "ecm_fixed",
+        "maw": "maw_dynamic",
+        "maw_dynamic": "maw_dynamic",
+        "dynamic_maw": "maw_dynamic",
+    }
+    if hom_mode not in hom_mode_alias:
+        raise ValueError(
+            f"Unsupported homogenization_mode='{homogenization_mode}'. "
+            "Use one of: full_fom, ecm_fixed, maw_dynamic."
+        )
+    hom_mode = hom_mode_alias[hom_mode]
+    if bool(dynamic_homogenization_weights) and hom_mode != "maw_dynamic":
+        hom_mode = "maw_dynamic"
 
     if bool(evaluate_homogenization):
         w_eps_anchor_full = (
@@ -431,27 +536,45 @@ def RunHpromMawEcmGprBatchSimulation(
         with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
             f.write(f"{float(hom_reference_measure):.16e}\n")
 
-        def _resolve_fixed_hom_weight(key_hrom, key_full):
-            if key_hrom in ecm_data:
-                w = np.asarray(ecm_data[key_hrom], dtype=float).reshape(-1)
-                if w.size == n_elem_current:
-                    return w
-            if key_full in ecm_data:
-                w_full = np.asarray(ecm_data[key_full], dtype=float).reshape(-1)
-                if w_full.size == n_elem_reference:
-                    return _project_full_weights_to_current(w_full, n_elem_current, full_to_local)
-            return None
-
-        w_eps_fixed_cur = _resolve_fixed_hom_weight("w_eps_hrom", "w_eps_full")
-        w_sig_fixed_cur = _resolve_fixed_hom_weight("w_sig_hrom", "w_sig_full")
-        use_dynamic_hom_weights = bool(dynamic_homogenization_weights)
-        if (not use_dynamic_hom_weights) and (w_eps_fixed_cur is None or w_sig_fixed_cur is None):
-            use_dynamic_hom_weights = True
+        if hom_mode == "full_fom":
+            if using_hrom_mesh:
+                raise RuntimeError(
+                    "[HPROM-MAWECM-GPR] homogenization_mode='full_fom' requires the full mesh. "
+                    "Use ecm_fixed or maw_dynamic for HROM mdpa runs."
+                )
+            use_dynamic_hom_weights = False
+            w_eps_fixed_cur = None
+            w_sig_fixed_cur = None
             print(
-                "  [HPROM-MAWECM-GPR] WARNING: fixed homogenization weights unavailable; "
-                "falling back to dynamic MAW homogenization."
+                "  [HPROM-MAWECM-GPR] Homogenization mode: full_fom "
+                "(unweighted full mesh, no homogenization hyper-reduction)."
             )
-        if use_dynamic_hom_weights:
+        elif hom_mode == "ecm_fixed":
+            def _resolve_fixed_hom_weight(key_hrom, key_full):
+                if key_hrom in ecm_data:
+                    w = np.asarray(ecm_data[key_hrom], dtype=float).reshape(-1)
+                    if w.size == n_elem_current:
+                        return w
+                if key_full in ecm_data:
+                    w_full = np.asarray(ecm_data[key_full], dtype=float).reshape(-1)
+                    if w_full.size == n_elem_reference:
+                        return _project_full_weights_to_current(w_full, n_elem_current, full_to_local)
+                return None
+
+            w_eps_fixed_cur = _resolve_fixed_hom_weight("w_eps_hrom", "w_eps_full")
+            w_sig_fixed_cur = _resolve_fixed_hom_weight("w_sig_hrom", "w_sig_full")
+            if w_eps_fixed_cur is None or w_sig_fixed_cur is None:
+                raise RuntimeError(
+                    "[HPROM-MAWECM-GPR] homogenization_mode='ecm_fixed' requested, "
+                    "but fixed eps/sig homogenization weights are unavailable."
+                )
+            use_dynamic_hom_weights = False
+            print(
+                "  [HPROM-MAWECM-GPR] Homogenization mode: ecm_fixed "
+                "(fixed classical eps/sig weights)."
+            )
+        else:
+            use_dynamic_hom_weights = True
             maw_eps = _build_maw_target_model(ecm_data, "eps", required=True)
             maw_sig = _build_maw_target_model(ecm_data, "sig", required=True)
             z_eps_local, z_eps_pos, miss_eps = _map_support_to_current(
@@ -470,19 +593,13 @@ def RunHpromMawEcmGprBatchSimulation(
                     f"[HPROM-MAWECM-GPR] WARNING: sig support lost {miss_sig.size} full-mesh indices "
                     "when mapping to current mesh."
                 )
-        else:
-            maw_eps = _build_maw_target_model(ecm_data, "eps", required=False)
-            maw_sig = _build_maw_target_model(ecm_data, "sig", required=False)
-
-        if bool(use_dynamic_hom_weights):
             print("  [HPROM-MAWECM-GPR] Homogenization mode: dynamic MAW weights.")
-        else:
-            print("  [HPROM-MAWECM-GPR] Homogenization mode: fixed weights (Stage9-compatible).")
     else:
         print("  [HPROM-MAWECM-GPR] Homogenization evaluation disabled (q-only mode).")
 
     if bool(dynamic_residual_weights):
         print("  [HPROM-MAWECM-GPR] Residual mode: dynamic MAW weights.")
+        print(f"  [HPROM-MAWECM-GPR] Include d(w_res)/d(q_m) tangent term: {int(use_weight_tangent)}")
     else:
         print("  [HPROM-MAWECM-GPR] Residual mode: fixed support anchor weights.")
         print("  [HPROM-MAWECM-GPR] Residual assembly backend: cached fixed-weight assembler.")
@@ -521,14 +638,16 @@ def RunHpromMawEcmGprBatchSimulation(
             f"but solver was configured for {expected_input_dim}."
         )
     qp_init_mode = str(qp_init_mode).strip().lower()
-    if qp_init_mode not in ("previous", "zero", "mu_affine"):
+    if qp_init_mode not in ("continuation", "previous", "zero", "mu_affine"):
         raise ValueError(
-            f"Unsupported qp_init_mode='{qp_init_mode}'. Use one of: previous, zero, mu_affine."
+            f"Unsupported qp_init_mode='{qp_init_mode}'. "
+            "Use one of: continuation, previous, zero, mu_affine."
         )
     qp_aff = gpr_model.get("qp_init_mu_affine", None)
-    if qp_init_mode == "mu_affine" and qp_aff is None:
+    if qp_init_mode in ("continuation", "mu_affine") and qp_aff is None:
         raise RuntimeError(
-            "[HPROM-MAWECM-GPR] qp_init_mode='mu_affine' requested but qp_init_mu_affine.npz is missing "
+            f"[HPROM-MAWECM-GPR] qp_init_mode='{qp_init_mode}' requires "
+            "qp_init_mu_affine.npz, but it is missing "
             f"in model directory."
         )
 
@@ -577,7 +696,9 @@ def RunHpromMawEcmGprBatchSimulation(
         q_s_map, j_qs_qp = evaluate_sparse_gp_map_and_jacobian_qp(x_in, gpr_model, n_primary)
         return np.asarray(q_s_map, dtype=float).reshape(-1), np.asarray(j_qs_qp, dtype=float)
 
-    def _initial_qp_guess(e_vec, q_prev):
+    def _initial_qp_guess(e_vec, q_prev, step_index):
+        if qp_init_mode == "continuation" and int(step_index) > 1:
+            return np.asarray(q_prev, dtype=float).copy()
         if qp_init_mode == "previous":
             return np.asarray(q_prev, dtype=float).copy()
         if qp_init_mode == "zero":
@@ -615,6 +736,23 @@ def RunHpromMawEcmGprBatchSimulation(
             return np.asarray(w_res_anchor_local, dtype=float).copy()
         return w_local
 
+    def _evaluate_residual_weights_and_jacobian_local(qp_vec):
+        w_support_all, dw_support_all = _evaluate_support_weights_and_jacobian(qp_vec, maw_res)
+        w_local = np.asarray(w_support_all[z_res_pos], dtype=float)
+        dw_local = np.asarray(dw_support_all[z_res_pos, :], dtype=float)
+        if dw_local.shape != (z_res_local.size, n_primary):
+            raise RuntimeError(
+                "[HPROM-MAWECM-GPR] residual MAW weight Jacobian shape mismatch: "
+                f"got {dw_local.shape}, expected ({z_res_local.size}, {n_primary})."
+            )
+        nz = np.flatnonzero(np.abs(w_local) > WEIGHT_ZERO_TOL)
+        if nz.size == 0:
+            return (
+                np.asarray(w_res_anchor_local, dtype=float).copy(),
+                np.zeros((z_res_local.size, n_primary), dtype=float),
+            )
+        return w_local, dw_local
+
     def _evaluate_target_weights_current_full(qp_vec, target_model, z_pos, w_anchor_full):
         w_support_all = _evaluate_support_weights(qp_vec, target_model)
         w_support_kept = np.asarray(w_support_all[z_pos], dtype=float)
@@ -630,7 +768,14 @@ def RunHpromMawEcmGprBatchSimulation(
     Kr_old = None
     J_full = np.zeros((n_total_dof, n_primary), dtype=float)
     q0_const, J0_const = _evaluate_qs_and_jac(np.zeros(n_primary, dtype=float), np.zeros(3, dtype=float))
-    phi_p_eff = phi_p + phi_s @ J0_const
+    a_m = np.asarray(gpr_model["A_m"], dtype=float)
+    if a_m.shape != (n_primary, n_primary):
+        raise RuntimeError(
+            f"[HPROM-MAWECM-GPR] A_m shape mismatch: got {a_m.shape}, "
+            f"expected {(n_primary, n_primary)}."
+        )
+    phi_master = phi_p @ a_m
+    phi_p_eff = phi_master + phi_s @ J0_const
     w0_const = phi_s @ q0_const
 
     print(f"  [HPROM-MAWECM-GPR] Solving for {n_steps_total} dynamic increments...")
@@ -639,10 +784,10 @@ def RunHpromMawEcmGprBatchSimulation(
         f"(reference full mesh: {n_elem_reference})"
     )
     print("  [HPROM-MAWECM-GPR] Manifold correction active: N(0)=0 and J(0)=0.")
-    print(f"  [HPROM-MAWECM-GPR] q_p initializer mode: {qp_init_mode}")
+    print(f"  [HPROM-MAWECM-GPR] q_m initializer mode: {qp_init_mode}")
     if predictor_only_mode:
         print("  [HPROM-MAWECM-GPR] Predictor-only mode enabled (max_its <= 0): no Newton correction.")
-    if qp_init_mode == "mu_affine" and qp_aff is not None:
+    if qp_init_mode in ("continuation", "mu_affine") and qp_aff is not None:
         print(f"  [HPROM-MAWECM-GPR] Using affine initializer: {qp_aff['path']}")
     print(
         f"  [HPROM-MAWECM-GPR] MAW residual support on current mesh: "
@@ -685,7 +830,7 @@ def RunHpromMawEcmGprBatchSimulation(
             print(f"\n[HPROM-MAWECM-GPR] Step {step:04d}/{n_steps_total} | E={E}")
         verbose_step = bool(verbose_iterations)
 
-        q_p = _initial_qp_guess(E, q_p)
+        q_p = _initial_qp_guess(E, q_p, step)
         it = 0
         res_norm_0 = None
         converged = False
@@ -709,7 +854,7 @@ def RunHpromMawEcmGprBatchSimulation(
             J_gpr = J_gpr_raw - J0_const
 
             if verbose_step:
-                print(f"    > q_p norm: {np.linalg.norm(q_p):.3e} | q_s norm: {np.linalg.norm(q_s):.3e}")
+                print(f"    > q_m norm: {np.linalg.norm(q_p):.3e} | q_s norm: {np.linalg.norm(q_s):.3e}")
             if (not _is_finite(q_p)) or (not _is_finite(q_s)):
                 print("  [HPROM-MAWECM-GPR] WARNING: non-finite reduced state detected.")
                 nonfinite_detected = True
@@ -741,8 +886,12 @@ def RunHpromMawEcmGprBatchSimulation(
 
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
             t0 = time.perf_counter()
+            dw_res_local = None
             if bool(dynamic_residual_weights):
-                w_res_local = _evaluate_residual_weights_local(q_p)
+                if use_weight_tangent:
+                    w_res_local, dw_res_local = _evaluate_residual_weights_and_jacobian_local(q_p)
+                else:
+                    w_res_local = _evaluate_residual_weights_local(q_p)
                 K_hp, rhs_hp = dyn_res_assembler.assemble(u_eq_curr, w_res_local)
             else:
                 w_res_local = np.asarray(w_res_anchor_local, dtype=float)
@@ -768,6 +917,22 @@ def RunHpromMawEcmGprBatchSimulation(
             KJ = K_hp @ J_full
             r_r = J_full.T @ rhs_hp
             K_r = J_full.T @ KJ
+            if use_weight_tangent and dw_res_local is not None:
+                # Same sign convention as the validated 2D MAWECM solver:
+                # Newton uses K_alg dq = R with R = rhs = -f_int.
+                # For R(q)=sum_e w_e(q) R_e(u(q)), K_alg=-dR/dq, hence
+                # the weight-dependency contribution is -sum_e R_e \otimes dw_e/dq.
+                rhs_unit_loc = -np.asarray(dyn_res_assembler._assembler._f_int, dtype=float).reshape(
+                    dyn_res_assembler.n_sel,
+                    int(dyn_res_assembler._assembler.n_local_dof),
+                )
+                r_free_e = _scatter_rhs_loc_by_element_free(
+                    rhs_loc=rhs_unit_loc,
+                    n_free=free_dofs.size,
+                    scatter_cache=unit_rhs_scatter,
+                )
+                drw_dqp = r_free_e @ dw_res_local
+                K_r = K_r - (J_manifold.T @ drw_dqp)
             t_projection += time.perf_counter() - t0
             Kr_last = K_r
             if (not _is_finite(r_r)) or (not _is_finite(K_r)):
@@ -878,7 +1043,13 @@ def RunHpromMawEcmGprBatchSimulation(
                     )
                     Kr_old = None
                 else:
-                    print(f"  [HPROM-MAWECM-GPR] WARNING: step {step} did not converge in {max_its} iterations.")
+                    msg = (
+                        f"[HPROM-MAWECM-GPR] Step {step}/{n_steps_total} did not converge in "
+                        f"{max_its} iterations. best ||R_r||={best_res:.3e}, rel={best_rel:.3e}."
+                    )
+                    if bool(fail_on_nonconvergence):
+                        raise RuntimeError(msg)
+                    print(f"  [HPROM-MAWECM-GPR] WARNING: {msg}")
                     if nonfinite_detected:
                         print("  [HPROM-MAWECM-GPR] WARNING: non-finite state encountered; rolling back to best finite iterate.")
                     if np.isfinite(best_res):

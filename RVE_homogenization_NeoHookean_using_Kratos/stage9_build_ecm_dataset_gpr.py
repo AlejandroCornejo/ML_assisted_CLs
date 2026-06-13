@@ -9,7 +9,7 @@ Stage-5-style dataset builder with independent sampling for:
   - homogenization targets (C_hom, b_hom)
 
 Residual projection uses the GPR-manifold tangent:
-  J_m = (phi_p + phi_s*J0) + phi_s * d(q_s_corr)/d(q_p)
+  J_m = (phi_m*A_m + phi_s*J0) + phi_s * d(q_s_corr)/d(q_m)
 """
 
 import os
@@ -184,6 +184,7 @@ def _fit_qp_gauss_newton(
     q_init,
     w_free,
     phi_p,
+    a_m,
     phi_s,
     gpr_model,
     n_primary,
@@ -198,7 +199,8 @@ def _fit_qp_gauss_newton(
     q = np.asarray(q_init, dtype=float).copy()
     w_target = np.asarray(w_free, dtype=float).reshape(-1)
     target_norm = max(np.linalg.norm(w_target), 1e-30)
-    phi_p_eff = np.asarray(phi_p, dtype=float) + np.asarray(phi_s, dtype=float) @ np.asarray(j0_ref, dtype=float)
+    phi_master = np.asarray(phi_p, dtype=float) @ np.asarray(a_m, dtype=float)
+    phi_p_eff = phi_master + np.asarray(phi_s, dtype=float) @ np.asarray(j0_ref, dtype=float)
     w0_const = np.asarray(phi_s, dtype=float) @ np.asarray(q0_ref, dtype=float).reshape(-1)
 
     q_s_raw, j_qs_qp_raw = _evaluate_gpr_qs_and_jac(q, gpr_model, n_primary)
@@ -323,8 +325,19 @@ def main():
 
     selected_traj_ids = _parse_trajectory_indices(args.trajectory_indices)
 
-    phi_p = np.asarray(np.load(os.path.join(gpr_dir, "phi_p.npy")), dtype=float)
+    phi_m_path = os.path.join(gpr_dir, "phi_m.npy")
+    if not os.path.exists(phi_m_path):
+        raise FileNotFoundError(
+            f"{phi_m_path}. Rebuild Stage7a/7b with the validated Joaquin-style LS split."
+        )
+    phi_p = np.asarray(np.load(phi_m_path), dtype=float)
     phi_s = np.asarray(np.load(os.path.join(gpr_dir, "phi_s.npy")), dtype=float)
+    a_m_path = os.path.join(gpr_dir, "A_m.npy")
+    if not os.path.exists(a_m_path):
+        raise FileNotFoundError(
+            f"{a_m_path}. Rebuild Stage7a/7b with the validated Joaquin-style LS split."
+        )
+    a_m = np.asarray(np.load(a_m_path), dtype=float)
     free_dofs = np.asarray(np.load(os.path.join(basis_dir, "free_dofs.npy")), dtype=np.int64)
     dir_dofs = np.asarray(np.load(os.path.join(basis_dir, "dirichlet_dofs.npy")), dtype=np.int64)
     eq_map_ref = np.asarray(np.load(os.path.join(basis_dir, "eq_map.npy")), dtype=np.int64)
@@ -335,6 +348,10 @@ def main():
     n_free = int(phi_p.shape[0])
     if int(phi_s.shape[0]) != n_free:
         raise ValueError("phi_p and phi_s row count mismatch.")
+    if a_m.shape != (n_primary, n_primary):
+        raise ValueError(
+            f"A_m shape mismatch: got {a_m.shape}, expected {(n_primary, n_primary)}."
+        )
     if int(gpr_model["n_primary"]) != n_primary:
         raise ValueError("GPR model n_primary does not match phi_p.")
     if int(gpr_model["n_secondary"]) != n_secondary:
@@ -508,7 +525,8 @@ def main():
     fit_rel_after = []
     fit_iters = []
     q0_const, j0_const = _evaluate_gpr_origin_terms(gpr_model, n_primary)
-    phi_p_eff_const = phi_p + phi_s @ j0_const
+    phi_master = phi_p @ a_m
+    phi_p_eff_const = phi_master + phi_s @ j0_const
     s_res_global = 0
     s_hom_global = 0
     for traj_name, u_path, e_path, idx_res, idx_hom in all_tasks:
@@ -534,12 +552,17 @@ def main():
                 u_free = u_snap[free_dofs]
                 u_aff_free = _affine_free(e_macro)
                 w_free = u_free - u_aff_free
-                q_p_init = w_free @ phi_p
+                q_master_init = w_free @ phi_p
+                try:
+                    q_p_init = np.linalg.solve(a_m, q_master_init)
+                except np.linalg.LinAlgError:
+                    q_p_init = np.linalg.lstsq(a_m, q_master_init, rcond=None)[0]
                 if fit_mode == "gauss_newton":
                     q_p, _, j_qs_qp, rel0, relf, nit = _fit_qp_gauss_newton(
                         q_init=q_p_init,
                         w_free=w_free,
                         phi_p=phi_p,
+                        a_m=a_m,
                         phi_s=phi_s,
                         gpr_model=gpr_model,
                         n_primary=n_primary,

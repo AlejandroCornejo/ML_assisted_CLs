@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Stage 7b (true sparse-GP): train sparse Gaussian-process manifold q_p -> q_s.
+Stage 7b (true sparse-GP): train sparse Gaussian-process manifold q_m -> q_s.
 
 This script trains a pure sparse variational GP model (per output component), then
 exports an analytic online model to `sparse_gp_model.npz` for PROM/HPROM usage.
@@ -48,10 +48,17 @@ def _load_dataset_config(data_dir):
 
 
 def _load_dataset(data_dir):
-    x_file = "ann_input_train.npy" if os.path.exists(os.path.join(data_dir, "ann_input_train.npy")) else "q_p_train.npy"
-    x = np.load(os.path.join(data_dir, x_file)).astype(np.float64)
+    qm_path = os.path.join(data_dir, "q_m_train.npy")
+    phi_m_path = os.path.join(data_dir, "phi_m.npy")
+    for required in (qm_path, phi_m_path):
+        if not os.path.exists(required):
+            raise FileNotFoundError(
+                f"{required}. Rebuild Stage7a with the validated Joaquin-style LS construction."
+            )
+    x = np.load(qm_path).astype(np.float64)
+    x_file = "q_m_train.npy"
     y = np.load(os.path.join(data_dir, "q_s_train.npy")).astype(np.float64)
-    phi_p = np.load(os.path.join(data_dir, "phi_p.npy"))
+    phi_p = np.load(phi_m_path)
     phi_s = np.load(os.path.join(data_dir, "phi_s.npy"))
 
     cfg = _load_dataset_config(data_dir)
@@ -62,7 +69,7 @@ def _load_dataset(data_dir):
     if include_macro:
         raise RuntimeError(
             "Dataset was built with macro-strain manifold inputs (N(q,mu)); "
-            "pure sparse-GP branch requires q_p-only inputs."
+            "pure sparse-GP branch requires q_m-only inputs."
         )
 
     if x.ndim != 2 or y.ndim != 2:
@@ -97,16 +104,25 @@ def _standardize(x, y):
 
 
 def _build_optional_mu_qp_affine(data_dir, n_primary):
+    saved_path = os.path.join(data_dir, "qm_init_mu_affine.npz")
+    if os.path.exists(saved_path):
+        d = np.load(saved_path, allow_pickle=True)
+        return {
+            "b_aff": np.asarray(d["b_aff"], dtype=float),
+            "mu_dim": int(np.ravel(d["mu_dim"])[0]),
+            "qp_dim": int(np.ravel(d["qp_dim"])[0]),
+            "rel_fit": float(np.ravel(d["rel_fit"])[0]),
+            "n_samples": int(np.ravel(d["n_samples"])[0]),
+        }
+
     mu_path = os.path.join(data_dir, "ls_targets_train.npy")
     if not os.path.exists(mu_path):
         return None
 
-    qp_path = os.path.join(data_dir, "q_p_train.npy")
-    if os.path.exists(qp_path):
-        qp = np.load(qp_path).astype(np.float64)
-    else:
-        x_file = "ann_input_train.npy" if os.path.exists(os.path.join(data_dir, "ann_input_train.npy")) else "q_p_train.npy"
-        qp = np.load(os.path.join(data_dir, x_file)).astype(np.float64)
+    qp_path = os.path.join(data_dir, "q_m_train.npy")
+    if not os.path.exists(qp_path):
+        raise FileNotFoundError(qp_path)
+    qp = np.load(qp_path).astype(np.float64)
 
     mu = np.load(mu_path).astype(np.float64)
     if mu.ndim != 2 or qp.ndim != 2:
@@ -588,11 +604,28 @@ def train_sparse_gp(
     model_path = os.path.join(out_dir, "sparse_gp_model.npz")
     save_sparse_gp_model(model_path, model_dict)
 
+    np.save(os.path.join(out_dir, "phi_m.npy"), phi_p)
     np.save(os.path.join(out_dir, "phi_p.npy"), phi_p)
     np.save(os.path.join(out_dir, "phi_s.npy"), phi_s)
+    for name in ("A_m.npy", "C_m.npy", "C_s.npy", "T_m.npy"):
+        src = os.path.join(data_dir, name)
+        if not os.path.exists(src):
+            raise FileNotFoundError(
+                f"Required Joaquin-style LS operator is missing: {src}. Rebuild Stage 7a."
+            )
+        np.save(os.path.join(out_dir, name), np.load(src))
 
     mu_qp_aff = _build_optional_mu_qp_affine(data_dir, n_primary=n_primary)
     if mu_qp_aff is not None:
+        np.savez(
+            os.path.join(out_dir, "qm_init_mu_affine.npz"),
+            b_aff=np.asarray(mu_qp_aff["b_aff"], dtype=float),
+            mu_dim=np.array([int(mu_qp_aff["mu_dim"])], dtype=np.int64),
+            qp_dim=np.array([int(mu_qp_aff["qp_dim"])], dtype=np.int64),
+            rel_fit=np.array([float(mu_qp_aff["rel_fit"])], dtype=float),
+            n_samples=np.array([int(mu_qp_aff["n_samples"])], dtype=np.int64),
+        )
+        # Compatibility name used by the existing online CLI.
         np.savez(
             os.path.join(out_dir, "qp_init_mu_affine.npz"),
             b_aff=np.asarray(mu_qp_aff["b_aff"], dtype=float),
@@ -602,12 +635,12 @@ def train_sparse_gp(
             n_samples=np.array([int(mu_qp_aff["n_samples"])], dtype=np.int64),
         )
         print(
-            "[Sparse-GP] Saved q_p initializer map: "
-            f"{os.path.join(out_dir, 'qp_init_mu_affine.npz')} "
+            "[Sparse-GP] Saved q_m initializer map: "
+            f"{os.path.join(out_dir, 'qm_init_mu_affine.npz')} "
             f"(mu_dim={mu_qp_aff['mu_dim']}, rel_fit={mu_qp_aff['rel_fit']:.3e})"
         )
     else:
-        print("[Sparse-GP] No LS targets found; qp_init_mu_affine.npz was not generated.")
+        print("[Sparse-GP] No LS targets found; qm_init_mu_affine.npz was not generated.")
 
     summary_path = os.path.join(out_dir, "training_summary.txt")
     with open(summary_path, "w", encoding="utf-8") as f:

@@ -68,6 +68,44 @@ def _rel_fro(a, b):
     return float(np.linalg.norm(a - b) / max(np.linalg.norm(b), 1e-30))
 
 
+def _aligned_error_metrics(reference, approximation):
+    ref = np.asarray(reference, dtype=float)
+    approx = np.asarray(approximation, dtype=float)
+    if ref.ndim != 2 or approx.ndim != 2:
+        raise ValueError("Expected two-dimensional histories.")
+
+    n = int(min(ref.shape[0], approx.shape[0]))
+    k = int(min(ref.shape[1], approx.shape[1]))
+    if n <= 0 or k <= 0:
+        raise ValueError("Cannot compare empty histories.")
+
+    ref = ref[:n, :k]
+    approx = approx[:n, :k]
+    diff = approx - ref
+    return {
+        "n": n,
+        "k": k,
+        "rel_fro": float(np.linalg.norm(diff) / max(np.linalg.norm(ref), 1e-30)),
+        "rmse": float(np.sqrt(np.mean(diff * diff))),
+        "max_abs": float(np.max(np.abs(diff))),
+        "per_component_rel": np.array(
+            [
+                np.linalg.norm(diff[:, j]) / max(np.linalg.norm(ref[:, j]), 1e-30)
+                for j in range(k)
+            ],
+            dtype=float,
+        ),
+    }
+
+
+def _format_component_errors(values, labels):
+    vals = np.asarray(values, dtype=float).reshape(-1)
+    return ", ".join(
+        f"{label}={vals[j]:.4e}"
+        for j, label in enumerate(labels[: vals.size])
+    )
+
+
 def _build_step_macro_strain_series(strain_path, seg_steps):
     e_wp = np.asarray(strain_path, dtype=float)
     if e_wp.ndim != 2 or e_wp.shape[1] < 3:
@@ -117,7 +155,7 @@ def _analyze_mu_vs_qp(mu_hist, qp_hist):
     y = y[mask, :]
 
     if x.shape[0] < max(10, 2 * k):
-        raise RuntimeError("Not enough valid samples for mu-vs-q_p diagnostics.")
+        raise RuntimeError("Not enough valid samples for mu-vs-q_m diagnostics.")
 
     # 1) Direct comparison (identity)
     rel_direct = _rel_fro(x, y)
@@ -187,23 +225,21 @@ def _save_q_only_comparison(prom_q_hist, hprom_q_hist, out_dir):
     q_prom = np.asarray(prom_q_hist, dtype=float)
     q_hprom = np.asarray(hprom_q_hist, dtype=float)
     if q_prom.ndim != 2 or q_hprom.ndim != 2:
-        raise ValueError("Expected PROM/HPROM q_p histories as 2D arrays.")
+        raise ValueError("Expected PROM/HPROM q_m histories as 2D arrays.")
 
     n = int(min(q_prom.shape[0], q_hprom.shape[0]))
     k = int(min(q_prom.shape[1], q_hprom.shape[1]))
     if n <= 1 or k <= 0:
-        raise RuntimeError("Invalid q_p histories for q-only comparison.")
+        raise RuntimeError("Invalid q_m histories for q-only comparison.")
 
     qp = q_prom[:n, :k]
     qh = q_hprom[:n, :k]
     dq = qh - qp
-    rel = float(np.linalg.norm(dq) / max(np.linalg.norm(qp), 1e-30))
-    rmse = float(np.sqrt(np.mean(dq * dq)))
-    max_abs = float(np.max(np.abs(dq)))
-    per_comp_rel = [
-        float(np.linalg.norm(dq[:, j]) / max(np.linalg.norm(qp[:, j]), 1e-30))
-        for j in range(k)
-    ]
+    metrics = _aligned_error_metrics(qp, qh)
+    rel = metrics["rel_fro"]
+    rmse = metrics["rmse"]
+    max_abs = metrics["max_abs"]
+    per_comp_rel = metrics["per_component_rel"]
 
     out_txt = os.path.join(out_dir, "q_only_prom_vs_hprom_summary.txt")
     with open(out_txt, "w", encoding="utf-8") as f:
@@ -229,9 +265,9 @@ def _save_q_only_comparison(prom_q_hist, hprom_q_hist, out_dir):
     print("  Stage 12 Q-Only Summary")
     print("=" * 60)
     print(f"  Compared steps/components: {n} / {k}")
-    print(f"  PROM vs HPROM q_p rel-Fro error = {rel:.4e}")
-    print(f"  PROM vs HPROM q_p RMSE          = {rmse:.4e}")
-    print(f"  PROM vs HPROM q_p max |diff|    = {max_abs:.4e}")
+    print(f"  PROM vs HPROM q_m rel-Fro error = {rel:.4e}")
+    print(f"  PROM vs HPROM q_m RMSE          = {rmse:.4e}")
+    print(f"  PROM vs HPROM q_m max |diff|    = {max_abs:.4e}")
     print(f"  Saved summary: {out_txt}")
 
 
@@ -278,7 +314,7 @@ def _save_mu_qp_diagnostics(diag, out_dir, label):
         axs = [axs]
     for j in range(k):
         ax = axs[j]
-        ax.scatter(x[:, j], y[:, j], s=8, alpha=0.35, label=r"$q_p$ vs $\mu$")
+        ax.scatter(x[:, j], y[:, j], s=8, alpha=0.35, label=r"$q_m$ vs $\mu$")
         ax.scatter(x[:, j], y_hat_aff[:, j], s=8, alpha=0.35, label="Affine fit")
         xmin = float(min(np.min(x[:, j]), np.min(y[:, j])))
         xmax = float(max(np.max(x[:, j]), np.max(y[:, j])))
@@ -288,7 +324,7 @@ def _save_mu_qp_diagnostics(diag, out_dir, label):
         ax.set_ylabel(fr"$q_{{p,{j+1}}}$")
         ax.grid(True, linestyle="--", alpha=0.35)
     axs[0].legend(loc="best")
-    fig.suptitle(f"mu vs q_p Alignment ({label})")
+    fig.suptitle(f"mu vs q_m Alignment ({label})")
     fig.tight_layout()
     fig.savefig(os.path.join(out_dir, f"mu_qp_alignment_{safe}_scatter.png"), dpi=180)
     plt.close(fig)
@@ -306,12 +342,12 @@ def _save_mu_qp_diagnostics(diag, out_dir, label):
         ax.set_ylabel(fr"comp {j+1}")
     axs[0].legend(loc="best")
     axs[-1].set_xlabel("Step")
-    fig.suptitle(f"mu/q_p Time Series ({label})")
+    fig.suptitle(f"mu/q_m Time Series ({label})")
     fig.tight_layout()
     fig.savefig(os.path.join(out_dir, f"mu_qp_alignment_{safe}_timeseries.png"), dpi=180)
     plt.close(fig)
 
-    print(f"  [{label}] mu-vs-q_p diagnostics saved: {summary_path}")
+    print(f"  [{label}] mu-vs-q_m diagnostics saved: {summary_path}")
     print(
         f"  [{label}] rel errors: direct={diag['rel_direct']:.3e}, "
         f"diag={diag['rel_diag']:.3e}, linear={diag['rel_lin']:.3e}, "
@@ -408,15 +444,17 @@ def run_stage12(
     gpr_data_dir="stage_7_gpr_data_ls",
     hprom_mawecm_gpr_dir="stage_12_hprom_mawecm_gpr_data_ls",
     out_dir="stage_12_hprom_mawecm_gpr_ls_results",
-    qp_init_mode="previous",
+    qp_init_mode="continuation",
+    hprom_max_its=25,
+    hprom_max_res_for_rel_convergence=1.0e-1,
+    hprom_include_weight_tangent=True,
+    hprom_old_stiffness_residual_cutoff=1.0e5,
     dynamic_residual_weights=True,
     dynamic_homogenization_weights=False,
+    hprom_homogenization_mode="full_fom",
     q_only=False,
 ):
     os.makedirs(out_dir, exist_ok=True)
-    if not bool(q_only):
-        print("[Stage 12] Enforcing residual-only workflow: homogenization evaluation is disabled.")
-    q_only = True
 
     # Load domain parameters from stage0 bundle
     emax = 2.0
@@ -459,6 +497,8 @@ def run_stage12(
     print(f"  GPR data dir: {gpr_data_dir}")
     print(f"  HPROM-MAWECM-GPR dir: {hprom_mawecm_gpr_dir}")
     print(f"  Output dir: {out_dir}")
+    print(f"  HPROM homogenization mode: {hprom_homogenization_mode}")
+    print(f"  q-only mode: {int(bool(q_only))}")
 
     mesh_fom_prom = "rve_geometry"
     mesh_hprom = "rve_geometry"
@@ -568,11 +608,16 @@ def run_stage12(
             Xc=Xc_h,
             Yc=Yc_h,
             qp_init_mode=qp_init_mode,
+            max_its=int(hprom_max_its),
+            max_res_for_rel_convergence=float(hprom_max_res_for_rel_convergence),
+            old_stiffness_residual_cutoff=float(hprom_old_stiffness_residual_cutoff),
             dynamic_residual_weights=dynamic_residual_weights,
+            include_weight_tangent=bool(hprom_include_weight_tangent),
             dynamic_homogenization_weights=(
                 dynamic_homogenization_weights if (not q_only) else False
             ),
             evaluate_homogenization=(not q_only),
+            homogenization_mode=hprom_homogenization_mode,
         )
         timings["HPROM-MAWECM-GPR"] = time.perf_counter() - t0
         h_eps = np.asarray(h_eps, dtype=float)
@@ -585,19 +630,195 @@ def run_stage12(
         h_sig = np.load(hprom_sig_file)
 
     if not bool(q_only):
-        n = min(len(f_sig), len(p_sig), len(h_sig))
-        err_prom = np.linalg.norm(f_sig[:n] - p_sig[:n]) / (np.linalg.norm(f_sig[:n]) + 1e-30)
-        err_hprom = np.linalg.norm(f_sig[:n] - h_sig[:n]) / (np.linalg.norm(f_sig[:n]) + 1e-30)
+        stress_prom_fom = _aligned_error_metrics(f_sig, p_sig)
+        stress_hprom_fom = _aligned_error_metrics(f_sig, h_sig)
+        stress_hprom_prom = _aligned_error_metrics(p_sig, h_sig)
+        strain_prom_fom = _aligned_error_metrics(f_eps, p_eps)
+        strain_hprom_fom = _aligned_error_metrics(f_eps, h_eps)
+        strain_hprom_prom = _aligned_error_metrics(p_eps, h_eps)
+
+        prom_q_file = os.path.join(out_dir, "prom_gpr_run_q_p.npy")
+        hprom_q_file = os.path.join(out_dir, "hprom_mawecm_gpr_run_q_p.npy")
+        q_hprom_prom = None
+        if os.path.exists(prom_q_file) and os.path.exists(hprom_q_file):
+            q_hprom_prom = _aligned_error_metrics(
+                np.load(prom_q_file),
+                np.load(hprom_q_file),
+            )
 
         print("\n" + "=" * 60)
         print("  Stage 12 Summary")
         print("=" * 60)
-        print(f"  PROM-GPR  vs FOM: Rel. Stress Error = {err_prom:.4e}")
-        print(f"  HPROM-MAWECM-GPR vs FOM: Rel. Stress Error = {err_hprom:.4e}")
+        print(
+            "  PROM-GPR  vs FOM: Rel. Stress Error = "
+            f"{stress_prom_fom['rel_fro']:.4e}"
+        )
+        print(
+            "  HPROM-MAWECM-GPR vs FOM: Rel. Stress Error = "
+            f"{stress_hprom_fom['rel_fro']:.4e}"
+        )
+        print(
+            "  HPROM-MAWECM-GPR vs PROM-GPR: Rel. Stress Error = "
+            f"{stress_hprom_prom['rel_fro']:.4e}"
+        )
+        print("  Stress component relative errors [reference in denominator]:")
+        print(
+            "    PROM/FOM       : "
+            + _format_component_errors(
+                stress_prom_fom["per_component_rel"],
+                ("sigma_xx", "sigma_yy", "sigma_xy"),
+            )
+        )
+        print(
+            "    HPROM/FOM      : "
+            + _format_component_errors(
+                stress_hprom_fom["per_component_rel"],
+                ("sigma_xx", "sigma_yy", "sigma_xy"),
+            )
+        )
+        print(
+            "    HPROM/PROM     : "
+            + _format_component_errors(
+                stress_hprom_prom["per_component_rel"],
+                ("sigma_xx", "sigma_yy", "sigma_xy"),
+            )
+        )
+        print("  Strain component relative errors [reference in denominator]:")
+        print(
+            "    PROM/FOM       : "
+            + _format_component_errors(
+                strain_prom_fom["per_component_rel"],
+                ("eps_xx", "eps_yy", "gamma_xy"),
+            )
+        )
+        print(
+            "    HPROM/FOM      : "
+            + _format_component_errors(
+                strain_hprom_fom["per_component_rel"],
+                ("eps_xx", "eps_yy", "gamma_xy"),
+            )
+        )
+        print(
+            "    HPROM/PROM     : "
+            + _format_component_errors(
+                strain_hprom_prom["per_component_rel"],
+                ("eps_xx", "eps_yy", "gamma_xy"),
+            )
+        )
+        if q_hprom_prom is not None:
+            q_labels = tuple(
+                f"q_{j + 1}" for j in range(q_hprom_prom["k"])
+            )
+            print(
+                "  HPROM-MAWECM-GPR vs PROM-GPR: Rel. q_m Error = "
+                f"{q_hprom_prom['rel_fro']:.4e}"
+            )
+            print(
+                "    q_m component relative errors: "
+                + _format_component_errors(
+                    q_hprom_prom["per_component_rel"],
+                    q_labels,
+                )
+            )
+            print(
+                "    q_m RMSE / max |difference|: "
+                f"{q_hprom_prom['rmse']:.4e} / "
+                f"{q_hprom_prom['max_abs']:.4e}"
+            )
+        else:
+            print("  HPROM/PROM q_m error unavailable: q_m history file missing.")
         for method, t in timings.items():
             print(f"  {method} time: {t:.2f}s")
 
-    # mu vs q_p diagnostics (important for LS interpretation and initialization quality)
+        error_summary_file = os.path.join(out_dir, "stage12_error_summary.txt")
+        with open(error_summary_file, "w", encoding="utf-8") as f:
+            f.write(
+                f"stress_rel_prom_vs_fom={stress_prom_fom['rel_fro']:.16e}\n"
+            )
+            f.write(
+                f"stress_rel_hprom_vs_fom={stress_hprom_fom['rel_fro']:.16e}\n"
+            )
+            f.write(
+                f"stress_rel_hprom_vs_prom={stress_hprom_prom['rel_fro']:.16e}\n"
+            )
+            f.write(
+                "stress_component_rel_prom_vs_fom="
+                + ",".join(
+                    f"{float(v):.16e}"
+                    for v in stress_prom_fom["per_component_rel"]
+                )
+                + "\n"
+            )
+            f.write(
+                "stress_component_rel_hprom_vs_fom="
+                + ",".join(
+                    f"{float(v):.16e}"
+                    for v in stress_hprom_fom["per_component_rel"]
+                )
+                + "\n"
+            )
+            f.write(
+                "stress_component_rel_hprom_vs_prom="
+                + ",".join(
+                    f"{float(v):.16e}"
+                    for v in stress_hprom_prom["per_component_rel"]
+                )
+                + "\n"
+            )
+            f.write(
+                f"strain_rel_prom_vs_fom={strain_prom_fom['rel_fro']:.16e}\n"
+            )
+            f.write(
+                f"strain_rel_hprom_vs_fom={strain_hprom_fom['rel_fro']:.16e}\n"
+            )
+            f.write(
+                f"strain_rel_hprom_vs_prom={strain_hprom_prom['rel_fro']:.16e}\n"
+            )
+            f.write(
+                "strain_component_rel_prom_vs_fom="
+                + ",".join(
+                    f"{float(v):.16e}"
+                    for v in strain_prom_fom["per_component_rel"]
+                )
+                + "\n"
+            )
+            f.write(
+                "strain_component_rel_hprom_vs_fom="
+                + ",".join(
+                    f"{float(v):.16e}"
+                    for v in strain_hprom_fom["per_component_rel"]
+                )
+                + "\n"
+            )
+            f.write(
+                "strain_component_rel_hprom_vs_prom="
+                + ",".join(
+                    f"{float(v):.16e}"
+                    for v in strain_hprom_prom["per_component_rel"]
+                )
+                + "\n"
+            )
+            if q_hprom_prom is not None:
+                f.write(
+                    f"q_m_rel_hprom_vs_prom={q_hprom_prom['rel_fro']:.16e}\n"
+                )
+                f.write(
+                    f"q_m_rmse_hprom_vs_prom={q_hprom_prom['rmse']:.16e}\n"
+                )
+                f.write(
+                    f"q_m_max_abs_hprom_vs_prom={q_hprom_prom['max_abs']:.16e}\n"
+                )
+                f.write(
+                    "q_m_component_rel_hprom_vs_prom="
+                    + ",".join(
+                        f"{float(v):.16e}"
+                        for v in q_hprom_prom["per_component_rel"]
+                    )
+                    + "\n"
+                )
+        print(f"  Error summary saved: {error_summary_file}")
+
+    # mu vs q_m diagnostics (important for LS interpretation and initialization quality)
     try:
         mu_hist = _build_step_macro_strain_series(strain_path, seg_steps)
         prom_q_file = os.path.join(out_dir, "prom_gpr_run_q_p.npy")
@@ -606,21 +827,21 @@ def run_stage12(
             d_prom = _analyze_mu_vs_qp(mu_hist, np.load(prom_q_file))
             _save_mu_qp_diagnostics(d_prom, out_dir, label="PROM-GPR")
         else:
-            print(f"  [PROM-GPR] mu-vs-q_p diagnostics skipped (missing {prom_q_file}).")
+            print(f"  [PROM-GPR] mu-vs-q_m diagnostics skipped (missing {prom_q_file}).")
         if os.path.exists(hprom_q_file):
             d_hprom = _analyze_mu_vs_qp(mu_hist, np.load(hprom_q_file))
             _save_mu_qp_diagnostics(d_hprom, out_dir, label="HPROM-MAWECM-GPR")
         else:
-            print(f"  [HPROM-MAWECM-GPR] mu-vs-q_p diagnostics skipped (missing {hprom_q_file}).")
+            print(f"  [HPROM-MAWECM-GPR] mu-vs-q_m diagnostics skipped (missing {hprom_q_file}).")
     except Exception as ex:
-        print(f"  [Stage 12] WARNING: mu-vs-q_p diagnostics failed: {ex}")
+        print(f"  [Stage 12] WARNING: mu-vs-q_m diagnostics failed: {ex}")
 
     prom_q_file = os.path.join(out_dir, "prom_gpr_run_q_p.npy")
     hprom_q_file = os.path.join(out_dir, "hprom_mawecm_gpr_run_q_p.npy")
     if bool(q_only):
         if not os.path.exists(prom_q_file) or not os.path.exists(hprom_q_file):
             raise RuntimeError(
-                "q-only comparison requires PROM and HPROM q_p files; "
+                "q-only comparison requires PROM and HPROM q_m history files; "
                 "rerun with --run-prom-gpr and --run-hprom-mawecm-gpr."
             )
         _save_q_only_comparison(np.load(prom_q_file), np.load(hprom_q_file), out_dir)
@@ -646,7 +867,7 @@ if __name__ == "__main__":
         "--gpr-data-dir",
         type=str,
         default="stage_7_gpr_data_ls",
-        help="Directory with sparse-GP model files (sparse_gp_model.npz, phi_p.npy, phi_s.npy).",
+        help="Directory with sparse-GP model files (sparse_gp_model.npz, phi_m.npy, A_m.npy, phi_s.npy).",
     )
     p.add_argument(
         "--hprom-mawecm-gpr-dir",
@@ -665,9 +886,43 @@ if __name__ == "__main__":
     p.add_argument(
         "--qp-init-mode",
         type=str,
-        default="previous",
-        choices=["previous", "zero", "mu_affine"],
-        help="Initializer for q_p at each increment in PROM/HPROM-MAWECM-GPR.",
+        default="continuation",
+        choices=["continuation", "previous", "zero", "mu_affine"],
+        help=(
+            "Initializer for q_m. 'continuation' matches the validated 2D workflow: "
+            "mu-affine predictor at the first increment, then previous converged q_m."
+        ),
+    )
+    p.add_argument(
+        "--hprom-max-its",
+        type=int,
+        default=25,
+        help="Maximum HPROM Newton iterations per increment. Use 0 for predictor-only evaluation.",
+    )
+    p.add_argument(
+        "--hprom-max-res-for-rel-convergence",
+        type=float,
+        default=1.0e-1,
+        help=(
+            "Maximum absolute ||R_r|| accepted by the combined relative-residual "
+            "and small-update convergence criteria."
+        ),
+    )
+    p.add_argument(
+        "--hprom-include-weight-tangent",
+        type=int,
+        default=1,
+        choices=[0, 1],
+        help="Include the dynamic MAW d(w)/d(q_m) contribution in the reduced tangent.",
+    )
+    p.add_argument(
+        "--hprom-old-stiffness-residual-cutoff",
+        type=float,
+        default=1.0e5,
+        help=(
+            "Use K_old at the first Newton iteration when ||R_r|| is below this value. "
+            "Pass 'inf' to use K_old whenever it is available."
+        ),
     )
     p.add_argument(
         "--fixed-residual-weights",
@@ -677,14 +932,25 @@ if __name__ == "__main__":
     p.add_argument(
         "--dynamic-homogenization-weights",
         action="store_true",
-        help="Use dynamic MAW homogenization weights (default is fixed Stage9-compatible homogenization weights).",
+        help="Use dynamic MAW homogenization weights (overrides --hprom-homogenization-mode).",
+    )
+    p.add_argument(
+        "--hprom-homogenization-mode",
+        type=str,
+        default="full_fom",
+        choices=["full_fom", "ecm_fixed", "maw_dynamic"],
+        help=(
+            "How HPROM-MAWECM computes homogenized eps/sig. "
+            "full_fom uses the full mesh without homogenization hyper-reduction; "
+            "ecm_fixed uses fixed classical eps/sig ECM weights; "
+            "maw_dynamic uses dynamic MAW eps/sig weights."
+        ),
     )
     p.add_argument(
         "--q-only",
         action="store_true",
-        help="Compare PROM-GPR vs HPROM-MAWECM-GPR using q_p trajectories only (skip FOM stress summary/plots).",
+        help="Compare PROM-GPR vs HPROM-MAWECM-GPR using q_m trajectories only (skip FOM stress summary/plots).",
     )
-    p.set_defaults(q_only=True)
     args = p.parse_args()
 
     run_stage12(
@@ -695,7 +961,12 @@ if __name__ == "__main__":
         hprom_mawecm_gpr_dir=args.hprom_mawecm_gpr_dir,
         out_dir=args.out_dir,
         qp_init_mode=args.qp_init_mode,
+        hprom_max_its=args.hprom_max_its,
+        hprom_max_res_for_rel_convergence=args.hprom_max_res_for_rel_convergence,
+        hprom_include_weight_tangent=bool(args.hprom_include_weight_tangent),
+        hprom_old_stiffness_residual_cutoff=args.hprom_old_stiffness_residual_cutoff,
         dynamic_residual_weights=(not args.fixed_residual_weights),
         dynamic_homogenization_weights=args.dynamic_homogenization_weights,
+        hprom_homogenization_mode=args.hprom_homogenization_mode,
         q_only=args.q_only,
     )

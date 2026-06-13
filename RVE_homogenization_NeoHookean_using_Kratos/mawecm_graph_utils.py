@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 from scipy import sparse
+from scipy.sparse.csgraph import connected_components
 
 
 def _as_2d(arr):
@@ -84,6 +85,102 @@ def build_knn_graph_laplacian(q_train, knn=8, metric="euclidean", kernel="gaussi
     return lap
 
 
+def filter_degenerate_tetrahedra(
+    points,
+    cells,
+    normalized_det_tol=1.0e-14,
+    require_all_nodes=True,
+    require_connected=True,
+):
+    """
+    Remove tetrahedra that are degenerate in the physical parameter space.
+
+    The determinant is evaluated after scaling every coordinate by its global
+    range. This makes the tolerance dimensionless and independent of the
+    relative units or amplitudes of the parameter coordinates.
+    """
+    x = _as_2d(points)
+    conn = np.asarray(cells, dtype=np.int64)
+    if x.shape[1] != 3:
+        raise ValueError(f"Tetrahedral points must have three coordinates, got {x.shape}.")
+    if conn.ndim != 2 or conn.shape[1] != 4:
+        raise ValueError(f"Expected tet4 connectivity, got shape {conn.shape}.")
+    if conn.shape[0] <= 0:
+        raise ValueError("Tetrahedral connectivity is empty.")
+    if np.min(conn) < 0 or np.max(conn) >= x.shape[0]:
+        raise ValueError(
+            f"Connectivity indices out of range for {x.shape[0]} points."
+        )
+
+    span = np.ptp(x, axis=0)
+    if np.any(~np.isfinite(span)) or np.any(span <= 0.0):
+        raise ValueError(f"Parameter coordinates have invalid ranges: {span}.")
+    x_scaled = (x - np.min(x, axis=0)) / span
+
+    x_e = x_scaled[conn]
+    jac = np.stack(
+        (
+            x_e[:, 1, :] - x_e[:, 0, :],
+            x_e[:, 2, :] - x_e[:, 0, :],
+            x_e[:, 3, :] - x_e[:, 0, :],
+        ),
+        axis=2,
+    )
+    abs_det = np.abs(np.linalg.det(jac))
+    tol = float(normalized_det_tol)
+    valid = np.isfinite(abs_det) & (abs_det > tol)
+    filtered = np.asarray(conn[valid], dtype=np.int64)
+    if filtered.shape[0] <= 0:
+        raise RuntimeError(
+            "All parameter-mesh tetrahedra were rejected as degenerate."
+        )
+
+    lap = build_cell_graph_laplacian(
+        n_nodes=int(x.shape[0]),
+        cells=filtered,
+        cell_type="tet4",
+        weight_mode="binary",
+    )
+    degree = np.asarray(lap.diagonal(), dtype=float).reshape(-1)
+    n_isolated = int(np.count_nonzero(degree <= 0.0))
+    adjacency = sparse.diags(degree, format="csr") - lap
+    adjacency.eliminate_zeros()
+    n_components, labels = connected_components(
+        adjacency,
+        directed=False,
+        return_labels=True,
+    )
+    largest_component = (
+        int(np.max(np.bincount(labels))) if labels.size else 0
+    )
+
+    if bool(require_all_nodes) and n_isolated > 0:
+        raise RuntimeError(
+            "Filtering degenerate tetrahedra isolated "
+            f"{n_isolated}/{x.shape[0]} parameter states."
+        )
+    if bool(require_connected) and int(n_components) != 1:
+        raise RuntimeError(
+            "Filtering degenerate tetrahedra produced a disconnected parameter "
+            f"graph with {int(n_components)} components "
+            f"(largest={largest_component}/{x.shape[0]})."
+        )
+
+    stats = {
+        "n_cells_total": int(conn.shape[0]),
+        "n_cells_kept": int(filtered.shape[0]),
+        "n_cells_removed": int(conn.shape[0] - filtered.shape[0]),
+        "normalized_det_tol": tol,
+        "min_kept_abs_det": float(np.min(abs_det[valid])),
+        "max_kept_abs_det": float(np.max(abs_det[valid])),
+        "n_graph_edges": int(adjacency.nnz // 2),
+        "n_isolated_nodes": n_isolated,
+        "n_components": int(n_components),
+        "largest_component": largest_component,
+    }
+    return filtered, lap, stats
+
+
 def build_cell_graph_laplacian(n_nodes, cells, cell_type="auto", weight_mode="binary"):
     """
     Build graph Laplacian L = D - W from mesh connectivity.
@@ -95,7 +192,8 @@ def build_cell_graph_laplacian(n_nodes, cells, cell_type="auto", weight_mode="bi
     cells : array, shape (n_cells, n_conn)
         Cell connectivity (0-based node ids).
     cell_type : str
-        "auto", "hex8", or "quad4".
+        "auto", "tet4", "hex8", or "quad4". Four-node connectivity is
+        ambiguous, so tetrahedral callers must pass "tet4" explicitly.
     weight_mode : str
         Currently only "binary" is supported.
     """
@@ -131,6 +229,11 @@ def build_cell_graph_laplacian(n_nodes, cells, cell_type="auto", weight_mode="bi
         )
     elif ctype == "quad4":
         local_edges = np.asarray([[0, 1], [1, 2], [2, 3], [3, 0]], dtype=np.int64)
+    elif ctype == "tet4":
+        local_edges = np.asarray(
+            [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]],
+            dtype=np.int64,
+        )
     else:
         raise ValueError(f"Unsupported cell_type='{cell_type}'.")
 

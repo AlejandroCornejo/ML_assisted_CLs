@@ -151,58 +151,94 @@ def _build_ls_targets(q_full, e_hist, n_primary):
     return mu, n_from_strain
 
 
-def _fit_ls_primary_basis(phi, q_full, mu, n_primary, sample_mask=None):
+def _fit_ls_master_map(q_full, mu, n_primary):
+    """Fit the Joaquin/2D-MAWECM POD-to-master map."""
     n_p = int(n_primary)
-    n_samples = int(q_full.shape[0])
-    if sample_mask is None:
-        idx = np.arange(n_samples, dtype=np.int64)
-    else:
-        idx = np.nonzero(np.asarray(sample_mask, dtype=bool))[0].astype(np.int64)
-    if idx.size < max(10, 2 * n_p):
+    if n_p != int(mu.shape[1]):
         raise RuntimeError(
-            f"Not enough samples for LS fit after filtering: {idx.size} samples for n_primary={n_p}."
+            "The LS master dimension must equal the physical parameter dimension. "
+            f"Got n_primary={n_p}, mu_dim={mu.shape[1]}."
         )
 
-    q_sel = q_full[idx, :]
-    mu_sel = mu[idx, :]
+    # Solve min ||Q T_m^T - Mu||_F.
+    t_m_t, *_ = np.linalg.lstsq(q_full, mu, rcond=None)
+    mu_hat = q_full @ t_m_t
+    err_rel = float(np.linalg.norm(mu_hat - mu) / max(np.linalg.norm(mu), 1e-30))
+    rmse = np.sqrt(np.mean((mu_hat - mu) ** 2, axis=0))
+    return {
+        "T_m": np.asarray(t_m_t.T, dtype=float),
+        "T_m_t": np.asarray(t_m_t, dtype=float),
+        "mu_hat": np.asarray(mu_hat, dtype=float),
+        "error_rel": err_rel,
+        "rmse": np.asarray(rmse, dtype=float),
+    }
 
-    q_scale = np.std(q_sel, axis=0)
-    q_scale = np.where(q_scale < 1e-12, 1.0, q_scale)
-    mu_scale = np.std(mu_sel, axis=0)
-    mu_scale = np.where(mu_scale < 1e-12, 1.0, mu_scale)
 
-    q_scaled = q_sel / q_scale[None, :]
-    mu_scaled = mu_sel / mu_scale[None, :]
-
-    c_scaled, *_ = np.linalg.lstsq(q_scaled, mu_scaled, rcond=None)
-    c = c_scaled / q_scale[:, None]
-
-    phi_candidate = phi @ c
-    u_p, s_p, _ = np.linalg.svd(phi_candidate, full_matrices=False)
-
-    tol_p = (s_p[0] if s_p.size > 0 else 1.0) * 1e-12
-    rank_p = int(np.sum(s_p > tol_p))
-    if rank_p < n_p:
+def _build_consistent_master_slave_split(phi, q_full, t_m_t):
+    """Build Phi_m, A_m, Phi_s and coordinates exactly as in the 2D workflow."""
+    phi_c = np.asarray(phi @ t_m_t, dtype=float)
+    u_m, s_m, v_m_t = np.linalg.svd(phi_c, full_matrices=False)
+    tol = (s_m[0] if s_m.size else 1.0) * 1e-12
+    rank = int(np.sum(s_m > tol))
+    expected_rank = int(t_m_t.shape[1])
+    if rank != expected_rank:
         raise RuntimeError(
-            f"LS primary basis is rank-deficient: rank={rank_p}, requested n_primary={n_p}."
+            f"LS master basis rank mismatch: rank={rank}, expected={expected_rank}."
         )
 
-    phi_p = u_p[:, :n_p]
-    return phi_p, c, s_p, idx
+    phi_m = np.asarray(u_m[:, :rank], dtype=float)
+    sigma_m = np.asarray(s_m[:rank], dtype=float)
+    v_m_t = np.asarray(v_m_t[:rank, :], dtype=float)
+    a_m = np.asarray(np.diag(sigma_m) @ v_m_t, dtype=float)
+
+    c_m = np.asarray(phi.T @ phi_m, dtype=float)
+    gram_m = c_m.T @ c_m
+    if np.linalg.norm(gram_m - np.eye(rank)) > 1e-10:
+        raise RuntimeError("C_m is not orthonormal enough for a stable master/slave split.")
+
+    # Orthogonal complement of C_m inside the retained POD space.
+    projector_s = np.eye(phi.shape[1], dtype=float) - c_m @ c_m.T
+    evals, evecs = np.linalg.eigh(projector_s)
+    order = np.argsort(evals)[::-1]
+    c_s = np.asarray(evecs[:, order[: phi.shape[1] - rank]], dtype=float)
+    if c_s.size:
+        c_s = np.asarray(np.linalg.qr(c_s)[0], dtype=float)
+
+    phi_s = np.asarray(phi @ c_s, dtype=float)
+    q_master = np.asarray(q_full @ c_m, dtype=float)
+    try:
+        q_m = np.linalg.solve(a_m, q_master.T).T
+    except np.linalg.LinAlgError:
+        q_m = np.linalg.lstsq(a_m, q_master.T, rcond=None)[0].T
+    q_s = np.asarray(q_full @ c_s, dtype=float)
+
+    w_ref = np.asarray(phi @ q_full.T, dtype=float).T
+    w_rec = (phi_m @ (a_m @ q_m.T)).T + (phi_s @ q_s.T).T
+    decoder_rel = float(np.linalg.norm(w_rec - w_ref) / max(np.linalg.norm(w_ref), 1e-30))
+
+    return {
+        "phi_c": phi_c,
+        "phi_m": phi_m,
+        "phi_s": phi_s,
+        "A_m": a_m,
+        "C_m": c_m,
+        "C_s": c_s,
+        "sigma_m": sigma_m,
+        "v_m_t": v_m_t,
+        "q_m": q_m,
+        "q_s": q_s,
+        "q_master": q_master,
+        "decoder_rel_error": decoder_rel,
+        "ortho_ms": float(np.linalg.norm(phi_m.T @ phi_s)),
+    }
 
 
-def _build_secondary_basis_from_primary(phi, phi_p, n_secondary):
-    n_s = int(n_secondary)
-    residual_space = phi - phi_p @ (phi_p.T @ phi)
-    u_s, s_s, _ = np.linalg.svd(residual_space, full_matrices=False)
-
-    tol_s = (s_s[0] if s_s.size > 0 else 1.0) * 1e-12
-    rank_s = int(np.sum(s_s > tol_s))
-    if rank_s < n_s:
-        raise RuntimeError(
-            f"Cannot extract full secondary space: rank={rank_s}, requested n_secondary={n_s}."
-        )
-    return u_s[:, :n_s]
+def _fit_affine_mu_to_qm(mu, q_m):
+    x_aug = np.hstack([np.asarray(mu, dtype=float), np.ones((mu.shape[0], 1))])
+    b_aff, *_ = np.linalg.lstsq(x_aug, q_m, rcond=None)
+    q_hat = x_aug @ b_aff
+    rel = float(np.linalg.norm(q_hat - q_m) / max(np.linalg.norm(q_m), 1e-30))
+    return np.asarray(b_aff, dtype=float), rel
 
 
 def _compute_cell_jacobians(mu_nodes, q_nodes, cells, cell_type):
@@ -268,187 +304,6 @@ def _compute_cell_jacobians(mu_nodes, q_nodes, cells, cell_type):
     return det_j_param, det_j_map, cond_j_param, valid, cells_out
 
 
-def _assign_samples_to_structured_hex_cells(mu3, d_mu, mu_center, grid_shape):
-    mu3 = np.asarray(mu3, dtype=float)
-    nx, ny, nz = [int(v) for v in grid_shape]
-    if nx < 2 or ny < 2 or nz < 2:
-        raise RuntimeError(f"Invalid structured grid shape: {grid_shape}")
-
-    xi = (mu3 - mu_center[None, :]) @ d_mu.T
-    xi_min = np.min(xi, axis=0)
-    xi_max = np.max(xi, axis=0)
-    span = np.maximum(xi_max - xi_min, 1e-14)
-    t = (xi - xi_min[None, :]) / span[None, :]
-    t = np.clip(t, 0.0, 1.0 - 1e-12)
-
-    ix = np.minimum((t[:, 0] * float(nx - 1)).astype(np.int64), nx - 2)
-    iy = np.minimum((t[:, 1] * float(ny - 1)).astype(np.int64), ny - 2)
-    iz = np.minimum((t[:, 2] * float(nz - 1)).astype(np.int64), nz - 2)
-
-    cid = ix * ((ny - 1) * (nz - 1)) + iy * (nz - 1) + iz
-    return cid
-
-
-def _compute_structured_hex_negative_sample_mask(mu3, qls3, mesh_max_points):
-    mu3 = np.asarray(mu3, dtype=float)
-    qls3 = np.asarray(qls3, dtype=float)
-
-    xi, d_mu, mu_center, _ = _compute_deformation_factor_matrix(mu3)
-    _ = xi  # explicit for readability
-    mu_m, _, q_m, cells, grid_shape = _build_structured_hex_mesh_from_mu(
-        mu3=mu3,
-        qpod3=qls3,
-        qls3=qls3,
-        d_mu=d_mu,
-        mu_center=mu_center,
-        mesh_max_points=int(mesh_max_points),
-        knn_k=12,
-    )
-    det_j_param, det_j_map, _, valid, cells = _compute_cell_jacobians(mu_m, q_m, cells, cell_type="hex")
-
-    bad_cell_mask = np.logical_or(~valid, ~np.isfinite(det_j_map))
-    bad_cell_mask = np.logical_or(bad_cell_mask, det_j_map <= 0.0)
-
-    sample_cell_ids = _assign_samples_to_structured_hex_cells(mu3, d_mu, mu_center, grid_shape)
-    sample_bad = bad_cell_mask[sample_cell_ids]
-
-    return {
-        "sample_bad_mask": sample_bad,
-        "bad_cell_mask": bad_cell_mask,
-        "det_j_map": det_j_map,
-        "det_j_param": det_j_param,
-        "valid_cells_mask": valid,
-        "grid_shape": tuple(int(v) for v in grid_shape),
-    }
-
-
-def _build_primary_secondary_bases(
-    phi,
-    w_free,
-    q_full,
-    e_hist,
-    n_primary,
-    enforce_positive_jacobian_ls=False,
-    jacobian_ls_max_iters=4,
-    jacobian_ls_mesh_max_points=4096,
-    jacobian_ls_drop_fraction=1.0,
-    jacobian_ls_seed=42,
-    jacobian_ls_min_samples=6000,
-):
-    n_total = int(phi.shape[1])
-    n_p = int(n_primary)
-    n_s = n_total - n_p
-
-    mu, n_from_strain = _build_ls_targets(q_full, e_hist, n_p)
-
-    if (not bool(enforce_positive_jacobian_ls)) or n_p < 3 or mu.shape[1] < 3:
-        phi_p, c, s_p, fit_idx = _fit_ls_primary_basis(phi, q_full, mu, n_p, sample_mask=None)
-        phi_s = _build_secondary_basis_from_primary(phi, phi_p, n_s)
-        ls_info = {
-            "enabled": bool(enforce_positive_jacobian_ls),
-            "iterations": 1,
-            "best_negative_samples": 0,
-            "best_negative_cells": 0,
-            "active_samples": int(fit_idx.size),
-            "total_samples": int(q_full.shape[0]),
-        }
-        return phi_p, phi_s, c, mu, n_from_strain, s_p, np.ones(q_full.shape[0], dtype=bool), ls_info
-
-    rng = np.random.default_rng(int(jacobian_ls_seed))
-    total_samples = int(q_full.shape[0])
-    min_keep = int(max(10 * n_p, min(int(jacobian_ls_min_samples), total_samples)))
-
-    active = np.ones(total_samples, dtype=bool)
-    best = None
-    history = []
-
-    n_iter = int(max(1, jacobian_ls_max_iters))
-    for it in range(n_iter):
-        phi_p, c, s_p, fit_idx = _fit_ls_primary_basis(phi, q_full, mu, n_p, sample_mask=active)
-        q_ls_all = w_free @ phi_p
-
-        jac = _compute_structured_hex_negative_sample_mask(
-            mu3=mu[:, :3],
-            qls3=q_ls_all[:, :3],
-            mesh_max_points=int(jacobian_ls_mesh_max_points),
-        )
-        bad_samples = np.asarray(jac["sample_bad_mask"], dtype=bool)
-        bad_active = np.logical_and(active, bad_samples)
-        n_bad_active = int(np.sum(bad_active))
-        n_bad_cells = int(np.sum(jac["bad_cell_mask"]))
-
-        history.append(
-            {
-                "iter": int(it + 1),
-                "active_samples": int(np.sum(active)),
-                "bad_active_samples": n_bad_active,
-                "bad_cells": n_bad_cells,
-            }
-        )
-        print(
-            f"[LS-JacobianAware] iter {it + 1}/{n_iter}: "
-            f"active={int(np.sum(active))}, bad_samples={n_bad_active}, bad_cells={n_bad_cells}"
-        )
-
-        score = (n_bad_active, n_bad_cells, -int(np.sum(active)))
-        if (best is None) or (score < best["score"]):
-            best = {
-                "score": score,
-                "phi_p": phi_p.copy(),
-                "c": c.copy(),
-                "s_p": s_p.copy(),
-                "active_mask": active.copy(),
-                "n_bad_active": n_bad_active,
-                "n_bad_cells": n_bad_cells,
-                "grid_shape": jac["grid_shape"],
-            }
-
-        if n_bad_active == 0:
-            break
-
-        bad_idx = np.nonzero(bad_active)[0]
-        if bad_idx.size == 0:
-            break
-
-        drop_frac = float(np.clip(jacobian_ls_drop_fraction, 0.0, 1.0))
-        n_drop = int(np.ceil(drop_frac * bad_idx.size))
-        n_drop = max(1, min(n_drop, bad_idx.size))
-
-        remaining_after = int(np.sum(active)) - n_drop
-        if remaining_after < min_keep:
-            n_drop = max(0, int(np.sum(active)) - min_keep)
-        if n_drop <= 0:
-            break
-
-        if n_drop < bad_idx.size:
-            drop_sel = np.sort(rng.choice(bad_idx, size=n_drop, replace=False))
-        else:
-            drop_sel = bad_idx
-        active[drop_sel] = False
-
-    if best is None:
-        raise RuntimeError("Jacobian-aware LS fit failed to produce a valid basis.")
-
-    phi_p = best["phi_p"]
-    c = best["c"]
-    s_p = best["s_p"]
-    active_mask = best["active_mask"]
-    phi_s = _build_secondary_basis_from_primary(phi, phi_p, n_s)
-
-    ls_info = {
-        "enabled": True,
-        "iterations": int(len(history)),
-        "history": history,
-        "best_negative_samples": int(best["n_bad_active"]),
-        "best_negative_cells": int(best["n_bad_cells"]),
-        "active_samples": int(np.sum(active_mask)),
-        "total_samples": int(total_samples),
-        "grid_shape": best["grid_shape"],
-    }
-
-    return phi_p, phi_s, c, mu, n_from_strain, s_p, active_mask, ls_info
-
-
 def _plot_domain_3d(data, labels, title, out_file):
     import matplotlib.pyplot as plt
     from plot_style_utils import apply_latex_plot_style
@@ -480,7 +335,7 @@ def _save_domain_comparison_plots(
     out_dir,
     mu_targets,
     q_pod,
-    q_ls,
+    q_m,
     max_samples=120000,
     seed=42,
 ):
@@ -494,7 +349,7 @@ def _save_domain_comparison_plots(
         idx = np.sort(rng.choice(n, size=n_use, replace=False))
         mu_targets = mu_targets[idx, :]
         q_pod = q_pod[idx, :]
-        q_ls = q_ls[idx, :]
+        q_m = q_m[idx, :]
 
     _plot_domain_3d(
         mu_targets,
@@ -509,10 +364,10 @@ def _save_domain_comparison_plots(
         out_file=os.path.join(out_dir, "domain_qpod_first3_3d.png"),
     )
     _plot_domain_3d(
-        q_ls,
-        labels=(r"$q^{LS}_1$", r"$q^{LS}_2$", r"$q^{LS}_3$"),
-        title="Domain in first 3 LS-primary coordinates",
-        out_file=os.path.join(out_dir, "domain_qls_first3_3d.png"),
+        q_m,
+        labels=(r"$q^m_1$", r"$q^m_2$", r"$q^m_3$"),
+        title="Domain in consistent LS-master coordinates",
+        out_file=os.path.join(out_dir, "domain_qm_first3_3d.png"),
     )
 
 
@@ -576,105 +431,6 @@ def _compute_macro_deformation_jacobian(e_hist):
     return j_vals
 
 
-def _idw_interpolate(query_pts, sample_pts, sample_vals, k=12, power=2.0, eps=1e-12):
-    q = np.asarray(query_pts, dtype=float)
-    x = np.asarray(sample_pts, dtype=float)
-    y = np.asarray(sample_vals, dtype=float)
-    if x.shape[0] != y.shape[0]:
-        raise ValueError("sample_pts and sample_vals must have the same number of rows.")
-    if x.shape[0] < 1:
-        raise ValueError("At least one sample point is required for interpolation.")
-
-    tree = cKDTree(x)
-    k_eff = int(min(max(1, int(k)), x.shape[0]))
-    dist, idx = tree.query(q, k=k_eff)
-
-    if k_eff == 1:
-        return y[np.asarray(idx, dtype=np.int64), :]
-
-    dist = np.asarray(dist, dtype=float)
-    idx = np.asarray(idx, dtype=np.int64)
-    weights = 1.0 / np.maximum(dist, float(eps)) ** float(power)
-    wsum = np.sum(weights, axis=1, keepdims=True)
-    wsum = np.maximum(wsum, float(eps))
-    vals = y[idx, :]
-    return np.sum(weights[:, :, None] * vals, axis=1) / wsum
-
-
-def _build_structured_hex_mesh_from_mu(
-    mu3,
-    qpod3,
-    qls3,
-    d_mu,
-    mu_center,
-    mesh_max_points=6000,
-    knn_k=12,
-):
-    mu3 = np.asarray(mu3, dtype=float)
-    qpod3 = np.asarray(qpod3, dtype=float)
-    qls3 = np.asarray(qls3, dtype=float)
-    if mu3.shape[0] < 8:
-        raise RuntimeError("Structured hexa mesh needs at least 8 samples.")
-
-    # Normalized coordinates for robust structured sampling.
-    xi = (mu3 - mu_center[None, :]) @ d_mu.T
-    xi_min = np.min(xi, axis=0)
-    xi_max = np.max(xi, axis=0)
-
-    n_axis = int(np.round(float(mesh_max_points) ** (1.0 / 3.0)))
-    n_axis = max(3, n_axis)
-    while n_axis ** 3 > int(mesh_max_points) and n_axis > 3:
-        n_axis -= 1
-
-    nx = ny = nz = int(n_axis)
-    gx = np.linspace(xi_min[0], xi_max[0], nx)
-    gy = np.linspace(xi_min[1], xi_max[1], ny)
-    gz = np.linspace(xi_min[2], xi_max[2], nz)
-    xx, yy, zz = np.meshgrid(gx, gy, gz, indexing="ij")
-    xi_nodes = np.column_stack((xx.ravel(), yy.ravel(), zz.ravel()))
-
-    inv_d = np.diag(1.0 / np.maximum(np.diag(d_mu), 1e-14))
-    mu_nodes = xi_nodes @ inv_d.T + mu_center[None, :]
-
-    qpod_nodes = _idw_interpolate(
-        query_pts=xi_nodes,
-        sample_pts=xi,
-        sample_vals=qpod3,
-        k=int(knn_k),
-        power=2.0,
-    )
-    qls_nodes = _idw_interpolate(
-        query_pts=xi_nodes,
-        sample_pts=xi,
-        sample_vals=qls3,
-        k=int(knn_k),
-        power=2.0,
-    )
-
-    def _nid(i, j, k):
-        return i * (ny * nz) + j * nz + k
-
-    hexes = []
-    for i in range(nx - 1):
-        for j in range(ny - 1):
-            for k in range(nz - 1):
-                n000 = _nid(i, j, k)
-                n100 = _nid(i + 1, j, k)
-                n110 = _nid(i + 1, j + 1, k)
-                n010 = _nid(i, j + 1, k)
-                n001 = _nid(i, j, k + 1)
-                n101 = _nid(i + 1, j, k + 1)
-                n111 = _nid(i + 1, j + 1, k + 1)
-                n011 = _nid(i, j + 1, k + 1)
-                hexes.append([n000, n100, n110, n010, n001, n101, n111, n011])
-
-    hexes = np.asarray(hexes, dtype=np.int64)
-    if hexes.shape[0] == 0:
-        raise RuntimeError("Structured hex mesh produced zero cells.")
-
-    return mu_nodes, qpod_nodes, qls_nodes, hexes, (nx, ny, nz)
-
-
 def _plot_jacobian_histograms(j_param_det, j_map_det, j_phys, out_dir):
     import matplotlib.pyplot as plt
     from plot_style_utils import apply_latex_plot_style
@@ -712,8 +468,8 @@ def _plot_jacobian_histograms(j_param_det, j_map_det, j_phys, out_dir):
         axes[1],
         j_map_det,
         color="#1d4ed8",
-        title=r"$\det(\partial q^{LS}/\partial \mu)$",
-        xlabel=r"$\det(\partial q^{LS}/\partial \mu)$",
+        title=r"$\det(\partial q_m/\partial \mu)$",
+        xlabel=r"$\det(\partial q_m/\partial \mu)$",
     )
     _safe_hist(
         axes[2],
@@ -941,19 +697,11 @@ def _write_mesh_jacobian_tex(
         )
 
         f.write(r"\subsection*{2. Parameter mesh and map Jacobians}" + "\n")
-        if str(mesh_type).lower() == "structured_hex":
-            f.write(
-                r"A structured 3D hexahedral mesh is built in the normalized parameter space. "
-                r"For each hexahedral cell $e$, using local edge vectors from a reference corner "
-                r"in $(\mu,q^{LS})$, we compute a local affine map "
-                r"$q^{LS}\approx \mathbf{A}_e\mu+\mathbf{b}_e$." + "\n"
-            )
-        else:
-            f.write(
-                r"A 3D Delaunay tetrahedralization is built in the normalized parameter space. "
-                r"For each tetrahedron $e$, using four corresponding nodes in $(\mu,q^{LS})$, we compute "
-                r"a local affine map $q^{LS}\approx \mathbf{A}_e\mu+\mathbf{b}_e$." + "\n"
-            )
+        f.write(
+            r"A 3D Delaunay tetrahedralization is built in the normalized parameter space. "
+            r"For each tetrahedron $e$, using four corresponding actual states in $(\mu,q_m)$, we compute "
+            r"a local affine map $q_m\approx \mathbf{A}_e\mu+\mathbf{b}_e$." + "\n"
+        )
         f.write(r"\begin{equation}" + "\n")
         f.write(r"\mathbf{A}_e = \mathbf{Q}_e\mathbf{M}_e^{-1},\qquad ")
         f.write(r"\mathbf{M}_e=[\mu_a-\mu_0\ \mu_b-\mu_0\ \mu_c-\mu_0],\quad ")
@@ -961,7 +709,7 @@ def _write_mesh_jacobian_tex(
         f.write(r"\end{equation}" + "\n")
         f.write(
             r"We monitor: (i) $\det(\mathbf{M}_e)$ for parameter-mesh degeneracy, and "
-            r"(ii) $\det(\mathbf{A}_e)=\det(\partial q^{LS}/\partial\mu)$ for orientation inversion." + "\n"
+            r"(ii) $\det(\mathbf{A}_e)=\det(\partial q_m/\partial\mu)$ for local folding." + "\n"
         )
 
         f.write(r"\subsection*{3. Physical deformation Jacobian}" + "\n")
@@ -1023,15 +771,15 @@ def _write_mesh_jacobian_tex(
         f.write(r"\begin{figure}[h!]" + "\n")
         f.write(r"\centering" + "\n")
         f.write(r"\includegraphics[width=0.48\textwidth]{domain_mu_targets_3d.png}" + "\n")
-        f.write(r"\includegraphics[width=0.48\textwidth]{domain_qls_first3_3d.png}" + "\n")
-        f.write(r"\caption{Point clouds in target parameter space and LS-primary reduced space.}" + "\n")
+        f.write(r"\includegraphics[width=0.48\textwidth]{domain_qm_first3_3d.png}" + "\n")
+        f.write(r"\caption{Point clouds in physical parameter space and consistent LS-master space.}" + "\n")
         f.write(r"\end{figure}" + "\n")
 
         f.write(r"\begin{figure}[h!]" + "\n")
         f.write(r"\centering" + "\n")
         f.write(r"\includegraphics[width=0.48\textwidth]{domain_qpod_first3_3d.png}" + "\n")
-        f.write(r"\includegraphics[width=0.48\textwidth]{domain_qls_first3_3d.png}" + "\n")
-        f.write(r"\caption{Point clouds in POD-first-3 and LS-primary-first-3 coordinates.}" + "\n")
+        f.write(r"\includegraphics[width=0.48\textwidth]{domain_qm_first3_3d.png}" + "\n")
+        f.write(r"\caption{Point clouds in POD-first-3 and consistent LS-master coordinates.}" + "\n")
         f.write(r"\end{figure}" + "\n")
 
         f.write(r"\begin{figure}[h!]" + "\n")
@@ -1043,8 +791,8 @@ def _write_mesh_jacobian_tex(
 
         f.write(r"\begin{figure}[h!]" + "\n")
         f.write(r"\centering" + "\n")
-        f.write(r"\includegraphics[width=0.48\textwidth]{parameter_mesh_q_ls_edges_3d.png}" + "\n")
-        f.write(r"\caption{Parameter-mesh edges mapped to LS-primary-first-3 space.}" + "\n")
+        f.write(r"\includegraphics[width=0.48\textwidth]{parameter_mesh_q_m_edges_3d.png}" + "\n")
+        f.write(r"\caption{Delaunay parameter-mesh edges mapped to consistent LS-master space.}" + "\n")
         f.write(r"\end{figure}" + "\n")
 
         f.write(r"\begin{figure}[h!]" + "\n")
@@ -1060,22 +808,22 @@ def _write_mesh_jacobian_tex(
 def _run_parameter_mesh_jacobian_checks(
     mu_targets,
     q_pod,
-    q_ls,
+    q_m,
     e_hist,
     out_dir,
     mesh_max_points=6000,
     mesh_seed=42,
-    mesh_type="structured_hex",
+    mesh_type="delaunay",
     run_command="python3 stage7a_prepare_rbf_dataset_ls.py --n-primary 3",
 ):
-    if mu_targets.shape[1] < 3 or q_pod.shape[1] < 3 or q_ls.shape[1] < 3:
+    if mu_targets.shape[1] < 3 or q_pod.shape[1] < 3 or q_m.shape[1] < 3:
         raise ValueError(
             "Jacobian checks require at least 3 target coordinates, 3 POD coordinates, and 3 LS coordinates."
         )
 
     mu3 = np.asarray(mu_targets[:, :3], dtype=float)
     qpod3 = np.asarray(q_pod[:, :3], dtype=float)
-    q3 = np.asarray(q_ls[:, :3], dtype=float)
+    q3 = np.asarray(q_m[:, :3], dtype=float)
 
     xi, d_mu, mu_center, mu_span = _compute_deformation_factor_matrix(mu3)
 
@@ -1096,6 +844,7 @@ def _run_parameter_mesh_jacobian_checks(
         mu_m = mu_m[idx_unique, :]
         qpod_m = qpod_m[idx_unique, :]
         q_m = q_m[idx_unique, :]
+        idx_sub = idx_sub[idx_unique]
 
         if xi_m.shape[0] < 4:
             raise RuntimeError("Not enough distinct mesh nodes for 3D Delaunay Jacobian checks.")
@@ -1107,20 +856,10 @@ def _run_parameter_mesh_jacobian_checks(
 
         cells = np.asarray(tri.simplices, dtype=np.int64)
         cell_type = "tet"
-    elif mesh_kind == "structured_hex":
-        mu_m, qpod_m, q_m, cells, grid_shape = _build_structured_hex_mesh_from_mu(
-            mu3=mu3,
-            qpod3=qpod3,
-            qls3=q3,
-            d_mu=d_mu,
-            mu_center=mu_center,
-            mesh_max_points=int(mesh_max_points),
-            knn_k=12,
-        )
-        cell_type = "hex"
     else:
         raise ValueError(
-            f"Unsupported mesh_type='{mesh_type}'. Available: 'delaunay', 'structured_hex'."
+            f"Unsupported mesh_type='{mesh_type}'. Only 'delaunay' is allowed: "
+            "the former structured IDW box extrapolated synthetic states."
         )
 
     n_cells = int(cells.shape[0])
@@ -1143,20 +882,39 @@ def _run_parameter_mesh_jacobian_checks(
 
     j_phys = _compute_macro_deformation_jacobian(e_hist)
     neg_phys = int(np.sum(j_phys <= 0.0))
+    nonzero_map = det_j_map_valid[np.abs(det_j_map_valid) > 1e-14]
+    orientation = float(np.sign(np.median(nonzero_map))) if nonzero_map.size else 0.0
+    folded_map = int(
+        np.sum(det_j_map_valid * orientation <= 1e-14)
+        if orientation != 0.0
+        else det_j_map_valid.size
+    )
     neg_map = int(np.sum(det_j_map_valid <= 0.0))
     neg_param = int(np.sum(det_j_param_valid <= 0.0))
 
     np.save(os.path.join(out_dir, "parameter_mesh_nodes_mu.npy"), mu_m)
     np.save(os.path.join(out_dir, "parameter_mesh_nodes_q_pod.npy"), qpod_m)
-    np.save(os.path.join(out_dir, "parameter_mesh_nodes_q_ls.npy"), q_m)
+    np.save(os.path.join(out_dir, "parameter_mesh_nodes_q_m.npy"), q_m)
+    np.save(os.path.join(out_dir, "parameter_mesh_sample_indices.npy"), idx_sub)
     np.save(os.path.join(out_dir, "parameter_mesh_cells.npy"), cells)
     if cell_type == "tet":
         np.save(os.path.join(out_dir, "parameter_mesh_tetrahedra.npy"), cells)
+        for stale_name in (
+            "parameter_mesh_hexahedra.npy",
+            "parameter_mesh_structured_grid_shape.npy",
+            "parameter_mesh_nodes_q_ls.npy",
+            "jacobian_det_mu_to_q_ls.npy",
+            "parameter_mesh_q_ls_edges_3d.png",
+            "domain_qls_first3_3d.png",
+        ):
+            stale_path = os.path.join(out_dir, stale_name)
+            if os.path.exists(stale_path):
+                os.remove(stale_path)
     else:
         np.save(os.path.join(out_dir, "parameter_mesh_hexahedra.npy"), cells)
         np.save(os.path.join(out_dir, "parameter_mesh_structured_grid_shape.npy"), np.array(grid_shape, dtype=np.int64))
     np.save(os.path.join(out_dir, "jacobian_det_parameter_mesh.npy"), det_j_param)
-    np.save(os.path.join(out_dir, "jacobian_det_mu_to_q_ls.npy"), det_j_map)
+    np.save(os.path.join(out_dir, "jacobian_det_mu_to_q_m.npy"), det_j_map)
     np.save(os.path.join(out_dir, "jacobian_cond_parameter_mesh.npy"), cond_j_param)
     np.save(os.path.join(out_dir, "macro_detF_from_applied_strain.npy"), j_phys)
     np.save(os.path.join(out_dir, "deformation_factor_matrix_mu.npy"), d_mu)
@@ -1169,7 +927,7 @@ def _run_parameter_mesh_jacobian_checks(
 
     fig_mu = os.path.join(out_dir, "parameter_mesh_mu_edges_3d.png")
     fig_qpod = os.path.join(out_dir, "parameter_mesh_q_pod_edges_3d.png")
-    fig_qls = os.path.join(out_dir, "parameter_mesh_q_ls_edges_3d.png")
+    fig_qls = os.path.join(out_dir, "parameter_mesh_q_m_edges_3d.png")
 
     if cell_type == "tet":
         _plot_tetrahedral_mesh_3d(
@@ -1197,8 +955,8 @@ def _run_parameter_mesh_jacobian_checks(
         _plot_tetrahedral_mesh_3d(
             points=q_m,
             tets=cells[valid, :],
-            labels=(r"$q^{LS}_1$", r"$q^{LS}_2$", r"$q^{LS}_3$"),
-            title="Mapped tetra mesh in LS-primary space",
+            labels=(r"$q^m_1$", r"$q^m_2$", r"$q^m_3$"),
+            title="Mapped tetra mesh in consistent LS-master space",
             out_file=fig_qls,
             edge_color="#1d4ed8",
             node_color="#111827",
@@ -1231,8 +989,8 @@ def _run_parameter_mesh_jacobian_checks(
         _plot_hexahedral_mesh_3d(
             points=q_m,
             hexes=cells[valid, :],
-            labels=(r"$q^{LS}_1$", r"$q^{LS}_2$", r"$q^{LS}_3$"),
-            title="Mapped structured hexa mesh in LS-primary space",
+            labels=(r"$q^m_1$", r"$q^m_2$", r"$q^m_3$"),
+            title="Mapped structured hexa mesh in consistent LS-master space",
             out_file=fig_qls,
             edge_color="#1d4ed8",
             node_color="#111827",
@@ -1251,10 +1009,14 @@ def _run_parameter_mesh_jacobian_checks(
         f.write(f"mesh_cells_degenerate={int(np.sum(~valid))}\n")
         f.write(f"mesh_type={mesh_kind}\n")
         f.write(f"mesh_cell_type={cell_type}\n")
+        f.write("mesh_nodes_source=actual_training_samples\n")
+        f.write("synthetic_idw_interpolation=0\n")
         if grid_shape is not None:
             f.write(f"structured_grid_shape={grid_shape[0]},{grid_shape[1]},{grid_shape[2]}\n")
         f.write(f"negative_detJ_param_count={neg_param}\n")
         f.write(f"negative_detJ_map_count={neg_map}\n")
+        f.write(f"dominant_orientation_detJ_map={orientation:.1f}\n")
+        f.write(f"folded_or_singular_detJ_map_count={folded_map}\n")
         f.write(f"negative_detF_macro_count={neg_phys}\n")
         f.write(f"min_abs_detJ_param={float(np.nanmin(np.abs(det_j_param_valid))):.16e}\n")
         f.write(f"min_detJ_map={float(np.nanmin(det_j_map_valid)):.16e}\n")
@@ -1291,6 +1053,7 @@ def _run_parameter_mesh_jacobian_checks(
         "summary_tex": tex_path,
         "neg_detJ_param_count": neg_param,
         "neg_detJ_map_count": neg_map,
+        "folded_detJ_map_count": folded_map,
         "neg_detF_macro_count": neg_phys,
         "min_detJ_map": float(np.nanmin(det_j_map_valid)),
         "min_detF_macro": float(np.min(j_phys)),
@@ -1311,13 +1074,7 @@ def prepare_rbf_dataset_least_squares(
     run_jacobian_checks=True,
     jacobian_mesh_max_points=6000,
     jacobian_mesh_seed=42,
-    jacobian_mesh_type="structured_hex",
-    enforce_positive_jacobian_ls=True,
-    jacobian_ls_max_iters=4,
-    jacobian_ls_mesh_max_points=4096,
-    jacobian_ls_drop_fraction=1.0,
-    jacobian_ls_seed=42,
-    jacobian_ls_min_samples=6000,
+    jacobian_mesh_type="delaunay",
     run_command_example=None,
 ):
     os.makedirs(out_dir, exist_ok=True)
@@ -1338,24 +1095,16 @@ def prepare_rbf_dataset_least_squares(
     )
 
     q_full = w_free @ phi
-    phi_p, phi_s, c_ls, mu_targets, n_from_strain, svals_primary, ls_active_mask, ls_info = _build_primary_secondary_bases(
-        phi=phi,
-        w_free=w_free,
-        q_full=q_full,
-        e_hist=e_hist,
-        n_primary=n_p,
-        enforce_positive_jacobian_ls=bool(enforce_positive_jacobian_ls),
-        jacobian_ls_max_iters=int(jacobian_ls_max_iters),
-        jacobian_ls_mesh_max_points=int(jacobian_ls_mesh_max_points),
-        jacobian_ls_drop_fraction=float(jacobian_ls_drop_fraction),
-        jacobian_ls_seed=int(jacobian_ls_seed),
-        jacobian_ls_min_samples=int(jacobian_ls_min_samples),
-    )
-
-    qp = w_free @ phi_p
-    qs = w_free @ phi_s
-
+    mu_targets, n_from_strain = _build_ls_targets(q_full, e_hist, n_p)
+    ls = _fit_ls_master_map(q_full, mu_targets, n_p)
+    split = _build_consistent_master_slave_split(phi, q_full, ls["T_m_t"])
+    phi_p = split["phi_m"]
+    phi_s = split["phi_s"]
+    qp = split["q_m"]
+    qs = split["q_s"]
+    b_aff, affine_rel = _fit_affine_mu_to_qm(mu_targets, qp)
     x_rbf = qp
+    ls_active_mask = np.ones(q_full.shape[0], dtype=np.uint8)
 
     n_s = int(phi_s.shape[1])
 
@@ -1363,29 +1112,42 @@ def prepare_rbf_dataset_least_squares(
     print(f"  Fluctuation snapshots W: {w_free.shape}")
     print(f"  Full reduced coordinates Q: {q_full.shape}")
     print(f"  LS targets Mu: {mu_targets.shape}")
-    print(f"  Primary coordinates q_p: {qp.shape}")
+    print(f"  Master coordinates q_m: {qp.shape}")
     print(f"  Secondary coordinates q_s: {qs.shape}")
     print(f"  RBF input: {x_rbf.shape}")
     print(
         f"  Primary source: {n_from_strain} strain components"
         f" + {max(0, n_p - n_from_strain)} auxiliary POD components"
     )
-    if bool(ls_info.get("enabled", False)):
-        print(
-            f"  Jacobian-aware LS: iterations={int(ls_info.get('iterations', 0))}, "
-            f"active_samples={int(ls_info.get('active_samples', w_free.shape[0]))}/"
-            f"{int(ls_info.get('total_samples', w_free.shape[0]))}, "
-            f"best_bad_samples={int(ls_info.get('best_negative_samples', 0))}, "
-            f"best_bad_cells={int(ls_info.get('best_negative_cells', 0))}"
-        )
+    print(f"  POD -> mu LS relative error: {ls['error_rel']:.3e}")
+    print(f"  Exact master/slave decoder error: {split['decoder_rel_error']:.3e}")
+    print(f"  mu -> q_m affine initializer error: {affine_rel:.3e}")
 
+    np.save(os.path.join(out_dir, "q_m_train.npy"), qp)
     np.save(os.path.join(out_dir, "q_p_train.npy"), qp)
     np.save(os.path.join(out_dir, "q_s_train.npy"), qs)
     np.save(os.path.join(out_dir, "ann_input_train.npy"), x_rbf)
+    np.save(os.path.join(out_dir, "phi_m.npy"), phi_p)
     np.save(os.path.join(out_dir, "phi_p.npy"), phi_p)
     np.save(os.path.join(out_dir, "phi_s.npy"), phi_s)
 
-    np.save(os.path.join(out_dir, "ls_coefficients_qfull_to_master.npy"), c_ls)
+    np.save(os.path.join(out_dir, "T_m.npy"), ls["T_m"])
+    np.save(os.path.join(out_dir, "ls_coefficients_qfull_to_master.npy"), ls["T_m_t"])
+    np.save(os.path.join(out_dir, "phi_c.npy"), split["phi_c"])
+    np.save(os.path.join(out_dir, "A_m.npy"), split["A_m"])
+    np.save(os.path.join(out_dir, "C_m.npy"), split["C_m"])
+    np.save(os.path.join(out_dir, "C_s.npy"), split["C_s"])
+    np.save(os.path.join(out_dir, "q_master_train.npy"), split["q_master"])
+    np.save(os.path.join(out_dir, "q_m_init_from_mu_A.npy"), b_aff[:-1, :])
+    np.save(os.path.join(out_dir, "q_m_init_from_mu_b.npy"), b_aff[-1, :])
+    np.savez(
+        os.path.join(out_dir, "qm_init_mu_affine.npz"),
+        b_aff=b_aff,
+        mu_dim=np.array([mu_targets.shape[1]], dtype=np.int64),
+        qp_dim=np.array([n_p], dtype=np.int64),
+        rel_fit=np.array([affine_rel], dtype=float),
+        n_samples=np.array([mu_targets.shape[0]], dtype=np.int64),
+    )
     np.save(os.path.join(out_dir, "ls_targets_train.npy"), mu_targets)
     np.save(os.path.join(out_dir, "ls_jacobian_active_mask.npy"), ls_active_mask.astype(np.uint8))
 
@@ -1395,8 +1157,9 @@ def prepare_rbf_dataset_least_squares(
         n_secondary=np.array([n_s], dtype=np.int64),
         input_dim=np.array([x_rbf.shape[1]], dtype=np.int64),
         include_macro_strain_input=np.array([0], dtype=np.int64),
-        selection_method=np.array(["least_squares"], dtype="U32"),
-        jacobian_aware_ls=np.array([1 if bool(enforce_positive_jacobian_ls) else 0], dtype=np.int64),
+        selection_method=np.array(["joaquin_ls_master"], dtype="U32"),
+        coordinate_system=np.array(["q_m_with_A_m"], dtype="U32"),
+        jacobian_aware_ls=np.array([0], dtype=np.int64),
     )
 
     proj_orth = float(np.linalg.norm(phi_p.T @ phi_s))
@@ -1413,25 +1176,19 @@ def prepare_rbf_dataset_least_squares(
         f.write(f"ls_target_dim={mu_targets.shape[1]}\n")
         f.write(f"ls_targets_from_strain={n_from_strain}\n")
         f.write(f"orthogonality_norm_phi_p_T_phi_s={proj_orth:.16e}\n")
-        f.write(f"jacobian_aware_ls_enabled={int(bool(ls_info.get('enabled', False)))}\n")
-        f.write(f"jacobian_aware_ls_iterations={int(ls_info.get('iterations', 0))}\n")
-        f.write(f"jacobian_aware_ls_active_samples={int(ls_info.get('active_samples', w_free.shape[0]))}\n")
-        f.write(f"jacobian_aware_ls_total_samples={int(ls_info.get('total_samples', w_free.shape[0]))}\n")
-        f.write(f"jacobian_aware_ls_best_negative_samples={int(ls_info.get('best_negative_samples', 0))}\n")
-        f.write(f"jacobian_aware_ls_best_negative_cells={int(ls_info.get('best_negative_cells', 0))}\n")
-        if "grid_shape" in ls_info:
-            gs = ls_info["grid_shape"]
-            f.write(f"jacobian_aware_ls_grid_shape={int(gs[0])},{int(gs[1])},{int(gs[2])}\n")
-        if svals_primary.size > 0:
-            f.write(f"primary_singular_value_max={float(np.max(svals_primary)):.16e}\n")
-            f.write(f"primary_singular_value_min={float(np.min(svals_primary)):.16e}\n")
+        f.write("coordinate_system=q_m_with_A_m\n")
+        f.write(f"pod_to_mu_ls_rel_error={ls['error_rel']:.16e}\n")
+        f.write("pod_to_mu_ls_rmse=" + ",".join(f"{v:.16e}" for v in ls["rmse"]) + "\n")
+        f.write(f"decoder_rel_error={split['decoder_rel_error']:.16e}\n")
+        f.write(f"mu_to_qm_affine_rel_error={affine_rel:.16e}\n")
+        f.write(f"orthogonality_norm_phi_m_T_phi_s={split['ortho_ms']:.16e}\n")
 
     if save_domain_plots and n_p >= 3 and mu_targets.shape[1] >= 3:
         _save_domain_comparison_plots(
             out_dir=out_dir,
             mu_targets=mu_targets[:, :3],
             q_pod=q_full[:, :3],
-            q_ls=qp[:, :3],
+            q_m=qp[:, :3],
             max_samples=int(plot_max_samples),
             seed=int(plot_seed),
         )
@@ -1439,7 +1196,7 @@ def prepare_rbf_dataset_least_squares(
             "Domain comparison plots saved to: "
             f"{out_dir}/domain_mu_targets_3d.png, "
             f"{out_dir}/domain_qpod_first3_3d.png, "
-            f"{out_dir}/domain_qls_first3_3d.png"
+            f"{out_dir}/domain_qm_first3_3d.png"
         )
     elif save_domain_plots:
         print(
@@ -1451,7 +1208,7 @@ def prepare_rbf_dataset_least_squares(
         jac_info = _run_parameter_mesh_jacobian_checks(
             mu_targets=mu_targets[:, :3],
             q_pod=q_full[:, :3],
-            q_ls=qp[:, :3],
+            q_m=qp[:, :3],
             e_hist=e_hist,
             out_dir=out_dir,
             mesh_max_points=int(jacobian_mesh_max_points),
@@ -1466,11 +1223,11 @@ def prepare_rbf_dataset_least_squares(
         print("Jacobian diagnostics:")
         print(
             f"  negative det(J_mu): {jac_info['neg_detJ_param_count']} | "
-            f"negative det(dq_ls/dmu): {jac_info['neg_detJ_map_count']} | "
+            f"folded/singular det(dq_m/dmu): {jac_info['folded_detJ_map_count']} | "
             f"negative det(F): {jac_info['neg_detF_macro_count']}"
         )
         print(f"  mesh type: {jac_info['mesh_type']} ({jac_info['mesh_cell_type']})")
-        print(f"  min det(dq_ls/dmu): {jac_info['min_detJ_map']:.3e}")
+        print(f"  min det(dq_m/dmu): {jac_info['min_detJ_map']:.3e}")
         print(f"  min det(F): {jac_info['min_detF_macro']:.3e}")
         print(f"  Summary txt: {jac_info['summary_txt']}")
         print(f"  Summary tex: {jac_info['summary_tex']}")
@@ -1533,44 +1290,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--jacobian-mesh-type",
         type=str,
-        default="structured_hex",
-        choices=["delaunay", "structured_hex"],
-        help="Mesh type for parameter-domain Jacobian checks.",
-    )
-    parser.add_argument(
-        "--disable-jacobian-aware-ls",
-        action="store_true",
-        help="Disable iterative Jacobian-aware filtering during LS primary-mode fit.",
-    )
-    parser.add_argument(
-        "--jacobian-ls-max-iters",
-        type=int,
-        default=4,
-        help="Maximum Jacobian-aware LS refit iterations.",
-    )
-    parser.add_argument(
-        "--jacobian-ls-mesh-max-points",
-        type=int,
-        default=4096,
-        help="Structured mesh point budget used by Jacobian-aware LS filtering.",
-    )
-    parser.add_argument(
-        "--jacobian-ls-drop-fraction",
-        type=float,
-        default=1.0,
-        help="Fraction of bad samples dropped at each Jacobian-aware LS iteration (0..1].",
-    )
-    parser.add_argument(
-        "--jacobian-ls-seed",
-        type=int,
-        default=42,
-        help="Random seed for Jacobian-aware LS sample dropping.",
-    )
-    parser.add_argument(
-        "--jacobian-ls-min-samples",
-        type=int,
-        default=6000,
-        help="Minimum active samples kept during Jacobian-aware LS filtering.",
+        default="delaunay",
+        choices=["delaunay"],
+        help="Delaunay tetrahedralization of actual training states; synthetic IDW grids are disabled.",
     )
     args = parser.parse_args()
 
@@ -1589,11 +1311,5 @@ if __name__ == "__main__":
         jacobian_mesh_max_points=args.jacobian_mesh_max_points,
         jacobian_mesh_seed=args.jacobian_mesh_seed,
         jacobian_mesh_type=args.jacobian_mesh_type,
-        enforce_positive_jacobian_ls=not args.disable_jacobian_aware_ls,
-        jacobian_ls_max_iters=args.jacobian_ls_max_iters,
-        jacobian_ls_mesh_max_points=args.jacobian_ls_mesh_max_points,
-        jacobian_ls_drop_fraction=args.jacobian_ls_drop_fraction,
-        jacobian_ls_seed=args.jacobian_ls_seed,
-        jacobian_ls_min_samples=args.jacobian_ls_min_samples,
         run_command_example=cmd_example,
     )

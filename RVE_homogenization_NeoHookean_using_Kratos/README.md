@@ -750,7 +750,7 @@ This stage projects fluctuation snapshots, after subtracting affine lifting, to:
 - inputs: `q_p`, using 4 modes
 - targets: `q_s`, using 17 modes (for a total of 21 modes)
 
-### Stage 7a-LS-RBF: Build Least-Squares RBF Dataset + Jacobian Diagnostics
+### Stage 7a-LS: Build the Consistent Master/Slave Dataset
 
 ```bash
 python3 stage7a_prepare_rbf_dataset_ls.py \
@@ -764,14 +764,97 @@ python3 stage7a_prepare_rbf_dataset_ls.py \
 
 Notes:
 
-- This command uses **no strain input** for RBF by default.
+- This is the LS construction validated in the 2D MAW-ECM workflow.
+- For the retained POD coordinates `Q` and physical parameters `Mu=[Exx,Eyy,Exy]`,
+  Stage 7a solves `Q T_m^T ~= Mu` and constructs:
+
+```math
+\Phi_c=\Phi T_m^T=\Phi_m A_m,
+\qquad
+w(q_m)=\Phi_m A_m q_m+\Phi_s q_s.
+```
+
+- `q_m` is the manifold input. `A_m` is part of the decoder and must not be omitted.
+- The parameter mesh contains only actual training states. The former structured
+  bounding-box grid and its IDW-generated states are disabled.
+- Delaunay tetrahedra are used only to represent local connectivity between the
+  selected actual states.
 - It computes and saves:
-  - domain comparison plots (`mu`, first-3 POD, first-3 LS-primary),
-  - Delaunay mesh figures in parameter and mapped LS-primary domains,
+  - `phi_m.npy`, `A_m.npy`, `phi_s.npy`,
+  - `q_m_train.npy`, `q_s_train.npy`,
+  - `parameter_mesh_nodes_mu.npy`, `parameter_mesh_nodes_q_m.npy`,
+  - `parameter_mesh_sample_indices.npy`, proving that every mesh node is a training sample,
+  - domain comparison plots (`mu`, first-3 POD, consistent `q_m`),
+  - Delaunay mesh figures in parameter and mapped master domains,
   - parameter-mesh Jacobian diagnostics,
   - macro deformation Jacobian check (`det(F)` from applied strain),
   - a LaTeX summary note:
     - `stage_7_ann_data_ls/ls_rbf_parameter_mesh_jacobian_note.tex`
+
+The GPR trainer must then use this LS directory:
+
+```bash
+python3 stage7b_train_sparse_gpr_manifold.py \
+  --data-dir stage_7_ann_data_ls \
+  --out-dir stage_7_gpr_data_ls \
+  --num-inducing 800 \
+  --inducing-selection kmeans \
+  --epochs 120 \
+  --batch-size 2048 \
+  --lr 0.05 \
+  --val-fraction 0.1 \
+  --device auto
+```
+
+Stage 7b copies `A_m` and the other LS operators into `stage_7_gpr_data_ls`.
+PROM-GPR, HPROM-GPR, Stage9-GPR, and Stage12 all use the same decoder
+`Phi_m A_m q_m + Phi_s q_s`.
+
+### Stage 12: Residual MAW-ECM with Full-Mesh Homogenization
+
+Stage 12 uses the actual Stage 7 training states and their Delaunay tetrahedra.
+It does not create a synthetic box grid and does not use IDW interpolation.
+
+```bash
+MPLCONFIGDIR=/tmp/mplcfg python3 stage12a_build_mawecm_dataset_gpr.py \
+  --gpr-dir stage_7_gpr_data_ls \
+  --parameter-mesh-dir stage_7_ann_data_ls \
+  --residual-state-source stage7_parameter_mesh \
+  --disable-homogenization 1 \
+  --out-dir stage_12_mawecm_dataset_gpr_ls_resonly
+
+MPLCONFIGDIR=/tmp/mplcfg python3 stage12b_build_mawecm_model_gpr.py \
+  --dataset-dir stage_12_mawecm_dataset_gpr_ls_resonly \
+  --classic-ecm-source compute \
+  --classic-rsvd-randomized 0 \
+  --targets res \
+  --disable-homogenization 1 \
+  --classic-constrain-sum-weights 1 \
+  --maw-min-support-size-res 30 \
+  --max-number-zeros-active-set-loop-maw-ecm 0 \
+  --enforce-sum-weights 1 \
+  --sum-weights-target 990.0 \
+  --res-target-source anchor \
+  --res-candidate-pool fixed_support \
+  --rbf-renorm 1 \
+  --rbf-clip-nonnegative 1 \
+  --out-dir stage_12_hprom_mawecm_gpr_data_ls_resonly_fullhom_phase1_100_sum990
+
+MPLCONFIGDIR=/tmp/mplcfg python3 stage12_test_hprom_mawecm_gpr.py \
+  --run-prom-gpr \
+  --run-hprom-mawecm-gpr \
+  --gpr-data-dir stage_7_gpr_data_ls \
+  --hprom-mawecm-gpr-dir stage_12_hprom_mawecm_gpr_data_ls_resonly_fullhom_phase1_100_sum990 \
+  --hprom-homogenization-mode full_fom \
+  --qp-init-mode continuation \
+  --hprom-include-weight-tangent 1 \
+  --hprom-old-stiffness-residual-cutoff inf \
+  --out-dir stage_12_hprom_mawecm_gpr_ls_results_phase1_100_sum990_fullhom
+```
+
+Legacy `q_p_*.npy` and `structured_*` data files are written only as
+compatibility aliases. New commands must use the canonical `q_m_*.npy`,
+`parameter_mesh_*`, and `--parameter-mesh-dir` names.
 
 ### Stage 7a-POD-DL: Build POD-DL Dataset
 
@@ -871,7 +954,7 @@ Important: keep comma-separated CLI values without spaces in bash.
 
 ### Stage 7b-Sparse-GPR (optional): True Sparse-GP Manifold
 
-This branch trains a pure sparse variational GP manifold `q_p -> q_s` and exports
+This branch trains a pure sparse variational GP manifold `q_m -> q_s` and exports
 `sparse_gp_model.npz` with analytic kernel coefficients for online PROM/HPROM-GPR.
 No RBF-hyperfit export is used in this branch.
 
@@ -893,13 +976,13 @@ python3 stage7b_train_sparse_gpr_manifold.py \
 
 Outputs:
 - `sparse_gp_model.npz` (analytic sparse-GP online model),
-- `phi_p.npy`, `phi_s.npy`,
+- `phi_m.npy`, `A_m.npy`, `phi_s.npy`,
 - `training_summary.txt`.
 
 If the input dataset contains `ls_targets_train.npy` (LS branch), Stage 7b-Sparse-GPR
 also exports:
 
-- `qp_init_mu_affine.npz`
+- `qm_init_mu_affine.npz` and the compatibility alias `qp_init_mu_affine.npz`
 
 This file enables the online initializer mode:
 

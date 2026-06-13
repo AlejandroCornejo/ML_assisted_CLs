@@ -6,20 +6,19 @@ Stage 12a: Build MAW-ECM dataset for HPROM-GPR.
 
 Residual-only workflow (default):
   - residual projection (Q_ecm, b_full)
-  - MAW metadata for residual samples (q_p_res, mu_res, sample_ids_res)
-  - state source can be trajectory sampling or Stage7 structured mesh nodes
+  - MAW metadata for residual samples (q_m_res, mu_res, sample_ids_res)
+  - state source can be trajectory sampling or Stage7 parameter-mesh nodes
 
 Optional legacy homogenization export can be enabled explicitly.
 
 Residual projection uses the GPR-manifold tangent:
-  J_m = (phi_p + phi_s*J0) + phi_s * d(q_s_corr)/d(q_p)
+  J_m = (phi_m*A_m + phi_s*J0) + phi_s * d(q_s_corr)/d(q_m)
 """
 
 import os
 import sys
 import argparse
 import numpy as np
-from scipy.spatial import cKDTree
 
 # Add Kratos path
 KRATOS_PATH = "/home/kratos/Kratos_Eigen_Check/bin/Release"
@@ -62,7 +61,7 @@ FIT_MAX_ITERS = 8
 FIT_REL_TOL = 1e-6
 FIT_L2_REG = 1e-10
 FIT_STEP_TOL = 1e-12
-RESIDUAL_STATE_SOURCE = "stage7_structured_mesh"  # options: trajectory_sampling, stage7_structured_mesh
+RESIDUAL_STATE_SOURCE = "stage7_parameter_mesh"
 
 
 def _build_free_map(n_dof, free_dofs):
@@ -130,18 +129,18 @@ def _pick_snapshot_indices(e_traj, n_steps, n_pick, mode, seed, time_weight):
     return get_stratified_indices(int(n_steps), n_pick, seed=int(seed))
 
 
-def _load_stage7_structured_mesh_nodes(structured_mesh_dir, n_primary):
-    mu_path = os.path.join(structured_mesh_dir, "parameter_mesh_nodes_mu.npy")
-    qls_path = os.path.join(structured_mesh_dir, "parameter_mesh_nodes_q_ls.npy")
-    cells_path = os.path.join(structured_mesh_dir, "parameter_mesh_cells.npy")
-    grid_path = os.path.join(structured_mesh_dir, "parameter_mesh_structured_grid_shape.npy")
+def _load_stage7_parameter_mesh_nodes(parameter_mesh_dir, n_primary):
+    mu_path = os.path.join(parameter_mesh_dir, "parameter_mesh_nodes_mu.npy")
+    qm_path = os.path.join(parameter_mesh_dir, "parameter_mesh_nodes_q_m.npy")
+    cells_path = os.path.join(parameter_mesh_dir, "parameter_mesh_cells.npy")
+    grid_path = os.path.join(parameter_mesh_dir, "parameter_mesh_structured_grid_shape.npy")
 
-    for p in (mu_path, qls_path, cells_path):
+    for p in (mu_path, qm_path, cells_path):
         if not os.path.exists(p):
             raise FileNotFoundError(p)
 
     mu_nodes = np.asarray(np.load(mu_path), dtype=float)
-    qls_nodes = np.asarray(np.load(qls_path), dtype=float)
+    qm_nodes = np.asarray(np.load(qm_path), dtype=float)
     cells = np.asarray(np.load(cells_path), dtype=np.int64)
     grid_shape = (
         np.asarray(np.load(grid_path), dtype=np.int64)
@@ -151,24 +150,27 @@ def _load_stage7_structured_mesh_nodes(structured_mesh_dir, n_primary):
 
     if mu_nodes.ndim != 2 or mu_nodes.shape[1] < 3:
         raise RuntimeError(f"Invalid parameter_mesh_nodes_mu shape: {mu_nodes.shape}")
-    if qls_nodes.ndim != 2 or qls_nodes.shape[0] != mu_nodes.shape[0]:
+    if qm_nodes.ndim != 2 or qm_nodes.shape[0] != mu_nodes.shape[0]:
         raise RuntimeError(
-            f"Invalid parameter_mesh_nodes_q_ls shape: {qls_nodes.shape}, expected ({mu_nodes.shape[0]},*)"
+            f"Invalid parameter_mesh_nodes_q_m shape: {qm_nodes.shape}, expected ({mu_nodes.shape[0]},*)"
         )
-    if qls_nodes.shape[1] < int(n_primary):
+    if qm_nodes.shape[1] < int(n_primary):
         raise RuntimeError(
-            f"parameter_mesh_nodes_q_ls has dim={qls_nodes.shape[1]} < n_primary={int(n_primary)}"
+            f"parameter_mesh_nodes_q_m has dim={qm_nodes.shape[1]} < n_primary={int(n_primary)}"
         )
-    if cells.ndim != 2 or cells.shape[1] not in (4, 8):
-        raise RuntimeError(f"Invalid parameter_mesh_cells shape: {cells.shape}")
+    if cells.ndim != 2 or cells.shape[1] != 4:
+        raise RuntimeError(
+            "Stage12 requires tetrahedral Delaunay connectivity from the corrected "
+            f"Stage7a workflow; got parameter_mesh_cells shape {cells.shape}."
+        )
     if np.min(cells) < 0 or np.max(cells) >= mu_nodes.shape[0]:
         raise RuntimeError(
             "parameter_mesh_cells has indices out of bounds for parameter_mesh_nodes_*."
         )
 
-    q_p_nodes = np.asarray(qls_nodes[:, : int(n_primary)], dtype=float)
+    q_m_nodes = np.asarray(qm_nodes[:, : int(n_primary)], dtype=float)
     mu3_nodes = np.asarray(mu_nodes[:, :3], dtype=float)
-    return q_p_nodes, mu3_nodes, cells, grid_shape
+    return q_m_nodes, mu3_nodes, cells, grid_shape
 
 
 def _parse_trajectory_indices(text):
@@ -237,6 +239,7 @@ def _fit_qp_gauss_newton(
     q_init,
     w_free,
     phi_p,
+    a_m,
     phi_s,
     gpr_model,
     n_primary,
@@ -251,7 +254,8 @@ def _fit_qp_gauss_newton(
     q = np.asarray(q_init, dtype=float).copy()
     w_target = np.asarray(w_free, dtype=float).reshape(-1)
     target_norm = max(np.linalg.norm(w_target), 1e-30)
-    phi_p_eff = np.asarray(phi_p, dtype=float) + np.asarray(phi_s, dtype=float) @ np.asarray(j0_ref, dtype=float)
+    phi_master = np.asarray(phi_p, dtype=float) @ np.asarray(a_m, dtype=float)
+    phi_p_eff = phi_master + np.asarray(phi_s, dtype=float) @ np.asarray(j0_ref, dtype=float)
     w0_const = np.asarray(phi_s, dtype=float) @ np.asarray(q0_ref, dtype=float).reshape(-1)
 
     q_s_raw, j_qs_qp_raw = _evaluate_gpr_qs_and_jac(q, gpr_model, n_primary)
@@ -305,17 +309,24 @@ def _parse_args():
     p.add_argument("--snapshots-dir", type=str, default=SNAPSHOTS_DIR)
     p.add_argument("--basis-dir", type=str, default=BASIS_DIR)
     p.add_argument("--gpr-dir", type=str, default=GPR_DIR)
-    p.add_argument("--structured-mesh-dir", type=str, default=STRUCTURED_MESH_DIR)
+    p.add_argument(
+        "--parameter-mesh-dir",
+        dest="parameter_mesh_dir",
+        type=str,
+        default=STRUCTURED_MESH_DIR,
+        help="Stage7 directory containing actual-sample Delaunay parameter-mesh arrays.",
+    )
     p.add_argument("--out-dir", type=str, default=OUT_DIR)
     p.add_argument(
         "--residual-state-source",
         type=str,
         default=RESIDUAL_STATE_SOURCE,
-        choices=["trajectory_sampling", "stage7_structured_mesh"],
+        choices=["trajectory_sampling", "stage7_parameter_mesh"],
         help=(
             "Source of residual states used to build Stage12a. "
             "'trajectory_sampling' uses snapshot-percent over FOM trajectories; "
-            "'stage7_structured_mesh' uses parameter_mesh_nodes_(mu,q_ls) from Stage7."
+            "'stage7_parameter_mesh' uses actual Stage7 Delaunay nodes (mu,q_m) "
+            "without IDW."
         ),
     )
     p.add_argument("--snapshot-percent-res", type=float, default=SNAPSHOT_PERCENT_RES)
@@ -325,7 +336,7 @@ def _parse_args():
         type=int,
         default=1,
         choices=[0, 1],
-        help="If 1, build residual-only Stage12a dataset (no C_hom/b_hom/q_p_hom exports).",
+        help="If 1, build residual-only Stage12a dataset (no C_hom/b_hom/q_m_hom exports).",
     )
     p.add_argument(
         "--sampling-mode",
@@ -389,7 +400,7 @@ def main():
     snapshots_dir = str(args.snapshots_dir)
     basis_dir = str(args.basis_dir)
     gpr_dir = str(args.gpr_dir)
-    structured_mesh_dir = str(args.structured_mesh_dir)
+    parameter_mesh_dir = str(args.parameter_mesh_dir)
     out_dir = str(args.out_dir)
     first_n_steps = int(args.first_n_steps)
     if first_n_steps < 0:
@@ -410,8 +421,19 @@ def main():
 
     selected_traj_ids = _parse_trajectory_indices(args.trajectory_indices)
 
-    phi_p = np.asarray(np.load(os.path.join(gpr_dir, "phi_p.npy")), dtype=float)
+    phi_m_path = os.path.join(gpr_dir, "phi_m.npy")
+    if not os.path.exists(phi_m_path):
+        raise FileNotFoundError(
+            f"{phi_m_path}. Rebuild Stage7a/7b with the validated Joaquin-style LS split."
+        )
+    phi_p = np.asarray(np.load(phi_m_path), dtype=float)
     phi_s = np.asarray(np.load(os.path.join(gpr_dir, "phi_s.npy")), dtype=float)
+    a_m_path = os.path.join(gpr_dir, "A_m.npy")
+    if not os.path.exists(a_m_path):
+        raise FileNotFoundError(
+            f"{a_m_path}. Rebuild Stage7a/7b with the validated Joaquin-style LS split."
+        )
+    a_m = np.asarray(np.load(a_m_path), dtype=float)
     free_dofs = np.asarray(np.load(os.path.join(basis_dir, "free_dofs.npy")), dtype=np.int64)
     dir_dofs = np.asarray(np.load(os.path.join(basis_dir, "dirichlet_dofs.npy")), dtype=np.int64)
     eq_map_ref = np.asarray(np.load(os.path.join(basis_dir, "eq_map.npy")), dtype=np.int64)
@@ -422,6 +444,10 @@ def main():
     n_free = int(phi_p.shape[0])
     if int(phi_s.shape[0]) != n_free:
         raise ValueError("phi_p and phi_s row count mismatch.")
+    if a_m.shape != (n_primary, n_primary):
+        raise ValueError(
+            f"A_m shape mismatch: got {a_m.shape}, expected {(n_primary, n_primary)}."
+        )
     if int(gpr_model["n_primary"]) != n_primary:
         raise ValueError("GPR model n_primary does not match phi_p.")
     if int(gpr_model["n_secondary"]) != n_secondary:
@@ -445,16 +471,10 @@ def main():
     print(f"[Info] residual-only mode (disable homogenization) = {int(disable_hom)}")
     print("[Info] Manifold correction active in Stage 12a MAW-ECM-GPR: N(0)=0 and J(0)=0.")
     all_tasks = []
-    q_p_nodes_struct = None
-    q_p_nodes_eval = None
-    q_s_nodes_eval_raw = None
-    mu_nodes_struct = None
-    mu_nodes_eval = None
-    cells_struct = None
-    grid_shape_struct = None
-    q_nn_idx = None
-    q_dist = None
-    mu_dist = None
+    q_m_nodes_mesh = None
+    mu_nodes_mesh = None
+    cells_mesh = None
+    grid_shape_mesh = None
     if residual_state_source == "trajectory_sampling":
         trajectories = sorted([d for d in os.listdir(snapshots_dir) if d.startswith("trajectory_")])
         if selected_traj_ids is not None:
@@ -546,50 +566,17 @@ def main():
         if include_hom:
             print(f"[Info] Total homogenization snapshots: {total_snapshots_hom}")
     else:
-        q_p_nodes_struct, mu_nodes_struct, cells_struct, grid_shape_struct = _load_stage7_structured_mesh_nodes(
-            structured_mesh_dir=structured_mesh_dir,
+        q_m_nodes_mesh, mu_nodes_mesh, cells_mesh, grid_shape_mesh = _load_stage7_parameter_mesh_nodes(
+            parameter_mesh_dir=parameter_mesh_dir,
             n_primary=n_primary,
         )
-        q_p_bank_file = os.path.join(structured_mesh_dir, "q_p_train.npy")
-        q_s_bank_file = os.path.join(structured_mesh_dir, "q_s_train.npy")
-        mu_bank_file = os.path.join(structured_mesh_dir, "ls_targets_train.npy")
-        if (not os.path.exists(q_p_bank_file)) or (not os.path.exists(q_s_bank_file)) or (not os.path.exists(mu_bank_file)):
-            raise FileNotFoundError(
-                "Structured mode requires q_p_train.npy, q_s_train.npy and ls_targets_train.npy "
-                f"in {structured_mesh_dir}."
-            )
-        q_p_bank = np.asarray(np.load(q_p_bank_file), dtype=float)
-        q_s_bank = np.asarray(np.load(q_s_bank_file), dtype=float)
-        mu_bank = np.asarray(np.load(mu_bank_file), dtype=float)
-        if q_p_bank.ndim != 2 or q_p_bank.shape[1] != n_primary:
-            raise RuntimeError(
-                f"Invalid q_p_train.npy shape {q_p_bank.shape}; expected (*,{n_primary})."
-            )
-        if q_s_bank.ndim != 2 or q_s_bank.shape[0] != q_p_bank.shape[0] or q_s_bank.shape[1] != n_secondary:
-            raise RuntimeError(
-                f"Invalid q_s_train.npy shape {q_s_bank.shape}; expected ({q_p_bank.shape[0]},{n_secondary})."
-            )
-        if mu_bank.ndim != 2 or mu_bank.shape[1] < 3 or mu_bank.shape[0] != q_p_bank.shape[0]:
-            raise RuntimeError(
-                f"Invalid ls_targets_train.npy shape {mu_bank.shape}; expected ({q_p_bank.shape[0]},>=3)."
-            )
-        mu_tree = cKDTree(mu_bank[:, :3])
-        mu_dist, q_nn_idx = mu_tree.query(mu_nodes_struct[:, :3], k=1)
-        q_p_nodes_eval = np.asarray(q_p_bank[np.asarray(q_nn_idx, dtype=np.int64)], dtype=float)
-        q_s_nodes_eval_raw = np.asarray(q_s_bank[np.asarray(q_nn_idx, dtype=np.int64)], dtype=float)
-        mu_nodes_eval = np.asarray(mu_bank[np.asarray(q_nn_idx, dtype=np.int64), :3], dtype=float)
-        q_dist = np.linalg.norm(q_p_nodes_eval - q_p_nodes_struct, axis=1)
-        total_snapshots_res = int(q_p_nodes_struct.shape[0])
+        total_snapshots_res = int(q_m_nodes_mesh.shape[0])
         total_snapshots_hom = int(total_snapshots_res if include_hom else 0)
         print(f"[Info] Residual state source: {residual_state_source}")
-        print(f"[Info] Structured mesh dir: {structured_mesh_dir}")
-        print(f"[Info] Structured mesh nodes (residual): {total_snapshots_res}")
-        print(f"[Info] Structured mesh cells: {int(cells_struct.shape[0])}")
-        print(
-            "[Info] Structured admissibility projection (mu-node -> nearest training snapshot): "
-            f"mean_dist_mu={float(np.mean(mu_dist)):.3e}, max_dist_mu={float(np.max(mu_dist)):.3e}, "
-            f"mean_dist_q={float(np.mean(q_dist)):.3e}, max_dist_q={float(np.max(q_dist)):.3e}"
-        )
+        print(f"[Info] Parameter mesh dir: {parameter_mesh_dir}")
+        print(f"[Info] Actual parameter-mesh nodes (residual): {total_snapshots_res}")
+        print(f"[Info] Delaunay parameter-mesh cells: {int(cells_mesh.shape[0])}")
+        print("[Info] States are actual Stage7 training states; IDW and box extrapolation are disabled.")
         if include_hom:
             print("[Info] Homogenization enabled: Stage12a will reuse structured residual states for hom blocks.")
         else:
@@ -661,13 +648,25 @@ def main():
         uy = F[1, 0] * x_free + (F[1, 1] - 1.0) * y_free
         return np.where(is_x_free, ux, uy)
 
+    def _capture_current_displacement_vector():
+        disp_vec = np.zeros(int(n_dof), dtype=float)
+        for i, node in enumerate(mp.Nodes):
+            d = node.GetSolutionStepValue(KM.DISPLACEMENT)
+            idx_x = int(eq_map[i, 0])
+            idx_y = int(eq_map[i, 1])
+            if 0 <= idx_x < int(n_dof):
+                disp_vec[idx_x] = float(d[0])
+            if 0 <= idx_y < int(n_dof):
+                disp_vec[idx_y] = float(d[1])
+        return disp_vec
+
     Q_ecm, b_full, C_hom, b_hom = _allocate_memmaps(
         out_dir, n_primary, total_snapshots_res, total_snapshots_hom, n_elem, include_homogenization=include_hom
     )
-    q_p_res = np.zeros((total_snapshots_res, n_primary), dtype=float)
+    q_m_res = np.zeros((total_snapshots_res, n_primary), dtype=float)
     mu_res = np.zeros((total_snapshots_res, 3), dtype=float)
     sample_ids_res = np.zeros((total_snapshots_res, 2), dtype=np.int64)
-    q_p_hom = np.zeros((total_snapshots_hom, n_primary), dtype=float)
+    q_m_hom = np.zeros((total_snapshots_hom, n_primary), dtype=float)
     mu_hom = np.zeros((total_snapshots_hom, 3), dtype=float)
     sample_ids_hom = np.zeros((total_snapshots_hom, 2), dtype=np.int64)
 
@@ -675,11 +674,11 @@ def main():
     fit_rel_after = []
     fit_iters = []
     q0_const, j0_const = _evaluate_gpr_origin_terms(gpr_model, n_primary)
-    phi_p_eff_const = phi_p + phi_s @ j0_const
+    phi_master = phi_p @ a_m
+    phi_p_eff_const = phi_master + phi_s @ j0_const
     w0_const = phi_s @ q0_const
     s_res_global = 0
     s_hom_global = 0
-    structured_state_scale = None
     if residual_state_source == "trajectory_sampling":
         for task in all_tasks:
             traj_name = str(task["traj"])
@@ -709,18 +708,23 @@ def main():
                 u_free = u_snap[free_dofs]
                 u_aff_free = _affine_free(e_macro)
                 w_free = u_free - u_aff_free
-                q_p_init = w_free @ phi_p
+                q_master_init = w_free @ phi_p
+                try:
+                    q_m_init = np.linalg.solve(a_m, q_master_init)
+                except np.linalg.LinAlgError:
+                    q_m_init = np.linalg.lstsq(a_m, q_master_init, rcond=None)[0]
 
                 SetDisplacementFromEquationVector(u_snap, eq_map, ta)
                 UpdateCurrentCoordinatesFromDisplacement(mp)
 
-                q_p_curr = None
+                q_m_curr = None
                 if ks in set_res:
                     if fit_mode == "gauss_newton":
-                        q_p, _, j_qs_qp, rel0, relf, nit = _fit_qp_gauss_newton(
-                            q_init=q_p_init,
+                        q_m, _, j_qs_qp, rel0, relf, nit = _fit_qp_gauss_newton(
+                            q_init=q_m_init,
                             w_free=w_free,
                             phi_p=phi_p,
+                            a_m=a_m,
                             phi_s=phi_s,
                             gpr_model=gpr_model,
                             n_primary=n_primary,
@@ -736,17 +740,17 @@ def main():
                         fit_rel_after.append(float(relf))
                         fit_iters.append(int(nit))
                     else:
-                        q_p = q_p_init
-                        q_s_raw, j_qs_qp_raw = _evaluate_gpr_qs_and_jac(q_p, gpr_model, n_primary)
+                        q_m = q_m_init
+                        q_s_raw, j_qs_qp_raw = _evaluate_gpr_qs_and_jac(q_m, gpr_model, n_primary)
                         _, j_qs_qp = _apply_manifold_origin_correction(
-                            q_p, q_s_raw, j_qs_qp_raw, q0_const, j0_const
+                            q_m, q_s_raw, j_qs_qp_raw, q0_const, j0_const
                         )
                         if j_qs_qp.shape != (n_secondary, n_primary):
                             raise RuntimeError(
                                 f"Invalid GPR Jacobian shape {j_qs_qp.shape}, expected {(n_secondary, n_primary)}."
                             )
-                    q_p_curr = np.asarray(q_p, dtype=float).reshape(-1)
-                    q_p_res[s_res_global, :] = q_p_curr
+                    q_m_curr = np.asarray(q_m, dtype=float).reshape(-1)
+                    q_m_res[s_res_global, :] = q_m_curr
                     mu_res[s_res_global, :] = e_macro[:3]
                     sample_ids_res[s_res_global, 0] = int(traj_id)
                     sample_ids_res[s_res_global, 1] = int(ks)
@@ -786,12 +790,13 @@ def main():
                     s_res_global += 1
 
                 if include_hom and ks in set_hom:
-                    if q_p_curr is None:
+                    if q_m_curr is None:
                         if fit_mode == "gauss_newton":
-                            q_p, _, _, rel0, relf, nit = _fit_qp_gauss_newton(
-                                q_init=q_p_init,
+                            q_m, _, _, rel0, relf, nit = _fit_qp_gauss_newton(
+                                q_init=q_m_init,
                                 w_free=w_free,
                                 phi_p=phi_p,
+                                a_m=a_m,
                                 phi_s=phi_s,
                                 gpr_model=gpr_model,
                                 n_primary=n_primary,
@@ -807,9 +812,9 @@ def main():
                             fit_rel_after.append(float(relf))
                             fit_iters.append(int(nit))
                         else:
-                            q_p = q_p_init
-                        q_p_curr = np.asarray(q_p, dtype=float).reshape(-1)
-                    q_p_hom[s_hom_global, :] = q_p_curr
+                            q_m = q_m_init
+                        q_m_curr = np.asarray(q_m, dtype=float).reshape(-1)
+                    q_m_hom[s_hom_global, :] = q_m_curr
                     mu_hom[s_hom_global, :] = e_macro[:3]
                     sample_ids_hom[s_hom_global, 0] = int(traj_id)
                     sample_ids_hom[s_hom_global, 1] = int(ks)
@@ -820,35 +825,37 @@ def main():
                     s_hom_global += 1
     else:
         if fit_mode == "gauss_newton":
-            print("[Warn] residual-fit-mode=gauss_newton is ignored for stage7_structured_mesh source.")
+            print("[Warn] residual-fit-mode=gauss_newton is ignored for stage7_parameter_mesh source.")
         for inode in range(int(total_snapshots_res)):
-            q_p_target = np.asarray(q_p_nodes_struct[inode, :], dtype=float).reshape(-1)
-            q_p_curr = np.asarray(q_p_nodes_eval[inode, :], dtype=float).reshape(-1)
-            q_s_state_raw = np.asarray(q_s_nodes_eval_raw[inode, :], dtype=float).reshape(-1)
-            mu_target = np.asarray(mu_nodes_struct[inode, :], dtype=float).reshape(-1)
-            e_macro = np.asarray(mu_nodes_eval[inode, :], dtype=float).reshape(-1)
-            q_s_map_raw, j_qs_qp_raw = _evaluate_gpr_qs_and_jac(q_p_curr, gpr_model, n_primary)
+            q_m_curr = np.asarray(q_m_nodes_mesh[inode, :], dtype=float).reshape(-1)
+            e_macro = np.asarray(mu_nodes_mesh[inode, :], dtype=float).reshape(-1)
+            q_s_map_raw, j_qs_qp_raw = _evaluate_gpr_qs_and_jac(q_m_curr, gpr_model, n_primary)
             _, j_qs_qp = _apply_manifold_origin_correction(
-                q_p_curr, q_s_map_raw, j_qs_qp_raw, q0_const, j0_const
+                q_m_curr, q_s_map_raw, j_qs_qp_raw, q0_const, j0_const
             )
             if j_qs_qp.shape != (n_secondary, n_primary):
                 raise RuntimeError(
                     f"Invalid GPR Jacobian shape {j_qs_qp.shape}, expected {(n_secondary, n_primary)}."
                 )
 
-            w_free = phi_p @ q_p_curr + phi_s @ q_s_state_raw
+            # The physical manifold state is evaluated at this actual Stage7 node.
+            # Origin correction only rearranges the algebra; it does not change
+            # phi_m*A_m*q_m + phi_s*N(q_m).
+            w_free = phi_master @ q_m_curr + phi_s @ q_s_map_raw
             u_aff_free = _affine_free(e_macro)
             u_free = u_aff_free + w_free
-            u_snap = np.zeros(int(n_dof), dtype=float)
+            sim.batch_strain[:] = e_macro[:3]
+            sim.ApplyBoundaryConditions()
+            u_snap = _capture_current_displacement_vector()
             u_snap[np.asarray(free_dofs, dtype=np.int64)] = u_free
 
             SetDisplacementFromEquationVector(u_snap, eq_map, ta)
-            UpdateCurrentCoordinatesFromDisplacement(mp)
+            UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
 
-            q_p_res[s_res_global, :] = q_p_curr
+            q_m_res[s_res_global, :] = q_m_curr
             mu_res[s_res_global, :] = e_macro[:3]
             sample_ids_res[s_res_global, 0] = -7
-            sample_ids_res[s_res_global, 1] = int(q_nn_idx[inode])
+            sample_ids_res[s_res_global, 1] = int(inode)
             J_m = phi_p_eff_const + phi_s @ j_qs_qp
 
             q_block.fill(0.0)
@@ -862,48 +869,47 @@ def main():
                     elem.CalculateRightHandSide(rhs, pi)
                 except RuntimeError as exc:
                     raise RuntimeError(
-                        "[Stage12a][structured] Inadmissible residual state "
-                        f"(node={inode}, nn_id={int(q_nn_idx[inode])}, "
-                        f"nn_dist_q={float(q_dist[inode]):.3e}, "
-                        f"mu_target=[{mu_target[0]:.6e},{mu_target[1]:.6e},{mu_target[2]:.6e}], "
-                        f"mu_eval=[{e_macro[0]:.6e},{e_macro[1]:.6e},{e_macro[2]:.6e}], "
-                        f"q_target=[{q_p_target[0]:.6e},{q_p_target[1]:.6e},{q_p_target[2]:.6e}], "
-                        f"q_eval=[{q_p_curr[0]:.6e},{q_p_curr[1]:.6e},{q_p_curr[2]:.6e}])."
+                        "[Stage12a][parameter-mesh] Exact training state is inadmissible "
+                        f"(node={inode}, "
+                        f"mu=[{e_macro[0]:.6e},{e_macro[1]:.6e},{e_macro[2]:.6e}], "
+                        f"q_m={np.array2string(q_m_curr, precision=6, separator=',')})."
                     ) from exc
                 rhs_arr = np.asarray(rhs, dtype=float)
                 if not np.isfinite(rhs_arr).all():
                     raise RuntimeError(
-                        "[Stage12a][structured] Non-finite element RHS detected "
-                        f"(node={inode}, nn_id={int(q_nn_idx[inode])}, elem={i})."
+                        "[Stage12a][parameter-mesh] Non-finite element RHS detected "
+                        f"(node={inode}, elem={i}, "
+                        f"mu=[{e_macro[0]:.6e},{e_macro[1]:.6e},{e_macro[2]:.6e}], "
+                        f"q_m={np.array2string(q_m_curr, precision=6, separator=',')})."
                     )
                 q_col = J_m[rows, :].T @ rhs_arr[rhs_pick]
                 if not np.isfinite(q_col).all():
                     raise RuntimeError(
-                        "[Stage12a][structured] Non-finite projected residual column detected "
-                        f"(node={inode}, nn_id={int(q_nn_idx[inode])}, elem={i})."
+                        "[Stage12a][parameter-mesh] Non-finite projected residual column detected "
+                        f"(node={inode}, elem={i})."
                     )
                 q_block[:, i] = q_col
 
             r0, r1 = n_primary * s_res_global, n_primary * (s_res_global + 1)
             if not np.isfinite(q_block).all():
                 raise RuntimeError(
-                    "[Stage12a][structured] Non-finite residual block detected "
-                    f"(node={inode}, nn_id={int(q_nn_idx[inode])})."
+                    "[Stage12a][parameter-mesh] Non-finite residual block detected "
+                    f"(node={inode})."
                 )
             Q_ecm[r0:r1, :] = q_block
             b_full[r0:r1] = np.sum(q_block, axis=1)
             if not np.isfinite(np.asarray(b_full[r0:r1], dtype=float)).all():
                 raise RuntimeError(
-                    "[Stage12a][structured] Non-finite residual rhs block detected "
-                    f"(node={inode}, nn_id={int(q_nn_idx[inode])})."
+                    "[Stage12a][parameter-mesh] Non-finite residual rhs block detected "
+                    f"(node={inode})."
                 )
             s_res_global += 1
 
             if include_hom:
-                q_p_hom[s_hom_global, :] = q_p_curr
+                q_m_hom[s_hom_global, :] = q_m_curr
                 mu_hom[s_hom_global, :] = e_macro[:3]
                 sample_ids_hom[s_hom_global, 0] = -7
-                sample_ids_hom[s_hom_global, 1] = int(q_nn_idx[inode])
+                sample_ids_hom[s_hom_global, 1] = int(inode)
                 _fill_hom_block_from_kratos(elements, mp, area_e, c_block)
                 h0, h1 = 6 * s_hom_global, 6 * (s_hom_global + 1)
                 C_hom[h0:h1, :] = c_block
@@ -925,26 +931,41 @@ def main():
         C_hom.flush()
     if b_hom is not None:
         b_hom.flush()
-    np.save(os.path.join(out_dir, "q_p_res.npy"), q_p_res)
+    np.save(os.path.join(out_dir, "q_m_res.npy"), q_m_res)
+    np.save(os.path.join(out_dir, "q_p_res.npy"), q_m_res)
     np.save(os.path.join(out_dir, "mu_res.npy"), mu_res)
     np.save(os.path.join(out_dir, "sample_ids_res.npy"), sample_ids_res)
-    if residual_state_source == "stage7_structured_mesh":
-        np.save(os.path.join(out_dir, "structured_mesh_cells_res.npy"), np.asarray(cells_struct, dtype=np.int64))
+    if residual_state_source == "stage7_parameter_mesh":
+        np.save(os.path.join(out_dir, "parameter_mesh_cells_res.npy"), np.asarray(cells_mesh, dtype=np.int64))
+        np.save(os.path.join(out_dir, "structured_mesh_cells_res.npy"), np.asarray(cells_mesh, dtype=np.int64))
         np.save(
             os.path.join(out_dir, "structured_mesh_grid_shape_res.npy"),
-            np.asarray(grid_shape_struct, dtype=np.int64),
+            np.asarray(grid_shape_mesh, dtype=np.int64),
         )
-        np.save(os.path.join(out_dir, "q_p_res_target_structured.npy"), np.asarray(q_p_nodes_struct, dtype=float))
-        np.save(os.path.join(out_dir, "mu_res_target_structured.npy"), np.asarray(mu_nodes_struct, dtype=float))
-        np.save(os.path.join(out_dir, "mu_res_eval_structured.npy"), np.asarray(mu_nodes_eval, dtype=float))
-        np.save(os.path.join(out_dir, "q_p_res_nn_dist_structured.npy"), np.asarray(q_dist, dtype=float))
-        np.save(os.path.join(out_dir, "mu_res_nn_dist_structured.npy"), np.asarray(mu_dist, dtype=float))
-        np.save(os.path.join(out_dir, "q_p_res_nn_index_structured.npy"), np.asarray(q_nn_idx, dtype=np.int64))
+        np.save(os.path.join(out_dir, "q_m_res_target_parameter_mesh.npy"), np.asarray(q_m_nodes_mesh, dtype=float))
+        np.save(os.path.join(out_dir, "q_p_res_target_structured.npy"), np.asarray(q_m_nodes_mesh, dtype=float))
+        np.save(os.path.join(out_dir, "mu_res_target_structured.npy"), np.asarray(mu_nodes_mesh, dtype=float))
+        # Compatibility files now encode exact identity evaluation.
+        np.save(os.path.join(out_dir, "mu_res_eval_structured.npy"), np.asarray(mu_nodes_mesh, dtype=float))
+        np.save(
+            os.path.join(out_dir, "q_p_res_nn_dist_structured.npy"),
+            np.zeros(total_snapshots_res, dtype=float),
+        )
+        np.save(
+            os.path.join(out_dir, "mu_res_nn_dist_structured.npy"),
+            np.zeros(total_snapshots_res, dtype=float),
+        )
+        np.save(
+            os.path.join(out_dir, "q_p_res_nn_index_structured.npy"),
+            np.arange(total_snapshots_res, dtype=np.int64),
+        )
     else:
         for p in (
             "structured_mesh_cells_res.npy",
+            "parameter_mesh_cells_res.npy",
             "structured_mesh_grid_shape_res.npy",
             "q_p_res_target_structured.npy",
+            "q_m_res_target_parameter_mesh.npy",
             "mu_res_target_structured.npy",
             "mu_res_eval_structured.npy",
             "q_p_res_nn_dist_structured.npy",
@@ -955,11 +976,12 @@ def main():
             if os.path.exists(fpath):
                 os.remove(fpath)
     if include_hom:
-        np.save(os.path.join(out_dir, "q_p_hom.npy"), q_p_hom)
+        np.save(os.path.join(out_dir, "q_m_hom.npy"), q_m_hom)
+        np.save(os.path.join(out_dir, "q_p_hom.npy"), q_m_hom)
         np.save(os.path.join(out_dir, "mu_hom.npy"), mu_hom)
         np.save(os.path.join(out_dir, "sample_ids_hom.npy"), sample_ids_hom)
     else:
-        for p in ("q_p_hom.npy", "mu_hom.npy", "sample_ids_hom.npy"):
+        for p in ("q_m_hom.npy", "q_p_hom.npy", "mu_hom.npy", "sample_ids_hom.npy"):
             fpath = os.path.join(out_dir, p)
             if os.path.exists(fpath):
                 os.remove(fpath)
@@ -988,23 +1010,27 @@ def main():
         sampling_mode=np.array([args.sampling_mode]),
         residual_state_source=np.array([residual_state_source]),
         structured_admissible_projection=np.array(
-            [1 if residual_state_source == "stage7_structured_mesh" else 0], dtype=np.int64
+            [0], dtype=np.int64
         ),
         structured_q_nn_mean_dist=np.array(
-            [float(np.mean(q_dist)) if residual_state_source == "stage7_structured_mesh" else np.nan], dtype=float
+            [0.0 if residual_state_source == "stage7_parameter_mesh" else np.nan], dtype=float
         ),
         structured_q_nn_max_dist=np.array(
-            [float(np.max(q_dist)) if residual_state_source == "stage7_structured_mesh" else np.nan], dtype=float
+            [0.0 if residual_state_source == "stage7_parameter_mesh" else np.nan], dtype=float
         ),
         structured_mu_nn_mean_dist=np.array(
-            [float(np.mean(mu_dist)) if residual_state_source == "stage7_structured_mesh" else np.nan], dtype=float
+            [0.0 if residual_state_source == "stage7_parameter_mesh" else np.nan], dtype=float
         ),
         structured_mu_nn_max_dist=np.array(
-            [float(np.max(mu_dist)) if residual_state_source == "stage7_structured_mesh" else np.nan], dtype=float
+            [0.0 if residual_state_source == "stage7_parameter_mesh" else np.nan], dtype=float
+        ),
+        structured_exact_state_evaluation=np.array(
+            [1 if residual_state_source == "stage7_parameter_mesh" else 0], dtype=np.int64
         ),
         param_aware_time_weight=np.array([args.param_aware_time_weight]),
         snapshots_dir=np.array([snapshots_dir]),
-        structured_mesh_dir=np.array([structured_mesh_dir]),
+        parameter_mesh_dir=np.array([parameter_mesh_dir]),
+        structured_mesh_dir=np.array([parameter_mesh_dir]),
         basis_dir=np.array([basis_dir]),
         gpr_data_dir=np.array([gpr_dir]),
         first_n_steps=np.array([first_n_steps], dtype=np.int64),
@@ -1013,6 +1039,10 @@ def main():
             dtype=np.int64,
         ),
         include_macro_strain_input=np.array([1 if include_macro else 0], dtype=np.int64),
+        coordinate_system=np.array(["q_m_with_A_m"]),
+        parameter_mesh_kind=np.array(
+            ["actual_samples_delaunay" if residual_state_source == "stage7_parameter_mesh" else "trajectory_sampling"]
+        ),
         A_total=a0_ref,
         A0_ref=np.array([a0_ref], dtype=float),
         hom_reference_measure=np.array([a0_ref], dtype=float),
@@ -1042,11 +1072,11 @@ def main():
         print(f"      - C_hom shape: {C_hom.shape}")
     else:
         print("      - C_hom: disabled")
-    print(f"      - q_p_res shape: {q_p_res.shape}")
+    print(f"      - q_m_res shape: {q_m_res.shape}")
     if include_hom:
-        print(f"      - q_p_hom shape: {q_p_hom.shape}")
+        print(f"      - q_m_hom shape: {q_m_hom.shape}")
     else:
-        print("      - q_p_hom: disabled")
+        print("      - q_m_hom: disabled")
     print(f"      - Datasets saved to: {out_dir}")
 
 
