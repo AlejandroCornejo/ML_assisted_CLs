@@ -14,6 +14,7 @@ This script:
 
 import os
 import sys
+import argparse
 import json
 import numpy as np
 import matplotlib.pyplot as plt
@@ -95,9 +96,34 @@ def build_indices_from_folders(root):
 # Main POD Workflow
 # ============================================================
 
-def run_stage2_pod():
+def run_stage2_pod(
+    snapshots_root=SNAPSHOTS_ROOT,
+    out_dir=OUT_DIR,
+    eps2_tol=EPS2_TOL,
+    min_rank=0,
+    max_rank=0,
+    save_diagnostics=SAVE_DIAGNOSTICS,
+):
+    if not (0.0 < float(eps2_tol) < 1.0):
+        raise ValueError("--eps2-tol must satisfy 0 < eps2_tol < 1.")
+    if int(min_rank) < 0:
+        raise ValueError("--min-rank must be >= 0.")
+    if int(max_rank) < 0:
+        raise ValueError("--max-rank must be >= 0.")
+    if int(max_rank) > 0 and int(min_rank) > int(max_rank):
+        raise ValueError("--min-rank cannot be larger than --max-rank.")
+
+    eps2_tol = float(eps2_tol)
+    min_rank = int(min_rank)
+    max_rank = int(max_rank)
+
     print("--- Stage 2: POD with Dirichlet Consistency ---")
-    os.makedirs(OUT_DIR, exist_ok=True)
+    print(f"snapshots_root : {snapshots_root}")
+    print(f"out_dir        : {out_dir}")
+    print(f"eps2_tol       : {eps2_tol:.3e}")
+    print(f"min_rank       : {min_rank if min_rank > 0 else '<disabled>'}")
+    print(f"max_rank       : {max_rank if max_rank > 0 else '<disabled>'}")
+    os.makedirs(out_dir, exist_ok=True)
     
     # 1. Reconstruction
     with open(PROJECT_PARAMETERS, "r") as f:
@@ -133,9 +159,9 @@ def run_stage2_pod():
     print(f"Center: ({Xc:.4f}, {Yc:.4f})")
     
     # 2. Snapshot Collection
-    traj_indices = build_indices_from_folders(SNAPSHOTS_ROOT)
+    traj_indices = build_indices_from_folders(snapshots_root)
     if not traj_indices:
-        print(f"[ERROR] No trajectory folders found in {SNAPSHOTS_ROOT}")
+        print(f"[ERROR] No trajectory folders found in {snapshots_root}")
         return
 
     W_f_list = []
@@ -143,7 +169,7 @@ def run_stage2_pod():
     total_snapshots = 0
 
     for idx in traj_indices:
-        traj_dir = os.path.join(SNAPSHOTS_ROOT, f"trajectory_{idx}")
+        traj_dir = os.path.join(snapshots_root, f"trajectory_{idx}")
         u_file = os.path.join(traj_dir, f"trajectory_{idx}_U.npy")
         e_file = os.path.join(traj_dir, f"trajectory_{idx}_applied_strain.npy")
         
@@ -195,20 +221,55 @@ def run_stage2_pod():
     # Selection based on epsilon^2 energy
     energy = S**2
     cumulative_energy = np.cumsum(energy) / np.sum(energy)
-    rank = np.searchsorted(cumulative_energy, 1.0 - EPS2_TOL) + 1
-    rank = int(min(rank, U_pod.shape[1]))
+    rank_energy = int(np.searchsorted(cumulative_energy, 1.0 - eps2_tol) + 1)
+    max_available_rank = int(U_pod.shape[1])
+    rank = rank_energy
+    if min_rank > 0:
+        rank = max(rank, min_rank)
+    if max_rank > 0:
+        rank = min(rank, max_rank)
+    if rank > max_available_rank:
+        print(
+            f"[WARNING] Requested rank {rank} exceeds available rank "
+            f"{max_available_rank}; clipping."
+        )
+        rank = max_available_rank
+    rank = int(max(1, rank))
     
     Phi_f = U_pod[:, :rank].copy()
     
-    print(f" POD Rank chosen: {rank} (Energy captured: {cumulative_energy[rank-1]:.6%})")
+    print(
+        f" POD Rank chosen: {rank} "
+        f"(energy-rank={rank_energy}, Energy captured: {cumulative_energy[rank-1]:.6%})"
+    )
 
     # 4. Save Basis and Metadata
-    np.save(os.path.join(OUT_DIR, "pod_basis_free.npy"), Phi_f)
-    np.save(os.path.join(OUT_DIR, "free_dofs.npy"), free_dofs)
-    np.save(os.path.join(OUT_DIR, "dirichlet_dofs.npy"), dir_dofs)
-    np.save(os.path.join(OUT_DIR, "eq_map.npy"), eq_map)
-    np.save(os.path.join(OUT_DIR, "domain_center.npy"), np.array([Xc, Yc]))
-    print(f" Saved POD basis and metadata to {OUT_DIR}")
+    np.save(os.path.join(out_dir, "pod_basis_free.npy"), Phi_f)
+    np.save(os.path.join(out_dir, "free_dofs.npy"), free_dofs)
+    np.save(os.path.join(out_dir, "dirichlet_dofs.npy"), dir_dofs)
+    np.save(os.path.join(out_dir, "eq_map.npy"), eq_map)
+    np.save(os.path.join(out_dir, "domain_center.npy"), np.array([Xc, Yc]))
+
+    summary = {
+        "snapshots_root": snapshots_root,
+        "mesh": mesh_base,
+        "eps2_tol": eps2_tol,
+        "rank_energy": rank_energy,
+        "rank": rank,
+        "max_available_rank": max_available_rank,
+        "energy_captured": float(cumulative_energy[rank - 1]),
+        "energy_loss": float(1.0 - cumulative_energy[rank - 1]),
+        "total_snapshots": int(total_snapshots),
+        "n_dof": int(n_dof),
+        "n_free_dofs": int(len(free_dofs)),
+        "n_dirichlet_dofs": int(len(dir_dofs)),
+        "max_dirichlet_residual": float(max_wD),
+        "mean_dirichlet_residual": float(mean_wD),
+    }
+    np.savez(os.path.join(out_dir, "stage2_pod_metadata.npz"), **summary)
+    with open(os.path.join(out_dir, "stage2_pod_summary.json"), "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f" Saved POD basis and metadata to {out_dir}")
 
     # 5. Compute and Save Affine Lifting Basis (Phi_d)
     # u_lift = Phi_d * [Exx, Eyy, Gxy]
@@ -228,11 +289,11 @@ def run_stage2_pod():
         if ix >= 0: phi_d[ix, 2] = 0.5 * dy
         if iy >= 0: phi_d[iy, 2] = 0.5 * dx
         
-    np.save(os.path.join(OUT_DIR, "phi_affine_lifting.npy"), phi_d)
-    print(f" Saved Affine Lifting Basis to {os.path.join(OUT_DIR, 'phi_affine_lifting.npy')}")
+    np.save(os.path.join(out_dir, "phi_affine_lifting.npy"), phi_d)
+    print(f" Saved Affine Lifting Basis to {os.path.join(out_dir, 'phi_affine_lifting.npy')}")
 
     # 6. Diagnostics
-    if SAVE_DIAGNOSTICS:
+    if save_diagnostics:
         plt.figure(figsize=(10, 4))
         
         plt.subplot(1, 2, 1)
@@ -248,8 +309,49 @@ def run_stage2_pod():
         plt.grid(True)
         
         plt.tight_layout()
-        plt.savefig(os.path.join(OUT_DIR, "pod_diagnostics.png"))
-        print(f" Diagnostics plot saved as {os.path.join(OUT_DIR, 'pod_diagnostics.png')}")
+        plt.savefig(os.path.join(out_dir, "pod_diagnostics.png"))
+        print(f" Diagnostics plot saved as {os.path.join(out_dir, 'pod_diagnostics.png')}")
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser(
+        description="Stage 2 POD basis construction for free fluctuation snapshots."
+    )
+    parser.add_argument("--snapshots-root", type=str, default=SNAPSHOTS_ROOT)
+    parser.add_argument("--out-dir", type=str, default=OUT_DIR)
+    parser.add_argument(
+        "--eps2-tol",
+        type=float,
+        default=EPS2_TOL,
+        help="Squared residual-energy tolerance used for POD truncation.",
+    )
+    parser.add_argument(
+        "--min-rank",
+        type=int,
+        default=0,
+        help="If >0, force at least this many POD modes after the energy criterion.",
+    )
+    parser.add_argument(
+        "--max-rank",
+        type=int,
+        default=0,
+        help="If >0, cap the POD rank after applying the energy criterion/min-rank.",
+    )
+    parser.add_argument(
+        "--save-diagnostics",
+        type=int,
+        default=1 if SAVE_DIAGNOSTICS else 0,
+        choices=[0, 1],
+    )
+    return parser.parse_args()
 
 if __name__ == "__main__":
-    run_stage2_pod()
+    args = _parse_args()
+    run_stage2_pod(
+        snapshots_root=args.snapshots_root,
+        out_dir=args.out_dir,
+        eps2_tol=args.eps2_tol,
+        min_rank=args.min_rank,
+        max_rank=args.max_rank,
+        save_diagnostics=bool(args.save_diagnostics),
+    )

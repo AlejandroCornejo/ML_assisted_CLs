@@ -58,6 +58,44 @@ def _compute_equivalent_stress_strain(eps, sig):
     return eps_eq, sigma_eq
 
 
+def _save_prom_only_plots(eps_pr, sig_pr, out_dir):
+    eps_pr = np.asarray(eps_pr, dtype=float)
+    sig_pr = np.asarray(sig_pr, dtype=float)
+    n = min(len(eps_pr), len(sig_pr))
+    if n == 0:
+        return
+
+    comp_labels = [
+        (0, r"$\sigma_{xx}$", r"$\varepsilon_{xx}$", "xx"),
+        (1, r"$\sigma_{yy}$", r"$\varepsilon_{yy}$", "yy"),
+        (2, r"$\sigma_{xy}$", r"$\gamma_{xy}$", "xy"),
+    ]
+
+    for i, label_sig, label_eps, suffix in comp_labels:
+        plt.figure(figsize=(7, 6))
+        plt.plot(eps_pr[:n, i], sig_pr[:n, i], "r--", label="PROM-GPR", linewidth=1.8)
+        plt.title(f"PROM-GPR Manifold: {label_sig}")
+        plt.xlabel(f"{label_eps} [-]")
+        plt.ylabel(f"{label_sig} [Pa]")
+        plt.grid(True, linestyle="--", alpha=0.7)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(out_dir, f"prom_gpr_only_{suffix}.png"), dpi=200)
+        plt.close()
+
+    pr_eps_eq, pr_sig_eq = _compute_equivalent_stress_strain(eps_pr[:n], sig_pr[:n])
+    plt.figure(figsize=(7, 6))
+    plt.plot(pr_eps_eq, pr_sig_eq, "r--", label="PROM-GPR", linewidth=1.8)
+    plt.title(r"PROM-GPR Manifold: $\sigma_{eq}$ vs $\varepsilon_{eq}$")
+    plt.xlabel(r"$\varepsilon_{eq}$ [-]")
+    plt.ylabel(r"$\sigma_{eq}$ [Pa]")
+    plt.grid(True, linestyle="--", alpha=0.7)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "prom_gpr_only_equivalent.png"), dpi=200)
+    plt.close()
+
+
 
 
 def _load_rom_model(model_dir="stage_2_pod_rve"):
@@ -157,6 +195,7 @@ def run_stage8_gpr(
     compare_baselines=True,
     run_fom=False,
     run_hprom=False,
+    compare_hprom=False,
     plot_only=False,
     use_old_stiffness_in_first_iteration=True,
     gpr_data_dir="stage_7_gpr_data",
@@ -164,6 +203,7 @@ def run_stage8_gpr(
     out_dir="stage_8_prom_gpr_results",
     use_stage6_waypoints=True,
     qp_init_mode="previous",
+    max_its=25,
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -207,7 +247,9 @@ def run_stage8_gpr(
     print(f"  Reference increment level: {REFERENCE_STEPS_FOR_UNIT_AMPLITUDE}")
     print(f"  Segments: {seg_steps}")
     print(f"  GPR data dir: {gpr_data_dir}")
-    print(f"  HPROM data dir: {hprom_data_dir}")
+    include_hprom = bool(compare_hprom or run_hprom)
+    if include_hprom:
+        print(f"  HPROM data dir: {hprom_data_dir}")
 
     if plot_only:
         print("[Stage 8-GPR] --plot-only enabled. Skipping solves.")
@@ -216,17 +258,19 @@ def run_stage8_gpr(
     ecm_file = os.path.join(hprom_data_dir, "ecm_weights_all.npz")
     mesh_fom_prom = "rve_geometry"
     mesh_hprom = "rve_geometry"
-    auto_hrom_mesh = _load_hrom_mesh_base_from_ecm_file(ecm_file)
-    if auto_hrom_mesh:
-        mesh_hprom = str(auto_hrom_mesh)
+    if include_hprom:
+        auto_hrom_mesh = _load_hrom_mesh_base_from_ecm_file(ecm_file)
+        if auto_hrom_mesh:
+            mesh_hprom = str(auto_hrom_mesh)
     print(f"  FOM/PROM mesh: {mesh_fom_prom}")
-    print(f"  HPROM mesh:    {mesh_hprom}")
+    if include_hprom:
+        print(f"  HPROM mesh:    {mesh_hprom}")
 
     phi_p, phi_s, free_dofs, _, _, gpr_model, _include_macro_strain_input = LoadPromGprModel(
         basis_dir="stage_2_pod_rve", gpr_data_dir=gpr_data_dir
     )
     parameters = setup_kratos_parameters(mesh_fom_prom)
-    parameters_hprom = setup_kratos_parameters(mesh_hprom)
+    parameters_hprom = setup_kratos_parameters(mesh_hprom) if include_hprom else None
 
     t0 = time.perf_counter()
     eps_pr, sig_pr = RunPromGprBatchSimulation(
@@ -241,6 +285,7 @@ def run_stage8_gpr(
         reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
         use_old_stiffness_in_first_iteration=use_old_stiffness_in_first_iteration,
         qp_init_mode=qp_init_mode,
+        max_its=max_its,
     )
     t_pr = time.perf_counter() - t0
 
@@ -249,11 +294,12 @@ def run_stage8_gpr(
     print(f"  PROM-GPR done in {t_pr:.1f}s")
 
     if not compare_baselines:
+        _save_prom_only_plots(eps_pr, sig_pr, out_dir)
         print("\n" + "=" * 40)
         print("  STAGE 8 COMPLETE (PROM-GPR ONLY)")
         print("=" * 40)
         print(f"  PROM-GPR Wall-time: {t_pr:.1f}s")
-        print(f"  Check output directory: {out_dir}/")
+        print(f"  PROM-only plots saved to: {out_dir}/")
         return
 
     fom_eps, fom_sig = _run_or_load_fom(
@@ -265,18 +311,24 @@ def run_stage8_gpr(
         force_run=run_fom,
         use_old_stiffness_in_first_iteration=use_old_stiffness_in_first_iteration,
     )
-    hprom_eps, hprom_sig = _run_or_load_hprom(
-        parameters_hprom,
-        strain_path,
-        out_dir,
-        emax,
-        REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
-        ecm_file,
-        force_run=run_hprom,
-        use_old_stiffness_in_first_iteration=use_old_stiffness_in_first_iteration,
-    )
+    if include_hprom:
+        hprom_eps, hprom_sig = _run_or_load_hprom(
+            parameters_hprom,
+            strain_path,
+            out_dir,
+            emax,
+            REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
+            ecm_file,
+            force_run=run_hprom,
+            use_old_stiffness_in_first_iteration=use_old_stiffness_in_first_iteration,
+        )
+    else:
+        hprom_eps = None
+        hprom_sig = None
 
-    n = min(len(fom_sig), len(sig_pr), len(hprom_sig), len(fom_eps), len(eps_pr), len(hprom_eps))
+    n = min(len(fom_sig), len(sig_pr), len(fom_eps), len(eps_pr))
+    if include_hprom:
+        n = min(n, len(hprom_sig), len(hprom_eps))
 
     plt.rcParams.update(
         {
@@ -296,7 +348,8 @@ def run_stage8_gpr(
         plt.figure(figsize=(7, 6))
         plt.plot(fom_eps[:n, i], fom_sig[:n, i], "k-", label="FOM", linewidth=2.0)
         plt.plot(eps_pr[:n, i], sig_pr[:n, i], "r--", label="PROM-GPR", linewidth=1.5)
-        plt.plot(hprom_eps[:n, i], hprom_sig[:n, i], "b:", label="HPROM", linewidth=1.5)
+        if include_hprom:
+            plt.plot(hprom_eps[:n, i], hprom_sig[:n, i], "b:", label="HPROM", linewidth=1.5)
 
         plt.title(f"Manifold Benchmark: {label_sig}")
         plt.xlabel(f"{label_eps} [-]")
@@ -309,12 +362,13 @@ def run_stage8_gpr(
 
     fom_eps_eq, fom_sig_eq = _compute_equivalent_stress_strain(fom_eps[:n], fom_sig[:n])
     pr_eps_eq, pr_sig_eq = _compute_equivalent_stress_strain(eps_pr[:n], sig_pr[:n])
-    hprom_eps_eq, hprom_sig_eq = _compute_equivalent_stress_strain(hprom_eps[:n], hprom_sig[:n])
 
     plt.figure(figsize=(7, 6))
     plt.plot(fom_eps_eq, fom_sig_eq, "k-", label="FOM", linewidth=2.0)
     plt.plot(pr_eps_eq, pr_sig_eq, "r--", label="PROM-GPR", linewidth=1.5)
-    plt.plot(hprom_eps_eq, hprom_sig_eq, "b:", label="HPROM", linewidth=1.5)
+    if include_hprom:
+        hprom_eps_eq, hprom_sig_eq = _compute_equivalent_stress_strain(hprom_eps[:n], hprom_sig[:n])
+        plt.plot(hprom_eps_eq, hprom_sig_eq, "b:", label="HPROM", linewidth=1.5)
     plt.title(r"Manifold Benchmark: $\sigma_{eq}$ vs $\varepsilon_{eq}$")
     plt.xlabel(r"$\varepsilon_{eq}$ [-]")
     plt.ylabel(r"$\sigma_{eq}$ [Pa]")
@@ -325,16 +379,26 @@ def run_stage8_gpr(
     plt.close()
 
     plt.figure(figsize=(7, 6))
-    fom_norm = np.linalg.norm(fom_sig[:n], axis=1) + 1e-30
-    err_hprom = np.linalg.norm(fom_sig[:n] - hprom_sig[:n], axis=1) / fom_norm
-    err_pr = np.linalg.norm(fom_sig[:n] - sig_pr[:n], axis=1) / fom_norm
+    fom_norm = np.linalg.norm(fom_sig[:n], axis=1)
+    diff_pr_norm = np.linalg.norm(fom_sig[:n] - sig_pr[:n], axis=1)
+    fom_norm_max = float(np.max(fom_norm)) if fom_norm.size else 0.0
+    # Pointwise relative errors are undefined when the reference stress is zero.
+    # Use a tiny physical floor only for plotting/history; report the global
+    # Frobenius relative error separately as the primary scalar metric.
+    rel_floor = max(1e-12 * fom_norm_max, 1e-30)
+    err_pr = diff_pr_norm / np.maximum(fom_norm, rel_floor)
+    global_rel_pr = float(
+        np.linalg.norm(fom_sig[:n] - sig_pr[:n]) / max(np.linalg.norm(fom_sig[:n]), 1e-30)
+    )
 
     plt.plot(err_pr, "r-", label="PROM-GPR Error", linewidth=1.5)
-    plt.plot(err_hprom, "b-", label="HPROM Error", linewidth=1.5)
+    if include_hprom:
+        err_hprom = np.linalg.norm(fom_sig[:n] - hprom_sig[:n], axis=1) / np.maximum(fom_norm, rel_floor)
+        plt.plot(err_hprom, "b-", label="HPROM Error", linewidth=1.5)
 
     plt.title("Relative Stress Error Comparison")
     plt.xlabel("Step")
-    plt.ylabel("Relative Error [-]")
+    plt.ylabel("Pointwise Relative Error [-]")
     plt.yscale("log")
     plt.grid(True, linestyle="--", alpha=0.7)
     plt.legend()
@@ -346,8 +410,10 @@ def run_stage8_gpr(
     print("  STAGE 8 COMPLETE")
     print("=" * 40)
     print(f"  PROM-GPR Wall-time: {t_pr:.1f}s")
-    print(f"  Max PROM-GPR Error: {np.max(err_pr):.2e}")
-    print(f"  Avg PROM-GPR Error: {np.mean(err_pr):.2e}")
+    print(f"  Global PROM-GPR Stress Rel. Error: {global_rel_pr:.2e}")
+    print(f"  Max PROM-GPR Pointwise Error: {np.max(err_pr):.2e}")
+    print(f"  Avg PROM-GPR Pointwise Error: {np.mean(err_pr):.2e}")
+    print(f"  Pointwise error denominator floor: {rel_floor:.2e}")
     print(f"  Check output directory: {out_dir}/ for plots.")
 
 
@@ -358,6 +424,11 @@ if __name__ == "__main__":
     p.add_argument("--no-compare", action="store_true", help="Run PROM-GPR only (no FOM/HPROM baselines).")
     p.add_argument("--run-fom", action="store_true", help="Force re-run local Stage 8 FOM baseline.")
     p.add_argument("--run-hprom", action="store_true", help="Force re-run local Stage 8 HPROM baseline.")
+    p.add_argument(
+        "--compare-hprom",
+        action="store_true",
+        help="Include HPROM baseline in comparison. Otherwise compare only FOM vs PROM-GPR.",
+    )
     p.add_argument("--plot-only", action="store_true", help="Only generate trajectory plot and step report.")
     p.add_argument(
         "--gpr-data-dir",
@@ -385,6 +456,12 @@ if __name__ == "__main__":
         help="Initializer for q_p at each increment in PROM-GPR.",
     )
     p.add_argument(
+        "--max-its",
+        type=int,
+        default=25,
+        help="Maximum reduced Newton iterations. Use 0 for direct mu-to-q_m prediction.",
+    )
+    p.add_argument(
         "--no-old-stiffness-first-it",
         action="store_true",
         help="Disable reuse of previous-step reduced stiffness in Newton iteration 0.",
@@ -405,6 +482,7 @@ if __name__ == "__main__":
         compare_baselines=not args.no_compare,
         run_fom=args.run_fom,
         run_hprom=args.run_hprom,
+        compare_hprom=args.compare_hprom,
         plot_only=args.plot_only,
         use_old_stiffness_in_first_iteration=not args.no_old_stiffness_first_it,
         gpr_data_dir=args.gpr_data_dir,
@@ -412,4 +490,5 @@ if __name__ == "__main__":
         out_dir=args.out_dir,
         use_stage6_waypoints=not args.control_points_only,
         qp_init_mode=args.qp_init_mode,
+        max_its=args.max_its,
     )

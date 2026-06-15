@@ -157,6 +157,10 @@ def RunPromGprBatchSimulation(
 ):
     t_wall_total_start = time.perf_counter()
 
+    max_its = int(max_its)
+    if max_its < 0:
+        raise ValueError(f"max_its must be >= 0, got {max_its}.")
+
     free_dofs = np.asarray(free_dofs, dtype=np.int64)
     if phi_p.shape[0] != phi_s.shape[0]:
         raise ValueError("phi_p and phi_s must have the same number of rows (n_free).")
@@ -341,6 +345,8 @@ def RunPromGprBatchSimulation(
     print(f"  [PROM-GPR] q_m initializer mode: {qp_init_mode}")
     if qp_init_mode in ("continuation", "mu_affine") and qp_aff is not None:
         print(f"  [PROM-GPR] Using affine initializer: {qp_aff['path']}")
+    if max_its == 0:
+        print("  [PROM-GPR] Direct mode: Newton correction disabled (max_its=0).")
     t_map = 0.0
     t_assembly = 0.0
     t_projection = 0.0
@@ -541,7 +547,12 @@ def RunPromGprBatchSimulation(
                 print("    > using previous reduced stiffness (K_old) at first iteration")
             it += 1
 
-        if not converged:
+        if max_its == 0:
+            # Direct manifold prediction: keep the selected initializer and
+            # evaluate q_s and homogenization without residual correction.
+            converged = True
+            Kr_old = None
+        elif not converged:
             quasi_converged = (
                 np.isfinite(best_res)
                 and np.isfinite(best_rel)

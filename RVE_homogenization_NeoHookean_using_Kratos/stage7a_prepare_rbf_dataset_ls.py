@@ -241,6 +241,35 @@ def _fit_affine_mu_to_qm(mu, q_m):
     return np.asarray(b_aff, dtype=float), rel
 
 
+def _compute_mu_to_qm_affine_diagnostics(mu, q_m, b_aff):
+    mu = np.asarray(mu, dtype=float)
+    q_m = np.asarray(q_m, dtype=float)
+    b_aff = np.asarray(b_aff, dtype=float)
+    x_aug = np.hstack([mu, np.ones((mu.shape[0], 1), dtype=float)])
+    q_hat = x_aug @ b_aff
+    diff = q_hat - q_m
+
+    rel = float(np.linalg.norm(diff) / max(np.linalg.norm(q_m), 1e-30))
+    comp_rel = np.linalg.norm(diff, axis=0) / np.maximum(np.linalg.norm(q_m, axis=0), 1e-30)
+    rmse = np.sqrt(np.mean(diff**2, axis=0))
+    max_abs = np.max(np.abs(diff), axis=0)
+    q_std = np.std(q_m, axis=0)
+
+    ss_res = np.sum(diff**2, axis=0)
+    ss_tot = np.sum((q_m - np.mean(q_m, axis=0, keepdims=True)) ** 2, axis=0)
+    r2 = 1.0 - ss_res / np.maximum(ss_tot, 1e-30)
+
+    return {
+        "q_hat": np.asarray(q_hat, dtype=float),
+        "rel_error": rel,
+        "component_rel_error": np.asarray(comp_rel, dtype=float),
+        "rmse": np.asarray(rmse, dtype=float),
+        "max_abs_error": np.asarray(max_abs, dtype=float),
+        "q_std": np.asarray(q_std, dtype=float),
+        "r2": np.asarray(r2, dtype=float),
+    }
+
+
 def _compute_cell_jacobians(mu_nodes, q_nodes, cells, cell_type):
     mu_m = np.asarray(mu_nodes, dtype=float)
     q_m = np.asarray(q_nodes, dtype=float)
@@ -1103,6 +1132,7 @@ def prepare_rbf_dataset_least_squares(
     qp = split["q_m"]
     qs = split["q_s"]
     b_aff, affine_rel = _fit_affine_mu_to_qm(mu_targets, qp)
+    mu_qm_diag = _compute_mu_to_qm_affine_diagnostics(mu_targets, qp, b_aff)
     x_rbf = qp
     ls_active_mask = np.ones(q_full.shape[0], dtype=np.uint8)
 
@@ -1122,6 +1152,17 @@ def prepare_rbf_dataset_least_squares(
     print(f"  POD -> mu LS relative error: {ls['error_rel']:.3e}")
     print(f"  Exact master/slave decoder error: {split['decoder_rel_error']:.3e}")
     print(f"  mu -> q_m affine initializer error: {affine_rel:.3e}")
+    print(
+        "  mu -> q_m component rel errors: "
+        + ", ".join(
+            f"q_{i+1}={float(v):.3e}"
+            for i, v in enumerate(mu_qm_diag["component_rel_error"])
+        )
+    )
+    print(
+        "  mu -> q_m R2: "
+        + ", ".join(f"q_{i+1}={float(v):.6f}" for i, v in enumerate(mu_qm_diag["r2"]))
+    )
 
     np.save(os.path.join(out_dir, "q_m_train.npy"), qp)
     np.save(os.path.join(out_dir, "q_p_train.npy"), qp)
@@ -1140,6 +1181,7 @@ def prepare_rbf_dataset_least_squares(
     np.save(os.path.join(out_dir, "q_master_train.npy"), split["q_master"])
     np.save(os.path.join(out_dir, "q_m_init_from_mu_A.npy"), b_aff[:-1, :])
     np.save(os.path.join(out_dir, "q_m_init_from_mu_b.npy"), b_aff[-1, :])
+    np.save(os.path.join(out_dir, "q_m_init_from_mu_fit.npy"), mu_qm_diag["q_hat"])
     np.savez(
         os.path.join(out_dir, "qm_init_mu_affine.npz"),
         b_aff=b_aff,
@@ -1147,6 +1189,15 @@ def prepare_rbf_dataset_least_squares(
         qp_dim=np.array([n_p], dtype=np.int64),
         rel_fit=np.array([affine_rel], dtype=float),
         n_samples=np.array([mu_targets.shape[0]], dtype=np.int64),
+    )
+    np.savez(
+        os.path.join(out_dir, "mu_to_qm_affine_diagnostics.npz"),
+        rel_error=np.array([mu_qm_diag["rel_error"]], dtype=float),
+        component_rel_error=mu_qm_diag["component_rel_error"],
+        rmse=mu_qm_diag["rmse"],
+        max_abs_error=mu_qm_diag["max_abs_error"],
+        q_std=mu_qm_diag["q_std"],
+        r2=mu_qm_diag["r2"],
     )
     np.save(os.path.join(out_dir, "ls_targets_train.npy"), mu_targets)
     np.save(os.path.join(out_dir, "ls_jacobian_active_mask.npy"), ls_active_mask.astype(np.uint8))
@@ -1164,6 +1215,7 @@ def prepare_rbf_dataset_least_squares(
 
     proj_orth = float(np.linalg.norm(phi_p.T @ phi_s))
     summary_path = os.path.join(out_dir, "ls_dataset_summary.txt")
+    mu_qm_diag_path = os.path.join(out_dir, "mu_to_qm_affine_diagnostics.txt")
     with open(summary_path, "w", encoding="utf-8") as f:
         f.write("Stage 7a LS-RBF dataset summary\n")
         f.write(f"basis_dir={basis_dir}\n")
@@ -1181,7 +1233,57 @@ def prepare_rbf_dataset_least_squares(
         f.write("pod_to_mu_ls_rmse=" + ",".join(f"{v:.16e}" for v in ls["rmse"]) + "\n")
         f.write(f"decoder_rel_error={split['decoder_rel_error']:.16e}\n")
         f.write(f"mu_to_qm_affine_rel_error={affine_rel:.16e}\n")
+        f.write(
+            "mu_to_qm_affine_component_rel_error="
+            + ",".join(f"{v:.16e}" for v in mu_qm_diag["component_rel_error"])
+            + "\n"
+        )
+        f.write(
+            "mu_to_qm_affine_rmse="
+            + ",".join(f"{v:.16e}" for v in mu_qm_diag["rmse"])
+            + "\n"
+        )
+        f.write(
+            "mu_to_qm_affine_max_abs_error="
+            + ",".join(f"{v:.16e}" for v in mu_qm_diag["max_abs_error"])
+            + "\n"
+        )
+        f.write(
+            "mu_to_qm_affine_r2="
+            + ",".join(f"{v:.16e}" for v in mu_qm_diag["r2"])
+            + "\n"
+        )
         f.write(f"orthogonality_norm_phi_m_T_phi_s={split['ortho_ms']:.16e}\n")
+
+    with open(mu_qm_diag_path, "w", encoding="utf-8") as f:
+        f.write("Stage 7a mu -> q_m affine diagnostics\n")
+        f.write("Model: q_m ~= [mu, 1] B_aff\n")
+        f.write(f"global_relative_error={mu_qm_diag['rel_error']:.16e}\n")
+        f.write(
+            "component_relative_error="
+            + ",".join(f"q_{i+1}:{float(v):.16e}" for i, v in enumerate(mu_qm_diag["component_rel_error"]))
+            + "\n"
+        )
+        f.write(
+            "rmse="
+            + ",".join(f"q_{i+1}:{float(v):.16e}" for i, v in enumerate(mu_qm_diag["rmse"]))
+            + "\n"
+        )
+        f.write(
+            "max_abs_error="
+            + ",".join(f"q_{i+1}:{float(v):.16e}" for i, v in enumerate(mu_qm_diag["max_abs_error"]))
+            + "\n"
+        )
+        f.write(
+            "q_std="
+            + ",".join(f"q_{i+1}:{float(v):.16e}" for i, v in enumerate(mu_qm_diag["q_std"]))
+            + "\n"
+        )
+        f.write(
+            "r2="
+            + ",".join(f"q_{i+1}:{float(v):.16e}" for i, v in enumerate(mu_qm_diag["r2"]))
+            + "\n"
+        )
 
     if save_domain_plots and n_p >= 3 and mu_targets.shape[1] >= 3:
         _save_domain_comparison_plots(
