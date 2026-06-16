@@ -30,23 +30,21 @@ class SoftMaxAnalyticalEdge(nn.Module):
 
         self.temperature = temperature
 
-        # self.w_i = nn.Parameter(torch.zeros(self.num_experts)) # weights
         self.w_i = nn.Parameter(torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0])) # weights
 
     def GetExpertProbabilities(self):
-        exp_w = torch.sum(torch.exp(self.w_i / self.temperature))
-        PI = torch.exp(self.w_i / self.temperature) / exp_w
-        return PI
+        return nn.functional.softmax(self.w_i / self.temperature, dim=0) 
 
     def EvalFunctions(self, X):
         PI = self.GetExpertProbabilities()
+        mod_X = self.a_i * X + self.b_i
         return torch.vstack((
-            PI[0] * ((self.a_i*X + self.b_i)    * self.c_i + self.d_i),
-            PI[1] * ((self.a_i*X + self.b_i)**2 * self.c_i + self.d_i),
-            PI[2] * ((self.a_i*X + self.b_i)**3 * self.c_i + self.d_i),
-            PI[3] * (torch.tanh(self.a_i*X + self.b_i) * self.c_i + self.d_i),
-            PI[4] * (torch.sin(self.a_i*X + self.b_i) * self.c_i + self.d_i)
-        ))
+            PI[0] * (mod_X   ),
+            PI[1] * (mod_X**2),
+            PI[2] * (mod_X**3),
+            PI[3] * (torch.tanh(mod_X)),
+            PI[4] * (torch.sin(mod_X))
+        )) * self.c_i + self.d_i
 
     def forward(self, X):
         functs = self.EvalFunctions(X)

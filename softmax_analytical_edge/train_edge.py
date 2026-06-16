@@ -13,7 +13,7 @@ def main():
     X = np.linspace(-1.0, 1.0, 500)
 
     # Y = np.sin(3*X) * np.log(X + 5)
-    Y = np.log(X**2 + 1)
+    Y = X*np.log(X**2 + 1)
     # Y = np.sin(X*2)
     # Y = np.sin(2*(X-5))
 
@@ -22,9 +22,9 @@ def main():
 
     criterion = torch.nn.MSELoss()
     optimizer = optim.AdamW(model.parameters(), lr=0.001)
-    # optimizer = optim.LBFGS(model.parameters(), lr=0.0001, max_iter=20, history_size=10, line_search_fn='strong_wolfe')
+    # optimizer = optim.LBFGS(model.parameters(), lr=0.0001, max_iter=100, history_size=150, line_search_fn='strong_wolfe')
 
-    epochs = 100_000
+    epochs = 50000
     for epoch in range(1, epochs + 1):
         def closure():
             optimizer.zero_grad()
