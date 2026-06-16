@@ -48,7 +48,8 @@ fom_trajectories_dir = os.path.join(script_dir, 'stage_1_training_set_fom')
 strain_trajectories = []
 stress_trajectories = []
 
-for i in range(1, 11):  # trajectory_1 to trajectory_10
+number_histories = 10
+for i in range(1, number_histories + 1):  # trajectory_1 to trajectory_10
     strain_file = os.path.join(fom_trajectories_dir, f'trajectory_{i}', f'trajectory_{i}_strain.npy')
     stress_file = os.path.join(fom_trajectories_dir, f'trajectory_{i}', f'trajectory_{i}_stress.npy')
     
@@ -60,7 +61,7 @@ for i in range(1, 11):  # trajectory_1 to trajectory_10
     print(f"Loaded trajectory_{i}: strain={strain_data.shape}, stress={stress_data.shape}")
 
 # Find minimum number of steps across all trajectories
-# min_steps = min(t.shape[0] for t in strain_trajectories)
+min_steps = min(t.shape[0] for t in strain_trajectories)
 print(f"\nMinimum number of steps across all trajectories: {min_steps}")
 
 # Sample each trajectory at equally spaced intervals to cover the full path
@@ -130,8 +131,8 @@ train_W_database = W_full_batch.view(-1, 1)  # [10*steps, 1]
 
 
 # max_W = 1
-# max_W = train_W_database.abs().max()
-max_W = 1
+max_W = train_W_database.abs().max()
+# max_W = 1
 train_W_database /= max_W  # Normalize W to have max absolute value of 1
 
 def L2_relative_error(pred, target):
@@ -245,16 +246,17 @@ def TRAIN_KAN(
 #*****************************************************************************************************************
 #*****************************************************************************************************************
 #*****************************************************************************************************************
-n_epochs = 5000
-learning_rate = 1.0e-2
+n_epochs = 100
+learning_rate = 1.0e-3
 
 order_stretches = 1   # Number of orders (can be set to any value)
 k = 3  # Degree of splines
-grid_size = 4  # Number of knots
+grid_size = 100  # Number of knots
 
 input_size = 2 * order_stretches + 1
 W_width = [input_size,
-            2,
+            5,
+            4,
             1,
             1] # output always 1
 
@@ -280,9 +282,10 @@ print("Check null W at null strain: ", model.CalculateW(torch.zeros(1,3)))
 print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1,3)))
 
 
-optimizer_1 = optim.Adam(
+optimizer_1 = optim.LBFGS( #LBFGS
     model.parameters(),
-    lr=learning_rate
+    lr=learning_rate,
+    line_search_fn="strong_wolfe"
 )
 
 print(20*"=")
@@ -299,7 +302,7 @@ TRAIN_KAN(
     n_epochs                    = n_epochs,
     max_W                       = max_W,
 
-    is_patient                  = False,
+    is_patient                  = True,
     patience                    = 50,
     reduce_lr_factor            = 0.75,
     minimum_lr                  = 1.0e-6,
@@ -307,13 +310,13 @@ TRAIN_KAN(
     train_W                     = False,
     early_stopping_threshold    = 1.0e-3,
     mixed_sovolev_training      = False,
-    mixed_sovolev_W_loss_weight = 0.1, # 1 is only W loss, 0 is only S loss
+    mixed_sovolev_W_loss_weight = 0.05, # 1 is only W loss, 0 is only S loss
 
-    update_grid = False,
-    grid_update_interval = 100,
-    initial_step_grid_update = 10,
-    final_step_grid_update = 500,
-    verbose_interval = 10
+    update_grid = True,
+    grid_update_interval = 5,
+    initial_step_grid_update = 1,
+    final_step_grid_update = 20,
+    verbose_interval = 1
 )
 #------------------------------------------------------------------------------------
 
@@ -373,7 +376,7 @@ plt.close()
 
 predicted_stress = max_W * model.CalculateNormalizedStress(train_strain_database)
 
-plt.plot(train_strain_database[:,0].detach().numpy(), train_stress_database[:,0].numpy(), '--', label='Reference S_xx')
+plt.plot(train_strain_database[:,0].detach().numpy(), train_stress_database[:,0].numpy(), '--', label='Reference S_xx',)
 plt.plot(train_strain_database[:,0].detach().numpy(), predicted_stress[:,0].detach().numpy(), '-', label='ICKAN S_xx' )
 plt.xlabel('Strain XX')
 plt.ylabel('Normalized Stress XX')
