@@ -313,9 +313,9 @@ TRAIN_KAN(
     mixed_sovolev_W_loss_weight = 0.05, # 1 is only W loss, 0 is only S loss
 
     update_grid = True,
-    grid_update_interval = 5,
-    initial_step_grid_update = 1,
-    final_step_grid_update = 20,
+    grid_update_interval = 10,
+    initial_step_grid_update = 10,
+    final_step_grid_update = 50,
     verbose_interval = 1
 )
 #------------------------------------------------------------------------------------

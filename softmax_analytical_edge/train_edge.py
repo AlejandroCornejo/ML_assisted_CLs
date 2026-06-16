@@ -12,8 +12,8 @@ def main():
     # Create dummy dataset: y = x**2
     X = np.linspace(-1.0, 1.0, 500)
 
-    Y = np.sin(3*X) * np.log(X + 5)
-    # Y = np.log(X**2 + 1)
+    # Y = np.sin(3*X) * np.log(X + 5)
+    Y = np.log(X**2 + 1)
     # Y = np.sin(X*2)
     # Y = np.sin(2*(X-5))
 
