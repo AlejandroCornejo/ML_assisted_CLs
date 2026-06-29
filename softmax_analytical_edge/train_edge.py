@@ -7,13 +7,15 @@ import softmax_analytical_edge as smae
 
 def main():
 
-    model = smae.SoftMaxAnalyticalEdge()
+    model = smae.SoftMaxAnalyticalEdge(
+                                        temperature=1.0,
+                                        noisy_start=False)
 
     # Create dummy dataset: y = x**2
     X = np.linspace(-1.0, 1.0, 500)
 
-    Y = np.sin(3*X) * np.log(X + 5)
-    # Y = np.log(X**2 + 1)
+    # Y = np.sin(3*X)
+    Y = np.log(X**4 + 1)
     # Y = np.sin(X*2)
     # Y = np.sin(2*(X-5))
 
@@ -22,9 +24,9 @@ def main():
 
     criterion = torch.nn.MSELoss()
     optimizer = optim.AdamW(model.parameters(), lr=0.001)
-    # optimizer = optim.LBFGS(model.parameters(), lr=0.0001, max_iter=20, history_size=10, line_search_fn='strong_wolfe')
+    # optimizer = optim.LBFGS(model.parameters(), lr=0.0001, max_iter=100, history_size=150, line_search_fn='strong_wolfe')
 
-    epochs = 100_000
+    epochs = 50_000
     for epoch in range(1, epochs + 1):
         def closure():
             optimizer.zero_grad()
@@ -37,7 +39,7 @@ def main():
         loss = optimizer.step(closure)
         if epoch % 1000 == 0 or epoch == 1:
             print(f"Epoch {epoch}/{epochs} loss={loss.item():.6e}")
-        if loss.item() < 1e-6:
+        if loss.item() < 1e-3:
             print(f"Early stopping at epoch {epoch} with loss={loss.item():.6e}")
             break
 
@@ -58,10 +60,14 @@ def main():
     final_loss = float(((Y_pred - Y) ** 2).mean())
     print(f"\nFinal MSE (numpy): {final_loss:.6e}")
 
+    X_augmented = np.linspace(-1.5, 1.5, 500)
+    Y_augmented = model(torch.from_numpy(X_augmented)).detach().numpy()
+
     # Plot and save comparison
     plt.figure(figsize=(8, 5))
     plt.plot(X, Y, label='reference')
     plt.plot(X, Y_pred, '--', label='model prediction')
+    plt.plot(X_augmented, Y_augmented, ':', label='model prediction (augmented)')
     plt.legend()
     plt.xlabel('x')
     plt.ylabel('y')

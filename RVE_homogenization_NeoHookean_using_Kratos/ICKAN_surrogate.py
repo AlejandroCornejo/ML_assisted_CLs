@@ -22,7 +22,7 @@ class ICKAN_W_Surrogate(nn.Module):
         # KAN definition for the energy density potential W
         self.KAN_W = KAN.MultKAN(
             # base_fun = "zero",
-            grid_eps = 0.02, # 1 grid is uniformly spaced in the range [grid_range[0], grid_range[1]]
+            grid_eps = 0.01, # 1 grid is uniformly spaced in the range [grid_range[0], grid_range[1]]
             width=W_width,  # output of size 1: W
             grid=self.grid_size,
             k=self.k,
@@ -39,20 +39,20 @@ class ICKAN_W_Surrogate(nn.Module):
             # sp_trainable = False,
             # sb_trainable = False,
             
-            noise_scale=0.001
+            noise_scale=0.0
         )
 
         # self.KAN_W.speed()
 
         # Initialize some extra parameters
         self.ki = nn.ParameterList([
-            p + 1 for p in range(self.order_stretches + 1)
-            # nn.Parameter(torch.tensor(p + 1.0)) for p in range(self.order_stretches + 1)
+            # p + 1 for p in range(self.order_stretches + 1)
+            nn.Parameter(torch.tensor(p + 1.0)) for p in range(self.order_stretches + 1)
         ])
 
         # The parameter multiplying the log(J) is initially set to 1.0
-        self.ki[-1] = 1.0
-        # self.ki[-1] = nn.Parameter(torch.tensor(1.0))
+        # self.ki[-1] = 1.0
+        self.ki[-1] = nn.Parameter(torch.tensor(1.0))
         
         # for k in self.ki:
         #     print(f"Initial ki: {k.item()}")
@@ -88,10 +88,10 @@ class ICKAN_W_Surrogate(nn.Module):
         max_log_J = torch.max(kan_input[:, -1]).item()
         min_log_J = torch.min(kan_input[:, -1]).item()
 
-        steps = 5000
-        input_1 = torch.linspace(0.9*min_lambda_1    , 1.1*max_lambda_1, steps)
-        input_2 = torch.linspace(0.9*min_lambda_2    , 1.1*max_lambda_2, steps)
-        input_3 = torch.linspace(0.9*min_log_J       , 1.1*max_log_J   , steps)
+        steps = 150
+        input_1 = torch.linspace(0.95*min_lambda_1    , 1.05*max_lambda_1, steps)
+        input_2 = torch.linspace(0.95*min_lambda_2    , 1.05*max_lambda_2, steps)
+        input_3 = torch.linspace(1.0*min_log_J       , 1.05*max_log_J   , steps)
 
         kan_input_for_grid = torch.stack((input_1, input_2, input_3), dim=1)  # Shape: (steps, 3), stacked along columns
 
@@ -118,8 +118,8 @@ class ICKAN_W_Surrogate(nn.Module):
 
         C = 2.0 * E + torch.eye(2)
         J = torch.linalg.det(C)**0.5
-        # log_J = torch.log(J + 1.0e-12)
-        log_J = (J - 1.0)**2
+        log_J = torch.log(J + 1.0e-8)
+        # log_J = (J - 1.0)**2
 
         square_eigenvalues = torch.linalg.eigvalsh(C)
         eigenvalues = torch.sqrt(square_eigenvalues)
@@ -139,7 +139,7 @@ class ICKAN_W_Surrogate(nn.Module):
         kan_inputs.append(log_J_expanded)
 
         KAN_input = torch.cat(kan_inputs, dim=-1)
-        
+
         viewed_KAN_input = KAN_input.view(-1, self.input_size)
 
         return viewed_KAN_input # Reshape to (batches*steps, input_size)
@@ -152,7 +152,7 @@ class ICKAN_W_Surrogate(nn.Module):
         """
         kan_input = self._compute_kan_input_for_strain(strain_database)  # Shape: (batches*steps, input_size)
 
-        null_kan_input = self._compute_kan_input_for_strain(torch.zeros_like(strain_database))
+        null_kan_input = self._compute_kan_input_for_strain(torch.zeros(1,3))
         W0 = self.KAN_W.forward(null_kan_input)
 
         W_raw = self.KAN_W.forward(kan_input)  # Shape: (batch x steps, 1)
