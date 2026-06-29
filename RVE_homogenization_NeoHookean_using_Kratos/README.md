@@ -856,6 +856,64 @@ Legacy `q_p_*.npy` and `structured_*` data files are written only as
 compatibility aliases. New commands must use the canonical `q_m_*.npy`,
 `parameter_mesh_*`, and `--parameter-mesh-dir` names.
 
+### Stage 12: Separate MAW-ECM for Residual, Strain, and Stress
+
+For a fully separated MAW-ECM model, build the Stage 12a dataset with
+homogenization enabled, then request `res,eps,sig` in Stage 12b. The residual,
+strain, and stress weights are trained independently. In this mode Stage 12b
+requires positive and sum-preserving MAW weights for the homogenization rules:
+`--classic-constrain-sum-weights 1`, `--enforce-sum-weights 1`,
+`--rbf-clip-nonnegative 1`, and `--rbf-renorm 1`.
+
+```bash
+MPLCONFIGDIR=/tmp/mplcfg python3 stage12a_build_mawecm_dataset_gpr.py \
+  --gpr-dir stage_7_gpr_data_ls \
+  --parameter-mesh-dir stage_7_ann_data_ls \
+  --residual-state-source stage7_parameter_mesh \
+  --disable-homogenization 0 \
+  --out-dir stage_12_mawecm_dataset_gpr_ls_mawhom
+
+MPLCONFIGDIR=/tmp/mplcfg python3 stage12b_build_mawecm_model_gpr.py \
+  --dataset-dir stage_12_mawecm_dataset_gpr_ls_mawhom \
+  --classic-ecm-source compute \
+  --classic-rsvd-randomized 0 \
+  --targets res,eps,sig \
+  --disable-homogenization 0 \
+  --hom-mode maw \
+  --classic-constrain-sum-weights 1 \
+  --maw-min-support-size-res 75 \
+  --maw-min-support-size-eps 0 \
+  --maw-min-support-size-sig 0 \
+  --use-global-graph-2ndstage 1 \
+  --smooth-laplacian-all-iterations 0 \
+  --max-number-zeros-active-set-loop-maw-ecm 1 \
+  --enforce-sum-weights 1 \
+  --sum-weights-target 990.0 \
+  --tol-rank-rel 1e-14 \
+  --res-target-source anchor \
+  --res-candidate-pool fixed_support \
+  --rbf-renorm 1 \
+  --rbf-clip-nonnegative 1 \
+  --save-weight-field-plots 1 \
+  --out-dir stage_12_hprom_mawecm_gpr_data_ls_res_eps_sig_mawhom_sum990
+
+MPLCONFIGDIR=/tmp/mplcfg python3 stage12_test_hprom_mawecm_gpr.py \
+  --run-prom-gpr \
+  --run-hprom-mawecm-gpr \
+  --gpr-data-dir stage_7_gpr_data_ls \
+  --hprom-mawecm-gpr-dir stage_12_hprom_mawecm_gpr_data_ls_res_eps_sig_mawhom_sum990 \
+  --hprom-homogenization-mode maw_dynamic \
+  --qp-init-mode continuation \
+  --hprom-include-weight-tangent 1 \
+  --hprom-old-stiffness-residual-cutoff inf \
+  --out-dir stage_12_hprom_mawecm_gpr_ls_results_res_eps_sig_mawhom_sum990
+```
+
+`maw_dynamic` evaluates the residual MAW weights for the reduced equilibrium
+and evaluates independent MAW weight fields for the homogenized strain and
+stress. Use `ecm_fixed` in the online test to keep classical strain/stress ECM
+weights while still using residual MAW.
+
 ### Stage 7a-POD-DL: Build POD-DL Dataset
 
 ```bash

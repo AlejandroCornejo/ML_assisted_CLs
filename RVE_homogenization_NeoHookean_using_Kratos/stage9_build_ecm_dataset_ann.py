@@ -8,8 +8,8 @@ Stage-5-style dataset builder with independent sampling for:
   - residual projection (Q_ecm, b_full)
   - homogenization targets (C_hom, b_hom)
 
-Residual projection uses the ANN-manifold tangent:
-  J_m = (phi_p + phi_s*J0) + phi_s * d(q_s_corr)/d(q_p)
+Residual projection uses the LS ANN-manifold tangent:
+  J_m = (Phi_m A_m + Phi_s*J0) + Phi_s * d(q_s_corr)/d(q_m)
 """
 
 import os
@@ -128,6 +128,13 @@ def _parse_trajectory_indices(text):
     return vals
 
 
+def _trajectory_id_from_name(name):
+    try:
+        return int(str(name).split("_")[-1])
+    except Exception:
+        return -1
+
+
 def _build_residual_projection_cache(elements, process_info, g2f):
     cache = []
     active = 0
@@ -224,11 +231,19 @@ def _apply_manifold_origin_correction(q_p_val, q_s_raw, j_qs_qp_raw, q0_ref, j0_
     j_corr = np.asarray(j_qs_qp_raw, dtype=float) - np.asarray(j0_ref, dtype=float)
     return q_s_corr, j_corr
 
+
+def _compute_ls_master_qm(w_free, phi_m, a_m):
+    phi_master = np.asarray(phi_m, dtype=float) @ np.asarray(a_m, dtype=float)
+    q_m, *_ = np.linalg.lstsq(phi_master, np.asarray(w_free, dtype=float).reshape(-1), rcond=None)
+    return q_m
+
+
 def _fit_qp_gauss_newton(
     q_init,
     w_free,
     phi_p,
     phi_s,
+    a_m,
     ann_model,
     device,
     n_secondary,
@@ -243,7 +258,8 @@ def _fit_qp_gauss_newton(
     q = np.asarray(q_init, dtype=float).copy()
     w_target = np.asarray(w_free, dtype=float).reshape(-1)
     target_norm = max(np.linalg.norm(w_target), 1e-30)
-    phi_p_eff = np.asarray(phi_p, dtype=float) + np.asarray(phi_s, dtype=float) @ np.asarray(j0_ref, dtype=float)
+    phi_master = np.asarray(phi_p, dtype=float) @ np.asarray(a_m, dtype=float)
+    phi_p_eff = phi_master + np.asarray(phi_s, dtype=float) @ np.asarray(j0_ref, dtype=float)
     w0_const = np.asarray(phi_s, dtype=float) @ np.asarray(q0_ref, dtype=float).reshape(-1)
 
     q_s_raw, j_qs_qp_raw = _evaluate_ann_qs_and_jac(q, ann_model, device, n_secondary, n_primary)
@@ -371,8 +387,17 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ann_model, include_macro = _load_ann_for_hprom(ann_dir, device)
 
-    phi_p = np.asarray(np.load(os.path.join(ann_dir, "phi_p.npy")), dtype=float)
+    phi_m_path = os.path.join(ann_dir, "phi_m.npy")
+    phi_p_path = phi_m_path if os.path.exists(phi_m_path) else os.path.join(ann_dir, "phi_p.npy")
+    phi_p = np.asarray(np.load(phi_p_path), dtype=float)
     phi_s = np.asarray(np.load(os.path.join(ann_dir, "phi_s.npy")), dtype=float)
+    a_m_path = os.path.join(ann_dir, "A_m.npy")
+    if not os.path.exists(a_m_path):
+        raise FileNotFoundError(
+            f"{a_m_path} is required for the LS ANN HPROM dataset. "
+            "Run the LS ANN training stage first."
+        )
+    a_m = np.asarray(np.load(a_m_path), dtype=float)
     free_dofs = np.asarray(np.load(os.path.join(basis_dir, "free_dofs.npy")), dtype=np.int64)
     dir_dofs = np.asarray(np.load(os.path.join(basis_dir, "dirichlet_dofs.npy")), dtype=np.int64)
     eq_map_ref = np.asarray(np.load(os.path.join(basis_dir, "eq_map.npy")), dtype=np.int64)
@@ -382,6 +407,8 @@ def main():
     n_free = int(phi_p.shape[0])
     if int(phi_s.shape[0]) != n_free:
         raise ValueError("phi_p and phi_s row count mismatch.")
+    if a_m.shape != (n_primary, n_primary):
+        raise RuntimeError(f"A_m shape mismatch: got {a_m.shape}, expected {(n_primary, n_primary)}.")
 
     n_total_dofs_ref = int(len(free_dofs) + len(dir_dofs))
     print(
@@ -392,6 +419,8 @@ def main():
         f"[Info] residual fit mode={fit_mode}, fit_max_iters={fit_max_iters}, "
         f"fit_rel_tol={fit_rel_tol:.2e}, fit_l2_reg={fit_l2_reg:.2e}, fit_step_tol={fit_step_tol:.2e}"
     )
+    print(f"[Info] Primary basis loaded from: {os.path.basename(phi_p_path)}")
+    print("[Info] LS decoder active in Stage 9a-ANN: u = Phi_m A_m q_m + Phi_s q_s(q_m).")
     print("[Info] Manifold correction active in Stage 9a-ANN: N(0)=0 and J(0)=0.")
 
     trajectories = sorted([d for d in os.listdir(snapshots_dir) if d.startswith("trajectory_")])
@@ -541,15 +570,23 @@ def main():
     Q_ecm, b_full, C_hom, b_hom = _allocate_memmaps(
         out_dir, n_primary, total_snapshots_res, total_snapshots_hom, n_elem
     )
+    q_m_res = np.zeros((total_snapshots_res, n_primary), dtype=float)
+    mu_res = np.zeros((total_snapshots_res, 3), dtype=float)
+    sample_ids_res = np.zeros((total_snapshots_res, 2), dtype=np.int64)
+    q_m_hom = np.zeros((total_snapshots_hom, n_primary), dtype=float)
+    mu_hom = np.zeros((total_snapshots_hom, 3), dtype=float)
+    sample_ids_hom = np.zeros((total_snapshots_hom, 2), dtype=np.int64)
 
     fit_rel_before = []
     fit_rel_after = []
     fit_iters = []
     q0_const, j0_const = _evaluate_ann_origin_terms(ann_model, device, n_secondary, n_primary)
-    phi_p_eff_const = phi_p + phi_s @ j0_const
+    phi_master = phi_p @ a_m
+    phi_p_eff_const = phi_master + phi_s @ j0_const
     s_res_global = 0
     s_hom_global = 0
     for traj_name, u_path, e_path, idx_res, idx_hom in all_tasks:
+        traj_id = _trajectory_id_from_name(traj_name)
         idx_res = np.unique(np.asarray(idx_res, dtype=int).reshape(-1))
         idx_hom = np.unique(np.asarray(idx_hom, dtype=int).reshape(-1))
         idx_union = np.union1d(idx_res, idx_hom)
@@ -564,6 +601,7 @@ def main():
             ks = int(k)
             u_snap = _extract_snapshot_u(u_all, ks, int(n_dof))
             e_macro = np.asarray(e_all[ks, :3], dtype=float)
+            q_p_for_metadata = None
 
             SetDisplacementFromEquationVector(u_snap, eq_map, ta)
             UpdateCurrentCoordinatesFromDisplacement(mp)
@@ -572,13 +610,14 @@ def main():
                 u_free = u_snap[free_dofs]
                 u_aff_free = _affine_free(e_macro)
                 w_free = u_free - u_aff_free
-                q_p_init = w_free @ phi_p
+                q_p_init = _compute_ls_master_qm(w_free, phi_p, a_m)
                 if fit_mode == "gauss_newton":
                     q_p, _, j_qs_qp, rel0, relf, nit = _fit_qp_gauss_newton(
                         q_init=q_p_init,
                         w_free=w_free,
                         phi_p=phi_p,
                         phi_s=phi_s,
+                        a_m=a_m,
                         ann_model=ann_model,
                         device=device,
                         n_secondary=n_secondary,
@@ -605,6 +644,7 @@ def main():
                         raise RuntimeError(
                             f"Invalid ANN Jacobian shape {j_qs_qp.shape}, expected {(n_secondary, n_primary)}."
                         )
+                q_p_for_metadata = np.asarray(q_p, dtype=float).copy()
                 J_m = phi_p_eff_const + phi_s @ j_qs_qp
 
                 q_block.fill(0.0)
@@ -621,13 +661,24 @@ def main():
                 r0, r1 = n_primary * s_res_global, n_primary * (s_res_global + 1)
                 Q_ecm[r0:r1, :] = q_block
                 b_full[r0:r1] = np.sum(q_block, axis=1)
+                q_m_res[s_res_global, :] = q_p_for_metadata
+                mu_res[s_res_global, :] = e_macro[:3]
+                sample_ids_res[s_res_global, :] = np.array([traj_id, ks], dtype=np.int64)
                 s_res_global += 1
 
             if ks in set_hom:
+                if q_p_for_metadata is None:
+                    u_free = u_snap[free_dofs]
+                    u_aff_free = _affine_free(e_macro)
+                    w_free = u_free - u_aff_free
+                    q_p_for_metadata = _compute_ls_master_qm(w_free, phi_p, a_m)
                 _fill_hom_block_from_kratos(elements, mp, area_e, c_block)
                 h0, h1 = 6 * s_hom_global, 6 * (s_hom_global + 1)
                 C_hom[h0:h1, :] = c_block
                 b_hom[h0:h1] = np.sum(c_block, axis=1)
+                q_m_hom[s_hom_global, :] = q_p_for_metadata
+                mu_hom[s_hom_global, :] = e_macro[:3]
+                sample_ids_hom[s_hom_global, :] = np.array([traj_id, ks], dtype=np.int64)
                 s_hom_global += 1
 
     if s_res_global != total_snapshots_res:
@@ -643,6 +694,14 @@ def main():
     b_full.flush()
     C_hom.flush()
     b_hom.flush()
+    np.save(os.path.join(out_dir, "q_m_res.npy"), q_m_res)
+    np.save(os.path.join(out_dir, "q_p_res.npy"), q_m_res)
+    np.save(os.path.join(out_dir, "mu_res.npy"), mu_res)
+    np.save(os.path.join(out_dir, "sample_ids_res.npy"), sample_ids_res)
+    np.save(os.path.join(out_dir, "q_m_hom.npy"), q_m_hom)
+    np.save(os.path.join(out_dir, "q_p_hom.npy"), q_m_hom)
+    np.save(os.path.join(out_dir, "mu_hom.npy"), mu_hom)
+    np.save(os.path.join(out_dir, "sample_ids_hom.npy"), sample_ids_hom)
 
     if fit_mode == "gauss_newton" and fit_rel_after:
         rb = np.asarray(fit_rel_before, dtype=float)
@@ -687,6 +746,7 @@ def main():
         fit_iters_mean=np.array([float(np.mean(fit_iters)) if fit_iters else np.nan], dtype=float),
         fit_iters_max=np.array([float(np.max(fit_iters)) if fit_iters else np.nan], dtype=float),
         manifold_origin_correction=np.array([1], dtype=np.int64),
+        ls_decoder_A_m_active=np.array([1], dtype=np.int64),
     )
     with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
         f.write(f"{a0_ref:.16e}\n")

@@ -20,6 +20,7 @@ def _inject_default(opt_name, opt_value):
 
 if __name__ == "__main__":
     _inject_default("--data-dir", "stage_9_ecm_dataset_ann_ls")
-    _inject_default("--out-dir", "stage_9_hprom_ann_data_ls")
+    _inject_default("--out-dir", "stage_9_hprom_ann_data_ls_independent_sum990")
+    _inject_default("--ecm-coupling-mode", "independent")
+    _inject_default("--constrain-sum-weights", "1")
     stage9_base.main()
-

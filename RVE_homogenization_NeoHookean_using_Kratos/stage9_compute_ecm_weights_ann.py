@@ -96,7 +96,15 @@ def run_rsvd_on_transpose(M_T, rsvd_tol, label=""):
     return U, s, float(eSVD)
 
 
-def run_ecm(U_basis, n_elem, ecm_tol, init_candidates, label="", max_unsuccessful_it=ECM_MAX_UNSUCCESSFUL_IT):
+def run_ecm(
+    U_basis,
+    n_elem,
+    ecm_tol,
+    init_candidates,
+    label="",
+    max_unsuccessful_it=ECM_MAX_UNSUCCESSFUL_IT,
+    constrain_sum_of_weights=False,
+):
     print(f"\n[{label}] Running Empirical Cubature Method")
     ecm = EmpiricalCubatureMethod(
         ECM_tolerance=float(ecm_tol),
@@ -108,7 +116,7 @@ def run_ecm(U_basis, n_elem, ecm_tol, init_candidates, label="", max_unsuccessfu
     ecm.SetUp(
         ResidualsBasis=U_basis,
         InitialCandidatesSet=init_candidates,
-        constrain_sum_of_weights=False,
+        constrain_sum_of_weights=bool(constrain_sum_of_weights),
         constrain_conditions=False,
         number_of_conditions=0,
     )
@@ -136,6 +144,13 @@ def parse_args():
     p.add_argument("--ecm-tol-eps", type=float, default=ECM_TOL_EPS)
     p.add_argument("--ecm-tol-sig", type=float, default=ECM_TOL_SIG)
     p.add_argument("--max-unsuccessful-it", type=int, default=ECM_MAX_UNSUCCESSFUL_IT)
+    p.add_argument(
+        "--constrain-sum-weights",
+        type=int,
+        default=1,
+        choices=[0, 1],
+        help="If 1, impose the ECM sum-of-weights/volume constraint for RES, EPS, and SIG.",
+    )
     p.add_argument(
         "--ecm-coupling-mode",
         type=str,
@@ -291,6 +306,7 @@ def main():
     print(f"  data_dir       = {data_dir}")
     print(f"  out_dir        = {out_dir}")
     print(f"  coupling mode  = {coupling_mode} (input='{args.ecm_coupling_mode}')")
+    print(f"  sum(w) cons.   = {int(args.constrain_sum_weights)}")
     if coupling_mode == "single":
         print(
             f"  single build   = single_matrix_rsvd, "
@@ -371,6 +387,7 @@ def main():
             init_candidates=None,
             label="ALL",
             max_unsuccessful_it=args.max_unsuccessful_it,
+            constrain_sum_of_weights=bool(int(args.constrain_sum_weights)),
         )
         Z_res, Z_eps, Z_sig = Z_all.copy(), Z_all.copy(), Z_all.copy()
         w_res_sel, w_eps_sel, w_sig_sel = w_all_sel.copy(), w_all_sel.copy(), w_all_sel.copy()
@@ -383,6 +400,7 @@ def main():
             init_candidates=None,
             label="RES",
             max_unsuccessful_it=args.max_unsuccessful_it,
+            constrain_sum_of_weights=bool(int(args.constrain_sum_weights)),
         )
         eps_init = np.array(Z_res, dtype=int) if coupling_mode == "cascade" else None
         Z_eps, w_eps_sel, w_eps_full = run_ecm(
@@ -392,6 +410,7 @@ def main():
             init_candidates=eps_init,
             label="EPS",
             max_unsuccessful_it=args.max_unsuccessful_it,
+            constrain_sum_of_weights=bool(int(args.constrain_sum_weights)),
         )
         sig_init = np.array(Z_eps, dtype=int) if coupling_mode == "cascade" else None
         Z_sig, w_sig_sel, w_sig_full = run_ecm(
@@ -401,6 +420,7 @@ def main():
             init_candidates=sig_init,
             label="SIG",
             max_unsuccessful_it=args.max_unsuccessful_it,
+            constrain_sum_of_weights=bool(int(args.constrain_sum_weights)),
         )
 
     b_hp_res = Q_res @ w_res_full
@@ -474,6 +494,7 @@ def main():
         ECM_TOL_SIG=float(args.ecm_tol_sig),
         ECM_COUPLING_MODE=np.array([coupling_mode]),
         ECM_COUPLING_MODE_INPUT=np.array([str(args.ecm_coupling_mode)]),
+        ECM_CONSTRAIN_SUM_WEIGHTS=np.array([int(args.constrain_sum_weights)], dtype=np.int64),
         SINGLE_BASIS_BUILD=np.array(["single_matrix_rsvd"]),
         SINGLE_BLOCK_NORMALIZATION=np.array([single_block_norm]),
         RSVD_TOL_SINGLE=np.array([tol_single], dtype=float),

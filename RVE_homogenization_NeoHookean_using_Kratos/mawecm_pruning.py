@@ -439,6 +439,13 @@ def _prune_step_optionb_np(w_old, A_loc_blocks, b_blocks, K_graph, alpha, p_loca
 
         use_matrix_free = int(total_d) > int(max_reduced_dim)
         if use_matrix_free:
+            if bool(opts.get("verbose", False)) and it == 1:
+                print(
+                    "[MAW-ECM][Phase2][graph] "
+                    f"matrix-free solve: r={r}, nodes={n_nodes}, "
+                    f"free_dim={int(total_d)}, max_reduced_dim={int(max_reduced_dim)}",
+                    flush=True,
+                )
             w, solve_info = _solve_graph_nullspace_matrix_free(
                 w_old=w_old,
                 wp_full=wp_full,
@@ -553,6 +560,15 @@ def _try_graph_pass(W, A_blocks, b_blocks, i_cand, iloc_pos, ind_sort, K_graph, 
     for ord_pos, k_loc in enumerate(ind_sort[:n_try]):
         p_local = int(k_loc)
         cand_global = int(iloc_pos[p_local])
+        if bool(options.get("verbose", False)):
+            if ord_pos == 0 or ord_pos + 1 == n_try or (ord_pos + 1) % 10 == 0:
+                print(
+                    "[MAW-ECM][Phase2][graph] "
+                    f"testing candidate {ord_pos + 1}/{n_try} "
+                    f"(local={p_local}, global={cand_global}, active={int(iloc_pos.size)}, "
+                    f"nodes={len(b_blocks)})",
+                    flush=True,
+                )
 
         A_loc_blocks = [Aj[:, iloc_pos] for Aj in A_blocks]
         w_old_loc = np.asarray(W[iloc_pos, :], dtype=float)

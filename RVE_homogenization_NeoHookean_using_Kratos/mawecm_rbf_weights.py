@@ -7,6 +7,7 @@ RBF regression for MAW-ECM adaptive weight fields.
 
 from __future__ import annotations
 
+import time
 import numpy as np
 
 
@@ -67,6 +68,8 @@ def fit_mawecm_rbf(
     poly_mode=1,
     lambda_reg=1.0e-10,
     length_scale_factor=1.0,
+    verbose=False,
+    label="MAW-RBF",
 ):
     """
     Fit multi-output Gaussian RBF model.
@@ -78,6 +81,12 @@ def fit_mawecm_rbf(
     """
     q = _as_2d(q_train, "q_train")
     W = _as_2d(W_train, "W_train")
+    t0 = time.perf_counter()
+    tag = str(label)
+
+    def _log(msg):
+        if bool(verbose):
+            print(f"  [{tag}] {msg}", flush=True)
 
     n_samples = int(q.shape[0])
     n_weights = int(W.shape[0])
@@ -85,14 +94,27 @@ def fit_mawecm_rbf(
         raise ValueError(
             f"W_train second dimension ({W.shape[1]}) must match q_train samples ({n_samples})."
         )
+    _log(
+        "RBF fit start: "
+        f"q_train={q.shape}, W_train={W.shape}, requested_centers={int(n_centers)}"
+    )
 
     center_ids = _choose_center_ids(n_samples=n_samples, n_centers=int(n_centers))
     centers = q[center_ids, :]
     l = _length_scales(q, factor=length_scale_factor)
+    _log(
+        f"centers selected: {centers.shape[0]} / {n_samples}; "
+        f"length_scales={np.array2string(l, precision=3, suppress_small=False)}"
+    )
 
+    tk = time.perf_counter()
+    _log(f"building Gaussian kernel Phi with shape ({n_samples}, {centers.shape[0]})...")
     Phi = _gaussian_kernel(q, centers, l)  # N x Nc
+    _log(f"kernel built in {time.perf_counter() - tk:.2f}s")
     lam = float(max(lambda_reg, 0.0))
 
+    ts = time.perf_counter()
+    _log("scaling outputs and assembling normal equations...")
     s = np.sqrt(np.mean(W * W, axis=1))
     s = np.maximum(s, 1.0e-14)
     Y = (W / s[:, None]).T  # N x n_weights
@@ -103,8 +125,14 @@ def fit_mawecm_rbf(
     PtP = P.T @ P if npoly > 0 else None
     PhiTPhi = Phi.T @ Phi + lam * np.eye(Nc, dtype=float)
     PhiTY = Phi.T @ Y
+    _log(
+        f"normal equations assembled in {time.perf_counter() - ts:.2f}s; "
+        f"Nc={Nc}, npoly={npoly}, outputs={n_weights}"
+    )
 
+    tls = time.perf_counter()
     if npoly == 0:
+        _log(f"solving least-squares system: A={PhiTPhi.shape}, B={PhiTY.shape}...")
         Alpha = np.linalg.lstsq(PhiTPhi, PhiTY, rcond=None)[0]
         Beta = np.zeros((0, n_weights), dtype=float)
     else:
@@ -115,9 +143,11 @@ def fit_mawecm_rbf(
             ]
         )
         B_sys = np.vstack([PhiTY, P.T @ Y])
+        _log(f"solving least-squares system: A={A_sys.shape}, B={B_sys.shape}...")
         X = np.linalg.lstsq(A_sys, B_sys, rcond=None)[0]
         Alpha = X[:Nc, :]
         Beta = X[Nc:, :]
+    _log(f"least-squares solve done in {time.perf_counter() - tls:.2f}s")
 
     model = {
         "center_ids": center_ids,
@@ -131,9 +161,15 @@ def fit_mawecm_rbf(
         "n_centers": int(centers.shape[0]),
     }
 
-    W_rec = eval_mawecm_rbf(q_query=q, model=model, clip_nonnegative=False, renorm_target=None)
+    tr = time.perf_counter()
+    _log("evaluating training reconstruction error...")
+    Y_rec = Phi @ Alpha
+    if P.shape[1] > 0:
+        Y_rec = Y_rec + P @ Beta
+    W_rec = Y_rec.T * s[:, None]
     rec_rel = float(np.linalg.norm(W_rec - W) / max(np.linalg.norm(W), 1.0e-30))
     model["train_rel_error"] = rec_rel
+    _log(f"RBF fit complete in {time.perf_counter() - t0:.2f}s; train_rel={rec_rel:.3e}")
     return model
 
 

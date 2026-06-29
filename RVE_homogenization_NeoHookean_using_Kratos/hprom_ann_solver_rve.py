@@ -51,6 +51,192 @@ from hprom_solver_rve import (
     GetReferenceIntegrationMeasureFromMesh,
 )
 from prom_ann_solver_rve import LoadPromAnnModel
+from mawecm_rbf_weights import eval_mawecm_rbf
+from mawecm_ann_weights import eval_mawecm_ann
+
+
+def _as_int_scalar(arr, key):
+    return int(np.ravel(arr[key])[0])
+
+
+def _as_float_scalar(arr, key):
+    return float(np.ravel(arr[key])[0])
+
+
+def _as_str_scalar(arr, key, default=""):
+    if key not in arr:
+        return str(default)
+    return str(np.ravel(arr[key])[0])
+
+
+def _build_maw_hom_target_model(ecm_data, target):
+    t = str(target).strip().lower()
+    if t not in ("eps", "sig"):
+        raise ValueError(f"Unsupported MAW homogenization target '{target}'.")
+    z_key = {"eps": "Z_eps", "sig": "Z_sig"}[t]
+    prefix = f"maw_{t}_"
+    regressor_type = _as_str_scalar(ecm_data, prefix + "regressor_type", default="rbf").strip().lower()
+    if regressor_type not in ("rbf", "ann"):
+        raise RuntimeError(
+            f"[HPROM-ANN] Unsupported MAW homogenization regressor '{regressor_type}' for {t}."
+        )
+    if regressor_type == "ann":
+        required = [
+            z_key,
+            prefix + "ann_x_mean",
+            prefix + "ann_x_std",
+            prefix + "ann_activation",
+            prefix + "ann_target_sum",
+            prefix + "ann_n_layers",
+        ]
+    else:
+        required = [
+            z_key,
+            prefix + "rbf_centers",
+            prefix + "rbf_length_scales",
+            prefix + "rbf_alpha",
+            prefix + "rbf_beta",
+            prefix + "rbf_scale",
+            prefix + "rbf_poly_mode",
+        ]
+    missing = [k for k in required if k not in ecm_data]
+    if missing:
+        raise RuntimeError(f"[HPROM-ANN] Missing MAW homogenization keys for {t}: {missing}")
+
+    z_support_full = np.asarray(ecm_data[z_key], dtype=np.int64).reshape(-1)
+    if z_support_full.size == 0:
+        raise RuntimeError(f"[HPROM-ANN] Empty MAW homogenization support for {t}.")
+
+    renorm_enabled = (
+        bool(_as_int_scalar(ecm_data, "maw_rbf_renorm"))
+        if "maw_rbf_renorm" in ecm_data
+        else True
+    )
+    clip_nonnegative = (
+        bool(_as_int_scalar(ecm_data, "maw_rbf_clip_nonnegative"))
+        if "maw_rbf_clip_nonnegative" in ecm_data
+        else True
+    )
+    renorm_target = None
+    if renorm_enabled and (prefix + "renorm_target") in ecm_data:
+        renorm_target = _as_float_scalar(ecm_data, prefix + "renorm_target")
+    coord_label = _as_str_scalar(ecm_data, prefix + "coord_label", default="q").strip().lower()
+    if coord_label not in ("q", "mu"):
+        raise RuntimeError(
+            f"[HPROM-ANN] Unsupported MAW homogenization coordinate '{coord_label}' for {t}."
+        )
+
+    rbf_model = None
+    ann_model = None
+    if regressor_type == "ann":
+        n_layers = _as_int_scalar(ecm_data, prefix + "ann_n_layers")
+        ann_model = {
+            "x_mean": np.asarray(ecm_data[prefix + "ann_x_mean"], dtype=float),
+            "x_std": np.asarray(ecm_data[prefix + "ann_x_std"], dtype=float),
+            "activation": _as_str_scalar(ecm_data, prefix + "ann_activation", default="silu"),
+            "target_sum": _as_float_scalar(ecm_data, prefix + "ann_target_sum"),
+            "n_layers": int(n_layers),
+        }
+        for i in range(int(n_layers)):
+            w_key = prefix + f"ann_W_{i}"
+            b_key = prefix + f"ann_b_{i}"
+            if w_key not in ecm_data or b_key not in ecm_data:
+                raise RuntimeError(
+                    f"[HPROM-ANN] Missing ANN layer arrays for {t}: {w_key}/{b_key}."
+                )
+            ann_model[f"W_{i}"] = np.asarray(ecm_data[w_key], dtype=float)
+            ann_model[f"b_{i}"] = np.asarray(ecm_data[b_key], dtype=float)
+    else:
+        rbf_model = {
+            "center_ids": (
+                np.asarray(ecm_data[prefix + "rbf_center_ids"], dtype=np.int64).reshape(-1)
+                if (prefix + "rbf_center_ids") in ecm_data
+                else np.arange(np.asarray(ecm_data[prefix + "rbf_centers"], dtype=float).shape[0], dtype=np.int64)
+            ),
+            "centers": np.asarray(ecm_data[prefix + "rbf_centers"], dtype=float),
+            "length_scales": np.asarray(ecm_data[prefix + "rbf_length_scales"], dtype=float),
+            "Alpha": np.asarray(ecm_data[prefix + "rbf_alpha"], dtype=float),
+            "Beta": np.asarray(ecm_data[prefix + "rbf_beta"], dtype=float),
+            "scale": np.asarray(ecm_data[prefix + "rbf_scale"], dtype=float),
+            "poly_mode": int(np.ravel(ecm_data[prefix + "rbf_poly_mode"])[0]),
+            "lambda_reg": (
+                _as_float_scalar(ecm_data, prefix + "rbf_lambda")
+                if (prefix + "rbf_lambda") in ecm_data
+                else 0.0
+            ),
+            "n_centers": (
+                _as_int_scalar(ecm_data, prefix + "rbf_n_centers")
+                if (prefix + "rbf_n_centers") in ecm_data
+                else int(np.asarray(ecm_data[prefix + "rbf_centers"], dtype=float).shape[0])
+            ),
+        }
+    return {
+        "target": t,
+        "z_support_full": z_support_full,
+        "regressor_type": regressor_type,
+        "rbf_model": rbf_model,
+        "ann_model": ann_model,
+        "renorm_target": renorm_target,
+        "clip_nonnegative": clip_nonnegative,
+        "coord_label": coord_label,
+    }
+
+
+def _build_full_to_local_map(ecm_data, n_elem_reference, n_current_elements):
+    if int(n_current_elements) == int(n_elem_reference):
+        return None
+    if "hrom_element_full_indices" not in ecm_data:
+        raise RuntimeError(
+            "[HPROM-ANN] HROM mesh is active but hrom_element_full_indices is missing. "
+            "Regenerate the HROM mdpa with the matching ECM/MAW file and --inplace-ecm."
+        )
+    full_ids = np.asarray(ecm_data["hrom_element_full_indices"], dtype=np.int64).reshape(-1)
+    if full_ids.size != int(n_current_elements):
+        raise RuntimeError(
+            f"[HPROM-ANN] hrom_element_full_indices size {full_ids.size} "
+            f"!= current element count {n_current_elements}."
+        )
+    return {int(full_idx): int(local_idx) for local_idx, full_idx in enumerate(full_ids.tolist())}
+
+
+def _evaluate_maw_hom_weights_current(q_m, e_vec, target_model, n_elem_reference, n_current_elements, full_to_local):
+    coord_label = str(target_model.get("coord_label", "q")).strip().lower()
+    if coord_label == "mu":
+        q_query = np.asarray(e_vec, dtype=float).reshape(1, -1)
+    else:
+        q_query = np.asarray(q_m, dtype=float).reshape(1, -1)
+    regressor_type = str(target_model.get("regressor_type", "rbf")).strip().lower()
+    if regressor_type == "ann":
+        w_support = eval_mawecm_ann(q_query, target_model["ann_model"]).reshape(-1)
+    else:
+        w_support = eval_mawecm_rbf(
+            q_query=q_query,
+            model=target_model["rbf_model"],
+            clip_nonnegative=bool(target_model.get("clip_nonnegative", True)),
+            renorm_target=target_model.get("renorm_target", None),
+        ).reshape(-1)
+
+    z_full = np.asarray(target_model["z_support_full"], dtype=np.int64).reshape(-1)
+    if z_full.size != w_support.size:
+        raise RuntimeError(
+            f"[HPROM-ANN] MAW {target_model['target']} support/weight mismatch: "
+            f"{z_full.size} vs {w_support.size}."
+        )
+    w_full = np.zeros(int(n_elem_reference), dtype=float)
+    w_full[z_full] = w_support
+    if full_to_local is None:
+        if int(n_current_elements) != w_full.size:
+            raise RuntimeError(
+                f"[HPROM-ANN] Current mesh has {n_current_elements} elements but "
+                f"MAW weights are full-mesh length {w_full.size}."
+            )
+        return w_full
+
+    w_current = np.zeros(int(n_current_elements), dtype=float)
+    for full_idx, local_idx in full_to_local.items():
+        if 0 <= int(full_idx) < w_full.size:
+            w_current[int(local_idx)] = w_full[int(full_idx)]
+    return w_current
 
 
 def LoadHpromAnnModel(
@@ -96,6 +282,7 @@ def RunHpromAnnBatchSimulation(
     max_its=25,
     abs_res_cutoff=NEWTON_TOL_ABS,
     dq_abs_cutoff=1.0e-6,
+    normalized_dq_cutoff=1.0e-4,
     max_res_for_rel_convergence=1.0e-1,
     min_rel_drop_stop=1.0e-2,
     stagnation_relnorm_gate=1.0e-4,
@@ -110,6 +297,9 @@ def RunHpromAnnBatchSimulation(
     eq_map_full=None,
     Xc=None,
     Yc=None,
+    qp_init_mode="continuation",
+    fail_on_nonconvergence=False,
+    homogenization_mode="ecm_fixed",
     return_stats=False,
 ):
     t_wall_total_start = time.perf_counter()
@@ -170,6 +360,14 @@ def RunHpromAnnBatchSimulation(
     )
     Z_union = np.asarray(ecm_data["Z_union"], dtype=np.int64).reshape(-1) if "Z_union" in ecm_data else Z_res
     n_elem_reference = int(np.ravel(ecm_data["n_elem"])[0]) if "n_elem" in ecm_data else len(elements)
+    hom_mode = str(homogenization_mode).strip().lower()
+    if hom_mode in ("maw", "maw_separate"):
+        hom_mode = "maw_dynamic"
+    if hom_mode not in ("ecm_fixed", "maw_dynamic"):
+        raise ValueError(
+            f"Unsupported HPROM-ANN homogenization_mode='{homogenization_mode}'. "
+            "Use 'ecm_fixed' or 'maw_dynamic'."
+        )
 
     if Xc is None or Yc is None:
         sim._InitializeDomainCenterIfNeeded(mp)
@@ -178,11 +376,26 @@ def RunHpromAnnBatchSimulation(
         # Keep affine lifting center consistent with basis/training reference mesh.
         x0c, y0c = float(Xc), float(Yc)
 
-    w_eps_hom, w_sig_hom, using_weighted_hom = ResolveHomogenizationWeightSelection(
-        ecm_data,
-        n_current_elements=len(elements),
-        solver_label="HPROM-ANN",
-    )
+    maw_eps_hom = None
+    maw_sig_hom = None
+    full_to_local_hom = None
+    if hom_mode == "maw_dynamic":
+        maw_eps_hom = _build_maw_hom_target_model(ecm_data, "eps")
+        maw_sig_hom = _build_maw_hom_target_model(ecm_data, "sig")
+        full_to_local_hom = _build_full_to_local_map(
+            ecm_data,
+            n_elem_reference=n_elem_reference,
+            n_current_elements=len(elements),
+        )
+        w_eps_hom = None
+        w_sig_hom = None
+        using_weighted_hom = True
+    else:
+        w_eps_hom, w_sig_hom, using_weighted_hom = ResolveHomogenizationWeightSelection(
+            ecm_data,
+            n_current_elements=len(elements),
+            solver_label="HPROM-ANN",
+        )
     hom_reference_measure = GetReferenceIntegrationMeasureFromMesh(full_mesh_base)
     print(f"  [HPROM-ANN] Homogenization reference measure A0 (full mesh): {hom_reference_measure:.6e}")
     with open(os.path.join(out_dir, "reference_measure_A0.txt"), "w", encoding="utf-8") as f:
@@ -191,7 +404,16 @@ def RunHpromAnnBatchSimulation(
         raise RuntimeError(
             "[HPROM-ANN] ECM homogenization weights are required (w_eps/w_sig not available)."
         )
-    print("  [HPROM-ANN] Using ECM-weighted homogenization (w_eps / w_sig).")
+    if hom_mode == "maw_dynamic":
+        print(
+            "  [HPROM-ANN] Using dynamic MAW-ECM homogenization weights "
+            f"(eps |Z|={maw_eps_hom['z_support_full'].size}, "
+            f"sig |Z|={maw_sig_hom['z_support_full'].size}, "
+            f"coords eps/sig={maw_eps_hom['coord_label']}/{maw_sig_hom['coord_label']}, "
+            f"regressors eps/sig={maw_eps_hom['regressor_type']}/{maw_sig_hom['regressor_type']})."
+        )
+    else:
+        print("  [HPROM-ANN] Using ECM-weighted homogenization (w_eps / w_sig).")
     dof_x = np.zeros(n_total_dof, dtype=float)
     dof_y = np.zeros(n_total_dof, dtype=float)
     is_x_dof = np.zeros(n_total_dof, dtype=bool)
@@ -266,6 +488,19 @@ def RunHpromAnnBatchSimulation(
     def _build_ann_input(q_tensor, e_tensor):
         return q_tensor
 
+    qp_init_mode = str(qp_init_mode).strip().lower()
+    if qp_init_mode not in ("continuation", "previous", "zero", "mu_affine"):
+        raise ValueError(
+            f"Unsupported qp_init_mode='{qp_init_mode}'. "
+            "Use one of: continuation, previous, zero, mu_affine."
+        )
+    qp_aff = getattr(ann_model, "qp_init_mu_affine", None)
+    if qp_init_mode in ("continuation", "mu_affine") and qp_aff is None:
+        raise RuntimeError(
+            f"[HPROM-ANN] qp_init_mode='{qp_init_mode}' requires qm_init_mu_affine.npz "
+            "in the ANN model directory."
+        )
+
     def _evaluate_qs_and_jac(qp_vec, e_vec):
         qp_arr = np.asarray(qp_vec, dtype=float).reshape(-1)
         e_arr = np.asarray(e_vec, dtype=float).reshape(3)
@@ -296,6 +531,34 @@ def RunHpromAnnBatchSimulation(
         jac_np = jac_ann.detach().cpu().numpy()
         return q_s_map, jac_np
 
+    def _compute_weighted_decoder_hessian(qp_vec, e_vec, output_weights):
+        qp_arr = np.asarray(qp_vec, dtype=float).reshape(-1)
+        e_arr = np.asarray(e_vec, dtype=float).reshape(3)
+        weights_np = np.asarray(output_weights, dtype=float).reshape(-1)
+        if weights_np.size != n_secondary:
+            raise RuntimeError(
+                "Invalid decoder-Hessian weights: "
+                f"got {weights_np.size}, expected {n_secondary}."
+            )
+        qp_tensor = torch.from_numpy(qp_arr.astype(np.float32)).to(device)
+        e_tensor = torch.from_numpy(e_arr.astype(np.float32)).unsqueeze(0).to(device)
+        weights = torch.from_numpy(weights_np.astype(np.float32)).to(device)
+
+        with torch.enable_grad():
+            qp_in = qp_tensor.clone().detach().requires_grad_(True)
+
+            def weighted_ann_output(q_vec):
+                q_local = q_vec.view(1, -1)
+                q_s_raw = ann_model(_build_ann_input(q_local, e_tensor)).reshape(-1)
+                return torch.dot(weights, q_s_raw)
+
+            hessian = torch.autograd.functional.hessian(
+                weighted_ann_output,
+                qp_in,
+                vectorize=True,
+            )
+        return hessian.detach().cpu().numpy().reshape(n_primary, n_primary)
+
     def _solve_reduced_system(K_sys, rhs):
         try:
             dq_loc = np.linalg.solve(K_sys, rhs)
@@ -311,10 +574,40 @@ def RunHpromAnnBatchSimulation(
             dq_loc, *_ = np.linalg.lstsq(K_reg, rhs, rcond=None)
         return dq_loc
 
+    def _initial_qp_guess(e_vec, q_prev, step_index):
+        if qp_init_mode == "continuation" and int(step_index) > 1:
+            return np.asarray(q_prev, dtype=float).copy()
+        if qp_init_mode == "previous":
+            return np.asarray(q_prev, dtype=float).copy()
+        if qp_init_mode == "zero":
+            return np.zeros(n_primary, dtype=float)
+        mu_dim = int(qp_aff["mu_dim"])
+        mu = np.asarray(e_vec, dtype=float).reshape(-1)[:mu_dim]
+        if mu.size < mu_dim:
+            raise RuntimeError(
+                f"[HPROM-ANN] q_m initializer expects mu_dim={mu_dim}, got {mu.size}."
+            )
+        return np.concatenate([mu, np.array([1.0])]) @ np.asarray(
+            qp_aff["b_aff"],
+            dtype=float,
+        )
+
     q_p = np.zeros(n_primary, dtype=float)
+    q_m_scale = ann_model.input_scaler.std.detach().cpu().numpy().reshape(-1).astype(float)
+    if q_m_scale.size != n_primary:
+        raise RuntimeError(
+            f"ANN q_m scale size mismatch: got {q_m_scale.size}, expected {n_primary}."
+        )
+    q_m_scale = np.maximum(np.abs(q_m_scale), 1.0e-12)
     Kr_old = None
     q0_const, J0_const = _evaluate_qs_and_jac(np.zeros(n_primary, dtype=float), np.zeros(3, dtype=float))
-    phi_p_eff = phi_p + phi_s @ J0_const
+    a_m = np.asarray(getattr(ann_model, "a_m_np", None), dtype=float)
+    if a_m.shape != (n_primary, n_primary):
+        raise RuntimeError(
+            f"[HPROM-ANN] Missing or invalid LS master map A_m: {a_m.shape}."
+        )
+    phi_master = phi_p @ a_m
+    phi_p_eff = phi_master + phi_s @ J0_const
     w0_const = phi_s @ q0_const
 
     print(f"  [HPROM-ANN] Solving for {n_steps_total} dynamic increments...")
@@ -326,6 +619,10 @@ def RunHpromAnnBatchSimulation(
     )
     if using_hrom_mesh:
         print("  [HPROM-ANN] Using reduced HROM mesh residual weights (w_res_hrom).")
+    print("  [HPROM-ANN] LS decoder active: u = Phi_m A_m q_m + Phi_s q_s(q_m).")
+    print(f"  [HPROM-ANN] q_m initializer mode: {qp_init_mode}")
+    if qp_init_mode in ("continuation", "mu_affine") and qp_aff is not None:
+        print(f"  [HPROM-ANN] Using affine initializer: {qp_aff['path']}")
     t_map = 0.0
     t_assembly = 0.0
     t_projection = 0.0
@@ -364,11 +661,16 @@ def RunHpromAnnBatchSimulation(
 
         it = 0
         res_norm_0 = None
-        converged = False
+        q_prev_np = q_p.copy()
+        q_p = _initial_qp_guess(E, q_prev_np, step)
+        converged = bool(max_its == 0)
         nonfinite_detected = False
         Kr_last = None
         dq_norm_prev = None
         prev_res_norm = None
+        prev_q_eval = None
+        prev_qs_eval = None
+        plateau_count = 0
         q_step_start = q_p.copy()
         best_q = q_step_start.copy()
         best_res = np.inf
@@ -390,6 +692,19 @@ def RunHpromAnnBatchSimulation(
                 print("  [HPROM-ANN] WARNING: non-finite reduced state detected.")
                 nonfinite_detected = True
                 break
+            q_eval_delta = np.inf
+            q_eval_delta_normalized = np.inf
+            if prev_q_eval is not None and prev_q_eval.shape == q_p.shape:
+                q_eval_change = q_p - prev_q_eval
+                q_eval_delta = float(np.linalg.norm(q_eval_change))
+                q_eval_delta_normalized = float(
+                    np.linalg.norm(q_eval_change / q_m_scale)
+                )
+            prev_q_eval = q_p.copy()
+            q_s_delta = np.inf
+            if prev_qs_eval is not None and prev_qs_eval.shape == q_s.shape:
+                q_s_delta = float(np.linalg.norm(q_s - prev_qs_eval))
+            prev_qs_eval = q_s.copy()
 
             if J_ann.shape != (n_secondary, n_primary):
                 raise RuntimeError(
@@ -433,7 +748,14 @@ def RunHpromAnnBatchSimulation(
             t0 = time.perf_counter()
             KJ = K_free_sparse @ J_manifold
             r_r = J_manifold.T @ r_full
-            K_r = J_manifold.T @ KJ
+            K_std = J_manifold.T @ KJ
+            # Exact nonlinear-manifold Newton tangent. Since rhs=-f_int,
+            # d(J^T rhs)/dq = H_u:rhs - J^T K J, hence the additive
+            # Newton matrix is J^T K J - H_u:rhs.
+            curvature_weights = phi_s.T @ r_full
+            K_curv = _compute_weighted_decoder_hessian(q_p, E, curvature_weights)
+            K_curv = 0.5 * (K_curv + K_curv.T)
+            K_r = K_std - K_curv
             t_projection += time.perf_counter() - t0
             Kr_last = K_r
             if (not _is_finite(r_r)) or (not _is_finite(K_r)):
@@ -453,10 +775,25 @@ def RunHpromAnnBatchSimulation(
                 best_res = float(res_norm)
                 best_q = q_p.copy()
                 best_rel = float(rel_res)
-            print(f"  > It {it:02d}: ||R_r|| = {res_norm:.3e}, rel = {rel_res:.3e}")
+            update_text = ""
+            if np.isfinite(q_eval_delta_normalized):
+                update_text = f", ||D_q^-1 dq_m|| = {q_eval_delta_normalized:.3e}"
+            print(f"  > It {it:02d}: ||R_r|| = {res_norm:.3e}, rel = {rel_res:.3e}{update_text}")
 
             if res_norm < float(abs_res_cutoff):
                 print(f"  > Converged in {it} iterations.")
+                converged = True
+                break
+            if (
+                it > 0
+                and np.isfinite(q_eval_delta_normalized)
+                and q_eval_delta_normalized < float(normalized_dq_cutoff)
+            ):
+                print(
+                    f"  > Converged in {it} iterations "
+                    f"(normalized q_m update={q_eval_delta_normalized:.3e} "
+                    f"< {float(normalized_dq_cutoff):.3e})."
+                )
                 converged = True
                 break
             if (
@@ -470,6 +807,28 @@ def RunHpromAnnBatchSimulation(
                 break
             if prev_res_norm is not None:
                 rel_drop = abs(prev_res_norm - res_norm) / max(prev_res_norm, 1e-30)
+                q_tol = 20.0 * float(dq_abs_cutoff)
+                q_is_flat = (
+                    np.isfinite(q_eval_delta)
+                    and np.isfinite(q_s_delta)
+                    and (q_eval_delta < q_tol)
+                    and (q_s_delta < q_tol)
+                )
+                if (
+                    it >= 2
+                    and q_is_flat
+                    and rel_res < max(float(relnorm_cutoff), 0.5 * float(stagnation_relnorm_gate))
+                ):
+                    print(
+                        f"  > Converged in {it} iterations (frozen q-state: "
+                        f"q_p_delta={q_eval_delta:.3e}, q_s_delta={q_s_delta:.3e}, rel={rel_res:.3e})."
+                    )
+                    converged = True
+                    break
+                if rel_drop < float(min_rel_drop_stop) and q_is_flat:
+                    plateau_count += 1
+                else:
+                    plateau_count = 0
                 if (
                     rel_drop < float(min_rel_drop_stop)
                     and rel_res < float(stagnation_relnorm_gate)
@@ -477,6 +836,17 @@ def RunHpromAnnBatchSimulation(
                 ):
                     print(
                         f"  > Converged in {it} iterations (stagnation criterion: rel_drop={rel_drop:.3e})."
+                    )
+                    converged = True
+                    break
+                if (
+                    plateau_count >= 3
+                    and rel_res < max(3.0 * float(relnorm_cutoff), float(stagnation_relnorm_gate))
+                    and (dq_norm_prev is None or dq_norm_prev < 5.0 * float(dq_abs_cutoff))
+                ):
+                    print(
+                        f"  > Converged in {it} iterations (flat residual plateau: "
+                        f"rel_drop={rel_drop:.3e}, q_p_delta={q_eval_delta:.3e}, q_s_delta={q_s_delta:.3e})."
                     )
                     converged = True
                     break
@@ -512,14 +882,13 @@ def RunHpromAnnBatchSimulation(
                 dq_norm = float(np.linalg.norm(dq_p))
                 print(f"    > large reduced update clipped with scale={scale:.3e}")
 
-            alpha = 1.0 if it <= 10 else 0.5
-            q_trial = q_p + alpha * dq_p
+            q_trial = q_p + dq_p
             if not _is_finite(q_trial):
                 print("  [HPROM-ANN] WARNING: non-finite reduced state update detected.")
                 nonfinite_detected = True
                 break
             q_p = q_trial
-            dq_norm_prev = abs(alpha) * dq_norm
+            dq_norm_prev = dq_norm
             if used_old:
                 print("    > using previous reduced stiffness (K_old) at first iteration")
             it += 1
@@ -531,16 +900,34 @@ def RunHpromAnnBatchSimulation(
                 and (best_rel < float(relnorm_cutoff))
                 and (best_res < float(max_res_for_rel_convergence))
             )
-            if quasi_converged:
+            plateau_quasi = (
+                np.isfinite(best_res)
+                and np.isfinite(best_rel)
+                and plateau_count >= 3
+                and (best_rel < max(3.0 * float(relnorm_cutoff), float(stagnation_relnorm_gate)))
+            )
+            if quasi_converged or plateau_quasi:
                 q_p = best_q.copy()
                 converged = True
-                print(
-                    "  [HPROM-ANN] Step accepted as quasi-converged: "
-                    f"best ||R_r||={best_res:.3e}, rel={best_rel:.3e}."
-                )
+                if quasi_converged:
+                    print(
+                        "  [HPROM-ANN] Step accepted as quasi-converged: "
+                        f"best ||R_r||={best_res:.3e}, rel={best_rel:.3e}."
+                    )
+                else:
+                    print(
+                        "  [HPROM-ANN] Step accepted as plateau-converged: "
+                        f"best ||R_r||={best_res:.3e}, rel={best_rel:.3e}, "
+                        f"plateau_count={plateau_count}."
+                    )
                 Kr_old = None
             else:
-                print(f"  [HPROM-ANN] WARNING: step {step} did not converge in {max_its} iterations.")
+                msg = f"[HPROM-ANN] Step {step} did not converge in {max_its} iterations."
+                if bool(fail_on_nonconvergence):
+                    raise RuntimeError(
+                        msg + f" Best ||R_r||={best_res:.3e}, rel={best_rel:.3e}."
+                    )
+                print(f"  [HPROM-ANN] WARNING: {msg}")
                 if nonfinite_detected:
                     print("  [HPROM-ANN] WARNING: non-finite state encountered; rolling back to best finite iterate.")
                 if np.isfinite(best_res):
@@ -578,7 +965,30 @@ def RunHpromAnnBatchSimulation(
         t_full_sync += time.perf_counter() - t0
         FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
-        if using_weighted_hom:
+        if hom_mode == "maw_dynamic":
+            w_eps_step = _evaluate_maw_hom_weights_current(
+                q_p,
+                E,
+                maw_eps_hom,
+                n_elem_reference=n_elem_reference,
+                n_current_elements=len(elements),
+                full_to_local=full_to_local_hom,
+            )
+            w_sig_step = _evaluate_maw_hom_weights_current(
+                q_p,
+                E,
+                maw_sig_hom,
+                n_elem_reference=n_elem_reference,
+                n_current_elements=len(elements),
+                full_to_local=full_to_local_hom,
+            )
+            hom_eps, hom_sig = CalculateHomogenizedFromAssemblerWithElementWeights(
+                vec_full_assembler,
+                w_eps=w_eps_step,
+                w_sig=w_sig_step,
+                reference_measure=hom_reference_measure,
+            )
+        elif using_weighted_hom:
             hom_eps, hom_sig = CalculateHomogenizedFromAssemblerWithElementWeights(
                 vec_full_assembler,
                 w_eps=w_eps_hom,

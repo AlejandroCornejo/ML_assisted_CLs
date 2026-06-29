@@ -19,7 +19,6 @@ def _inject_default(opt_name, opt_value):
 
 
 if __name__ == "__main__":
-    _inject_default("--ann-dir", "stage_7_ann_data_ls")
+    _inject_default("--ann-dir", "stage_7_ann_model_ls_newton")
     _inject_default("--out-dir", "stage_9_ecm_dataset_ann_ls")
     stage9_base.main()
-

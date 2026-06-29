@@ -59,6 +59,34 @@ def _compute_equivalent_stress_strain(eps, sig):
     return eps_eq, sigma_eq
 
 
+def _rel_error(pred, ref):
+    pred = np.asarray(pred, dtype=float)
+    ref = np.asarray(ref, dtype=float)
+    return float(np.linalg.norm(pred - ref) / (np.linalg.norm(ref) + 1e-30))
+
+
+def _component_rel_errors(pred, ref, labels):
+    pred = np.asarray(pred, dtype=float)
+    ref = np.asarray(ref, dtype=float)
+    n_comp = min(pred.shape[1], ref.shape[1], len(labels))
+    return {
+        labels[i]: _rel_error(pred[:, i], ref[:, i])
+        for i in range(n_comp)
+    }
+
+
+def _format_component_errors(errors, labels):
+    return ", ".join(f"{label}={errors[label]:.4e}" for label in labels if label in errors)
+
+
+def _load_first_existing_npy(out_dir, candidates):
+    for name in candidates:
+        path = os.path.join(out_dir, name)
+        if os.path.exists(path):
+            return np.load(path), path
+    return None, None
+
+
 def plot_hprom_ann_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir, timings=None):
     n = min(len(f_sig), len(p_sig), len(h_sig), len(f_eps), len(p_eps), len(h_eps))
 
@@ -149,6 +177,7 @@ def run_stage10(
     ann_data_dir="stage_7_ann_data",
     hprom_ann_dir="stage_9_hprom_ann_data",
     out_dir="stage_10_hprom_ann_results",
+    hprom_homogenization_mode="ecm_fixed",
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -193,6 +222,7 @@ def run_stage10(
     print(f"  ANN data dir: {ann_data_dir}")
     print(f"  HPROM-ANN dir: {hprom_ann_dir}")
     print(f"  Output dir: {out_dir}")
+    print(f"  HPROM homogenization mode: {hprom_homogenization_mode}")
 
     mesh_fom_prom = "rve_geometry"
     mesh_hprom = "rve_geometry"
@@ -299,6 +329,7 @@ def run_stage10(
             eq_map_full=eq_map_h,
             Xc=Xc_h,
             Yc=Yc_h,
+            homogenization_mode=hprom_homogenization_mode,
         )
         timings["HPROM-ANN"] = time.perf_counter() - t0
         h_eps = np.asarray(h_eps, dtype=float)
@@ -310,17 +341,100 @@ def run_stage10(
         h_eps = np.load(hprom_eps_file)
         h_sig = np.load(hprom_sig_file)
 
-    n = min(len(f_sig), len(p_sig), len(h_sig))
-    err_prom = np.linalg.norm(f_sig[:n] - p_sig[:n]) / (np.linalg.norm(f_sig[:n]) + 1e-30)
-    err_hprom = np.linalg.norm(f_sig[:n] - h_sig[:n]) / (np.linalg.norm(f_sig[:n]) + 1e-30)
+    n = min(len(f_sig), len(p_sig), len(h_sig), len(f_eps), len(p_eps), len(h_eps))
+    err_prom = _rel_error(p_sig[:n], f_sig[:n])
+    err_hprom = _rel_error(h_sig[:n], f_sig[:n])
+    err_hprom_vs_prom = _rel_error(h_sig[:n], p_sig[:n])
 
-    print("\n" + "=" * 60)
-    print("  Stage 10 Summary")
-    print("=" * 60)
-    print(f"  PROM-ANN  vs FOM: Rel. Stress Error = {err_prom:.4e}")
-    print(f"  HPROM-ANN vs FOM: Rel. Stress Error = {err_hprom:.4e}")
+    stress_labels = ["sigma_xx", "sigma_yy", "sigma_xy"]
+    strain_labels = ["eps_xx", "eps_yy", "gamma_xy"]
+    stress_prom_fom = _component_rel_errors(p_sig[:n], f_sig[:n], stress_labels)
+    stress_hprom_fom = _component_rel_errors(h_sig[:n], f_sig[:n], stress_labels)
+    stress_hprom_prom = _component_rel_errors(h_sig[:n], p_sig[:n], stress_labels)
+    strain_prom_fom = _component_rel_errors(p_eps[:n], f_eps[:n], strain_labels)
+    strain_hprom_fom = _component_rel_errors(h_eps[:n], f_eps[:n], strain_labels)
+    strain_hprom_prom = _component_rel_errors(h_eps[:n], p_eps[:n], strain_labels)
+
+    q_prom, q_prom_path = _load_first_existing_npy(
+        out_dir,
+        [
+            "prom_ann_run_q_p.npy",
+            "prom_ann_q_p.npy",
+        ],
+    )
+    q_hprom, q_hprom_path = _load_first_existing_npy(
+        out_dir,
+        [
+            "hprom_ann_run_q_p.npy",
+            "hprom_ann_q_p.npy",
+        ],
+    )
+
+    q_error = None
+    q_comp_errors = None
+    q_rmse = None
+    q_max_abs = None
+    if q_prom is not None and q_hprom is not None:
+        q_prom = np.asarray(q_prom, dtype=float)
+        q_hprom = np.asarray(q_hprom, dtype=float)
+        nq = min(len(q_prom), len(q_hprom))
+        ncomp_q = min(q_prom.shape[1], q_hprom.shape[1]) if q_prom.ndim == 2 and q_hprom.ndim == 2 else 0
+        if nq > 0 and ncomp_q > 0:
+            q_prom_a = q_prom[:nq, :ncomp_q]
+            q_hprom_a = q_hprom[:nq, :ncomp_q]
+            q_diff = q_hprom_a - q_prom_a
+            q_error = _rel_error(q_hprom_a, q_prom_a)
+            q_comp_errors = {
+                f"q_{i + 1}": _rel_error(q_hprom_a[:, i], q_prom_a[:, i])
+                for i in range(ncomp_q)
+            }
+            q_rmse = float(np.sqrt(np.mean(q_diff * q_diff)))
+            q_max_abs = float(np.max(np.abs(q_diff)))
+
+    summary_lines = [
+        "",
+        "=" * 60,
+        "  Stage 10 Summary",
+        "=" * 60,
+        f"  PROM-ANN  vs FOM: Rel. Stress Error = {err_prom:.4e}",
+        f"  HPROM-ANN vs FOM: Rel. Stress Error = {err_hprom:.4e}",
+        f"  HPROM-ANN vs PROM-ANN: Rel. Stress Error = {err_hprom_vs_prom:.4e}",
+        "  Stress component relative errors [reference in denominator]:",
+        f"    PROM/FOM       : {_format_component_errors(stress_prom_fom, stress_labels)}",
+        f"    HPROM/FOM      : {_format_component_errors(stress_hprom_fom, stress_labels)}",
+        f"    HPROM/PROM     : {_format_component_errors(stress_hprom_prom, stress_labels)}",
+        "  Strain component relative errors [reference in denominator]:",
+        f"    PROM/FOM       : {_format_component_errors(strain_prom_fom, strain_labels)}",
+        f"    HPROM/FOM      : {_format_component_errors(strain_hprom_fom, strain_labels)}",
+        f"    HPROM/PROM     : {_format_component_errors(strain_hprom_prom, strain_labels)}",
+    ]
+
+    if q_error is not None:
+        q_labels = list(q_comp_errors.keys())
+        summary_lines.extend(
+            [
+                f"  HPROM-ANN vs PROM-ANN: Rel. q_m Error = {q_error:.4e}",
+                f"    q_m component relative errors: {_format_component_errors(q_comp_errors, q_labels)}",
+                f"    q_m RMSE / max |difference|: {q_rmse:.4e} / {q_max_abs:.4e}",
+            ]
+        )
+    else:
+        missing = []
+        if q_prom is None:
+            missing.append("PROM q history")
+        if q_hprom is None:
+            missing.append("HPROM q history")
+        summary_lines.append(f"  q_m PROM/HPROM comparison skipped (missing {', '.join(missing)}).")
+
     for method, t in timings.items():
-        print(f"  {method} time: {t:.2f}s")
+        summary_lines.append(f"  {method} time: {t:.2f}s")
+
+    summary_path = os.path.join(out_dir, "stage10_error_summary.txt")
+    summary_lines.append(f"  Error summary saved: {summary_path}")
+    for line in summary_lines:
+        print(line)
+    with open(summary_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(summary_lines).lstrip() + "\n")
 
     plot_hprom_ann_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir, timings)
 
@@ -350,6 +464,13 @@ if __name__ == "__main__":
         default="stage_10_hprom_ann_results",
         help="Output directory for Stage 10 ANN benchmark.",
     )
+    p.add_argument(
+        "--hprom-homogenization-mode",
+        type=str,
+        default="ecm_fixed",
+        choices=["ecm_fixed", "maw_dynamic", "maw", "maw_separate"],
+        help="HPROM-ANN homogenization weights: fixed classical ECM or dynamic MAW-ECM eps/sig.",
+    )
     args = p.parse_args()
 
     run_stage10(
@@ -359,4 +480,5 @@ if __name__ == "__main__":
         ann_data_dir=args.ann_data_dir,
         hprom_ann_dir=args.hprom_ann_dir,
         out_dir=args.out_dir,
+        hprom_homogenization_mode=args.hprom_homogenization_mode,
     )

@@ -10,6 +10,8 @@ Default behavior follows the residual-centric MAW setup:
   - Homogenization supports/weights are kept classical (no MAW) unless requested.
   - Every local MAW target is anchored at the classical ECM rule: b_j=A_j*w_ini.
   - Phase 1 is unregularized; phase 2 is enabled only through explicit flags.
+  - If homogenization MAW is requested, eps/sig are trained independently and
+    require positive, sum-preserving weights.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from mawecm_graph_utils import (
 )
 from mawecm_pruning import run_mawecm_pruning
 from mawecm_rbf_weights import fit_mawecm_rbf, eval_mawecm_rbf
+from mawecm_ann_weights import fit_mawecm_ann, eval_mawecm_ann
 from empirical_cubature_method import EmpiricalCubatureMethod
 from randomized_singular_value_decomposition import RandomizedSingularValueDecomposition
 
@@ -474,6 +477,124 @@ def _augment_blocks_with_sum_constraint(A_blocks, b_blocks, target_sum):
     return A_aug, b_aug
 
 
+def _scale_hom_blocks_by_component(A_blocks, b_blocks, target):
+    """Balance eps/sig component rows without changing their exact feasible set."""
+    if not A_blocks:
+        return A_blocks, b_blocks, np.ones(0, dtype=float)
+
+    m = int(np.asarray(A_blocks[0]).shape[0])
+    if m <= 0:
+        return A_blocks, b_blocks, np.ones(0, dtype=float)
+    for A, b in zip(A_blocks, b_blocks):
+        if int(np.asarray(A).shape[0]) != m or int(np.asarray(b).reshape(-1).size) != m:
+            raise RuntimeError(
+                f"Cannot component-scale MAW-{target}: variable local row counts before rowspace compression."
+            )
+
+    row_norms = np.zeros((len(A_blocks), m), dtype=float)
+    rhs_abs = np.zeros((len(A_blocks), m), dtype=float)
+    for i, (A, b) in enumerate(zip(A_blocks, b_blocks)):
+        Aj = np.asarray(A, dtype=float)
+        bj = np.asarray(b, dtype=float).reshape(-1)
+        row_norms[i, :] = np.linalg.norm(Aj, axis=1)
+        rhs_abs[i, :] = np.abs(bj)
+
+    char = np.maximum(
+        np.sqrt(np.mean(row_norms * row_norms, axis=0)),
+        np.sqrt(np.mean(rhs_abs * rhs_abs, axis=0)),
+    )
+    char = np.maximum(char, 1.0e-30)
+    scales = 1.0 / char
+
+    A_scaled = []
+    b_scaled = []
+    for A, b in zip(A_blocks, b_blocks):
+        Aj = np.asarray(A, dtype=float)
+        bj = np.asarray(b, dtype=float).reshape(-1)
+        A_scaled.append(Aj * scales[:, None])
+        b_scaled.append(bj * scales)
+
+    print(
+        f"  [MAW-{target}] component row scaling: "
+        + ", ".join(f"s{i + 1}={scales[i]:.3e}" for i in range(scales.size)),
+        flush=True,
+    )
+    return A_scaled, b_scaled, scales
+
+
+def _compress_constraints_rowspace(A_blocks, b_blocks, tol_rel, label):
+    """Remove linearly dependent local constraint rows without changing the feasible set."""
+    tol_rel = float(max(tol_rel, 0.0))
+    A_eff = []
+    b_eff = []
+    ranks = []
+    m_full = []
+    n_rank_zero = 0
+
+    for A, b in zip(A_blocks, b_blocks):
+        Aj = np.asarray(A, dtype=float)
+        bj = np.asarray(b, dtype=float).reshape(-1)
+        m = int(Aj.shape[0])
+        m_full.append(m)
+        if m == 0:
+            rank = 0
+            A_hat = np.zeros((0, int(Aj.shape[1])), dtype=float)
+            b_hat = np.zeros((0,), dtype=float)
+        else:
+            U, s, _ = np.linalg.svd(Aj, full_matrices=False)
+            smax = float(np.max(s)) if s.size else 0.0
+            tol = tol_rel * max(smax, 1.0)
+            rank = int(np.sum(s > tol))
+            if rank <= 0:
+                A_hat = np.zeros((0, int(Aj.shape[1])), dtype=float)
+                b_hat = np.zeros((0,), dtype=float)
+            elif rank >= m:
+                A_hat = Aj
+                b_hat = bj
+            else:
+                U_r = U[:, :rank]
+                A_hat = U_r.T @ Aj
+                b_hat = U_r.T @ bj
+
+        if rank == 0:
+            n_rank_zero += 1
+        ranks.append(rank)
+        A_eff.append(np.asarray(A_hat, dtype=float))
+        b_eff.append(np.asarray(b_hat, dtype=float))
+
+    ranks_arr = np.asarray(ranks, dtype=np.int64)
+    m_full_arr = np.asarray(m_full, dtype=np.int64)
+    info = {
+        "n_blocks": int(ranks_arr.size),
+        "m_full_min": int(np.min(m_full_arr)) if m_full_arr.size else 0,
+        "m_full_max": int(np.max(m_full_arr)) if m_full_arr.size else 0,
+        "rank_min": int(np.min(ranks_arr)) if ranks_arr.size else 0,
+        "rank_mean": float(np.mean(ranks_arr)) if ranks_arr.size else 0.0,
+        "rank_max": int(np.max(ranks_arr)) if ranks_arr.size else 0,
+        "n_rank_zero": int(n_rank_zero),
+        "n_row_reduced": int(np.sum(ranks_arr < m_full_arr)) if ranks_arr.size else 0,
+    }
+    print(
+        f"  [MAW-{label}] rowspace compression: "
+        f"rank(min/mean/max)=({info['rank_min']}/{info['rank_mean']:.2f}/{info['rank_max']}), "
+        f"reduced_blocks={info['n_row_reduced']}/{info['n_blocks']}, rank0={info['n_rank_zero']}"
+    )
+    return A_eff, b_eff, info
+
+
+def _pack_b_blocks_for_save(b_blocks):
+    """Pack possibly variable-size local RHS blocks into a rectangular diagnostic array."""
+    sizes = np.asarray([np.asarray(b, dtype=float).size for b in b_blocks], dtype=np.int64)
+    if sizes.size == 0:
+        return np.zeros((0, 0), dtype=float), sizes
+    max_size = int(np.max(sizes))
+    packed = np.full((int(sizes.size), max_size), np.nan, dtype=float)
+    for i, b in enumerate(b_blocks):
+        bj = np.asarray(b, dtype=float).reshape(-1)
+        packed[i, : bj.size] = bj
+    return packed, sizes
+
+
 def _validate_maw_constraints(
     A_blocks,
     b_blocks,
@@ -519,12 +640,16 @@ def _plot_maw_weight_fields_3d(
     fmt,
     clip_nonnegative,
     renorm_target,
+    coord_label="q",
+    regressor_type="rbf",
 ):
-    """Plot w(q1,q2;q3) as three surfaces at representative fixed q3 values."""
+    """Plot w(x1,x2;x3) as three surfaces at representative fixed coordinate-3 values."""
     q = np.asarray(q_train, dtype=float)
     w = np.asarray(W_train, dtype=float)
     z = np.asarray(z_red, dtype=np.int64).reshape(-1)
     tag = str(target).strip().lower()
+    coord_label = str(coord_label).strip().lower() or "q"
+    regressor_type = str(regressor_type).strip().lower()
 
     if q.ndim != 2 or q.shape[1] < 3:
         print(
@@ -559,6 +684,10 @@ def _plot_maw_weight_fields_3d(
     q2_vec = np.linspace(float(np.min(q[:, 1])), float(np.max(q[:, 1])), n_q2)
     q1_grid, q2_grid = np.meshgrid(q1_vec, q2_vec, indexing="xy")
     q3_values = np.quantile(q[:, 2], [0.10, 0.50, 0.90])
+    axis_labels = {
+        "q": (r"$q^m_1$", r"$q^m_2$", r"$q^m_3$"),
+        "mu": (r"$\mu_1$", r"$\mu_2$", r"$\mu_3$"),
+    }.get(coord_label, (r"$x_1$", r"$x_2$", r"$x_3$"))
 
     # Evaluate in bounded-memory batches because a full Stage12 RBF may contain
     # thousands of centers.
@@ -573,22 +702,35 @@ def _plot_maw_weight_fields_3d(
             query[:, 3:] = np.median(q[:, 3:], axis=0)[None, :]
         parts = []
         for i0 in range(0, query.shape[0], batch_size):
-            parts.append(
-                eval_mawecm_rbf(
-                    q_query=query[i0 : i0 + batch_size],
-                    model=rbf_model,
-                    clip_nonnegative=bool(clip_nonnegative),
-                    renorm_target=renorm_target,
+            q_batch = query[i0 : i0 + batch_size]
+            if regressor_type == "ann":
+                parts.append(eval_mawecm_ann(q_batch, rbf_model))
+            else:
+                parts.append(
+                    eval_mawecm_rbf(
+                        q_query=q_batch,
+                        model=rbf_model,
+                        clip_nonnegative=bool(clip_nonnegative),
+                        renorm_target=renorm_target,
+                    )
                 )
-            )
         slice_weights.append(np.hstack(parts))
 
     n_all = int(z.size)
     n_do = n_all if int(max_plots) <= 0 else min(n_all, int(max_plots))
     summary_rows = []
     q3_band = max(float(np.ptp(q[:, 2])) / 20.0, 1.0e-12)
+    print(
+        f"  [MAW-plots][{tag}] plotting {n_do}/{n_all} weight surfaces...",
+        flush=True,
+    )
 
     for k in range(n_do):
+        if k == 0 or (k + 1) == n_do or (k + 1) % 10 == 0:
+            print(
+                f"  [MAW-plots][{tag}] plot {k + 1}/{n_do}",
+                flush=True,
+            )
         fields = [
             np.asarray(weights[k], dtype=float).reshape(n_q2, n_q1)
             for weights in slice_weights
@@ -640,13 +782,13 @@ def _plot_maw_weight_fields_3d(
                     linewidths=0.0,
                     depthshade=False,
                 )
-            ax.set_xlabel(r"$q_1$")
-            ax.set_ylabel(r"$q_2$")
+            ax.set_xlabel(axis_labels[0])
+            ax.set_ylabel(axis_labels[1])
             ax.set_zlabel(r"$w_e$")
             ax.set_zlim(value_min - z_pad, value_max + z_pad)
             ax.view_init(elev=28.0, azim=-58.0)
             ax.set_title(
-                rf"$q_3={q3:.3e}$ | curvature={curvature[j]:.2e}",
+                rf"{axis_labels[2]}={q3:.3e} | curvature={curvature[j]:.2e}",
                 fontsize=10,
             )
         elem_id = int(z[k])
@@ -687,31 +829,43 @@ def _plot_maw_weight_fields_3d(
 def _build_graph_for_target(dataset, q_train, target, args):
     mode = str(args.graph_mode).strip().lower()
     if mode == "parameter_mesh_stage12":
-        if str(target).strip().lower() != "res":
-            raise RuntimeError(
-                "The Stage12 parameter-mesh graph is currently supported only for residual target."
-            )
         cells = dataset.get("cells_struct_res", None)
         if cells is None:
             raise RuntimeError(
                 "parameter_mesh_cells_res.npy not found in dataset. "
                 "Rebuild Stage12a from the Stage7 Delaunay parameter mesh."
             )
-        mu_train = np.asarray(dataset["mu_res"], dtype=float)
+        target_key = str(target).strip().lower()
+        if target_key == "res":
+            mu_train = np.asarray(dataset["mu_res"], dtype=float)
+            q_label = "q_m_res"
+        elif target_key in ("eps", "sig"):
+            mu_train = np.asarray(dataset["mu_hom"], dtype=float)
+            q_label = "q_m_hom"
+        else:
+            raise ValueError(f"Unsupported MAW graph target '{target}'.")
         if mu_train.shape != (int(q_train.shape[0]), 3):
             raise RuntimeError(
-                "Stage12 parameter graph requires mu_res aligned with q_m_res; "
-                f"got mu_res={mu_train.shape}, q_m_res={q_train.shape}."
+                f"Stage12 parameter graph requires mu aligned with {q_label}; "
+                f"got mu={mu_train.shape}, {q_label}={q_train.shape} for target={target_key}."
+            )
+        cells = np.asarray(cells, dtype=np.int64)
+        if cells.size and (int(np.min(cells)) < 0 or int(np.max(cells)) >= int(q_train.shape[0])):
+            raise RuntimeError(
+                "Stage12 parameter graph cells are incompatible with the selected target samples. "
+                f"target={target_key}, n_samples={int(q_train.shape[0])}, "
+                f"cell id range=[{int(np.min(cells))},{int(np.max(cells))}]. "
+                "Rebuild Stage12a with homogenization enabled from the same Stage7 parameter mesh."
             )
         _, laplacian, graph_stats = filter_degenerate_tetrahedra(
             points=mu_train,
-            cells=np.asarray(cells, dtype=np.int64),
+            cells=cells,
             normalized_det_tol=1.0e-14,
             require_all_nodes=True,
             require_connected=True,
         )
         print(
-            "  [MAW-graph] Stage12 parameter tetrahedra: "
+            f"  [MAW-graph][{target_key}] Stage12 parameter tetrahedra: "
             f"kept={graph_stats['n_cells_kept']}/"
             f"{graph_stats['n_cells_total']}, "
             f"removed_degenerate={graph_stats['n_cells_removed']}, "
@@ -814,6 +968,17 @@ def _run_target_maw(
         )
         n_centers = int(args.rbf_centers_sig)
 
+    component_scales = np.ones(
+        int(np.asarray(A_blocks[0]).shape[0]) if A_blocks else 0,
+        dtype=float,
+    )
+    if target in ("eps", "sig"):
+        A_blocks, b_blocks, component_scales = _scale_hom_blocks_by_component(
+            A_blocks=A_blocks,
+            b_blocks=b_blocks,
+            target=target,
+        )
+
     sum_target = float(args.sum_weights_target)
     if sum_target <= 0.0:
         sum_target = float(np.sum(w_ini))
@@ -825,15 +990,41 @@ def _run_target_maw(
         )
         print(f"  [MAW-{target}] enforcing sum(w)={sum_target:.6e} in each local block.")
 
+    rowspace_info = {
+        "n_blocks": len(A_blocks),
+        "m_full_min": int(min(A.shape[0] for A in A_blocks)) if A_blocks else 0,
+        "m_full_max": int(max(A.shape[0] for A in A_blocks)) if A_blocks else 0,
+        "rank_min": np.nan,
+        "rank_mean": np.nan,
+        "rank_max": np.nan,
+        "n_rank_zero": 0,
+        "n_row_reduced": 0,
+    }
+    if target in ("eps", "sig") and bool(int(args.maw_hom_rowspace_compress)):
+        A_blocks, b_blocks, rowspace_info = _compress_constraints_rowspace(
+            A_blocks=A_blocks,
+            b_blocks=b_blocks,
+            tol_rel=float(args.maw_hom_rowspace_tol_rel),
+            label=target,
+        )
+
     use_global_graph = bool(int(args.use_global_graph_2ndstage))
     K_graph = None
     if use_global_graph:
         K_graph = _build_graph_for_target(
             dataset=dataset,
-            q_train=q_train,
+            q_train=mu_train if target in ("eps", "sig") else q_train,
             target=target,
             args=args,
         )
+
+    coord_label = "mu" if target in ("eps", "sig") else "q"
+    coord_train = np.asarray(mu_train if coord_label == "mu" else q_train, dtype=float)
+    print(
+        f"  [MAW-{target}] weight-field coordinate: {coord_label} "
+        f"(shape={coord_train.shape})",
+        flush=True,
+    )
 
     min_support = {
         "res": int(args.maw_min_support_size_res),
@@ -890,7 +1081,7 @@ def _run_target_maw(
         b_blocks=b_blocks,
         z_ini=z_ini,
         w_ini=w_ini,
-        q_train=q_train,
+        q_train=coord_train,
         options=prune_opts,
     )
 
@@ -909,21 +1100,81 @@ def _run_target_maw(
     )
 
     renorm_target = float(np.sum(w_ini))
-    rbf = fit_mawecm_rbf(
-        q_train=q_train,
-        W_train=W_train,
-        n_centers=n_centers,
-        poly_mode=int(args.rbf_poly_mode),
-        lambda_reg=float(args.rbf_lambda),
-        length_scale_factor=float(args.rbf_length_scale_factor),
-    )
+    regressor_type = "rbf"
+    if target in ("eps", "sig"):
+        regressor_type = str(args.maw_hom_weight_regressor).strip().lower()
+    rbf = None
+    ann = None
+    weight_model = None
 
-    W_recon = eval_mawecm_rbf(
-        q_query=q_train,
-        model=rbf,
-        clip_nonnegative=bool(int(args.rbf_clip_nonnegative)),
-        renorm_target=renorm_target if bool(int(args.rbf_renorm)) else None,
-    )
+    if regressor_type == "ann":
+        print(
+            f"  [MAW-{target}] fitting ANN weights: "
+            f"samples={int(coord_train.shape[0])}, support={int(z_red.size)}, "
+            f"coord={coord_label}, hidden={args.maw_ann_hidden_dims}, "
+            f"epochs={int(args.maw_ann_epochs)}",
+            flush=True,
+        )
+        ann = fit_mawecm_ann(
+            q_train=coord_train,
+            W_train=W_train,
+            target_sum=renorm_target,
+            hidden_dims=str(args.maw_ann_hidden_dims),
+            activation=str(args.maw_ann_activation),
+            epochs=int(args.maw_ann_epochs),
+            batch_size=int(args.maw_ann_batch_size),
+            lr=float(args.maw_ann_lr),
+            weight_decay=float(args.maw_ann_weight_decay),
+            val_fraction=float(args.maw_ann_val_fraction),
+            patience=int(args.maw_ann_patience),
+            seed=int(args.maw_ann_seed),
+            mse_weight=float(args.maw_ann_mse_weight),
+            verbose=True,
+            label=f"MAW-{target}-ANN",
+        )
+        weight_model = ann
+        print(
+            f"  [MAW-{target}] ANN fit done: "
+            f"train_rel={float(ann.get('train_rel_error', np.nan)):.3e}, "
+            f"val_rel={float(ann.get('val_rel_error', np.nan)):.3e}",
+            flush=True,
+        )
+        print(f"  [MAW-{target}] validating fitted ANN on training states...", flush=True)
+        W_recon = eval_mawecm_ann(coord_train, ann)
+    else:
+        effective_centers = int(coord_train.shape[0]) if int(n_centers) <= 0 else min(int(n_centers), int(coord_train.shape[0]))
+        print(
+            f"  [MAW-{target}] fitting RBF weights: "
+            f"samples={int(coord_train.shape[0])}, support={int(z_red.size)}, "
+            f"coord={coord_label}, "
+            f"centers={effective_centers}, poly_mode={int(args.rbf_poly_mode)}, "
+            f"lambda={float(args.rbf_lambda):.1e}",
+            flush=True,
+        )
+        rbf = fit_mawecm_rbf(
+            q_train=coord_train,
+            W_train=W_train,
+            n_centers=n_centers,
+            poly_mode=int(args.rbf_poly_mode),
+            lambda_reg=float(args.rbf_lambda),
+            length_scale_factor=float(args.rbf_length_scale_factor),
+            verbose=True,
+            label=f"MAW-{target}-RBF",
+        )
+        weight_model = rbf
+        print(
+            f"  [MAW-{target}] RBF fit done: "
+            f"train_rel={float(rbf.get('train_rel_error', np.nan)):.3e}",
+            flush=True,
+        )
+
+        print(f"  [MAW-{target}] validating fitted RBF on training states...", flush=True)
+        W_recon = eval_mawecm_rbf(
+            q_query=coord_train,
+            model=rbf,
+            clip_nonnegative=bool(int(args.rbf_clip_nonnegative)),
+            renorm_target=renorm_target if bool(int(args.rbf_renorm)) else None,
+        )
     rel_recon = float(np.linalg.norm(W_recon - W_train) / max(np.linalg.norm(W_train), 1.0e-30))
 
     # Fixed anchor vectors for compatibility with existing Stage-9/10-style consumers.
@@ -931,9 +1182,11 @@ def _run_target_maw(
     w_anchor = np.mean(W_train, axis=1)
     w_full[z_red] = w_anchor
 
+    b_train_packed, m_constraints_per_block = _pack_b_blocks_for_save(b_blocks)
+
     print(
         f"  [MAW-{target}] rhs={rhs_mode} |Z_ini|={z_ini.size} -> |Z_red|={z_red.size}, "
-        f"RBF train-rel={rel_recon:.3e}, max_rel={validation['max_rel']:.3e}, "
+        f"{regressor_type.upper()} train-rel={rel_recon:.3e}, max_rel={validation['max_rel']:.3e}, "
         f"min_w={validation['min_weight']:.3e}, prune-elapsed={maw['elapsed_sec']:.2f}s"
     )
 
@@ -943,13 +1196,20 @@ def _run_target_maw(
         "w_ini": w_ini,
         "q_train": q_train,
         "mu_train": mu_train,
+        "coord_train": coord_train,
+        "coord_label": coord_label,
+        "component_scales": component_scales,
         "ids": ids,
-        "A_m": int(np.asarray(b_blocks[0]).size),
-        "b_train": np.asarray(np.vstack([np.asarray(bj, dtype=float) for bj in b_blocks]), dtype=float),
+        "A_m": int(np.max(m_constraints_per_block)) if m_constraints_per_block.size else 0,
+        "m_constraints_per_block": m_constraints_per_block,
+        "b_train": b_train_packed,
         "maw": maw,
         "z_red": z_red,
         "W_train": W_train,
+        "regressor_type": regressor_type,
+        "weight_model": weight_model,
         "rbf": rbf,
+        "ann": ann,
         "w_full": w_full,
         "w_sel": w_full[z_red],
         "renorm_target": float(renorm_target),
@@ -957,6 +1217,7 @@ def _run_target_maw(
         "rhs_mode": np.array([rhs_mode]),
         "sum_target": float(sum_target),
         "sum_constraint": int(bool(int(args.enforce_sum_weights))),
+        "rowspace_info": dict(rowspace_info),
     }
 
 
@@ -1000,6 +1261,48 @@ def _build_fixed_hom_target_result(dataset, ecm_fixed, target):
         "recon_rel": 0.0,
         "rhs_mode": np.array(["fixed_classic"]),
         "fixed_classic": True,
+    }
+
+
+def _build_fixed_res_target_result(dataset, ecm_fixed):
+    z = np.asarray(ecm_fixed["Z_res"], dtype=np.int64).reshape(-1)
+    w = np.asarray(ecm_fixed["w_res"], dtype=float).reshape(-1)
+    if z.size != w.size:
+        raise RuntimeError(f"Fixed ECM size mismatch for res: |Z|={z.size}, |w|={w.size}")
+    n_elem = int(dataset["n_elem"])
+    w_full = np.zeros(n_elem, dtype=float)
+    if "w_res_full" in ecm_fixed:
+        wf = np.asarray(ecm_fixed["w_res_full"], dtype=float).reshape(-1)
+        if wf.size == n_elem:
+            w_full[:] = wf
+        else:
+            w_full[z] = w
+    else:
+        w_full[z] = w
+    q_train = np.asarray(dataset["q_m_res"], dtype=float)
+    mu_train = np.asarray(dataset["mu_res"], dtype=float)
+    ids = np.asarray(dataset["ids_res"], dtype=np.int64)
+    return {
+        "target": "res",
+        "z_ini": z.copy(),
+        "w_ini": w.copy(),
+        "q_train": q_train,
+        "mu_train": mu_train,
+        "ids": ids,
+        "A_m": int(dataset["nq"]),
+        "b_train": np.zeros((q_train.shape[0], int(dataset["nq"])), dtype=float),
+        "maw": None,
+        "z_red": z.copy(),
+        "W_train": np.tile(w[:, None], (1, q_train.shape[0])),
+        "rbf": None,
+        "w_full": w_full,
+        "w_sel": w_full[z],
+        "renorm_target": float(np.sum(w)),
+        "recon_rel": 0.0,
+        "rhs_mode": np.array(["fixed_classic"]),
+        "fixed_classic": True,
+        "sum_target": float(np.sum(w)),
+        "sum_constraint": int(0),
     }
 
 
@@ -1092,6 +1395,7 @@ def _save_stage12b_file(out_file, dataset, ecm_fixed, results, args):
         "MAW_VERSION": np.array(["v1"]),
         "maw_q_dim": np.array([int(dataset["q_m_res"].shape[1])], dtype=np.int64),
         "maw_targets": np.array([",".join(maw_enabled_targets)]),
+        "maw_res_mode": np.array([str(args.res_mode)]),
         "maw_hom_mode": np.array(
             ["disabled" if bool(int(args.disable_homogenization)) else str(args.hom_mode)]
         ),
@@ -1109,6 +1413,11 @@ def _save_stage12b_file(out_file, dataset, ecm_fixed, results, args):
             [int(args.smooth_laplacian_all_iterations)], dtype=np.int64
         ),
         "maw_min_support_size_res": np.array([int(args.maw_min_support_size_res)], dtype=np.int64),
+        "maw_min_support_size_eps": np.array([int(args.maw_min_support_size_eps)], dtype=np.int64),
+        "maw_min_support_size_sig": np.array([int(args.maw_min_support_size_sig)], dtype=np.int64),
+        "maw_phase1_stop_size_res": np.array([int(args.maw_phase1_stop_size_res)], dtype=np.int64),
+        "maw_phase1_stop_size_eps": np.array([int(args.maw_phase1_stop_size_eps)], dtype=np.int64),
+        "maw_phase1_stop_size_sig": np.array([int(args.maw_phase1_stop_size_sig)], dtype=np.int64),
         "maw_max_number_zeros_active_set_loop": np.array(
             [int(args.max_number_zeros_active_set_loop_maw_ecm)], dtype=np.int64
         ),
@@ -1119,12 +1428,19 @@ def _save_stage12b_file(out_file, dataset, ecm_fixed, results, args):
         ),
         "maw_stage2_criterion": np.array([int(args.criterion)], dtype=np.int64),
         "maw_incremental_smoothing": np.array([int(args.incremental_smoothing)], dtype=np.int64),
+        "maw_hom_weight_regressor": np.array([str(args.maw_hom_weight_regressor)]),
         "maw_rbf_clip_nonnegative": np.array([int(args.rbf_clip_nonnegative)], dtype=np.int64),
         "maw_rbf_renorm": np.array([int(args.rbf_renorm)], dtype=np.int64),
         "maw_postprocess_mode": np.array(
             [
-                ("clip+" if int(args.rbf_clip_nonnegative) else "")
-                + ("renorm" if int(args.rbf_renorm) else "none")
+                (
+                    "softmax_sum"
+                    if str(args.maw_hom_weight_regressor).strip().lower() == "ann"
+                    else (
+                        ("clip+" if int(args.rbf_clip_nonnegative) else "")
+                        + ("renorm" if int(args.rbf_renorm) else "none")
+                    )
+                )
             ]
         ),
     }
@@ -1136,7 +1452,10 @@ def _save_stage12b_file(out_file, dataset, ecm_fixed, results, args):
     for t in ("res", "eps", "sig"):
         rec = results[t]
         maw = rec["maw"]
-        rbf = rec["rbf"]
+        rbf = rec.get("rbf", None)
+        ann = rec.get("ann", None)
+        weight_model = rec.get("weight_model", rbf if rbf is not None else ann)
+        regressor_type = str(rec.get("regressor_type", "rbf" if rbf is not None else "none")).strip().lower()
         prefix = f"maw_{t}_"
 
         payload[prefix + "Z_ini"] = np.asarray(rec["z_ini"], dtype=np.int64)
@@ -1144,9 +1463,46 @@ def _save_stage12b_file(out_file, dataset, ecm_fixed, results, args):
         payload[prefix + "sample_ids"] = np.asarray(rec["ids"], dtype=np.int64)
         payload[prefix + "q_train"] = np.asarray(rec["q_train"], dtype=float)
         payload[prefix + "mu_train"] = np.asarray(rec["mu_train"], dtype=float)
+        payload[prefix + "coord_label"] = np.array([str(rec.get("coord_label", "q"))])
+        payload[prefix + "coord_train"] = np.asarray(
+            rec.get("coord_train", rec["q_train"]),
+            dtype=float,
+        )
+        payload[prefix + "component_scales"] = np.asarray(
+            rec.get("component_scales", np.ones(0, dtype=float)),
+            dtype=float,
+        )
+        payload[prefix + "regressor_type"] = np.array([regressor_type])
         payload[prefix + "W_train"] = np.asarray(rec["W_train"], dtype=float)
         payload[prefix + "b_train"] = np.asarray(rec["b_train"], dtype=float)
         payload[prefix + "m_constraints"] = np.array([int(rec["A_m"])], dtype=np.int64)
+        payload[prefix + "m_constraints_per_block"] = np.asarray(
+            rec.get(
+                "m_constraints_per_block",
+                np.full(
+                    int(np.asarray(rec["q_train"]).shape[0]),
+                    int(rec["A_m"]),
+                    dtype=np.int64,
+                ),
+            ),
+            dtype=np.int64,
+        )
+        rowspace_info = dict(rec.get("rowspace_info", {}))
+        payload[prefix + "rowspace_rank_min"] = np.array(
+            [float(rowspace_info.get("rank_min", np.nan))], dtype=float
+        )
+        payload[prefix + "rowspace_rank_mean"] = np.array(
+            [float(rowspace_info.get("rank_mean", np.nan))], dtype=float
+        )
+        payload[prefix + "rowspace_rank_max"] = np.array(
+            [float(rowspace_info.get("rank_max", np.nan))], dtype=float
+        )
+        payload[prefix + "rowspace_reduced_blocks"] = np.array(
+            [int(rowspace_info.get("n_row_reduced", 0))], dtype=np.int64
+        )
+        payload[prefix + "rowspace_rank0_count"] = np.array(
+            [int(rowspace_info.get("n_rank_zero", 0))], dtype=np.int64
+        )
         payload[prefix + "recon_rel"] = np.array([float(rec["recon_rel"])], dtype=float)
         payload[prefix + "rhs_mode"] = np.array([str(np.ravel(rec["rhs_mode"])[0])])
         payload[prefix + "sum_constraint"] = np.array([int(rec.get("sum_constraint", 0))], dtype=np.int64)
@@ -1156,7 +1512,7 @@ def _save_stage12b_file(out_file, dataset, ecm_fixed, results, args):
             dtype=np.int64,
         )
         payload[prefix + "renorm_target"] = np.array([float(rec["renorm_target"])], dtype=float)
-        if maw is not None and rbf is not None:
+        if maw is not None and weight_model is not None:
             payload[prefix + "n_stop"] = np.array([int(maw["n_stop"])], dtype=np.int64)
             payload[prefix + "prune_history_active_counts"] = np.asarray(
                 maw["active_counts"], dtype=np.int64
@@ -1195,23 +1551,42 @@ def _save_stage12b_file(out_file, dataset, ecm_fixed, results, args):
             )
             payload[prefix + "stage_history"] = np.asarray(maw["stage_history"])
 
-            payload[prefix + "rbf_centers"] = np.asarray(rbf["centers"], dtype=float)
-            payload[prefix + "rbf_center_ids"] = np.asarray(rbf["center_ids"], dtype=np.int64)
-            payload[prefix + "rbf_length_scales"] = np.asarray(
-                rbf["length_scales"], dtype=float
-            )
-            payload[prefix + "rbf_alpha"] = np.asarray(rbf["Alpha"], dtype=float)
-            payload[prefix + "rbf_beta"] = np.asarray(rbf["Beta"], dtype=float)
-            payload[prefix + "rbf_scale"] = np.asarray(rbf["scale"], dtype=float)
-            payload[prefix + "rbf_poly_mode"] = np.array(
-                [int(rbf["poly_mode"])], dtype=np.int64
-            )
-            payload[prefix + "rbf_lambda"] = np.array(
-                [float(rbf["lambda_reg"])], dtype=float
-            )
-            payload[prefix + "rbf_n_centers"] = np.array(
-                [int(rbf["n_centers"])], dtype=np.int64
-            )
+            if regressor_type == "ann":
+                payload[prefix + "ann_x_mean"] = np.asarray(ann["x_mean"], dtype=float)
+                payload[prefix + "ann_x_std"] = np.asarray(ann["x_std"], dtype=float)
+                payload[prefix + "ann_activation"] = np.array([str(ann.get("activation", "silu"))])
+                payload[prefix + "ann_hidden_dims"] = np.asarray(
+                    ann.get("hidden_dims", np.zeros(0, dtype=np.int64)),
+                    dtype=np.int64,
+                )
+                payload[prefix + "ann_target_sum"] = np.array([float(ann["target_sum"])], dtype=float)
+                payload[prefix + "ann_n_layers"] = np.array([int(ann["n_layers"])], dtype=np.int64)
+                payload[prefix + "ann_best_epoch"] = np.array([int(ann.get("best_epoch", -1))], dtype=np.int64)
+                payload[prefix + "ann_best_val_loss"] = np.array([float(ann.get("best_val_loss", np.nan))], dtype=float)
+                payload[prefix + "ann_train_rel_error"] = np.array([float(ann.get("train_rel_error", np.nan))], dtype=float)
+                payload[prefix + "ann_val_rel_error"] = np.array([float(ann.get("val_rel_error", np.nan))], dtype=float)
+                payload[prefix + "ann_elapsed_sec"] = np.array([float(ann.get("elapsed_sec", np.nan))], dtype=float)
+                for i in range(int(ann["n_layers"])):
+                    payload[prefix + f"ann_W_{i}"] = np.asarray(ann[f"W_{i}"], dtype=float)
+                    payload[prefix + f"ann_b_{i}"] = np.asarray(ann[f"b_{i}"], dtype=float)
+            else:
+                payload[prefix + "rbf_centers"] = np.asarray(rbf["centers"], dtype=float)
+                payload[prefix + "rbf_center_ids"] = np.asarray(rbf["center_ids"], dtype=np.int64)
+                payload[prefix + "rbf_length_scales"] = np.asarray(
+                    rbf["length_scales"], dtype=float
+                )
+                payload[prefix + "rbf_alpha"] = np.asarray(rbf["Alpha"], dtype=float)
+                payload[prefix + "rbf_beta"] = np.asarray(rbf["Beta"], dtype=float)
+                payload[prefix + "rbf_scale"] = np.asarray(rbf["scale"], dtype=float)
+                payload[prefix + "rbf_poly_mode"] = np.array(
+                    [int(rbf["poly_mode"])], dtype=np.int64
+                )
+                payload[prefix + "rbf_lambda"] = np.array(
+                    [float(rbf["lambda_reg"])], dtype=float
+                )
+                payload[prefix + "rbf_n_centers"] = np.array(
+                    [int(rbf["n_centers"])], dtype=np.int64
+                )
 
     # Keep classical ECM baseline for traceability and comparisons.
     for k in (
@@ -1271,6 +1646,13 @@ def parse_args():
     p.add_argument("--fixed-ecm-dir", type=str, default=FIXED_ECM_DIR)
     p.add_argument("--out-dir", type=str, default=OUT_DIR)
     p.add_argument("--targets", type=str, default="res")
+    p.add_argument(
+        "--res-mode",
+        type=str,
+        default="maw",
+        choices=["maw", "fixed_classic"],
+        help="Residual handling: adaptive MAW-ECM (default) or keep the classical ECM residual rule fixed.",
+    )
     p.add_argument(
         "--hom-mode",
         type=str,
@@ -1411,6 +1793,17 @@ def parse_args():
     p.add_argument("--max-reduced-dim", type=int, default=2500)
     p.add_argument("--strict-constraint-rel-tol", type=float, default=1.0e-8)
     p.add_argument("--strict-negative-tol", type=float, default=1.0e-12)
+    p.add_argument(
+        "--maw-hom-rowspace-compress",
+        type=int,
+        default=1,
+        choices=[0, 1],
+        help=(
+            "If 1, eps/sig MAW local blocks are projected to their numerical row-space "
+            "after adding the sum constraint. This removes redundant equations before pruning."
+        ),
+    )
+    p.add_argument("--maw-hom-rowspace-tol-rel", type=float, default=1.0e-12)
 
     p.add_argument("--rbf-centers-res", type=int, default=0)
     p.add_argument("--rbf-centers-eps", type=int, default=0)
@@ -1420,6 +1813,28 @@ def parse_args():
     p.add_argument("--rbf-length-scale-factor", type=float, default=1.0)
     p.add_argument("--rbf-clip-nonnegative", type=int, default=1, choices=[0, 1])
     p.add_argument("--rbf-renorm", type=int, default=1, choices=[0, 1])
+    p.add_argument(
+        "--maw-hom-weight-regressor",
+        type=str,
+        default="rbf",
+        choices=["rbf", "ann"],
+        help="Regressor for eps/sig MAW weight fields. Residual MAW still uses RBF.",
+    )
+    p.add_argument("--maw-ann-hidden-dims", type=str, default="128,128,128")
+    p.add_argument("--maw-ann-activation", type=str, default="silu", choices=["silu", "tanh", "relu", "gelu"])
+    p.add_argument("--maw-ann-epochs", type=int, default=2000)
+    p.add_argument("--maw-ann-batch-size", type=int, default=2048)
+    p.add_argument("--maw-ann-lr", type=float, default=1.0e-3)
+    p.add_argument("--maw-ann-weight-decay", type=float, default=1.0e-6)
+    p.add_argument("--maw-ann-val-fraction", type=float, default=0.1)
+    p.add_argument("--maw-ann-patience", type=int, default=200)
+    p.add_argument("--maw-ann-seed", type=int, default=11)
+    p.add_argument(
+        "--maw-ann-mse-weight",
+        type=float,
+        default=10.0,
+        help="Extra probability-MSE weight added to the ANN KL loss.",
+    )
     p.add_argument(
         "--save-weight-field-plots",
         type=int,
@@ -1450,6 +1865,33 @@ def main():
     hom_mode = "fixed_classic" if hom_mode_raw == "fixed_stage9" else hom_mode_raw
     if disable_hom and hom_mode == "maw":
         raise ValueError("Homogenization is disabled; --hom-mode maw is not allowed.")
+    if (not disable_hom) and hom_mode == "maw":
+        missing_hom_targets = [t for t in ("eps", "sig") if t not in targets]
+        if missing_hom_targets:
+            raise ValueError(
+                "--hom-mode maw requires separated homogenization MAW targets. "
+                f"Missing targets: {missing_hom_targets}. Use --targets res,eps,sig."
+            )
+        if not bool(int(args.classic_constrain_sum_weights)):
+            raise ValueError(
+                "--hom-mode maw requires --classic-constrain-sum-weights 1 so the "
+                "initial eps/sig ECM rules are volume/sum preserving."
+            )
+        if not bool(int(args.enforce_sum_weights)):
+            raise ValueError(
+                "--hom-mode maw requires --enforce-sum-weights 1 for every local "
+                "eps/sig MAW block."
+            )
+        if str(args.maw_hom_weight_regressor).strip().lower() == "rbf" and not bool(int(args.rbf_clip_nonnegative)):
+            raise ValueError(
+                "--hom-mode maw requires --rbf-clip-nonnegative 1 so online eps/sig "
+                "weights remain nonnegative."
+            )
+        if str(args.maw_hom_weight_regressor).strip().lower() == "rbf" and not bool(int(args.rbf_renorm)):
+            raise ValueError(
+                "--hom-mode maw requires --rbf-renorm 1 so online eps/sig weights "
+                "preserve the target sum."
+            )
     args.hom_mode = hom_mode
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -1479,9 +1921,11 @@ def main():
     print(f"dataset_dir : {args.dataset_dir}")
     print(f"classic src : {classic_source}")
     print(f"disable hom: {int(disable_hom)}")
-    print(f"fixed_ecm   : {args.fixed_ecm_dir}")
+    fixed_ecm_label = str(args.fixed_ecm_dir) if classic_source == "file" else "<unused>"
+    print(f"fixed_ecm   : {fixed_ecm_label}")
     print(f"out_file    : {out_file}")
     print(f"maw targets : {targets}")
+    print(f"res_mode    : {args.res_mode}")
     print(f"hom_mode    : {hom_mode}")
     print(f"res pool/rhs: {args.res_candidate_pool} / {args.res_target_source}")
     print(f"graph mode  : {args.graph_mode}")
@@ -1493,13 +1937,20 @@ def main():
         print(f"N_s_res/hom : {dataset['ns_res']} / {dataset['ns_hom']}")
 
     results = {}
-    results["res"] = _run_target_maw(
-        target="res",
-        dataset=dataset,
-        ecm_fixed=ecm_fixed,
-        n_elem=n_elem,
-        args=args,
-    )
+    if str(args.res_mode).strip().lower() == "fixed_classic":
+        results["res"] = _build_fixed_res_target_result(dataset, ecm_fixed)
+        print(
+            f"  [RES] fixed classical residual support kept: |Z|={results['res']['z_red'].size} "
+            "(no residual MAW pruning)"
+        )
+    else:
+        results["res"] = _run_target_maw(
+            target="res",
+            dataset=dataset,
+            ecm_fixed=ecm_fixed,
+            n_elem=n_elem,
+            args=args,
+        )
 
     if disable_hom:
         for t in ("eps", "sig"):
@@ -1508,6 +1959,7 @@ def main():
     else:
         for t in ("eps", "sig"):
             if hom_mode == "maw" and t in targets:
+                print(f"  [Stage12b] Starting MAW target '{t}'...", flush=True)
                 results[t] = _run_target_maw(
                     target=t,
                     dataset=dataset,
@@ -1515,6 +1967,7 @@ def main():
                     n_elem=n_elem,
                     args=args,
                 )
+                print(f"  [Stage12b] Finished MAW target '{t}'.", flush=True)
             else:
                 results[t] = _build_fixed_hom_target_result(dataset, ecm_fixed, target=t)
                 print(
@@ -1524,13 +1977,14 @@ def main():
     if bool(int(args.save_weight_field_plots)):
         for t in ("res", "eps", "sig"):
             rec = results[t]
-            if rec["maw"] is None or rec["rbf"] is None:
+            if rec["maw"] is None or rec.get("weight_model", rec.get("rbf", None)) is None:
                 continue
+            print(f"  [Stage12b] Starting weight-field plots for '{t}'...", flush=True)
             rec["n_weight_field_plots"] = _plot_maw_weight_fields_3d(
-                q_train=rec["q_train"],
+                q_train=rec.get("coord_train", rec["q_train"]),
                 W_train=rec["W_train"],
                 z_red=rec["z_red"],
-                rbf_model=rec["rbf"],
+                rbf_model=rec.get("weight_model", rec.get("rbf")),
                 out_dir=args.out_dir,
                 target=t,
                 max_plots=int(args.max_weight_field_plots),
@@ -1539,7 +1993,10 @@ def main():
                 renorm_target=(
                     float(rec["renorm_target"]) if bool(int(args.rbf_renorm)) else None
                 ),
+                coord_label=rec.get("coord_label", "q"),
+                regressor_type=rec.get("regressor_type", "rbf"),
             )
+            print(f"  [Stage12b] Finished weight-field plots for '{t}'.", flush=True)
 
     _save_stage12b_file(
         out_file=out_file,
