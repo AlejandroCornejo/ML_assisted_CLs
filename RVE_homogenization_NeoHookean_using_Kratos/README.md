@@ -185,6 +185,12 @@ ANN chain:
 Stage1(FOM) + Stage2 -> Stage7a -> Stage7b -> Stage7c -> Stage8
 ```
 
+ANN-LS + MAW-ECM chain:
+
+```text
+Stage1(FOM) + Stage2 -> Stage7a-LS -> Stage7b-ANN-LS -> Stage9/Stage12 -> Stage6c -> Stage10
+```
+
 RBF chain:
 
 ```text
@@ -205,6 +211,7 @@ Final benchmark entrypoints:
 - `Stage8-POD-DL`: PROM-POD-DL benchmark
 - `Stage10`: FOM vs PROM-RBF vs HPROM-RBF
 - `Stage10-POD-DL`: FOM vs PROM-POD-DL vs HPROM-POD-DL
+- `Stage10-ANN-LS`: FOM vs PROM-ANN vs HPROM-ANN, with optional direct `D-HPROM-ANN`
 
 ## 3) Main Reduced Models
 
@@ -554,7 +561,7 @@ Again, this is an approximate tangent on the nonlinear manifold unless second-or
 Always run from:
 
 ```bash
-cd /home/kratos/ML_assisted_CLs/homogenization_NeoHookean_using_Kratos_Hole_Tension
+cd /home/kratos/ML_assisted_CLs_clean/RVE_homogenization_NeoHookean_using_Kratos
 ```
 
 ### Stage 0: Generate Training Trajectories
@@ -1093,7 +1100,7 @@ python3 stage9_compute_ecm_weights_gpr.py \
   --ecm-tol-eps 0 \
   --ecm-tol-sig 0
 
-python3 build_hrom_mesh_from_ecm.py \
+python3 stage6c_create_hrom_mdpa.py \
   --base-mesh rve_geometry \
   --ecm-file stage_9_hprom_gpr_data/ecm_weights_all.npz \
   --selection-key Z_union \
@@ -1372,7 +1379,7 @@ stage_9_hprom_rbf_data/ecm_weights_all.npz
 ### Stage 9c: Build HROM Mesh from ECM + Paper-Style Selection Image
 
 ```bash
-python3 build_hrom_mesh_from_ecm.py \
+python3 stage6c_create_hrom_mdpa.py \
   --base-mesh rve_geometry \
   --ecm-file stage_9_hprom_rbf_data/ecm_weights_all.npz \
   --selection-key Z_union \
@@ -1426,7 +1433,7 @@ python3 stage9_compute_ecm_weights_gpr.py \
 Build HROM mesh from GPR ECM selection:
 
 ```bash
-python3 build_hrom_mesh_from_ecm.py \
+python3 stage6c_create_hrom_mdpa.py \
   --base-mesh rve_geometry \
   --ecm-file stage_9_hprom_gpr_data/ecm_weights_all.npz \
   --selection-key Z_union \
@@ -1538,7 +1545,7 @@ python3 stage9_compute_ecm_weights_pod_dl.py \
 Build HROM mesh from POD-DL ECM selection:
 
 ```bash
-python3 build_hrom_mesh_from_ecm.py \
+python3 stage6c_create_hrom_mdpa.py \
   --base-mesh rve_geometry \
   --ecm-file stage_9_hprom_pod_dl_data/ecm_weights_all.npz \
   --selection-key Z_union \
@@ -1662,7 +1669,7 @@ python3 stage9_compute_ecm_weights_ann_ls.py \
 5) Build ANN-LS HROM mesh and update ECM file in place:
 
 ```bash
-python3 build_hrom_mesh_from_ecm.py \
+python3 stage6c_create_hrom_mdpa.py \
   --base-mesh rve_geometry \
   --ecm-file stage_9_hprom_ann_data_ls/ecm_weights_all.npz \
   --selection-key Z_union \
@@ -1683,6 +1690,195 @@ python3 stage8_test_prom_ann_ls.py --run-fom --run-hprom
 
 ```bash
 python3 stage10_test_hprom_ann_ls.py --run-fom --run-prom-ann --run-hprom-ann
+```
+
+### Current ANN-LS MAW-ECM Checkpoint
+
+This is the current working path for the ANN-LS HPROM with adaptive MAW-ECM
+weights. It is the path used for the latest timing/accuracy checks.
+
+Use the Kratos Eigen environment before launching Kratos-based scripts:
+
+```bash
+cd /home/kratos/ML_assisted_CLs_clean/RVE_homogenization_NeoHookean_using_Kratos
+source /home/kratos/set_up_kratos_eigen.sh
+```
+
+#### MAW-ECM constraints
+
+For each sampled state `j`, MAW-ECM computes a local positive cubature vector:
+
+```math
+\mathbf{w}_j \ge 0
+```
+
+that matches the local ECM target:
+
+```math
+\mathbf{A}_j \mathbf{w}_j = \mathbf{b}_j
+```
+
+and always enforces the total measure:
+
+```math
+\mathbf{1}^{T}\mathbf{w}_j = 990.
+```
+
+For non-componentwise homogenization, each strain or stress block contains the
+three homogenized components plus the sum constraint:
+
+```math
+\mathbf{A}_j^{\varepsilon}, \mathbf{A}_j^{\sigma}
+\in \mathbb{R}^{4 \times |\mathcal{Z}|}.
+```
+
+For componentwise homogenization, each scalar component has its own positive,
+sum-preserving rule:
+
+```math
+\mathbf{A}_{j,c}^{\varepsilon}, \mathbf{A}_{j,c}^{\sigma}
+\in \mathbb{R}^{2 \times |\mathcal{Z}_c|},
+\qquad
+c\in\{xx,yy,xy\}.
+```
+
+The current all-adaptive checkpoint uses:
+
+- `res`: MAW-ECM, phase 1 to `40`, graph phase 2 to `10`, RBF weight field.
+- `eps`: MAW-ECM, phase 1 to `40`, graph phase 2 to `10`, ANN weight field.
+- `sig`: MAW-ECM, phase 1 to `40`, graph phase 2 to `10`, ANN weight field.
+- Graph pruning is done on a uniform subset of `500` graph states.
+- Homogenization ANN weights are trained in `mu=(E_xx,E_yy,G_xy)` coordinates.
+- Sum of weights is forced to `990.0` and weights are kept positive.
+- The generated HROM mesh uses `Z_union` and currently contains `29` selected elements for this checkpoint.
+
+Build the current MAW-ECM model:
+
+```bash
+MPLCONFIGDIR=/tmp/mplcfg python3 stage12b_build_mawecm_model_gpr.py \
+  --dataset-dir stage_9_ecm_dataset_ann_ls_hom50 \
+  --classic-ecm-source file \
+  --fixed-ecm-dir stage_9_hprom_ann_data_ls_independent_sum990 \
+  --targets res,eps,sig \
+  --res-mode maw \
+  --hom-mode maw \
+  --disable-homogenization 0 \
+  --maw-hom-componentwise 0 \
+  --maw-min-support-size-res 10 \
+  --maw-min-support-size-eps 10 \
+  --maw-min-support-size-sig 10 \
+  --maw-phase1-stop-size-res 40 \
+  --maw-phase1-stop-size-eps 40 \
+  --maw-phase1-stop-size-sig 40 \
+  --use-global-graph-2ndstage 1 \
+  --smooth-laplacian-all-iterations 0 \
+  --alpha-smooth 1e2 \
+  --graph-mode knn \
+  --graph-knn 8 \
+  --maw-prune-graph-subsample-size 500 \
+  --maw-prune-graph-subsample-mode uniform \
+  --maw-prune-graph-subsample-seed 11 \
+  --max-number-zeros-active-set-loop-maw-ecm 1 \
+  --n-candidates-to-try 20 \
+  --max-reduced-dim 120000 \
+  --enforce-sum-weights 1 \
+  --sum-weights-target 990.0 \
+  --tol-rank-rel 1e-14 \
+  --maw-hom-rowspace-compress 1 \
+  --maw-hom-weight-regressor ann \
+  --maw-ann-hidden-dims 256,256,256 \
+  --maw-ann-activation gelu \
+  --maw-ann-epochs 4000 \
+  --maw-ann-batch-size 128 \
+  --maw-ann-lr 1e-3 \
+  --maw-ann-weight-decay 1e-6 \
+  --maw-ann-patience 500 \
+  --maw-ann-lr-scheduler 1 \
+  --maw-ann-lr-scheduler-factor 0.5 \
+  --maw-ann-lr-scheduler-patience 150 \
+  --maw-ann-min-lr 1e-6 \
+  --maw-ann-mse-weight 10.0 \
+  --maw-ann-physics-weight 1.0 \
+  --maw-ann-seed 11 \
+  --save-weight-field-plots 1 \
+  --max-weight-field-plots 20 \
+  --out-dir stage_12_hprom_ann_mawecm_res_eps_sig_phase1to40_phase2to10_sum990_ann
+```
+
+Build the HROM mdpa and save TeX-rendered selection plots:
+
+```bash
+MPLCONFIGDIR=/tmp/mplcfg python3 stage6c_create_hrom_mdpa.py \
+  --base-mesh rve_geometry \
+  --ecm-file stage_12_hprom_ann_mawecm_res_eps_sig_phase1to40_phase2to10_sum990_ann/ecm_weights_all.npz \
+  --selection-key Z_union \
+  --condition-mode all \
+  --output-mesh rve_geometry_stage12_hprom_ann_mawecm_res_eps_sig_phase1to40_phase2to10_sum990_ann_hrom \
+  --inplace-ecm \
+  --save-selection-image stage_12_hprom_ann_mawecm_res_eps_sig_phase1to40_phase2to10_sum990_ann/Z_union_selected_elements.png \
+  --save-extra-selection-images 1 \
+  --extra-selection-keys Z_res,Z_eps,Z_sig,Z_union \
+  --model-label HPROM-ANN-MAWECM \
+  --use-tex
+```
+
+Stage 10 automatically reads `hrom_mesh_base` from `ecm_weights_all.npz`.
+Therefore, after `stage6c_create_hrom_mdpa.py --inplace-ecm`, no extra
+`--use-hrom-mdpa` flag is needed in Stage 10.
+
+Run the optimized iterative HPROM and the direct no-Newton comparison:
+
+```bash
+MPLCONFIGDIR=/tmp/mplcfg python3 stage10_test_hprom_ann_ls.py \
+  --run-hprom-ann \
+  --run-hprom-ann-direct \
+  --ann-data-dir stage_7_ann_model_ls_newton \
+  --hprom-ann-dir stage_12_hprom_ann_mawecm_res_eps_sig_phase1to40_phase2to10_sum990_ann \
+  --hprom-homogenization-mode maw_dynamic \
+  --hprom-corrector-iters 25 \
+  --hprom-include-manifold-curvature 0 \
+  --qp-init-mode continuation \
+  --out-dir stage_10_hprom_ann_ls_results_mawecm_res_eps_sig_phase1to40_phase2to10_sum990_ann_hrom
+```
+
+The optimized current checkpoint has representative results:
+
+```text
+PROM-ANN  vs FOM                  : 7.7917e-05
+HPROM-ANN vs FOM                  : 2.5292e-03
+HPROM-ANN vs PROM-ANN             : 2.5143e-03
+D-HPROM-ANN vs FOM                : 2.5656e-03
+D-HPROM-ANN vs PROM-ANN           : 2.5496e-03
+HPROM-ANN RVE online kernel time  : about 3.9 s
+D-HPROM-ANN RVE online kernel time: about 0.5 s
+```
+
+#### Stage 10 options that matter
+
+- `--run-hprom-ann` runs the iterative HPROM-ANN corrector.
+- `--run-hprom-ann-direct` also runs `D-HPROM-ANN`, which evaluates the direct ANN prediction with no Newton correction.
+- `--hprom-corrector-iters 25` is the standard iterative mode.
+- `--hprom-corrector-iters 0` is the direct-only mode; the code forces `qp_init_mode='mu_affine'` for consistency.
+- `--qp-init-mode continuation` is recommended for the iterative corrector.
+- `--hprom-include-manifold-curvature 0` uses the fast Gauss-Newton/quasi-Newton tangent and avoids the expensive nonlinear-manifold Hessian term.
+- `--hprom-include-manifold-curvature 1` uses the exact curvature term; it is much slower and has not improved the current benchmark accuracy.
+- `--hprom-homogenization-mode maw_dynamic` evaluates the adaptive MAW homogenization weights online.
+- `--hprom-homogenization-mode ecm_fixed` keeps classical fixed homogenization weights.
+- `--hprom-maw-hom-eval-mode model` uses the saved ANN/RBF MAW weight model.
+- `--hprom-maw-hom-eval-mode nearest` and `--hprom-maw-hom-eval-mode oracle` are diagnostics using stored training weights; they should not be used as production timings.
+
+#### Timing interpretation
+
+Stage 10 reports two different timing classes:
+
+- `RVE online kernel time` is the relevant timing for an RVE material-call style benchmark. It excludes plotting, file I/O, result stacking, and most script bookkeeping.
+- `script wall time` includes Python launcher overhead, cached-array loading/saving, plotting, and diagnostics.
+
+For paper-style RVE timing comparisons, use the `RVE online kernel time`,
+`per step`, and `throughput` lines saved in:
+
+```bash
+stage_10_hprom_ann_ls_results_mawecm_res_eps_sig_phase1to40_phase2to10_sum990_ann_hrom/hprom_ann_timing_stats.txt
 ```
 
 The file:
@@ -1740,6 +1936,7 @@ prom_solver_rve.py
 hprom_solver_rve.py
 hprom_rbf_solver_rve.py
 hprom_gpr_solver_rve.py
+hprom_ann_solver_rve.py
 prom_ann_solver_rve.py
 prom_rbf_solver_rve.py
 prom_gpr_solver_rve.py
@@ -1757,7 +1954,10 @@ stage4_test_rve.py
 stage5_build_ecm_dataset.py
 stage5_compute_ecm_weights.py
 stage6_test_hprom.py
+stage6c_create_hrom_mdpa.py
 stage7a_prepare_ann_rbf_dataset.py
+stage7a_prepare_ann_dataset_ls.py
+stage7a_prepare_rbf_dataset_ls.py
 stage7a_prepare_pod_dl_dataset.py
 stage7b_train_ann_manifold.py
 stage7b_train_rbf_manifold.py
@@ -1768,15 +1968,21 @@ stage7c_test_rbf_rom.py
 stage7c_test_pod_dl_rom.py
 stage7c_compare_bounds.py
 stage8_test_prom_ann.py
+stage8_test_prom_ann_ls.py
 stage8_test_prom_rbf.py
 stage8_test_prom_gpr.py
 stage8_test_prom_dl.py
+stage9_build_ecm_dataset_ann_ls.py
 stage9_build_ecm_dataset_rbf.py
 stage9_build_ecm_dataset_gpr.py
+stage9_compute_ecm_weights_ann_ls.py
 stage9_compute_ecm_weights_rbf.py
 stage9_compute_ecm_weights_gpr.py
+stage10_test_hprom_ann_ls.py
 stage10_test_hprom_rbf.py
 stage10_test_hprom_gpr.py
+stage12a_build_mawecm_dataset_gpr.py
+stage12b_build_mawecm_model_gpr.py
 ```
 
 ### Inputs
