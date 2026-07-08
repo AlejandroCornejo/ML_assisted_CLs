@@ -8,6 +8,7 @@ Stage-5-style RSVD + ECM workflow with configurable coupling mode:
   - cascade: EPS starts from Z_res, SIG starts from Z_eps (legacy "coupled")
   - independent: RES/EPS/SIG start independently
   - single: one ECM solve shared by RES/EPS/SIG
+  - hom split: optional independent ECM rules for normal/shear hom components
 """
 
 import os
@@ -178,6 +179,16 @@ def parse_args():
         default=-1.0,
         help="Tolerance for single aggregated basis (<=0 uses min of res/eps/sig tolerances).",
     )
+    p.add_argument(
+        "--hom-ecm-split-mode",
+        type=str,
+        default="combined",
+        help=(
+            "Homogenization ECM split. combined = legacy EPS(3 comps) and SIG(3 comps). "
+            "normal_shear_4 = EPS normals, gamma_xy, SIG normals, sigma_xy as four "
+            "independent ECM rules. Use with --ecm-coupling-mode independent."
+        ),
+    )
     return p.parse_args()
 
 
@@ -205,6 +216,25 @@ def normalize_single_block_normalization(mode_raw):
         return "none"
     raise ValueError(
         f"Unsupported --single-block-normalization='{mode_raw}'. Use one of: fro, row, none."
+    )
+
+
+def normalize_hom_ecm_split_mode(mode_raw):
+    mode = str(mode_raw).strip().lower()
+    if mode in ("combined", "legacy", "none", "off"):
+        return "combined"
+    if mode in (
+        "normal_shear_4",
+        "normal-shear-4",
+        "norm_shear",
+        "normals_shear",
+        "4",
+        "four",
+    ):
+        return "normal_shear_4"
+    raise ValueError(
+        f"Unsupported --hom-ecm-split-mode='{mode_raw}'. "
+        "Use one of: combined, normal_shear_4."
     )
 
 
@@ -260,6 +290,21 @@ def _meta_int(meta, key, fallback_key=None):
     raise KeyError(f"Missing metadata key '{key}'")
 
 
+def _componentwise_hom_prediction(C_blk, w_eps_components_full, w_sig_components_full):
+    eps_w = np.asarray(w_eps_components_full, dtype=float)
+    sig_w = np.asarray(w_sig_components_full, dtype=float)
+    if eps_w.shape != (3, C_blk.shape[2]):
+        raise RuntimeError(f"Invalid eps component weights shape {eps_w.shape}; expected (3,{C_blk.shape[2]}).")
+    if sig_w.shape != (3, C_blk.shape[2]):
+        raise RuntimeError(f"Invalid sig component weights shape {sig_w.shape}; expected (3,{C_blk.shape[2]}).")
+    pred_eps = np.zeros((C_blk.shape[0], 3), dtype=float)
+    pred_sig = np.zeros((C_blk.shape[0], 3), dtype=float)
+    for comp in range(3):
+        pred_eps[:, comp] = C_blk[:, comp, :] @ eps_w[comp, :]
+        pred_sig[:, comp] = C_blk[:, 3 + comp, :] @ sig_w[comp, :]
+    return pred_eps.reshape(-1), pred_sig.reshape(-1)
+
+
 def main():
     args = parse_args()
     data_dir = str(args.data_dir)
@@ -290,6 +335,12 @@ def main():
 
     coupling_mode = normalize_ecm_coupling_mode(args.ecm_coupling_mode)
     single_block_norm = normalize_single_block_normalization(args.single_block_normalization)
+    hom_split_mode = normalize_hom_ecm_split_mode(args.hom_ecm_split_mode)
+    if hom_split_mode != "combined" and coupling_mode != "independent":
+        raise ValueError(
+            "--hom-ecm-split-mode normal_shear_4 requires --ecm-coupling-mode independent. "
+            "Cascade/single coupling would mix the four hom component rules again."
+        )
     tol_single = float(args.rsvd_tol_single)
     if tol_single <= 0.0:
         tol_single = float(min(args.rsvd_tol_res, args.rsvd_tol_eps, args.rsvd_tol_sig))
@@ -306,6 +357,7 @@ def main():
     print(f"  data_dir       = {data_dir}")
     print(f"  out_dir        = {out_dir}")
     print(f"  coupling mode  = {coupling_mode} (input='{args.ecm_coupling_mode}')")
+    print(f"  hom split mode = {hom_split_mode} (input='{args.hom_ecm_split_mode}')")
     print(f"  sum(w) cons.   = {int(args.constrain_sum_weights)}")
     if coupling_mode == "single":
         print(
@@ -349,6 +401,14 @@ def main():
     b_eps = b_blk[:, 0:3].reshape(n_rows_eps)
     C_sig = C_blk[:, 3:6, :].reshape(n_rows_sig, n_elem)
     b_sig = b_blk[:, 3:6].reshape(n_rows_sig)
+    C_eps_norm = C_blk[:, 0:2, :].reshape(2 * ns_hom, n_elem)
+    b_eps_norm = b_blk[:, 0:2].reshape(2 * ns_hom)
+    C_eps_xy = C_blk[:, 2, :]
+    b_eps_xy = b_blk[:, 2]
+    C_sig_norm = C_blk[:, 3:5, :].reshape(2 * ns_hom, n_elem)
+    b_sig_norm = b_blk[:, 3:5].reshape(2 * ns_hom)
+    C_sig_xy = C_blk[:, 5, :]
+    b_sig_xy = b_blk[:, 5]
 
     # ECM selection according to coupling mode
     eSVD_all = np.nan
@@ -360,6 +420,10 @@ def main():
         eSVD_res = np.nan
         eSVD_eps = np.nan
         eSVD_sig = np.nan
+        eSVD_eps_norm = np.nan
+        eSVD_eps_xy = np.nan
+        eSVD_sig_norm = np.nan
+        eSVD_sig_xy = np.nan
         U_all, _, eSVD_all, scales = build_single_basis_from_blocks(
             Q_res,
             C_eps,
@@ -371,8 +435,30 @@ def main():
         alpha_res, alpha_eps, alpha_sig, _ = scales
     else:
         U_res, _, eSVD_res = run_rsvd_on_transpose(Q_res.T, args.rsvd_tol_res, label="RES")
-        U_eps, _, eSVD_eps = run_rsvd_on_transpose(C_eps.T, args.rsvd_tol_eps, label="EPS")
-        U_sig, _, eSVD_sig = run_rsvd_on_transpose(C_sig.T, args.rsvd_tol_sig, label="SIG")
+        if hom_split_mode == "normal_shear_4":
+            eSVD_eps = np.nan
+            eSVD_sig = np.nan
+            U_eps = None
+            U_sig = None
+            U_eps_norm, _, eSVD_eps_norm = run_rsvd_on_transpose(
+                C_eps_norm.T, args.rsvd_tol_eps, label="EPS_NORM"
+            )
+            U_eps_xy, _, eSVD_eps_xy = run_rsvd_on_transpose(
+                C_eps_xy.T, args.rsvd_tol_eps, label="EPS_XY"
+            )
+            U_sig_norm, _, eSVD_sig_norm = run_rsvd_on_transpose(
+                C_sig_norm.T, args.rsvd_tol_sig, label="SIG_NORM"
+            )
+            U_sig_xy, _, eSVD_sig_xy = run_rsvd_on_transpose(
+                C_sig_xy.T, args.rsvd_tol_sig, label="SIG_XY"
+            )
+        else:
+            U_eps, _, eSVD_eps = run_rsvd_on_transpose(C_eps.T, args.rsvd_tol_eps, label="EPS")
+            U_sig, _, eSVD_sig = run_rsvd_on_transpose(C_sig.T, args.rsvd_tol_sig, label="SIG")
+            eSVD_eps_norm = np.nan
+            eSVD_eps_xy = np.nan
+            eSVD_sig_norm = np.nan
+            eSVD_sig_xy = np.nan
 
     if coupling_mode == "single":
         ecm_tol_all = float(min(args.ecm_tol_res, args.ecm_tol_eps, args.ecm_tol_sig))
@@ -392,6 +478,18 @@ def main():
         Z_res, Z_eps, Z_sig = Z_all.copy(), Z_all.copy(), Z_all.copy()
         w_res_sel, w_eps_sel, w_sig_sel = w_all_sel.copy(), w_all_sel.copy(), w_all_sel.copy()
         w_res_full, w_eps_full, w_sig_full = w_all_full.copy(), w_all_full.copy(), w_all_full.copy()
+        Z_eps_norm = np.zeros(0, dtype=int)
+        Z_eps_xy = np.zeros(0, dtype=int)
+        Z_sig_norm = np.zeros(0, dtype=int)
+        Z_sig_xy = np.zeros(0, dtype=int)
+        w_eps_norm_sel = np.zeros(0, dtype=float)
+        w_eps_xy_sel = np.zeros(0, dtype=float)
+        w_sig_norm_sel = np.zeros(0, dtype=float)
+        w_sig_xy_sel = np.zeros(0, dtype=float)
+        w_eps_norm_full = np.zeros(n_elem, dtype=float)
+        w_eps_xy_full = np.zeros(n_elem, dtype=float)
+        w_sig_norm_full = np.zeros(n_elem, dtype=float)
+        w_sig_xy_full = np.zeros(n_elem, dtype=float)
     else:
         Z_res, w_res_sel, w_res_full = run_ecm(
             U_basis=U_res,
@@ -402,26 +500,83 @@ def main():
             max_unsuccessful_it=args.max_unsuccessful_it,
             constrain_sum_of_weights=bool(int(args.constrain_sum_weights)),
         )
-        eps_init = np.array(Z_res, dtype=int) if coupling_mode == "cascade" else None
-        Z_eps, w_eps_sel, w_eps_full = run_ecm(
-            U_basis=U_eps,
-            n_elem=n_elem,
-            ecm_tol=args.ecm_tol_eps,
-            init_candidates=eps_init,
-            label="EPS",
-            max_unsuccessful_it=args.max_unsuccessful_it,
-            constrain_sum_of_weights=bool(int(args.constrain_sum_weights)),
-        )
-        sig_init = np.array(Z_eps, dtype=int) if coupling_mode == "cascade" else None
-        Z_sig, w_sig_sel, w_sig_full = run_ecm(
-            U_basis=U_sig,
-            n_elem=n_elem,
-            ecm_tol=args.ecm_tol_sig,
-            init_candidates=sig_init,
-            label="SIG",
-            max_unsuccessful_it=args.max_unsuccessful_it,
-            constrain_sum_of_weights=bool(int(args.constrain_sum_weights)),
-        )
+        if hom_split_mode == "normal_shear_4":
+            Z_eps_norm, w_eps_norm_sel, w_eps_norm_full = run_ecm(
+                U_basis=U_eps_norm,
+                n_elem=n_elem,
+                ecm_tol=args.ecm_tol_eps,
+                init_candidates=None,
+                label="EPS_NORM",
+                max_unsuccessful_it=args.max_unsuccessful_it,
+                constrain_sum_of_weights=bool(int(args.constrain_sum_weights)),
+            )
+            Z_eps_xy, w_eps_xy_sel, w_eps_xy_full = run_ecm(
+                U_basis=U_eps_xy,
+                n_elem=n_elem,
+                ecm_tol=args.ecm_tol_eps,
+                init_candidates=None,
+                label="EPS_XY",
+                max_unsuccessful_it=args.max_unsuccessful_it,
+                constrain_sum_of_weights=bool(int(args.constrain_sum_weights)),
+            )
+            Z_sig_norm, w_sig_norm_sel, w_sig_norm_full = run_ecm(
+                U_basis=U_sig_norm,
+                n_elem=n_elem,
+                ecm_tol=args.ecm_tol_sig,
+                init_candidates=None,
+                label="SIG_NORM",
+                max_unsuccessful_it=args.max_unsuccessful_it,
+                constrain_sum_of_weights=bool(int(args.constrain_sum_weights)),
+            )
+            Z_sig_xy, w_sig_xy_sel, w_sig_xy_full = run_ecm(
+                U_basis=U_sig_xy,
+                n_elem=n_elem,
+                ecm_tol=args.ecm_tol_sig,
+                init_candidates=None,
+                label="SIG_XY",
+                max_unsuccessful_it=args.max_unsuccessful_it,
+                constrain_sum_of_weights=bool(int(args.constrain_sum_weights)),
+            )
+            Z_eps = np.union1d(Z_eps_norm, Z_eps_xy).astype(int)
+            Z_sig = np.union1d(Z_sig_norm, Z_sig_xy).astype(int)
+            w_eps_full = np.vstack([w_eps_norm_full, w_eps_norm_full, w_eps_xy_full])
+            w_sig_full = np.vstack([w_sig_norm_full, w_sig_norm_full, w_sig_xy_full])
+            # No single meaningful selected-weight vector exists for a component-wise rule.
+            w_eps_sel = np.zeros(0, dtype=float)
+            w_sig_sel = np.zeros(0, dtype=float)
+        else:
+            Z_eps_norm = np.zeros(0, dtype=int)
+            Z_eps_xy = np.zeros(0, dtype=int)
+            Z_sig_norm = np.zeros(0, dtype=int)
+            Z_sig_xy = np.zeros(0, dtype=int)
+            w_eps_norm_sel = np.zeros(0, dtype=float)
+            w_eps_xy_sel = np.zeros(0, dtype=float)
+            w_sig_norm_sel = np.zeros(0, dtype=float)
+            w_sig_xy_sel = np.zeros(0, dtype=float)
+            w_eps_norm_full = np.zeros(n_elem, dtype=float)
+            w_eps_xy_full = np.zeros(n_elem, dtype=float)
+            w_sig_norm_full = np.zeros(n_elem, dtype=float)
+            w_sig_xy_full = np.zeros(n_elem, dtype=float)
+            eps_init = np.array(Z_res, dtype=int) if coupling_mode == "cascade" else None
+            Z_eps, w_eps_sel, w_eps_full = run_ecm(
+                U_basis=U_eps,
+                n_elem=n_elem,
+                ecm_tol=args.ecm_tol_eps,
+                init_candidates=eps_init,
+                label="EPS",
+                max_unsuccessful_it=args.max_unsuccessful_it,
+                constrain_sum_of_weights=bool(int(args.constrain_sum_weights)),
+            )
+            sig_init = np.array(Z_eps, dtype=int) if coupling_mode == "cascade" else None
+            Z_sig, w_sig_sel, w_sig_full = run_ecm(
+                U_basis=U_sig,
+                n_elem=n_elem,
+                ecm_tol=args.ecm_tol_sig,
+                init_candidates=sig_init,
+                label="SIG",
+                max_unsuccessful_it=args.max_unsuccessful_it,
+                constrain_sum_of_weights=bool(int(args.constrain_sum_weights)),
+            )
 
     b_hp_res = Q_res @ w_res_full
     err_hp_res = rel_error(b_hp_res, b_res)
@@ -430,19 +585,36 @@ def main():
     print(f"[RES] Final check ||Q·w − b|| / ||b|| = {err_hp_res:.3e}")
     print(f"[RES] Final check ||Q·w − b||         = {abs_hp_res:.3e}  (max |.| = {max_hp_res:.3e})")
 
-    b_hp_eps = C_eps @ w_eps_full
+    if hom_split_mode == "normal_shear_4":
+        b_hp_eps, b_hp_sig = _componentwise_hom_prediction(
+            C_blk,
+            w_eps_components_full=w_eps_full,
+            w_sig_components_full=w_sig_full,
+        )
+    else:
+        b_hp_eps = C_eps @ w_eps_full
+        b_hp_sig = C_sig @ w_sig_full
     err_hp_eps = rel_error(b_hp_eps, b_eps)
     abs_hp_eps = np.linalg.norm(b_hp_eps - b_eps)
     max_hp_eps = np.max(np.abs(b_hp_eps - b_eps))
     print(f"[EPS] Final check ||C_eps·w − b_eps|| / ||b_eps|| = {err_hp_eps:.3e}")
     print(f"[EPS] Final check ||C_eps·w − b_eps||             = {abs_hp_eps:.3e}  (max |.| = {max_hp_eps:.3e})")
 
-    b_hp_sig = C_sig @ w_sig_full
     err_hp_sig = rel_error(b_hp_sig, b_sig)
     abs_hp_sig = np.linalg.norm(b_hp_sig - b_sig)
     max_hp_sig = np.max(np.abs(b_hp_sig - b_sig))
     print(f"[SIG] Final check ||C_sig·w − b_sig|| / ||b_sig|| = {err_hp_sig:.3e}")
     print(f"[SIG] Final check ||C_sig·w − b_sig||             = {abs_hp_sig:.3e}  (max |.| = {max_hp_sig:.3e})")
+    if hom_split_mode == "normal_shear_4":
+        err_eps_norm = rel_error(C_eps_norm @ w_eps_norm_full, b_eps_norm)
+        err_eps_xy = rel_error(C_eps_xy @ w_eps_xy_full, b_eps_xy)
+        err_sig_norm = rel_error(C_sig_norm @ w_sig_norm_full, b_sig_norm)
+        err_sig_xy = rel_error(C_sig_xy @ w_sig_xy_full, b_sig_xy)
+        print(
+            "[HOM-SPLIT] component checks: "
+            f"eps_norm={err_eps_norm:.3e}, eps_xy={err_eps_xy:.3e}, "
+            f"sig_norm={err_sig_norm:.3e}, sig_xy={err_sig_xy:.3e}"
+        )
 
     Z_union = np.union1d(np.union1d(Z_res, Z_eps), Z_sig).astype(int)
 
@@ -453,6 +625,12 @@ def main():
     print(f"  |Z_eps|   = {Z_eps.size:5d}  ({100.0 * Z_eps.size / n_elem:.1f}%)")
     print(f"  |Z_sig|   = {Z_sig.size:5d}  ({100.0 * Z_sig.size / n_elem:.1f}%)")
     print(f"  |Z_union| = {Z_union.size:5d}  ({100.0 * Z_union.size / n_elem:.1f}%)")
+    if hom_split_mode == "normal_shear_4":
+        print(
+            "  hom split detail: "
+            f"|Z_eps_norm|={Z_eps_norm.size}, |Z_eps_xy|={Z_eps_xy.size}, "
+            f"|Z_sig_norm|={Z_sig_norm.size}, |Z_sig_xy|={Z_sig_xy.size}"
+        )
     if coupling_mode == "cascade":
         print("  coupling detail: cascade (EPS initialized with Z_res, SIG initialized with Z_eps)")
     elif coupling_mode == "single":
@@ -474,8 +652,22 @@ def main():
         w_res_full=w_res_full,
         w_eps=w_eps_sel,
         w_eps_full=w_eps_full,
+        w_eps_components_full=w_eps_full,
+        Z_eps_norm=Z_eps_norm,
+        w_eps_norm=w_eps_norm_sel,
+        w_eps_norm_full=w_eps_norm_full,
+        Z_eps_xy=Z_eps_xy,
+        w_eps_xy=w_eps_xy_sel,
+        w_eps_xy_full=w_eps_xy_full,
         w_sig=w_sig_sel,
         w_sig_full=w_sig_full,
+        w_sig_components_full=w_sig_full,
+        Z_sig_norm=Z_sig_norm,
+        w_sig_norm=w_sig_norm_sel,
+        w_sig_norm_full=w_sig_norm_full,
+        Z_sig_xy=Z_sig_xy,
+        w_sig_xy=w_sig_xy_sel,
+        w_sig_xy_full=w_sig_xy_full,
         nq=nq,
         Ns_res=ns_res,
         Ns_hom=ns_hom,
@@ -485,15 +677,37 @@ def main():
         rel_error_res=err_hp_res,
         RSVD_TOL_EPS=float(args.rsvd_tol_eps),
         eSVD_eps=eSVD_eps,
+        eSVD_eps_norm=eSVD_eps_norm,
+        eSVD_eps_xy=eSVD_eps_xy,
         rel_error_eps=err_hp_eps,
+        rel_error_eps_norm=np.array(
+            [err_eps_norm if hom_split_mode == "normal_shear_4" else np.nan],
+            dtype=float,
+        ),
+        rel_error_eps_xy=np.array(
+            [err_eps_xy if hom_split_mode == "normal_shear_4" else np.nan],
+            dtype=float,
+        ),
         RSVD_TOL_SIG=float(args.rsvd_tol_sig),
         eSVD_sig=eSVD_sig,
+        eSVD_sig_norm=eSVD_sig_norm,
+        eSVD_sig_xy=eSVD_sig_xy,
         rel_error_sig=err_hp_sig,
+        rel_error_sig_norm=np.array(
+            [err_sig_norm if hom_split_mode == "normal_shear_4" else np.nan],
+            dtype=float,
+        ),
+        rel_error_sig_xy=np.array(
+            [err_sig_xy if hom_split_mode == "normal_shear_4" else np.nan],
+            dtype=float,
+        ),
         ECM_TOL_RES=float(args.ecm_tol_res),
         ECM_TOL_EPS=float(args.ecm_tol_eps),
         ECM_TOL_SIG=float(args.ecm_tol_sig),
         ECM_COUPLING_MODE=np.array([coupling_mode]),
         ECM_COUPLING_MODE_INPUT=np.array([str(args.ecm_coupling_mode)]),
+        HOM_ECM_SPLIT_MODE=np.array([hom_split_mode]),
+        HOM_ECM_SPLIT_MODE_INPUT=np.array([str(args.hom_ecm_split_mode)]),
         ECM_CONSTRAIN_SUM_WEIGHTS=np.array([int(args.constrain_sum_weights)], dtype=np.int64),
         SINGLE_BASIS_BUILD=np.array(["single_matrix_rsvd"]),
         SINGLE_BLOCK_NORMALIZATION=np.array([single_block_norm]),

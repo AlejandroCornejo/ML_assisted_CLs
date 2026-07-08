@@ -69,18 +69,24 @@ def _as_str_scalar(arr, key, default=""):
     return str(np.ravel(arr[key])[0])
 
 
-def _build_maw_hom_target_model(ecm_data, target):
+def _build_maw_hom_target_model(ecm_data, target, prefix=None, z_key=None, target_label=None):
     t = str(target).strip().lower()
     if t not in ("eps", "sig"):
         raise ValueError(f"Unsupported MAW homogenization target '{target}'.")
-    z_key = {"eps": "Z_eps", "sig": "Z_sig"}[t]
-    prefix = f"maw_{t}_"
+    z_key = z_key or {"eps": "Z_eps", "sig": "Z_sig"}[t]
+    prefix = prefix or f"maw_{t}_"
+    label = str(target_label or t)
     regressor_type = _as_str_scalar(ecm_data, prefix + "regressor_type", default="rbf").strip().lower()
-    if regressor_type not in ("rbf", "ann"):
+    if regressor_type not in ("rbf", "ann", "fixed_classic"):
         raise RuntimeError(
-            f"[HPROM-ANN] Unsupported MAW homogenization regressor '{regressor_type}' for {t}."
+            f"[HPROM-ANN] Unsupported MAW homogenization regressor '{regressor_type}' for {label}."
         )
-    if regressor_type == "ann":
+    if regressor_type == "fixed_classic":
+        required = [
+            z_key,
+            prefix + "w_fixed",
+        ]
+    elif regressor_type == "ann":
         required = [
             z_key,
             prefix + "ann_x_mean",
@@ -101,11 +107,11 @@ def _build_maw_hom_target_model(ecm_data, target):
         ]
     missing = [k for k in required if k not in ecm_data]
     if missing:
-        raise RuntimeError(f"[HPROM-ANN] Missing MAW homogenization keys for {t}: {missing}")
+        raise RuntimeError(f"[HPROM-ANN] Missing MAW homogenization keys for {label}: {missing}")
 
     z_support_full = np.asarray(ecm_data[z_key], dtype=np.int64).reshape(-1)
     if z_support_full.size == 0:
-        raise RuntimeError(f"[HPROM-ANN] Empty MAW homogenization support for {t}.")
+        raise RuntimeError(f"[HPROM-ANN] Empty MAW homogenization support for {label}.")
 
     renorm_enabled = (
         bool(_as_int_scalar(ecm_data, "maw_rbf_renorm"))
@@ -123,12 +129,43 @@ def _build_maw_hom_target_model(ecm_data, target):
     coord_label = _as_str_scalar(ecm_data, prefix + "coord_label", default="q").strip().lower()
     if coord_label not in ("q", "mu"):
         raise RuntimeError(
-            f"[HPROM-ANN] Unsupported MAW homogenization coordinate '{coord_label}' for {t}."
+            f"[HPROM-ANN] Unsupported MAW homogenization coordinate '{coord_label}' for {label}."
         )
 
     rbf_model = None
     ann_model = None
-    if regressor_type == "ann":
+    w_fixed = None
+    coord_train = None
+    W_train = None
+    if (prefix + "coord_train") in ecm_data and (prefix + "W_train") in ecm_data:
+        coord_train = np.asarray(ecm_data[prefix + "coord_train"], dtype=float)
+        W_train = np.asarray(ecm_data[prefix + "W_train"], dtype=float)
+        if coord_train.ndim != 2:
+            raise RuntimeError(
+                f"[HPROM-ANN] Invalid MAW {label} coord_train shape {coord_train.shape}; expected 2D."
+            )
+        if W_train.ndim != 2:
+            raise RuntimeError(
+                f"[HPROM-ANN] Invalid MAW {label} W_train shape {W_train.shape}; expected 2D."
+            )
+        if W_train.shape[0] != z_support_full.size:
+            raise RuntimeError(
+                f"[HPROM-ANN] Invalid MAW {label} W_train/support mismatch: "
+                f"{W_train.shape[0]} vs {z_support_full.size}."
+            )
+        if W_train.shape[1] != coord_train.shape[0]:
+            raise RuntimeError(
+                f"[HPROM-ANN] Invalid MAW {label} W_train/coord_train mismatch: "
+                f"{W_train.shape[1]} vs {coord_train.shape[0]}."
+            )
+    if regressor_type == "fixed_classic":
+        w_fixed = np.asarray(ecm_data[prefix + "w_fixed"], dtype=float).reshape(-1)
+        if w_fixed.size != z_support_full.size:
+            raise RuntimeError(
+                f"[HPROM-ANN] Fixed-classic MAW {label} support/weight mismatch: "
+                f"{z_support_full.size} vs {w_fixed.size}."
+            )
+    elif regressor_type == "ann":
         n_layers = _as_int_scalar(ecm_data, prefix + "ann_n_layers")
         ann_model = {
             "x_mean": np.asarray(ecm_data[prefix + "ann_x_mean"], dtype=float),
@@ -142,7 +179,7 @@ def _build_maw_hom_target_model(ecm_data, target):
             b_key = prefix + f"ann_b_{i}"
             if w_key not in ecm_data or b_key not in ecm_data:
                 raise RuntimeError(
-                    f"[HPROM-ANN] Missing ANN layer arrays for {t}: {w_key}/{b_key}."
+                    f"[HPROM-ANN] Missing ANN layer arrays for {label}: {w_key}/{b_key}."
                 )
             ann_model[f"W_{i}"] = np.asarray(ecm_data[w_key], dtype=float)
             ann_model[f"b_{i}"] = np.asarray(ecm_data[b_key], dtype=float)
@@ -171,15 +208,46 @@ def _build_maw_hom_target_model(ecm_data, target):
             ),
         }
     return {
-        "target": t,
+        "target": label,
+        "base_target": t,
         "z_support_full": z_support_full,
         "regressor_type": regressor_type,
         "rbf_model": rbf_model,
         "ann_model": ann_model,
+        "w_fixed": w_fixed,
+        "coord_train": coord_train,
+        "W_train": W_train,
         "renorm_target": renorm_target,
         "clip_nonnegative": clip_nonnegative,
         "coord_label": coord_label,
     }
+
+
+def _has_maw_hom_component_models(ecm_data):
+    required = []
+    for base in ("eps", "sig"):
+        for comp in range(3):
+            prefix = f"maw_{base}_{comp}_"
+            required.extend([f"Z_{base}_{comp}", prefix + "regressor_type"])
+    return all(k in ecm_data for k in required)
+
+
+def _build_maw_hom_component_models(ecm_data, target):
+    t = str(target).strip().lower()
+    if t not in ("eps", "sig"):
+        raise ValueError(f"Unsupported MAW homogenization component target '{target}'.")
+    models = []
+    for comp in range(3):
+        models.append(
+            _build_maw_hom_target_model(
+                ecm_data,
+                t,
+                prefix=f"maw_{t}_{comp}_",
+                z_key=f"Z_{t}_{comp}",
+                target_label=f"{t}_{comp}",
+            )
+        )
+    return models
 
 
 def _build_full_to_local_map(ecm_data, n_elem_reference, n_current_elements):
@@ -199,14 +267,63 @@ def _build_full_to_local_map(ecm_data, n_elem_reference, n_current_elements):
     return {int(full_idx): int(local_idx) for local_idx, full_idx in enumerate(full_ids.tolist())}
 
 
-def _evaluate_maw_hom_weights_current(q_m, e_vec, target_model, n_elem_reference, n_current_elements, full_to_local):
+def _evaluate_nearest_maw_hom_support_weights(q_query, target_model):
+    coord_train = target_model.get("coord_train", None)
+    W_train = target_model.get("W_train", None)
+    if coord_train is None or W_train is None:
+        raise RuntimeError(
+            f"[HPROM-ANN] MAW nearest/oracle requested for {target_model['target']}, "
+            "but coord_train/W_train were not stored in the ECM file. Rebuild Stage12b "
+            "with a MAW model that stores training weights."
+        )
+    coord_train = np.asarray(coord_train, dtype=float)
+    W_train = np.asarray(W_train, dtype=float)
+    q = np.asarray(q_query, dtype=float).reshape(1, -1)
+    if coord_train.ndim != 2 or W_train.ndim != 2:
+        raise RuntimeError(
+            f"[HPROM-ANN] Invalid MAW nearest data for {target_model['target']}: "
+            f"coord_train={coord_train.shape}, W_train={W_train.shape}."
+        )
+    if q.shape[1] != coord_train.shape[1]:
+        raise RuntimeError(
+            f"[HPROM-ANN] MAW nearest coordinate mismatch for {target_model['target']}: "
+            f"query dim={q.shape[1]}, train dim={coord_train.shape[1]}."
+        )
+    scale = np.std(coord_train, axis=0)
+    scale = np.where(np.abs(scale) > 1.0e-14, scale, 1.0)
+    diff = (coord_train - q) / scale
+    nearest_id = int(np.argmin(np.einsum("ij,ij->i", diff, diff)))
+    return W_train[:, nearest_id].reshape(-1)
+
+
+def _evaluate_maw_hom_weights_current(
+    q_m,
+    e_vec,
+    target_model,
+    n_elem_reference,
+    n_current_elements,
+    full_to_local,
+    eval_mode="model",
+):
     coord_label = str(target_model.get("coord_label", "q")).strip().lower()
     if coord_label == "mu":
         q_query = np.asarray(e_vec, dtype=float).reshape(1, -1)
     else:
         q_query = np.asarray(q_m, dtype=float).reshape(1, -1)
+    eval_mode = str(eval_mode or "model").strip().lower()
+    if eval_mode == "oracle":
+        eval_mode = "nearest"
+    if eval_mode not in ("model", "nearest"):
+        raise RuntimeError(
+            f"[HPROM-ANN] Unsupported MAW homogenization eval mode '{eval_mode}'. "
+            "Use 'model' or 'nearest'."
+        )
     regressor_type = str(target_model.get("regressor_type", "rbf")).strip().lower()
-    if regressor_type == "ann":
+    if regressor_type == "fixed_classic":
+        w_support = np.asarray(target_model["w_fixed"], dtype=float).reshape(-1)
+    elif eval_mode == "nearest":
+        w_support = _evaluate_nearest_maw_hom_support_weights(q_query, target_model)
+    elif regressor_type == "ann":
         w_support = eval_mawecm_ann(q_query, target_model["ann_model"]).reshape(-1)
     else:
         w_support = eval_mawecm_rbf(
@@ -300,6 +417,7 @@ def RunHpromAnnBatchSimulation(
     qp_init_mode="continuation",
     fail_on_nonconvergence=False,
     homogenization_mode="ecm_fixed",
+    maw_hom_eval_mode="model",
     return_stats=False,
 ):
     t_wall_total_start = time.perf_counter()
@@ -368,6 +486,13 @@ def RunHpromAnnBatchSimulation(
             f"Unsupported HPROM-ANN homogenization_mode='{homogenization_mode}'. "
             "Use 'ecm_fixed' or 'maw_dynamic'."
         )
+    maw_hom_eval_mode = str(maw_hom_eval_mode or "model").strip().lower()
+    if maw_hom_eval_mode == "oracle":
+        maw_hom_eval_mode = "nearest"
+    if maw_hom_eval_mode not in ("model", "nearest"):
+        raise ValueError(
+            f"Unsupported maw_hom_eval_mode='{maw_hom_eval_mode}'. Use 'model' or 'nearest'."
+        )
 
     if Xc is None or Yc is None:
         sim._InitializeDomainCenterIfNeeded(mp)
@@ -378,10 +503,16 @@ def RunHpromAnnBatchSimulation(
 
     maw_eps_hom = None
     maw_sig_hom = None
+    maw_hom_componentwise = False
     full_to_local_hom = None
     if hom_mode == "maw_dynamic":
-        maw_eps_hom = _build_maw_hom_target_model(ecm_data, "eps")
-        maw_sig_hom = _build_maw_hom_target_model(ecm_data, "sig")
+        maw_hom_componentwise = _has_maw_hom_component_models(ecm_data)
+        if maw_hom_componentwise:
+            maw_eps_hom = _build_maw_hom_component_models(ecm_data, "eps")
+            maw_sig_hom = _build_maw_hom_component_models(ecm_data, "sig")
+        else:
+            maw_eps_hom = _build_maw_hom_target_model(ecm_data, "eps")
+            maw_sig_hom = _build_maw_hom_target_model(ecm_data, "sig")
         full_to_local_hom = _build_full_to_local_map(
             ecm_data,
             n_elem_reference=n_elem_reference,
@@ -405,13 +536,25 @@ def RunHpromAnnBatchSimulation(
             "[HPROM-ANN] ECM homogenization weights are required (w_eps/w_sig not available)."
         )
     if hom_mode == "maw_dynamic":
-        print(
-            "  [HPROM-ANN] Using dynamic MAW-ECM homogenization weights "
-            f"(eps |Z|={maw_eps_hom['z_support_full'].size}, "
-            f"sig |Z|={maw_sig_hom['z_support_full'].size}, "
-            f"coords eps/sig={maw_eps_hom['coord_label']}/{maw_sig_hom['coord_label']}, "
-            f"regressors eps/sig={maw_eps_hom['regressor_type']}/{maw_sig_hom['regressor_type']})."
-        )
+        if maw_hom_componentwise:
+            eps_sizes = [int(m["z_support_full"].size) for m in maw_eps_hom]
+            sig_sizes = [int(m["z_support_full"].size) for m in maw_sig_hom]
+            eps_regs = [str(m["regressor_type"]) for m in maw_eps_hom]
+            sig_regs = [str(m["regressor_type"]) for m in maw_sig_hom]
+            print(
+                "  [HPROM-ANN] Using component-wise dynamic MAW-ECM homogenization "
+                f"(eps |Z|={eps_sizes}, sig |Z|={sig_sizes}, "
+                f"regressors eps/sig={eps_regs}/{sig_regs}, eval={maw_hom_eval_mode})."
+            )
+        else:
+            print(
+                "  [HPROM-ANN] Using dynamic MAW-ECM homogenization weights "
+                f"(eps |Z|={maw_eps_hom['z_support_full'].size}, "
+                f"sig |Z|={maw_sig_hom['z_support_full'].size}, "
+                f"coords eps/sig={maw_eps_hom['coord_label']}/{maw_sig_hom['coord_label']}, "
+                f"regressors eps/sig={maw_eps_hom['regressor_type']}/{maw_sig_hom['regressor_type']}, "
+                f"eval={maw_hom_eval_mode})."
+            )
     else:
         print("  [HPROM-ANN] Using ECM-weighted homogenization (w_eps / w_sig).")
     dof_x = np.zeros(n_total_dof, dtype=float)
@@ -966,22 +1109,54 @@ def RunHpromAnnBatchSimulation(
         FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
         if hom_mode == "maw_dynamic":
-            w_eps_step = _evaluate_maw_hom_weights_current(
-                q_p,
-                E,
-                maw_eps_hom,
-                n_elem_reference=n_elem_reference,
-                n_current_elements=len(elements),
-                full_to_local=full_to_local_hom,
-            )
-            w_sig_step = _evaluate_maw_hom_weights_current(
-                q_p,
-                E,
-                maw_sig_hom,
-                n_elem_reference=n_elem_reference,
-                n_current_elements=len(elements),
-                full_to_local=full_to_local_hom,
-            )
+            if maw_hom_componentwise:
+                w_eps_step = np.vstack(
+                    [
+                        _evaluate_maw_hom_weights_current(
+                            q_p,
+                            E,
+                            model,
+                            n_elem_reference=n_elem_reference,
+                            n_current_elements=len(elements),
+                            full_to_local=full_to_local_hom,
+                            eval_mode=maw_hom_eval_mode,
+                        )
+                        for model in maw_eps_hom
+                    ]
+                )
+                w_sig_step = np.vstack(
+                    [
+                        _evaluate_maw_hom_weights_current(
+                            q_p,
+                            E,
+                            model,
+                            n_elem_reference=n_elem_reference,
+                            n_current_elements=len(elements),
+                            full_to_local=full_to_local_hom,
+                            eval_mode=maw_hom_eval_mode,
+                        )
+                        for model in maw_sig_hom
+                    ]
+                )
+            else:
+                w_eps_step = _evaluate_maw_hom_weights_current(
+                    q_p,
+                    E,
+                    maw_eps_hom,
+                    n_elem_reference=n_elem_reference,
+                    n_current_elements=len(elements),
+                    full_to_local=full_to_local_hom,
+                    eval_mode=maw_hom_eval_mode,
+                )
+                w_sig_step = _evaluate_maw_hom_weights_current(
+                    q_p,
+                    E,
+                    maw_sig_hom,
+                    n_elem_reference=n_elem_reference,
+                    n_current_elements=len(elements),
+                    full_to_local=full_to_local_hom,
+                    eval_mode=maw_hom_eval_mode,
+                )
             hom_eps, hom_sig = CalculateHomogenizedFromAssemblerWithElementWeights(
                 vec_full_assembler,
                 w_eps=w_eps_step,

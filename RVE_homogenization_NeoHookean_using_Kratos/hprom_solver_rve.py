@@ -369,7 +369,37 @@ def ResolveHomogenizationWeightSelection(ecm_data, n_current_elements, solver_la
     """
     n_cur = int(n_current_elements)
 
-    def _pick(key_hrom, key_full):
+    def _validate_weight_array(w_raw, key):
+        w = np.asarray(w_raw, dtype=float)
+        if w.ndim == 2:
+            if w.shape == (3, n_cur) or w.shape == (n_cur, 3):
+                return w
+            print(
+                f"[{solver_label}] WARNING: {key} has component-wise shape {w.shape}, "
+                f"but current mesh has {n_cur} elements."
+            )
+            return None
+        w = w.reshape(-1)
+        if w.size == n_cur:
+            return w
+        return None
+
+    def _pick(key_hrom, key_full, key_components_hrom=None, key_components_full=None):
+        for key in (key_components_hrom, key_hrom, key_components_full, key_full):
+            if not key or key not in ecm_data:
+                continue
+            w = _validate_weight_array(ecm_data[key], key)
+            if w is not None:
+                return w
+            if key == key_hrom or key == key_components_hrom:
+                w_size = np.asarray(ecm_data[key]).size
+                print(
+                    f"[{solver_label}] WARNING: {key} has size {w_size}, "
+                    f"but current mesh has {n_cur} elements."
+                )
+        return None
+
+    def _pick_legacy(key_hrom, key_full):
         if key_hrom in ecm_data:
             w = np.asarray(ecm_data[key_hrom], dtype=float).reshape(-1)
             if w.size == n_cur:
@@ -384,8 +414,22 @@ def ResolveHomogenizationWeightSelection(ecm_data, n_current_elements, solver_la
                 return w
         return None
 
-    w_eps = _pick("w_eps_hrom", "w_eps_full")
-    w_sig = _pick("w_sig_hrom", "w_sig_full")
+    w_eps = _pick(
+        "w_eps_hrom",
+        "w_eps_full",
+        key_components_hrom="w_eps_components_hrom",
+        key_components_full="w_eps_components_full",
+    )
+    w_sig = _pick(
+        "w_sig_hrom",
+        "w_sig_full",
+        key_components_hrom="w_sig_components_hrom",
+        key_components_full="w_sig_components_full",
+    )
+    if w_eps is None:
+        w_eps = _pick_legacy("w_eps_hrom", "w_eps_full")
+    if w_sig is None:
+        w_sig = _pick_legacy("w_sig_hrom", "w_sig_full")
     using = (w_eps is not None) and (w_sig is not None)
     return w_eps, w_sig, using
 
@@ -414,7 +458,33 @@ def CalculateHomogenizedFromAssemblerWithElementWeights(assembler, w_eps=None, w
             den = float(np.sum(area_e))
             num = np.einsum("e,ej->j", area_e, mean_e)
         else:
-            ww = np.asarray(w, dtype=float).reshape(-1)
+            ww_raw = np.asarray(w, dtype=float)
+            if ww_raw.ndim == 2:
+                if ww_raw.shape == (mean_e.shape[1], mean_e.shape[0]):
+                    ww_comp = ww_raw
+                elif ww_raw.shape == (mean_e.shape[0], mean_e.shape[1]):
+                    ww_comp = ww_raw.T
+                else:
+                    raise RuntimeError(
+                        f"Component homogenization weights have shape {ww_raw.shape}; "
+                        f"expected ({mean_e.shape[1]},{mean_e.shape[0]}) or "
+                        f"({mean_e.shape[0]},{mean_e.shape[1]})."
+                    )
+                out = np.zeros(mean_e.shape[1], dtype=float)
+                for j in range(mean_e.shape[1]):
+                    wj = ww_comp[j, :]
+                    nz = np.flatnonzero(np.abs(wj) > WEIGHT_ZERO_TOL)
+                    if nz.size == 0:
+                        continue
+                    if reference_measure is None:
+                        den_j = float(np.dot(wj[nz], area_e[nz]))
+                    else:
+                        den_j = float(reference_measure)
+                    num_j = float(np.dot(wj[nz] * area_e[nz], mean_e[nz, j]))
+                    out[j] = num_j if abs(den_j) <= 1e-30 else num_j / den_j
+                return out
+
+            ww = ww_raw.reshape(-1)
             if ww.size != mean_e.shape[0]:
                 raise RuntimeError(
                     f"Homogenization weight size {ww.size} does not match active elements {mean_e.shape[0]}."

@@ -774,7 +774,33 @@ def CalculateHomogenizedFromAssemblerWithElementWeights(
             den = float(np.sum(area_e)) if reference_measure is None else float(reference_measure)
             num = np.einsum("e,ej->j", area_e, mean_e)
         else:
-            ww = np.asarray(w, dtype=float).reshape(-1)
+            ww_raw = np.asarray(w, dtype=float)
+            if ww_raw.ndim == 2:
+                if ww_raw.shape == (mean_e.shape[1], mean_e.shape[0]):
+                    ww_comp = ww_raw
+                elif ww_raw.shape == (mean_e.shape[0], mean_e.shape[1]):
+                    ww_comp = ww_raw.T
+                else:
+                    raise RuntimeError(
+                        f"Component homogenization weights have shape {ww_raw.shape}; "
+                        f"expected ({mean_e.shape[1]},{mean_e.shape[0]}) or "
+                        f"({mean_e.shape[0]},{mean_e.shape[1]})."
+                    )
+                out = np.zeros(mean_e.shape[1], dtype=float)
+                for j in range(mean_e.shape[1]):
+                    wj = ww_comp[j, :]
+                    nz = np.flatnonzero(np.abs(wj) > WEIGHT_ZERO_TOL)
+                    if nz.size == 0:
+                        continue
+                    if reference_measure is None:
+                        den_j = float(np.dot(wj[nz], area_e[nz]))
+                    else:
+                        den_j = float(reference_measure)
+                    num_j = float(np.dot(wj[nz] * area_e[nz], mean_e[nz, j]))
+                    out[j] = num_j if abs(den_j) <= 1e-30 else num_j / den_j
+                return out
+
+            ww = ww_raw.reshape(-1)
             if ww.size != mean_e.shape[0]:
                 raise RuntimeError(
                     f"Homogenization weight size {ww.size} does not match active elements {mean_e.shape[0]}."

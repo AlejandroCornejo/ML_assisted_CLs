@@ -178,8 +178,17 @@ def run_stage10(
     hprom_ann_dir="stage_9_hprom_ann_data",
     out_dir="stage_10_hprom_ann_results",
     hprom_homogenization_mode="ecm_fixed",
+    hprom_maw_hom_eval_mode="model",
+    hprom_corrector_iters=25,
+    qp_init_mode="continuation",
 ):
     os.makedirs(out_dir, exist_ok=True)
+    if int(hprom_corrector_iters) == 0 and str(qp_init_mode).strip().lower() != "mu_affine":
+        print(
+            "  [Stage10] Direct HPROM-ANN mode requested "
+            "(--hprom-corrector-iters 0): forcing qp_init_mode='mu_affine'."
+        )
+        qp_init_mode = "mu_affine"
 
     # Load domain parameters from stage0 bundle
     emax = 2.0
@@ -223,6 +232,9 @@ def run_stage10(
     print(f"  HPROM-ANN dir: {hprom_ann_dir}")
     print(f"  Output dir: {out_dir}")
     print(f"  HPROM homogenization mode: {hprom_homogenization_mode}")
+    print(f"  HPROM MAW hom eval mode: {hprom_maw_hom_eval_mode}")
+    print(f"  HPROM corrector iterations: {hprom_corrector_iters}")
+    print(f"  HPROM q_m initializer mode: {qp_init_mode}")
 
     mesh_fom_prom = "rve_geometry"
     mesh_hprom = "rve_geometry"
@@ -330,6 +342,9 @@ def run_stage10(
             Xc=Xc_h,
             Yc=Yc_h,
             homogenization_mode=hprom_homogenization_mode,
+            maw_hom_eval_mode=hprom_maw_hom_eval_mode,
+            max_its=int(hprom_corrector_iters),
+            qp_init_mode=qp_init_mode,
         )
         timings["HPROM-ANN"] = time.perf_counter() - t0
         h_eps = np.asarray(h_eps, dtype=float)
@@ -471,6 +486,33 @@ if __name__ == "__main__":
         choices=["ecm_fixed", "maw_dynamic", "maw", "maw_separate"],
         help="HPROM-ANN homogenization weights: fixed classical ECM or dynamic MAW-ECM eps/sig.",
     )
+    p.add_argument(
+        "--hprom-maw-hom-eval-mode",
+        type=str,
+        default="model",
+        choices=["model", "nearest", "oracle"],
+        help=(
+            "How to evaluate dynamic MAW homogenization weights. 'model' uses the saved "
+            "ANN/RBF regressor; 'nearest'/'oracle' uses the exact stored training weights "
+            "of the nearest MAW training state. Fixed-classic components are unaffected."
+        ),
+    )
+    p.add_argument(
+        "--hprom-corrector-iters",
+        type=int,
+        default=25,
+        help="Maximum HPROM-ANN Newton/corrector iterations. Use 0 to evaluate the direct ANN prediction only.",
+    )
+    p.add_argument(
+        "--qp-init-mode",
+        type=str,
+        default="continuation",
+        choices=["continuation", "previous", "zero", "mu_affine"],
+        help=(
+            "Initial q_m for HPROM-ANN. For --hprom-corrector-iters 0, use "
+            "'mu_affine' to evaluate the direct mu-to-q_m prediction at every step."
+        ),
+    )
     args = p.parse_args()
 
     run_stage10(
@@ -481,4 +523,7 @@ if __name__ == "__main__":
         hprom_ann_dir=args.hprom_ann_dir,
         out_dir=args.out_dir,
         hprom_homogenization_mode=args.hprom_homogenization_mode,
+        hprom_maw_hom_eval_mode=args.hprom_maw_hom_eval_mode,
+        hprom_corrector_iters=args.hprom_corrector_iters,
+        qp_init_mode=args.qp_init_mode,
     )

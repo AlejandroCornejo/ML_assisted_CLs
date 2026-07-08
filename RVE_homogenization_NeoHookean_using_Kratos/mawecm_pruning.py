@@ -30,6 +30,8 @@ DEFAULT_OPTIONS = {
     "tol_zero": 1.0e-12,
     "max_active_set_iters": 30,
     "max_reduced_dim": 2500,
+    "graph_cg_maxiter": 1000,
+    "graph_cg_rtol": 1.0e-9,
     "warn_max_reduced_dim": False,
     "weight_pos_tol": 0.0,
     "enforce_nonnegativity": True,
@@ -52,6 +54,8 @@ def _merge_options(options):
     out["criterion"] = int(out["criterion"])
     out["max_active_set_iters"] = int(out["max_active_set_iters"])
     out["max_reduced_dim"] = int(out["max_reduced_dim"])
+    out["graph_cg_maxiter"] = int(out["graph_cg_maxiter"])
+    out["graph_cg_rtol"] = float(out["graph_cg_rtol"])
     out["smooth_laplacian_all_iterations"] = bool(out["smooth_laplacian_all_iterations"])
     out["use_global_graph_2ndstage"] = bool(out["use_global_graph_2ndstage"])
     out["max_number_zeros_active_set_loop"] = int(out["max_number_zeros_active_set_loop"])
@@ -173,6 +177,8 @@ def _solve_graph_nullspace_matrix_free(
     active_masks,
     incremental,
     tol_rank_rel,
+    cg_rtol=1.0e-9,
+    cg_maxiter=1000,
 ):
     """
     Solve the graph QP by projected CG without explicitly constructing N.
@@ -184,45 +190,66 @@ def _solve_graph_nullspace_matrix_free(
     w_ref = np.asarray(w_old, dtype=float)
     wp = np.asarray(wp_full, dtype=float)
     r, n_nodes = w_ref.shape
-    m_sizes = [int(np.asarray(b).size) for b in b_blocks]
-    if not m_sizes or min(m_sizes) <= 0 or len(set(m_sizes)) != 1:
+    m_sizes = np.asarray([int(np.asarray(b).size) for b in b_blocks], dtype=np.int64)
+    if m_sizes.size != int(n_nodes) or np.any(m_sizes < 0):
         return w_ref, {
             "ok": False,
-            "reason": "matrix-free graph solve requires equal nonzero local constraint sizes",
+            "reason": "matrix-free graph solve received invalid local constraint sizes",
             "iterations": 0,
         }
-
-    A = np.stack([np.asarray(Aj, dtype=float) for Aj in A_loc_blocks], axis=0)
     active = np.stack(
         [np.asarray(mask, dtype=bool) for mask in active_masks],
         axis=1,
     )
     free = ~active
 
+    projector_groups = []
     # Row scaling improves the local projector conditioning without changing
-    # either the equality constraints or their null spaces.
-    A_free = A * free.T[:, None, :]
-    row_scale = np.linalg.norm(A_free, axis=2)
-    if np.any(~np.isfinite(row_scale)) or np.any(row_scale <= float(tol_rank_rel)):
-        return w_ref, {
-            "ok": False,
-            "reason": "invalid local constraint scaling in matrix-free graph solve",
-            "iterations": 0,
-        }
-    A_scaled = A / row_scale[:, :, None]
-    A_scaled_free = A_scaled * free.T[:, None, :]
-    gram = np.einsum(
-        "jmr,jnr->jmn",
-        A_scaled_free,
-        A_scaled_free,
-        optimize=True,
-    )
-    try:
-        gram_inv = np.linalg.inv(gram)
-    except np.linalg.LinAlgError:
-        gram_inv = np.linalg.pinv(
-            gram,
-            rcond=max(float(tol_rank_rel), 1.0e-14),
+    # either the equality constraints or their null spaces. Groups allow
+    # rowspace-compressed blocks with different local ranks.
+    for m in sorted(int(v) for v in np.unique(m_sizes)):
+        nodes = np.flatnonzero(m_sizes == m).astype(np.int64, copy=False)
+        if nodes.size == 0:
+            continue
+        if m == 0:
+            projector_groups.append({"m": 0, "nodes": nodes})
+            continue
+        A_group = np.stack(
+            [np.asarray(A_loc_blocks[int(j)], dtype=float) for j in nodes],
+            axis=0,
+        )
+        free_group = free[:, nodes].T  # (n_group, r)
+        A_free = A_group * free_group[:, None, :]
+        row_scale = np.linalg.norm(A_free, axis=2)
+        if np.any(~np.isfinite(row_scale)) or np.any(row_scale <= float(tol_rank_rel)):
+            return w_ref, {
+                "ok": False,
+                "reason": "invalid local constraint scaling in matrix-free graph solve",
+                "iterations": 0,
+            }
+        A_scaled = A_group / row_scale[:, :, None]
+        A_scaled_free = A_scaled * free_group[:, None, :]
+        gram = np.einsum(
+            "jmr,jnr->jmn",
+            A_scaled_free,
+            A_scaled_free,
+            optimize=True,
+        )
+        try:
+            gram_inv = np.linalg.inv(gram)
+        except np.linalg.LinAlgError:
+            gram_inv = np.linalg.pinv(
+                gram,
+                rcond=max(float(tol_rank_rel), 1.0e-14),
+            )
+        projector_groups.append(
+            {
+                "m": m,
+                "nodes": nodes,
+                "free": free_group,
+                "A_scaled": A_scaled,
+                "gram_inv": gram_inv,
+            }
         )
 
     free_idx = np.flatnonzero(free.reshape(-1, order="F"))
@@ -246,25 +273,33 @@ def _solve_graph_nullspace_matrix_free(
 
     def _project(W):
         W_free = np.asarray(W, dtype=float) * free
-        local_rhs = np.einsum(
-            "jmr,rj->jm",
-            A_scaled,
-            W_free,
-            optimize=True,
-        )
-        local_lam = np.einsum(
-            "jmn,jn->jm",
-            gram_inv,
-            local_rhs,
-            optimize=True,
-        )
-        correction = np.einsum(
-            "jmr,jm->rj",
-            A_scaled,
-            local_lam,
-            optimize=True,
-        )
-        return (W_free - correction) * free
+        out = W_free.copy()
+        for group in projector_groups:
+            if int(group["m"]) == 0:
+                continue
+            nodes = group["nodes"]
+            Wg = W_free[:, nodes]
+            A_scaled = group["A_scaled"]
+            local_rhs = np.einsum(
+                "jmr,rj->jm",
+                A_scaled,
+                Wg,
+                optimize=True,
+            )
+            local_lam = np.einsum(
+                "jmn,jn->jm",
+                group["gram_inv"],
+                local_rhs,
+                optimize=True,
+            )
+            correction = np.einsum(
+                "jmr,jm->rj",
+                A_scaled,
+                local_lam,
+                optimize=True,
+            )
+            out[:, nodes] = (Wg - correction) * group["free"].T
+        return out * free
 
     g_full = (
         _apply_graph_hessian(w_ref, K, alpha)
@@ -310,9 +345,9 @@ def _solve_graph_nullspace_matrix_free(
         operator,
         rhs,
         x0=np.zeros(n_free, dtype=float),
-        rtol=1.0e-9,
+        rtol=float(cg_rtol),
         atol=0.0,
-        maxiter=1000,
+        maxiter=int(cg_maxiter),
         M=preconditioner,
         callback=_count_iteration,
     )
@@ -456,6 +491,8 @@ def _prune_step_optionb_np(w_old, A_loc_blocks, b_blocks, K_graph, alpha, p_loca
                 active_masks=Dj,
                 incremental=incremental,
                 tol_rank_rel=tol_rank_rel,
+                cg_rtol=float(opts.get("graph_cg_rtol", 1.0e-9)),
+                cg_maxiter=int(opts.get("graph_cg_maxiter", 1000)),
             )
             if not bool(solve_info["ok"]):
                 return w_old, {
@@ -556,19 +593,20 @@ def _try_graph_pass(W, A_blocks, b_blocks, i_cand, iloc_pos, ind_sort, K_graph, 
     cand_records = []
     fail_reasons = {}
     tol_neg = float(options["tol_neg"])
+    t_pass = time.perf_counter()
 
     for ord_pos, k_loc in enumerate(ind_sort[:n_try]):
+        t_cand = time.perf_counter()
         p_local = int(k_loc)
         cand_global = int(iloc_pos[p_local])
         if bool(options.get("verbose", False)):
-            if ord_pos == 0 or ord_pos + 1 == n_try or (ord_pos + 1) % 10 == 0:
-                print(
-                    "[MAW-ECM][Phase2][graph] "
-                    f"testing candidate {ord_pos + 1}/{n_try} "
-                    f"(local={p_local}, global={cand_global}, active={int(iloc_pos.size)}, "
-                    f"nodes={len(b_blocks)})",
-                    flush=True,
-                )
+            print(
+                "[MAW-ECM][Phase2][graph] "
+                f"testing candidate {ord_pos + 1}/{n_try} "
+                f"(local={p_local}, global={cand_global}, active={int(iloc_pos.size)}, "
+                f"nodes={len(b_blocks)})",
+                flush=True,
+            )
 
         A_loc_blocks = [Aj[:, iloc_pos] for Aj in A_blocks]
         w_old_loc = np.asarray(W[iloc_pos, :], dtype=float)
@@ -584,6 +622,17 @@ def _try_graph_pass(W, A_blocks, b_blocks, i_cand, iloc_pos, ind_sort, K_graph, 
         if not info.get("ok", False):
             rs = str(info.get("reason", "unknown"))
             fail_reasons[rs] = int(fail_reasons.get(rs, 0)) + 1
+            if bool(options.get("verbose", False)):
+                lin = info.get("linear_solver", {}) if isinstance(info, dict) else {}
+                cg_txt = ""
+                if isinstance(lin, dict) and lin:
+                    cg_txt = f", cg_iters={int(lin.get('iterations', 0))}"
+                print(
+                    "[MAW-ECM][Phase2][graph] "
+                    f"candidate {ord_pos + 1}/{n_try} failed in "
+                    f"{time.perf_counter() - t_cand:.2f}s{cg_txt}: {rs}",
+                    flush=True,
+                )
             continue
 
         i_cand_new = np.array([i for i in i_cand if int(i) != cand_global], dtype=np.int64)
@@ -614,12 +663,28 @@ def _try_graph_pass(W, A_blocks, b_blocks, i_cand, iloc_pos, ind_sort, K_graph, 
                 "tested_rank": int(ord_pos),
             }
         )
+        if bool(options.get("verbose", False)):
+            lin = info.get("linear_solver", {}) if isinstance(info, dict) else {}
+            cg_txt = ""
+            if isinstance(lin, dict) and lin:
+                cg_txt = (
+                    f", cg_iters={int(lin.get('iterations', 0))}, "
+                    f"constraint_rel={float(lin.get('max_constraint_rel', np.nan)):.2e}"
+                )
+            print(
+                "[MAW-ECM][Phase2][graph] "
+                f"candidate {ord_pos + 1}/{n_try} feasible in "
+                f"{time.perf_counter() - t_cand:.2f}s{cg_txt}; "
+                f"R95={float(metrics['R95']):.3e}, Rmax={float(metrics['Rmax']):.3e}",
+                flush=True,
+            )
 
     if not cand_records:
         return False, W, i_cand, None, {
             "tested": int(n_try),
             "n_feasible": 0,
             "fail_reasons": fail_reasons,
+            "elapsed_sec": float(time.perf_counter() - t_pass),
         }
 
     crit = int(options["criterion"])
@@ -633,11 +698,19 @@ def _try_graph_pass(W, A_blocks, b_blocks, i_cand, iloc_pos, ind_sort, K_graph, 
         raise ValueError(f"Unsupported criterion={crit}.")
 
     best = order[0]
+    if bool(options.get("verbose", False)):
+        print(
+            "[MAW-ECM][Phase2][graph] "
+            f"candidate scan complete in {time.perf_counter() - t_pass:.2f}s: "
+            f"feasible={len(cand_records)}/{n_try}, selected global={int(best['removed'])}",
+            flush=True,
+        )
     return True, best["W_new"], best["i_cand_new"], best["removed"], {
         "tested": int(n_try),
         "n_feasible": int(len(cand_records)),
         "fail_reasons": fail_reasons,
         "candidate_metrics": best,
+        "elapsed_sec": float(time.perf_counter() - t_pass),
     }
 
 

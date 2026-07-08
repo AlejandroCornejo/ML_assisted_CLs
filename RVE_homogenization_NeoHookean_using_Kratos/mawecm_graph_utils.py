@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 from scipy import sparse
 from scipy.sparse.csgraph import connected_components
+from scipy.spatial import cKDTree
 
 
 def _as_2d(arr):
@@ -51,13 +52,27 @@ def build_knn_graph_laplacian(q_train, knn=8, metric="euclidean", kernel="gaussi
         raise ValueError("Only euclidean metric is supported.")
 
     k = int(max(1, min(int(knn), n - 1)))
-    d2 = _pairwise_sqeuclidean(q)
-    np.fill_diagonal(d2, np.inf)
+    query_k = int(min(n, k + 1))
+    tree = cKDTree(q)
+    try:
+        dist, nn_idx = tree.query(q, k=query_k, workers=-1)
+    except TypeError:
+        dist, nn_idx = tree.query(q, k=query_k)
+    dist = np.asarray(dist, dtype=float)
+    nn_idx = np.asarray(nn_idx, dtype=np.int64)
+    if dist.ndim == 1:
+        dist = dist[:, None]
+        nn_idx = nn_idx[:, None]
 
-    nn_idx = np.argpartition(d2, kth=k - 1, axis=1)[:, :k]
-    rows = np.repeat(np.arange(n, dtype=np.int64), k)
-    cols = nn_idx.reshape(-1)
-    d2_vals = d2[rows, cols]
+    row_grid = np.repeat(np.arange(n, dtype=np.int64)[:, None], nn_idx.shape[1], axis=1)
+    mask = (nn_idx >= 0) & (nn_idx != row_grid) & np.isfinite(dist)
+    rows = row_grid[mask].astype(np.int64, copy=False)
+    cols = nn_idx[mask].astype(np.int64, copy=False)
+    d2_vals = np.square(dist[mask])
+
+    # cKDTree normally returns exactly k non-self neighbors because query_k=k+1.
+    # If duplicate points perturb the self ordering, keeping one extra neighbor is harmless:
+    # the graph remains sparse and the Laplacian regularizer stays local.
 
     ker = str(kernel).strip().lower()
     if ker == "binary":
@@ -288,8 +303,13 @@ def edge_jump_metrics(delta_w, k_graph):
     dict with keys: S, R95, Rmax, n_edges
     """
     dw = _as_2d(delta_w)
-    k = np.asarray(k_graph.todense() if sparse.issparse(k_graph) else k_graph, dtype=float)
-    if dw.shape[1] != k.shape[0] or k.shape[0] != k.shape[1]:
+    if sparse.issparse(k_graph):
+        k = sparse.csr_matrix(k_graph)
+        k_shape = k.shape
+    else:
+        k = np.asarray(k_graph, dtype=float)
+        k_shape = k.shape
+    if dw.shape[1] != k_shape[0] or k_shape[0] != k_shape[1]:
         raise ValueError("delta_w columns must match k_graph size.")
 
     i_edge, j_edge = edge_list_from_laplacian(k_graph)

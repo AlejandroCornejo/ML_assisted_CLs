@@ -411,7 +411,7 @@ def _build_blocks_res(dataset, z_ini, w_ini, rhs_mode="dataset"):
     return A_blocks, b_blocks, q_train, mu_train, ids
 
 
-def _build_blocks_eps(dataset, z_ini, w_ini, rhs_mode="anchor"):
+def _build_blocks_eps(dataset, z_ini, w_ini, rhs_mode="anchor", component_index=None):
     ns = int(dataset["ns_hom"])
     if ns <= 0 or dataset["C_hom"] is None or dataset["b_hom"] is None:
         raise RuntimeError("EPS MAW requested but dataset has no homogenization blocks.")
@@ -421,7 +421,13 @@ def _build_blocks_eps(dataset, z_ini, w_ini, rhs_mode="anchor"):
     A_blocks = []
     b_blocks = []
     for s in range(ns):
-        r0, r1 = 6 * s, 6 * s + 3
+        if component_index is None:
+            r0, r1 = 6 * s, 6 * s + 3
+        else:
+            comp = int(component_index)
+            if comp < 0 or comp >= 3:
+                raise ValueError(f"Invalid eps component_index={component_index}.")
+            r0, r1 = 6 * s + comp, 6 * s + comp + 1
         A_full = np.asarray(C_hom[r0:r1, :], dtype=float)
         A = A_full[:, z_ini]
         if mode == "dataset":
@@ -438,7 +444,7 @@ def _build_blocks_eps(dataset, z_ini, w_ini, rhs_mode="anchor"):
     return A_blocks, b_blocks, q_train, mu_train, ids
 
 
-def _build_blocks_sig(dataset, z_ini, w_ini, rhs_mode="anchor"):
+def _build_blocks_sig(dataset, z_ini, w_ini, rhs_mode="anchor", component_index=None):
     ns = int(dataset["ns_hom"])
     if ns <= 0 or dataset["C_hom"] is None or dataset["b_hom"] is None:
         raise RuntimeError("SIG MAW requested but dataset has no homogenization blocks.")
@@ -448,7 +454,13 @@ def _build_blocks_sig(dataset, z_ini, w_ini, rhs_mode="anchor"):
     A_blocks = []
     b_blocks = []
     for s in range(ns):
-        r0, r1 = 6 * s + 3, 6 * s + 6
+        if component_index is None:
+            r0, r1 = 6 * s + 3, 6 * s + 6
+        else:
+            comp = int(component_index)
+            if comp < 0 or comp >= 3:
+                raise ValueError(f"Invalid sig component_index={component_index}.")
+            r0, r1 = 6 * s + 3 + comp, 6 * s + 3 + comp + 1
         A_full = np.asarray(C_hom[r0:r1, :], dtype=float)
         A = A_full[:, z_ini]
         if mode == "dataset":
@@ -627,6 +639,36 @@ def _validate_maw_constraints(
             f"< -{strict_negative_tol:.3e}."
         )
     return {"max_rel": max_rel, "min_weight": min_weight}
+
+
+def _select_prune_graph_subset(coord_train, target, args):
+    """Deterministic subset used only by graph-regularized MAW pruning."""
+    n = int(np.asarray(coord_train).shape[0])
+    size = int(getattr(args, "maw_prune_graph_subsample_size", 0))
+    if size <= 0 or size >= n:
+        return None
+    mode = str(getattr(args, "maw_prune_graph_subsample_mode", "uniform")).strip().lower()
+    if mode == "uniform":
+        idx = np.unique(np.round(np.linspace(0, n - 1, size)).astype(np.int64))
+        if idx.size < size:
+            missing = size - int(idx.size)
+            pool = np.setdiff1d(np.arange(n, dtype=np.int64), idx, assume_unique=False)
+            idx = np.sort(np.concatenate([idx, pool[:missing]]))
+    elif mode == "random":
+        seed = int(getattr(args, "maw_prune_graph_subsample_seed", 11))
+        rng = np.random.default_rng(seed)
+        idx = np.sort(rng.choice(n, size=size, replace=False).astype(np.int64))
+    else:
+        raise ValueError(
+            f"Unsupported --maw-prune-graph-subsample-mode='{mode}'. "
+            "Use 'uniform' or 'random'."
+        )
+    print(
+        f"  [MAW-{target}] graph-pruning subset: {int(idx.size)}/{n} states "
+        f"(mode={mode}); final ANN physics loss still uses the full set.",
+        flush=True,
+    )
+    return idx
 
 
 def _plot_maw_weight_fields_3d(
@@ -888,7 +930,73 @@ def _build_graph_for_target(dataset, q_train, target, args):
     raise ValueError(f"Unsupported --graph-mode='{args.graph_mode}'.")
 
 
-def _select_initial_support_and_weights(ecm_fixed, target, n_elem, candidate_pool="fixed_support"):
+def _hom_component_classic_keys(target, component_index):
+    t = str(target).strip().lower()
+    if component_index is None:
+        return None
+    comp = int(component_index)
+    if t not in ("eps", "sig") or comp not in (0, 1, 2):
+        return None
+    suffix = "xy" if comp == 2 else "norm"
+    return (
+        f"Z_{t}_{suffix}",
+        f"w_{t}_{suffix}",
+        f"w_{t}_{suffix}_full",
+        suffix,
+    )
+
+
+def _load_hom_component_classic_rule(ecm_fixed, target, component_index, n_elem):
+    keys = _hom_component_classic_keys(target, component_index)
+    if keys is None:
+        return None
+    z_key, w_key, w_full_key, suffix = keys
+    if z_key not in ecm_fixed or w_key not in ecm_fixed:
+        return None
+
+    z = np.asarray(ecm_fixed[z_key], dtype=np.int64).reshape(-1)
+    w = np.asarray(ecm_fixed[w_key], dtype=float).reshape(-1)
+    if z.size != w.size:
+        raise RuntimeError(
+            f"Fixed component ECM size mismatch for {target}_{component_index} "
+            f"({suffix}): |Z|={z.size}, |w|={w.size}."
+        )
+    if z.size == 0:
+        return None
+    if np.any(z < 0) or np.any(z >= int(n_elem)):
+        raise RuntimeError(
+            f"Fixed component ECM support {z_key} has indices outside [0,{int(n_elem)})."
+        )
+
+    w_full = np.zeros(int(n_elem), dtype=float)
+    if w_full_key in ecm_fixed:
+        wf = np.asarray(ecm_fixed[w_full_key], dtype=float).reshape(-1)
+        if wf.size != int(n_elem):
+            raise RuntimeError(
+                f"{w_full_key} size {wf.size} != n_elem {int(n_elem)}."
+            )
+        w_full[:] = wf
+    else:
+        w_full[z] = w
+
+    return {
+        "z": z,
+        "w": w,
+        "w_full": w_full,
+        "z_key": z_key,
+        "w_key": w_key,
+        "w_full_key": w_full_key,
+        "suffix": suffix,
+    }
+
+
+def _select_initial_support_and_weights(
+    ecm_fixed,
+    target,
+    n_elem,
+    candidate_pool="fixed_support",
+    component_index=None,
+):
     t = str(target).strip().lower()
     pool = str(candidate_pool).strip().lower()
     if pool not in ("fixed_support", "full_mesh"):
@@ -915,12 +1023,25 @@ def _select_initial_support_and_weights(ecm_fixed, target, n_elem, candidate_poo
                 w = np.ones(int(n_elem), dtype=float)
             # Ensure all full-mesh candidates are initially active in MAW pruning.
             w = np.maximum(w, 1.0e-12)
-    elif t == "eps":
-        z = np.asarray(ecm_fixed["Z_eps"], dtype=np.int64).reshape(-1)
-        w = np.asarray(ecm_fixed["w_eps"], dtype=float).reshape(-1)
-    elif t == "sig":
-        z = np.asarray(ecm_fixed["Z_sig"], dtype=np.int64).reshape(-1)
-        w = np.asarray(ecm_fixed["w_sig"], dtype=float).reshape(-1)
+    elif t in ("eps", "sig"):
+        component_rule = _load_hom_component_classic_rule(
+            ecm_fixed=ecm_fixed,
+            target=t,
+            component_index=component_index,
+            n_elem=n_elem,
+        )
+        if component_rule is not None:
+            z = np.asarray(component_rule["z"], dtype=np.int64).reshape(-1)
+            w = np.asarray(component_rule["w"], dtype=float).reshape(-1)
+            print(
+                f"  [MAW-{t}_{component_index}] using classical component "
+                f"bootstrap '{component_rule['suffix']}' from "
+                f"{component_rule['z_key']}: |Z|={z.size}",
+                flush=True,
+            )
+        else:
+            z = np.asarray(ecm_fixed[f"Z_{t}"], dtype=np.int64).reshape(-1)
+            w = np.asarray(ecm_fixed[f"w_{t}"], dtype=float).reshape(-1)
     else:
         raise ValueError(f"Unsupported target {target}")
     if z.size != w.size:
@@ -934,7 +1055,12 @@ def _run_target_maw(
     ecm_fixed,
     n_elem,
     args,
+    label=None,
+    hom_component_index=None,
+    min_support_override=None,
+    phase1_stop_size_override=None,
 ):
+    tag = str(label or target).strip().lower()
     if target == "res":
         z_ini, w_ini = _select_initial_support_and_weights(
             ecm_fixed,
@@ -949,6 +1075,7 @@ def _run_target_maw(
             target,
             n_elem=n_elem,
             candidate_pool="fixed_support",
+            component_index=hom_component_index,
         )
         rhs_mode = "anchor"
 
@@ -959,14 +1086,24 @@ def _run_target_maw(
         n_centers = int(args.rbf_centers_res)
     elif target == "eps":
         A_blocks, b_blocks, q_train, mu_train, ids = _build_blocks_eps(
-            dataset, z_ini, w_ini, rhs_mode=rhs_mode
+            dataset,
+            z_ini,
+            w_ini,
+            rhs_mode=rhs_mode,
+            component_index=hom_component_index,
         )
         n_centers = int(args.rbf_centers_eps)
-    else:
+    elif target == "sig":
         A_blocks, b_blocks, q_train, mu_train, ids = _build_blocks_sig(
-            dataset, z_ini, w_ini, rhs_mode=rhs_mode
+            dataset,
+            z_ini,
+            w_ini,
+            rhs_mode=rhs_mode,
+            component_index=hom_component_index,
         )
         n_centers = int(args.rbf_centers_sig)
+    else:
+        raise ValueError(f"Unsupported MAW target '{target}'.")
 
     component_scales = np.ones(
         int(np.asarray(A_blocks[0]).shape[0]) if A_blocks else 0,
@@ -976,7 +1113,7 @@ def _run_target_maw(
         A_blocks, b_blocks, component_scales = _scale_hom_blocks_by_component(
             A_blocks=A_blocks,
             b_blocks=b_blocks,
-            target=target,
+            target=tag,
         )
 
     sum_target = float(args.sum_weights_target)
@@ -988,7 +1125,7 @@ def _run_target_maw(
             b_blocks=b_blocks,
             target_sum=sum_target,
         )
-        print(f"  [MAW-{target}] enforcing sum(w)={sum_target:.6e} in each local block.")
+        print(f"  [MAW-{tag}] enforcing sum(w)={sum_target:.6e} in each local block.")
 
     rowspace_info = {
         "n_blocks": len(A_blocks),
@@ -1005,37 +1142,57 @@ def _run_target_maw(
             A_blocks=A_blocks,
             b_blocks=b_blocks,
             tol_rel=float(args.maw_hom_rowspace_tol_rel),
-            label=target,
-        )
-
-    use_global_graph = bool(int(args.use_global_graph_2ndstage))
-    K_graph = None
-    if use_global_graph:
-        K_graph = _build_graph_for_target(
-            dataset=dataset,
-            q_train=mu_train if target in ("eps", "sig") else q_train,
-            target=target,
-            args=args,
+            label=tag,
         )
 
     coord_label = "mu" if target in ("eps", "sig") else "q"
     coord_train = np.asarray(mu_train if coord_label == "mu" else q_train, dtype=float)
     print(
-        f"  [MAW-{target}] weight-field coordinate: {coord_label} "
+        f"  [MAW-{tag}] weight-field coordinate: {coord_label} "
         f"(shape={coord_train.shape})",
         flush=True,
     )
+
+    use_global_graph = bool(int(args.use_global_graph_2ndstage))
+    prune_idx = None
+    A_blocks_prune = A_blocks
+    b_blocks_prune = b_blocks
+    coord_train_prune = coord_train
+    if use_global_graph:
+        prune_idx = _select_prune_graph_subset(coord_train, tag, args)
+        if prune_idx is not None:
+            if str(args.graph_mode).strip().lower() != "knn":
+                raise RuntimeError(
+                    "Graph-pruning subsampling is currently supported only with "
+                    "--graph-mode knn."
+                )
+            A_blocks_prune = [A_blocks[int(i)] for i in prune_idx]
+            b_blocks_prune = [b_blocks[int(i)] for i in prune_idx]
+            coord_train_prune = coord_train[prune_idx, :]
+
+    K_graph = None
+    if use_global_graph:
+        K_graph = _build_graph_for_target(
+            dataset=dataset,
+            q_train=coord_train_prune,
+            target=target,
+            args=args,
+        )
 
     min_support = {
         "res": int(args.maw_min_support_size_res),
         "eps": int(args.maw_min_support_size_eps),
         "sig": int(args.maw_min_support_size_sig),
     }[target]
+    if min_support_override is not None:
+        min_support = int(min_support_override)
     phase1_stop_size = {
         "res": int(args.maw_phase1_stop_size_res),
         "eps": int(args.maw_phase1_stop_size_eps),
         "sig": int(args.maw_phase1_stop_size_sig),
     }[target]
+    if phase1_stop_size_override is not None:
+        phase1_stop_size = int(phase1_stop_size_override)
 
     prune_opts = {
         "alpha_smooth": float(args.alpha_smooth) if use_global_graph else 0.0,
@@ -1048,6 +1205,8 @@ def _run_target_maw(
         "tol_zero": float(args.tol_zero),
         "max_active_set_iters": int(args.max_as_iters),
         "max_reduced_dim": int(args.max_reduced_dim),
+        "graph_cg_maxiter": int(args.maw_graph_cg_maxiter),
+        "graph_cg_rtol": float(args.maw_graph_cg_rtol),
         "warn_max_reduced_dim": False,
         "enforce_nonnegativity": True,
         "use_global_graph_2ndstage": use_global_graph,
@@ -1071,17 +1230,17 @@ def _run_target_maw(
         strict_negative_tol=float(args.strict_negative_tol),
     )
     print(
-        f"  [MAW-{target}] init feasibility: "
+        f"  [MAW-{tag}] init feasibility: "
         f"max_rel={validation_ini['max_rel']:.3e}, "
         f"min_w={validation_ini['min_weight']:.3e}"
     )
 
     maw = run_mawecm_pruning(
-        A_blocks=A_blocks,
-        b_blocks=b_blocks,
+        A_blocks=A_blocks_prune,
+        b_blocks=b_blocks_prune,
         z_ini=z_ini,
         w_ini=w_ini,
-        q_train=coord_train,
+        q_train=coord_train_prune,
         options=prune_opts,
     )
 
@@ -1091,9 +1250,12 @@ def _run_target_maw(
         raise RuntimeError(f"MAW returned empty support for target={target}.")
     support_local = np.asarray(maw["i_support_local"], dtype=np.int64)
     A_blocks_red = [np.asarray(A[:, support_local], dtype=float) for A in A_blocks]
+    A_blocks_red_prune = [
+        np.asarray(A[:, support_local], dtype=float) for A in A_blocks_prune
+    ]
     validation = _validate_maw_constraints(
-        A_blocks=A_blocks_red,
-        b_blocks=b_blocks,
+        A_blocks=A_blocks_red_prune,
+        b_blocks=b_blocks_prune,
         W_train=W_train,
         strict_rel_tol=float(args.strict_constraint_rel_tol),
         strict_negative_tol=float(args.strict_negative_tol),
@@ -1109,16 +1271,22 @@ def _run_target_maw(
 
     if regressor_type == "ann":
         print(
-            f"  [MAW-{target}] fitting ANN weights: "
-            f"samples={int(coord_train.shape[0])}, support={int(z_red.size)}, "
+            f"  [MAW-{tag}] fitting ANN weights: "
+            f"samples={int(coord_train_prune.shape[0])}, support={int(z_red.size)}, "
             f"coord={coord_label}, hidden={args.maw_ann_hidden_dims}, "
-            f"epochs={int(args.maw_ann_epochs)}",
+            f"epochs={int(args.maw_ann_epochs)}, "
+            f"physics_states={int(coord_train.shape[0])}",
             flush=True,
         )
         ann = fit_mawecm_ann(
-            q_train=coord_train,
+            q_train=coord_train_prune,
             W_train=W_train,
             target_sum=renorm_target,
+            constraint_A_blocks=A_blocks_red_prune,
+            constraint_b_blocks=b_blocks_prune,
+            physics_q_train=coord_train,
+            physics_constraint_A_blocks=A_blocks_red,
+            physics_constraint_b_blocks=b_blocks,
             hidden_dims=str(args.maw_ann_hidden_dims),
             activation=str(args.maw_ann_activation),
             epochs=int(args.maw_ann_epochs),
@@ -1127,50 +1295,56 @@ def _run_target_maw(
             weight_decay=float(args.maw_ann_weight_decay),
             val_fraction=float(args.maw_ann_val_fraction),
             patience=int(args.maw_ann_patience),
+            lr_scheduler=bool(int(args.maw_ann_lr_scheduler)),
+            lr_scheduler_factor=float(args.maw_ann_lr_scheduler_factor),
+            lr_scheduler_patience=int(args.maw_ann_lr_scheduler_patience),
+            min_lr=float(args.maw_ann_min_lr),
             seed=int(args.maw_ann_seed),
             mse_weight=float(args.maw_ann_mse_weight),
+            physics_weight=float(args.maw_ann_physics_weight),
             verbose=True,
-            label=f"MAW-{target}-ANN",
+            label=f"MAW-{tag}-ANN",
         )
         weight_model = ann
         print(
-            f"  [MAW-{target}] ANN fit done: "
+            f"  [MAW-{tag}] ANN fit done: "
             f"train_rel={float(ann.get('train_rel_error', np.nan)):.3e}, "
-            f"val_rel={float(ann.get('val_rel_error', np.nan)):.3e}",
+            f"val_rel={float(ann.get('val_rel_error', np.nan)):.3e}, "
+            f"constraint_rel={float(ann.get('train_constraint_rel_error', np.nan)):.3e}",
             flush=True,
         )
-        print(f"  [MAW-{target}] validating fitted ANN on training states...", flush=True)
-        W_recon = eval_mawecm_ann(coord_train, ann)
+        print(f"  [MAW-{tag}] validating fitted ANN on training states...", flush=True)
+        W_recon = eval_mawecm_ann(coord_train_prune, ann)
     else:
-        effective_centers = int(coord_train.shape[0]) if int(n_centers) <= 0 else min(int(n_centers), int(coord_train.shape[0]))
+        effective_centers = int(coord_train_prune.shape[0]) if int(n_centers) <= 0 else min(int(n_centers), int(coord_train_prune.shape[0]))
         print(
-            f"  [MAW-{target}] fitting RBF weights: "
-            f"samples={int(coord_train.shape[0])}, support={int(z_red.size)}, "
+            f"  [MAW-{tag}] fitting RBF weights: "
+            f"samples={int(coord_train_prune.shape[0])}, support={int(z_red.size)}, "
             f"coord={coord_label}, "
             f"centers={effective_centers}, poly_mode={int(args.rbf_poly_mode)}, "
             f"lambda={float(args.rbf_lambda):.1e}",
             flush=True,
         )
         rbf = fit_mawecm_rbf(
-            q_train=coord_train,
+            q_train=coord_train_prune,
             W_train=W_train,
             n_centers=n_centers,
             poly_mode=int(args.rbf_poly_mode),
             lambda_reg=float(args.rbf_lambda),
             length_scale_factor=float(args.rbf_length_scale_factor),
             verbose=True,
-            label=f"MAW-{target}-RBF",
+            label=f"MAW-{tag}-RBF",
         )
         weight_model = rbf
         print(
-            f"  [MAW-{target}] RBF fit done: "
+            f"  [MAW-{tag}] RBF fit done: "
             f"train_rel={float(rbf.get('train_rel_error', np.nan)):.3e}",
             flush=True,
         )
 
-        print(f"  [MAW-{target}] validating fitted RBF on training states...", flush=True)
+        print(f"  [MAW-{tag}] validating fitted RBF on training states...", flush=True)
         W_recon = eval_mawecm_rbf(
-            q_query=coord_train,
+            q_query=coord_train_prune,
             model=rbf,
             clip_nonnegative=bool(int(args.rbf_clip_nonnegative)),
             renorm_target=renorm_target if bool(int(args.rbf_renorm)) else None,
@@ -1182,21 +1356,29 @@ def _run_target_maw(
     w_anchor = np.mean(W_train, axis=1)
     w_full[z_red] = w_anchor
 
-    b_train_packed, m_constraints_per_block = _pack_b_blocks_for_save(b_blocks)
+    b_train_packed, m_constraints_per_block = _pack_b_blocks_for_save(b_blocks_prune)
 
     print(
-        f"  [MAW-{target}] rhs={rhs_mode} |Z_ini|={z_ini.size} -> |Z_red|={z_red.size}, "
+        f"  [MAW-{tag}] rhs={rhs_mode} |Z_ini|={z_ini.size} -> |Z_red|={z_red.size}, "
         f"{regressor_type.upper()} train-rel={rel_recon:.3e}, max_rel={validation['max_rel']:.3e}, "
         f"min_w={validation['min_weight']:.3e}, prune-elapsed={maw['elapsed_sec']:.2f}s"
     )
 
     return {
-        "target": target,
+        "target": tag,
+        "base_target": target,
+        "hom_component_index": -1 if hom_component_index is None else int(hom_component_index),
         "z_ini": z_ini,
         "w_ini": w_ini,
         "q_train": q_train,
         "mu_train": mu_train,
-        "coord_train": coord_train,
+        "coord_train": coord_train_prune,
+        "coord_train_full": coord_train,
+        "prune_subset_indices": (
+            np.asarray(prune_idx, dtype=np.int64)
+            if prune_idx is not None
+            else np.arange(coord_train.shape[0], dtype=np.int64)
+        ),
         "coord_label": coord_label,
         "component_scales": component_scales,
         "ids": ids,
@@ -1261,6 +1443,127 @@ def _build_fixed_hom_target_result(dataset, ecm_fixed, target):
         "recon_rel": 0.0,
         "rhs_mode": np.array(["fixed_classic"]),
         "fixed_classic": True,
+    }
+
+
+def _build_fixed_hom_component_result(dataset, ecm_fixed, target, component_index):
+    """Build one component-wise homogenization record with constant classical ECM weights."""
+    t = str(target).strip().lower()
+    if t not in ("eps", "sig"):
+        raise ValueError(f"Unsupported fixed hom component target '{target}'.")
+    comp = int(component_index)
+    if comp < 0 or comp > 2:
+        raise ValueError(f"Invalid {t} component index {component_index}; expected 0, 1 or 2.")
+
+    q_train = np.asarray(dataset["q_m_hom"], dtype=float)
+    mu_train = np.asarray(dataset["mu_hom"], dtype=float)
+    ids = np.asarray(dataset["ids_hom"], dtype=np.int64)
+    n_elem = int(dataset["n_elem"])
+
+    component_rule = _load_hom_component_classic_rule(
+        ecm_fixed=ecm_fixed,
+        target=t,
+        component_index=comp,
+        n_elem=n_elem,
+    )
+    if component_rule is not None:
+        z = np.asarray(component_rule["z"], dtype=np.int64).reshape(-1)
+        w = np.asarray(component_rule["w"], dtype=float).reshape(-1)
+        w_full = np.asarray(component_rule["w_full"], dtype=float).reshape(-1)
+        rhs_label = f"fixed_classic_component_{component_rule['suffix']}"
+    else:
+        base = _build_fixed_hom_target_result(dataset, ecm_fixed, target=t)
+        z = np.asarray(base["z_red"], dtype=np.int64).reshape(-1)
+        w = np.asarray(base["w_sel"], dtype=float).reshape(-1)
+        w_full = np.zeros(n_elem, dtype=float)
+        w_full[z] = w
+        rhs_label = "fixed_classic_component"
+
+    return {
+        "target": f"{t}_{comp}",
+        "base_target": t,
+        "hom_component_index": comp,
+        "z_ini": z.copy(),
+        "w_ini": w.copy(),
+        "q_train": q_train,
+        "mu_train": mu_train,
+        "coord_train": mu_train,
+        "coord_label": "mu",
+        "component_scales": np.ones(0, dtype=float),
+        "ids": ids,
+        "A_m": int(1),
+        "m_constraints_per_block": np.ones(q_train.shape[0], dtype=np.int64),
+        "b_train": np.zeros((q_train.shape[0], 1), dtype=float),
+        "maw": None,
+        "z_red": z.copy(),
+        "W_train": np.tile(w[:, None], (1, q_train.shape[0])),
+        "regressor_type": "fixed_classic",
+        "weight_model": None,
+        "rbf": None,
+        "ann": None,
+        "w_full": w_full,
+        "w_sel": w.copy(),
+        "renorm_target": float(np.sum(w)),
+        "recon_rel": 0.0,
+        "rhs_mode": np.array([rhs_label]),
+        "fixed_classic": True,
+        "sum_target": float(np.sum(w)),
+        "sum_constraint": int(1),
+        "rowspace_info": {},
+    }
+
+
+def _build_componentwise_hom_target_result(dataset, target, component_results):
+    t = str(target).strip().lower()
+    if t not in ("eps", "sig"):
+        raise ValueError(f"Unsupported component-wise hom target '{target}'.")
+    comps = list(component_results)
+    if len(comps) != 3:
+        raise RuntimeError(f"Component-wise {t} requires exactly 3 component records.")
+
+    n_elem = int(dataset["n_elem"])
+    z_union = np.zeros(0, dtype=np.int64)
+    z_ini_union = np.zeros(0, dtype=np.int64)
+    w_full_stack = []
+    for rec in comps:
+        z_union = np.union1d(z_union, np.asarray(rec["z_red"], dtype=np.int64).reshape(-1))
+        z_ini_union = np.union1d(z_ini_union, np.asarray(rec["z_ini"], dtype=np.int64).reshape(-1))
+        w_full_stack.append(np.asarray(rec["w_full"], dtype=float).reshape(-1))
+    z_union = z_union.astype(np.int64)
+    z_ini_union = z_ini_union.astype(np.int64)
+    w_full = np.mean(np.vstack(w_full_stack), axis=0) if w_full_stack else np.zeros(n_elem, dtype=float)
+
+    q_train = np.asarray(dataset["q_m_hom"], dtype=float)
+    mu_train = np.asarray(dataset["mu_hom"], dtype=float)
+    ids = np.asarray(dataset["ids_hom"], dtype=np.int64)
+    return {
+        "target": t,
+        "z_ini": z_ini_union.copy(),
+        "w_ini": w_full[z_ini_union].copy(),
+        "q_train": q_train,
+        "mu_train": mu_train,
+        "ids": ids,
+        "A_m": int(3),
+        "m_constraints_per_block": np.full(q_train.shape[0], 3, dtype=np.int64),
+        "b_train": np.zeros((q_train.shape[0], 3), dtype=float),
+        "maw": None,
+        "z_red": z_union.copy(),
+        "W_train": np.tile(w_full[z_union][:, None], (1, q_train.shape[0])),
+        "regressor_type": "componentwise",
+        "weight_model": None,
+        "rbf": None,
+        "ann": None,
+        "w_full": w_full,
+        "w_sel": w_full[z_union],
+        "renorm_target": float(np.sum(w_full)),
+        "recon_rel": 0.0,
+        "rhs_mode": np.array(["componentwise_maw"]),
+        "fixed_classic": False,
+        "componentwise": True,
+        "component_records": comps,
+        "sum_target": float(np.mean([float(rec.get("sum_target", np.sum(rec["w_full"]))) for rec in comps])),
+        "sum_constraint": int(1),
+        "rowspace_info": {},
     }
 
 
@@ -1346,8 +1649,180 @@ def _parse_targets(text):
     return valid
 
 
+def _parse_component_sizes(text, fallback, name):
+    raw = str(text).strip()
+    if raw == "":
+        return [int(fallback)] * 3
+    vals = [v.strip() for v in raw.split(",") if v.strip()]
+    if len(vals) != 3:
+        raise ValueError(f"{name} must be empty or three comma-separated integers, got '{text}'.")
+    out = [int(v) for v in vals]
+    if any(v < 0 for v in out):
+        raise ValueError(f"{name} entries must be non-negative, got {out}.")
+    return out
+
+
+def _parse_component_flags(text, name):
+    raw = str(text).strip()
+    if raw == "":
+        return [0, 0, 0]
+    vals = [v.strip() for v in raw.split(",") if v.strip()]
+    if len(vals) != 3:
+        raise ValueError(f"{name} must be empty or three comma-separated 0/1 flags, got '{text}'.")
+    out = [int(v) for v in vals]
+    if any(v not in (0, 1) for v in out):
+        raise ValueError(f"{name} entries must be 0 or 1, got {out}.")
+    return out
+
+
+def _append_maw_model_payload(payload, rec, prefix, z_key):
+    """Save one MAW weight model under an explicit prefix."""
+    maw = rec["maw"]
+    rbf = rec.get("rbf", None)
+    ann = rec.get("ann", None)
+    weight_model = rec.get("weight_model", rbf if rbf is not None else ann)
+    regressor_type = str(rec.get("regressor_type", "rbf" if rbf is not None else "none")).strip().lower()
+
+    payload[z_key] = np.asarray(rec["z_red"], dtype=np.int64)
+    payload[prefix + "Z_ini"] = np.asarray(rec["z_ini"], dtype=np.int64)
+    payload[prefix + "w_ini"] = np.asarray(rec["w_ini"], dtype=float)
+    payload[prefix + "sample_ids"] = np.asarray(rec["ids"], dtype=np.int64)
+    payload[prefix + "q_train"] = np.asarray(rec["q_train"], dtype=float)
+    payload[prefix + "mu_train"] = np.asarray(rec["mu_train"], dtype=float)
+    payload[prefix + "coord_label"] = np.array([str(rec.get("coord_label", "q"))])
+    payload[prefix + "coord_train"] = np.asarray(
+        rec.get("coord_train", rec["q_train"]),
+        dtype=float,
+    )
+    if "coord_train_full" in rec:
+        payload[prefix + "coord_train_full"] = np.asarray(rec["coord_train_full"], dtype=float)
+    if "prune_subset_indices" in rec:
+        payload[prefix + "prune_subset_indices"] = np.asarray(
+            rec["prune_subset_indices"],
+            dtype=np.int64,
+        )
+    payload[prefix + "component_scales"] = np.asarray(
+        rec.get("component_scales", np.ones(0, dtype=float)),
+        dtype=float,
+    )
+    payload[prefix + "regressor_type"] = np.array([regressor_type])
+    payload[prefix + "W_train"] = np.asarray(rec["W_train"], dtype=float)
+    payload[prefix + "b_train"] = np.asarray(rec["b_train"], dtype=float)
+    payload[prefix + "m_constraints"] = np.array([int(rec["A_m"])], dtype=np.int64)
+    payload[prefix + "m_constraints_per_block"] = np.asarray(
+        rec.get(
+            "m_constraints_per_block",
+            np.full(
+                int(np.asarray(rec["q_train"]).shape[0]),
+                int(rec["A_m"]),
+                dtype=np.int64,
+            ),
+        ),
+        dtype=np.int64,
+    )
+    payload[prefix + "rhs_mode"] = np.array([str(np.ravel(rec["rhs_mode"])[0])])
+    payload[prefix + "sum_constraint"] = np.array([int(rec.get("sum_constraint", 0))], dtype=np.int64)
+    payload[prefix + "sum_target"] = np.array([float(rec.get("sum_target", rec["renorm_target"]))], dtype=float)
+    payload[prefix + "renorm_target"] = np.array([float(rec["renorm_target"])], dtype=float)
+    payload[prefix + "recon_rel"] = np.array([float(rec["recon_rel"])], dtype=float)
+    payload[prefix + "hom_component_index"] = np.array(
+        [int(rec.get("hom_component_index", -1))],
+        dtype=np.int64,
+    )
+    payload[prefix + "is_fixed_classic"] = np.array(
+        [1 if bool(rec.get("fixed_classic", False)) else 0],
+        dtype=np.int64,
+    )
+
+    if regressor_type == "fixed_classic" or bool(rec.get("fixed_classic", False)):
+        payload[prefix + "regressor_type"] = np.array(["fixed_classic"])
+        payload[prefix + "w_fixed"] = np.asarray(rec["w_sel"], dtype=float)
+        return
+
+    rowspace_info = dict(rec.get("rowspace_info", {}))
+    payload[prefix + "rowspace_rank_min"] = np.array(
+        [float(rowspace_info.get("rank_min", np.nan))], dtype=float
+    )
+    payload[prefix + "rowspace_rank_mean"] = np.array(
+        [float(rowspace_info.get("rank_mean", np.nan))], dtype=float
+    )
+    payload[prefix + "rowspace_rank_max"] = np.array(
+        [float(rowspace_info.get("rank_max", np.nan))], dtype=float
+    )
+    payload[prefix + "rowspace_reduced_blocks"] = np.array(
+        [int(rowspace_info.get("n_row_reduced", 0))], dtype=np.int64
+    )
+    payload[prefix + "rowspace_rank0_count"] = np.array(
+        [int(rowspace_info.get("n_rank_zero", 0))], dtype=np.int64
+    )
+
+    if maw is None or weight_model is None:
+        return
+
+    payload[prefix + "n_stop"] = np.array([int(maw["n_stop"])], dtype=np.int64)
+    payload[prefix + "prune_history_active_counts"] = np.asarray(maw["active_counts"], dtype=np.int64)
+    payload[prefix + "prune_history_removed_global"] = np.asarray(maw["removed_local"], dtype=np.int64)
+    payload[prefix + "tol_neg"] = np.array([float(maw["tol_neg"])], dtype=float)
+    payload[prefix + "alpha_smooth"] = np.array([float(maw["options"]["alpha_smooth"])], dtype=float)
+    payload[prefix + "criterion"] = np.array([int(maw["options"]["criterion"])], dtype=np.int64)
+    payload[prefix + "elapsed_sec"] = np.array([float(maw["elapsed_sec"])], dtype=float)
+    payload[prefix + "phase1_start_size"] = np.array([int(maw["phase1_start_size"])], dtype=np.int64)
+    payload[prefix + "phase1_end_size"] = np.array([int(maw["phase1_end_size"])], dtype=np.int64)
+    payload[prefix + "phase2_started"] = np.array([int(bool(maw["phase2_started"]))], dtype=np.int64)
+    payload[prefix + "phase2_start_size"] = np.array([int(maw["phase2_start_size"])], dtype=np.int64)
+    payload[prefix + "phase2_end_size"] = np.array([int(maw["phase2_end_size"])], dtype=np.int64)
+    payload[prefix + "phase2_attempts"] = np.array([int(maw["phase2_attempts"])], dtype=np.int64)
+    payload[prefix + "phase2_successes"] = np.array([int(maw["phase2_successes"])], dtype=np.int64)
+    payload[prefix + "stage_history"] = np.asarray(maw["stage_history"])
+
+    if regressor_type == "ann":
+        payload[prefix + "ann_x_mean"] = np.asarray(ann["x_mean"], dtype=float)
+        payload[prefix + "ann_x_std"] = np.asarray(ann["x_std"], dtype=float)
+        payload[prefix + "ann_activation"] = np.array([str(ann.get("activation", "silu"))])
+        payload[prefix + "ann_hidden_dims"] = np.asarray(
+            ann.get("hidden_dims", np.zeros(0, dtype=np.int64)),
+            dtype=np.int64,
+        )
+        payload[prefix + "ann_target_sum"] = np.array([float(ann["target_sum"])], dtype=float)
+        payload[prefix + "ann_n_layers"] = np.array([int(ann["n_layers"])], dtype=np.int64)
+        payload[prefix + "ann_best_epoch"] = np.array([int(ann.get("best_epoch", -1))], dtype=np.int64)
+        payload[prefix + "ann_best_val_loss"] = np.array([float(ann.get("best_val_loss", np.nan))], dtype=float)
+        payload[prefix + "ann_train_rel_error"] = np.array([float(ann.get("train_rel_error", np.nan))], dtype=float)
+        payload[prefix + "ann_val_rel_error"] = np.array([float(ann.get("val_rel_error", np.nan))], dtype=float)
+        payload[prefix + "ann_physics_weight"] = np.array([float(ann.get("physics_weight", 0.0))], dtype=float)
+        payload[prefix + "ann_train_constraint_rel_error"] = np.array(
+            [float(ann.get("train_constraint_rel_error", np.nan))],
+            dtype=float,
+        )
+        payload[prefix + "ann_val_constraint_rel_error"] = np.array(
+            [float(ann.get("val_constraint_rel_error", np.nan))],
+            dtype=float,
+        )
+        payload[prefix + "ann_elapsed_sec"] = np.array([float(ann.get("elapsed_sec", np.nan))], dtype=float)
+        payload[prefix + "ann_final_lr"] = np.array([float(ann.get("final_lr", np.nan))], dtype=float)
+        payload[prefix + "ann_lr_scheduler"] = np.array([int(ann.get("lr_scheduler", 0))], dtype=np.int64)
+        for i in range(int(ann["n_layers"])):
+            payload[prefix + f"ann_W_{i}"] = np.asarray(ann[f"W_{i}"], dtype=float)
+            payload[prefix + f"ann_b_{i}"] = np.asarray(ann[f"b_{i}"], dtype=float)
+    elif regressor_type == "rbf":
+        payload[prefix + "rbf_centers"] = np.asarray(rbf["centers"], dtype=float)
+        payload[prefix + "rbf_center_ids"] = np.asarray(rbf["center_ids"], dtype=np.int64)
+        payload[prefix + "rbf_length_scales"] = np.asarray(rbf["length_scales"], dtype=float)
+        payload[prefix + "rbf_alpha"] = np.asarray(rbf["Alpha"], dtype=float)
+        payload[prefix + "rbf_beta"] = np.asarray(rbf["Beta"], dtype=float)
+        payload[prefix + "rbf_scale"] = np.asarray(rbf["scale"], dtype=float)
+        payload[prefix + "rbf_poly_mode"] = np.array([int(rbf["poly_mode"])], dtype=np.int64)
+        payload[prefix + "rbf_lambda"] = np.array([float(rbf["lambda_reg"])], dtype=float)
+        payload[prefix + "rbf_n_centers"] = np.array([int(rbf["n_centers"])], dtype=np.int64)
+
+
 def _save_stage12b_file(out_file, dataset, ecm_fixed, results, args):
     n_elem = int(dataset["n_elem"])
+    hom_componentwise = bool(int(getattr(args, "maw_hom_componentwise", 0))) and all(
+        f"{base}_{comp}" in results
+        for base in ("eps", "sig")
+        for comp in range(3)
+    )
 
     # Compatibility vectors
     z_res = np.asarray(results["res"]["z_red"], dtype=np.int64)
@@ -1359,7 +1834,17 @@ def _save_stage12b_file(out_file, dataset, ecm_fixed, results, args):
     w_eps_full = np.asarray(results["eps"]["w_full"], dtype=float)
     w_sig_full = np.asarray(results["sig"]["w_full"], dtype=float)
 
-    maw_enabled_targets = [t for t in ("res", "eps", "sig") if results[t]["maw"] is not None]
+    if hom_componentwise:
+        maw_enabled_targets = [
+            t for t in ("res", "eps", "sig") if results[t]["maw"] is not None
+        ] + [
+            f"{base}_{comp}"
+            for base in ("eps", "sig")
+            for comp in range(3)
+            if results[f"{base}_{comp}"]["maw"] is not None
+        ]
+    else:
+        maw_enabled_targets = [t for t in ("res", "eps", "sig") if results[t]["maw"] is not None]
     fixed_dir_tag = (
         str(args.fixed_ecm_dir)
         if str(args.classic_ecm_source).strip().lower() == "file"
@@ -1405,6 +1890,15 @@ def _save_stage12b_file(out_file, dataset, ecm_fixed, results, args):
         "maw_knn": np.array([int(args.graph_knn)], dtype=np.int64),
         "maw_graph_kernel": np.array([str(args.graph_kernel)]),
         "maw_graph_sigma": np.array([float(args.graph_sigma)], dtype=float),
+        "maw_prune_graph_subsample_size": np.array(
+            [int(args.maw_prune_graph_subsample_size)], dtype=np.int64
+        ),
+        "maw_prune_graph_subsample_mode": np.array(
+            [str(args.maw_prune_graph_subsample_mode)]
+        ),
+        "maw_prune_graph_subsample_seed": np.array(
+            [int(args.maw_prune_graph_subsample_seed)], dtype=np.int64
+        ),
         "maw_alpha_smooth": np.array([float(args.alpha_smooth)], dtype=float),
         "maw_use_global_graph_2ndstage": np.array(
             [int(args.use_global_graph_2ndstage)], dtype=np.int64
@@ -1429,6 +1923,7 @@ def _save_stage12b_file(out_file, dataset, ecm_fixed, results, args):
         "maw_stage2_criterion": np.array([int(args.criterion)], dtype=np.int64),
         "maw_incremental_smoothing": np.array([int(args.incremental_smoothing)], dtype=np.int64),
         "maw_hom_weight_regressor": np.array([str(args.maw_hom_weight_regressor)]),
+        "maw_hom_componentwise": np.array([int(hom_componentwise)], dtype=np.int64),
         "maw_rbf_clip_nonnegative": np.array([int(args.rbf_clip_nonnegative)], dtype=np.int64),
         "maw_rbf_renorm": np.array([int(args.rbf_renorm)], dtype=np.int64),
         "maw_postprocess_mode": np.array(
@@ -1565,7 +2060,18 @@ def _save_stage12b_file(out_file, dataset, ecm_fixed, results, args):
                 payload[prefix + "ann_best_val_loss"] = np.array([float(ann.get("best_val_loss", np.nan))], dtype=float)
                 payload[prefix + "ann_train_rel_error"] = np.array([float(ann.get("train_rel_error", np.nan))], dtype=float)
                 payload[prefix + "ann_val_rel_error"] = np.array([float(ann.get("val_rel_error", np.nan))], dtype=float)
+                payload[prefix + "ann_physics_weight"] = np.array([float(ann.get("physics_weight", 0.0))], dtype=float)
+                payload[prefix + "ann_train_constraint_rel_error"] = np.array(
+                    [float(ann.get("train_constraint_rel_error", np.nan))],
+                    dtype=float,
+                )
+                payload[prefix + "ann_val_constraint_rel_error"] = np.array(
+                    [float(ann.get("val_constraint_rel_error", np.nan))],
+                    dtype=float,
+                )
                 payload[prefix + "ann_elapsed_sec"] = np.array([float(ann.get("elapsed_sec", np.nan))], dtype=float)
+                payload[prefix + "ann_final_lr"] = np.array([float(ann.get("final_lr", np.nan))], dtype=float)
+                payload[prefix + "ann_lr_scheduler"] = np.array([int(ann.get("lr_scheduler", 0))], dtype=np.int64)
                 for i in range(int(ann["n_layers"])):
                     payload[prefix + f"ann_W_{i}"] = np.asarray(ann[f"W_{i}"], dtype=float)
                     payload[prefix + f"ann_b_{i}"] = np.asarray(ann[f"b_{i}"], dtype=float)
@@ -1588,6 +2094,18 @@ def _save_stage12b_file(out_file, dataset, ecm_fixed, results, args):
                     [int(rbf["n_centers"])], dtype=np.int64
                 )
 
+    if hom_componentwise:
+        for base in ("eps", "sig"):
+            for comp in range(3):
+                key = f"{base}_{comp}"
+                rec = results[key]
+                _append_maw_model_payload(
+                    payload=payload,
+                    rec=rec,
+                    prefix=f"maw_{base}_{comp}_",
+                    z_key=f"Z_{base}_{comp}",
+                )
+
     # Keep classical ECM baseline for traceability and comparisons.
     for k in (
         "Z_res",
@@ -1600,6 +2118,22 @@ def _save_stage12b_file(out_file, dataset, ecm_fixed, results, args):
         "w_res_full",
         "w_eps_full",
         "w_sig_full",
+        "w_eps_components_full",
+        "w_sig_components_full",
+        "Z_eps_norm",
+        "w_eps_norm",
+        "w_eps_norm_full",
+        "Z_eps_xy",
+        "w_eps_xy",
+        "w_eps_xy_full",
+        "Z_sig_norm",
+        "w_sig_norm",
+        "w_sig_norm_full",
+        "Z_sig_xy",
+        "w_sig_xy",
+        "w_sig_xy_full",
+        "HOM_ECM_SPLIT_MODE",
+        "HOM_ECM_SPLIT_MODE_INPUT",
         "rel_error_res",
         "rel_error_eps",
         "rel_error_sig",
@@ -1730,6 +2264,23 @@ def parse_args():
     p.add_argument("--graph-knn", type=int, default=8)
     p.add_argument("--graph-kernel", type=str, default="gaussian", choices=["gaussian", "binary"])
     p.add_argument("--graph-sigma", type=float, default=0.0)
+    p.add_argument(
+        "--maw-prune-graph-subsample-size",
+        type=int,
+        default=0,
+        help=(
+            "If >0 and graph phase-2 is enabled, prune on this many graph states "
+            "instead of all states. The final ANN can still use all states through "
+            "the physics loss. Currently supported with --graph-mode knn."
+        ),
+    )
+    p.add_argument(
+        "--maw-prune-graph-subsample-mode",
+        type=str,
+        default="uniform",
+        choices=["uniform", "random"],
+    )
+    p.add_argument("--maw-prune-graph-subsample-seed", type=int, default=11)
     p.add_argument("--alpha-smooth", type=float, default=0.1)
     p.add_argument(
         "--use-global-graph-2ndstage",
@@ -1754,6 +2305,24 @@ def parse_args():
     p.add_argument("--maw-min-support-size-eps", type=int, default=0)
     p.add_argument("--maw-min-support-size-sig", type=int, default=0)
     p.add_argument(
+        "--maw-min-support-size-eps-components",
+        type=str,
+        default="",
+        help=(
+            "Component-wise eps n_stop as 'xx,yy,xy' when --maw-hom-componentwise 1. "
+            "Empty uses --maw-min-support-size-eps for all three."
+        ),
+    )
+    p.add_argument(
+        "--maw-min-support-size-sig-components",
+        type=str,
+        default="",
+        help=(
+            "Component-wise sig n_stop as 'xx,yy,xy' when --maw-hom-componentwise 1. "
+            "Empty uses --maw-min-support-size-sig for all three."
+        ),
+    )
+    p.add_argument(
         "--maw-phase1-stop-size-res",
         type=int,
         default=0,
@@ -1761,6 +2330,42 @@ def parse_args():
     )
     p.add_argument("--maw-phase1-stop-size-eps", type=int, default=0)
     p.add_argument("--maw-phase1-stop-size-sig", type=int, default=0)
+    p.add_argument(
+        "--maw-phase1-stop-size-eps-components",
+        type=str,
+        default="",
+        help=(
+            "Component-wise eps phase-1 stop sizes as 'xx,yy,xy'. "
+            "Empty uses --maw-phase1-stop-size-eps for all three."
+        ),
+    )
+    p.add_argument(
+        "--maw-phase1-stop-size-sig-components",
+        type=str,
+        default="",
+        help=(
+            "Component-wise sig phase-1 stop sizes as 'xx,yy,xy'. "
+            "Empty uses --maw-phase1-stop-size-sig for all three."
+        ),
+    )
+    p.add_argument(
+        "--maw-fixed-classic-eps-components",
+        type=str,
+        default="",
+        help=(
+            "Component-wise eps fixed-classic flags as 'xx,yy,xy'. "
+            "Use e.g. 0,0,1 to keep gamma_xy on the traditional ECM rule."
+        ),
+    )
+    p.add_argument(
+        "--maw-fixed-classic-sig-components",
+        type=str,
+        default="",
+        help=(
+            "Component-wise sig fixed-classic flags as 'xx,yy,xy'. "
+            "Use e.g. 0,0,1 to keep sigma_xy on the traditional ECM rule."
+        ),
+    )
     p.add_argument(
         "--max-number-zeros-active-set-loop-maw-ecm",
         type=int,
@@ -1791,6 +2396,8 @@ def parse_args():
     p.add_argument("--tol-zero", type=float, default=1.0e-12)
     p.add_argument("--max-as-iters", type=int, default=30)
     p.add_argument("--max-reduced-dim", type=int, default=2500)
+    p.add_argument("--maw-graph-cg-maxiter", type=int, default=1000)
+    p.add_argument("--maw-graph-cg-rtol", type=float, default=1.0e-9)
     p.add_argument("--strict-constraint-rel-tol", type=float, default=1.0e-8)
     p.add_argument("--strict-negative-tol", type=float, default=1.0e-12)
     p.add_argument(
@@ -1804,7 +2411,17 @@ def parse_args():
         ),
     )
     p.add_argument("--maw-hom-rowspace-tol-rel", type=float, default=1.0e-12)
-
+    p.add_argument(
+        "--maw-hom-componentwise",
+        type=int,
+        default=0,
+        choices=[0, 1],
+        help=(
+            "If 1, build six independent MAW rules for eps_xx, eps_yy, gamma_xy, "
+            "sig_xx, sig_yy and sig_xy. Each component keeps its own positive, "
+            "sum-preserving adaptive weights."
+        ),
+    )
     p.add_argument("--rbf-centers-res", type=int, default=0)
     p.add_argument("--rbf-centers-eps", type=int, default=0)
     p.add_argument("--rbf-centers-sig", type=int, default=0)
@@ -1828,12 +2445,26 @@ def parse_args():
     p.add_argument("--maw-ann-weight-decay", type=float, default=1.0e-6)
     p.add_argument("--maw-ann-val-fraction", type=float, default=0.1)
     p.add_argument("--maw-ann-patience", type=int, default=200)
+    p.add_argument("--maw-ann-lr-scheduler", type=int, default=1, choices=[0, 1])
+    p.add_argument("--maw-ann-lr-scheduler-factor", type=float, default=0.5)
+    p.add_argument("--maw-ann-lr-scheduler-patience", type=int, default=100)
+    p.add_argument("--maw-ann-min-lr", type=float, default=1.0e-6)
     p.add_argument("--maw-ann-seed", type=int, default=11)
     p.add_argument(
         "--maw-ann-mse-weight",
         type=float,
         default=10.0,
         help="Extra probability-MSE weight added to the ANN KL loss.",
+    )
+    p.add_argument(
+        "--maw-ann-physics-weight",
+        type=float,
+        default=0.0,
+        help=(
+            "Extra local constraint loss for ANN MAW hom weights: "
+            "mean ||A_j w(mu_j)-b_j||^2/||b_j||^2. Use >0 for component-normalized "
+            "physics-aware training."
+        ),
     )
     p.add_argument(
         "--save-weight-field-plots",
@@ -1863,6 +2494,35 @@ def main():
         raise ValueError("Residual target 'res' is required in --targets.")
     hom_mode_raw = str(args.hom_mode).strip().lower()
     hom_mode = "fixed_classic" if hom_mode_raw == "fixed_stage9" else hom_mode_raw
+    hom_componentwise = (not disable_hom) and hom_mode == "maw" and bool(int(args.maw_hom_componentwise))
+    eps_component_nstop = _parse_component_sizes(
+        args.maw_min_support_size_eps_components,
+        fallback=int(args.maw_min_support_size_eps),
+        name="--maw-min-support-size-eps-components",
+    )
+    sig_component_nstop = _parse_component_sizes(
+        args.maw_min_support_size_sig_components,
+        fallback=int(args.maw_min_support_size_sig),
+        name="--maw-min-support-size-sig-components",
+    )
+    eps_component_phase1 = _parse_component_sizes(
+        args.maw_phase1_stop_size_eps_components,
+        fallback=int(args.maw_phase1_stop_size_eps),
+        name="--maw-phase1-stop-size-eps-components",
+    )
+    sig_component_phase1 = _parse_component_sizes(
+        args.maw_phase1_stop_size_sig_components,
+        fallback=int(args.maw_phase1_stop_size_sig),
+        name="--maw-phase1-stop-size-sig-components",
+    )
+    eps_component_fixed = _parse_component_flags(
+        args.maw_fixed_classic_eps_components,
+        name="--maw-fixed-classic-eps-components",
+    )
+    sig_component_fixed = _parse_component_flags(
+        args.maw_fixed_classic_sig_components,
+        name="--maw-fixed-classic-sig-components",
+    )
     if disable_hom and hom_mode == "maw":
         raise ValueError("Homogenization is disabled; --hom-mode maw is not allowed.")
     if (not disable_hom) and hom_mode == "maw":
@@ -1927,6 +2587,12 @@ def main():
     print(f"maw targets : {targets}")
     print(f"res_mode    : {args.res_mode}")
     print(f"hom_mode    : {hom_mode}")
+    print(f"hom compwise: {int(hom_componentwise)}")
+    if hom_componentwise:
+        print(f"eps n_stop components [xx,yy,xy]: {eps_component_nstop}")
+        print(f"sig n_stop components [xx,yy,xy]: {sig_component_nstop}")
+        print(f"eps fixed-classic components [xx,yy,xy]: {eps_component_fixed}")
+        print(f"sig fixed-classic components [xx,yy,xy]: {sig_component_fixed}")
     print(f"res pool/rhs: {args.res_candidate_pool} / {args.res_target_source}")
     print(f"graph mode  : {args.graph_mode}")
     print(f"n_elem      : {n_elem}")
@@ -1958,7 +2624,55 @@ def main():
         print("  [Stage12b] Homogenization targets are disabled: eps/sig supports forced empty.")
     else:
         for t in ("eps", "sig"):
-            if hom_mode == "maw" and t in targets:
+            if hom_mode == "maw" and t in targets and hom_componentwise:
+                comp_records = []
+                for comp in range(3):
+                    comp_key = f"{t}_{comp}"
+                    fixed_flags = eps_component_fixed if t == "eps" else sig_component_fixed
+                    if int(fixed_flags[comp]) == 1:
+                        rec = _build_fixed_hom_component_result(
+                            dataset=dataset,
+                            ecm_fixed=ecm_fixed,
+                            target=t,
+                            component_index=comp,
+                        )
+                        print(
+                            f"  [Stage12b] Fixed classical target '{comp_key}' kept: "
+                            f"|Z|={rec['z_red'].size}",
+                            flush=True,
+                        )
+                    else:
+                        print(f"  [Stage12b] Starting MAW target '{comp_key}'...", flush=True)
+                        rec = _run_target_maw(
+                            target=t,
+                            dataset=dataset,
+                            ecm_fixed=ecm_fixed,
+                            n_elem=n_elem,
+                            args=args,
+                            label=comp_key,
+                            hom_component_index=comp,
+                            min_support_override=(
+                                eps_component_nstop[comp] if t == "eps" else sig_component_nstop[comp]
+                            ),
+                            phase1_stop_size_override=(
+                                eps_component_phase1[comp] if t == "eps" else sig_component_phase1[comp]
+                            ),
+                        )
+                    results[comp_key] = rec
+                    comp_records.append(rec)
+                    print(f"  [Stage12b] Finished target '{comp_key}'.", flush=True)
+                results[t] = _build_componentwise_hom_target_result(
+                    dataset=dataset,
+                    target=t,
+                    component_results=comp_records,
+                )
+                sizes = [int(rec["z_red"].size) for rec in comp_records]
+                print(
+                    f"  [MAW-{t}] component-wise supports kept: {sizes}; "
+                    f"union |Z|={results[t]['z_red'].size}",
+                    flush=True,
+                )
+            elif hom_mode == "maw" and t in targets:
                 print(f"  [Stage12b] Starting MAW target '{t}'...", flush=True)
                 results[t] = _run_target_maw(
                     target=t,
@@ -1975,7 +2689,12 @@ def main():
                 )
 
     if bool(int(args.save_weight_field_plots)):
-        for t in ("res", "eps", "sig"):
+        plot_keys = ["res"]
+        if hom_componentwise:
+            plot_keys.extend([f"{base}_{comp}" for base in ("eps", "sig") for comp in range(3)])
+        else:
+            plot_keys.extend(["eps", "sig"])
+        for t in plot_keys:
             rec = results[t]
             if rec["maw"] is None or rec.get("weight_model", rec.get("rbf", None)) is None:
                 continue
