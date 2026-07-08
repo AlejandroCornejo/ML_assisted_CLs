@@ -13,6 +13,7 @@ import time
 import numpy as np
 import torch
 from scipy.sparse import coo_matrix
+from scipy.special import erf
 try:
     from torch.func import jacfwd as _torch_jacfwd
 except Exception:
@@ -77,6 +78,114 @@ def _as_str_scalar(arr, key, default=""):
     return str(np.ravel(arr[key])[0])
 
 
+def _build_fast_rbf_single_query_eval(model, clip_nonnegative=True, renorm_target=None):
+    centers = np.asarray(model["centers"], dtype=float)
+    length_scales = np.asarray(model["length_scales"], dtype=float).reshape(-1)
+    alpha = np.asarray(model["Alpha"], dtype=float)
+    beta = np.asarray(model["Beta"], dtype=float)
+    scale = np.asarray(model["scale"], dtype=float).reshape(-1)
+    poly_mode = int(model["poly_mode"])
+    inv_l2 = 1.0 / np.maximum(length_scales * length_scales, 1.0e-30)
+    clip = bool(clip_nonnegative)
+    target = None if renorm_target is None else float(renorm_target)
+
+    def _eval(q_p):
+        q = np.asarray(q_p, dtype=float).reshape(-1)
+        diff = q[None, :] - centers
+        phi = np.exp(-0.5 * np.sum(diff * diff * inv_l2[None, :], axis=1))
+        yh = phi @ alpha
+        if poly_mode == 1:
+            if beta.shape[0] > 0:
+                yh = yh + beta[0, :]
+        elif poly_mode == 2:
+            p = np.concatenate(([1.0], q))
+            yh = yh + p @ beta
+        elif poly_mode != 0:
+            raise RuntimeError(f"[HPROM-ANN] Unsupported residual RBF poly_mode={poly_mode}.")
+        w = yh * scale
+        if clip:
+            w = np.maximum(w, 0.0)
+        if target is not None:
+            sw = float(np.sum(w))
+            if sw > 1.0e-30:
+                w = (target / sw) * w
+            else:
+                w = np.zeros_like(w)
+        return w
+
+    def _eval_with_jacobian(q_p):
+        q = np.asarray(q_p, dtype=float).reshape(-1)
+        diff = q[None, :] - centers
+        phi = np.exp(-0.5 * np.sum(diff * diff * inv_l2[None, :], axis=1))
+        yh = phi @ alpha
+        dphi = -phi[:, None] * diff * inv_l2[None, :]
+        dy = alpha.T @ dphi
+        if poly_mode == 1:
+            if beta.shape[0] > 0:
+                yh = yh + beta[0, :]
+        elif poly_mode == 2:
+            p = np.concatenate(([1.0], q))
+            yh = yh + p @ beta
+            for a in range(min(q.size, beta.shape[0] - 1)):
+                dy[:, a] += beta[1 + a, :]
+        elif poly_mode != 0:
+            raise RuntimeError(f"[HPROM-ANN] Unsupported residual RBF poly_mode={poly_mode}.")
+
+        w = yh * scale
+        dw = dy * scale[:, None]
+        if clip:
+            mask = w > 0.0
+            w = np.maximum(w, 0.0)
+            dw = dw * mask[:, None]
+        if target is not None:
+            sw = float(np.sum(w))
+            if sw > 1.0e-30:
+                dsw = np.sum(dw, axis=0)
+                fac = target / sw
+                dw = fac * dw - (target / (sw * sw)) * w[:, None] * dsw[None, :]
+                w = fac * w
+            else:
+                w = np.zeros_like(w)
+                dw = np.zeros_like(dw)
+        return w, dw
+
+    return _eval, _eval_with_jacobian
+
+
+def _build_fast_maw_ann_single_query_eval(model):
+    x_mean = np.asarray(model["x_mean"], dtype=float).reshape(-1)
+    x_std = np.maximum(np.asarray(model["x_std"], dtype=float).reshape(-1), 1.0e-12)
+    activation = str(model.get("activation", "silu")).strip().lower()
+    target_sum = float(model["target_sum"])
+    n_layers = int(model["n_layers"])
+    weights = [np.asarray(model[f"W_{i}"], dtype=float) for i in range(n_layers)]
+    biases = [np.asarray(model[f"b_{i}"], dtype=float).reshape(-1) for i in range(n_layers)]
+
+    def _act(y):
+        if activation == "silu":
+            z = np.clip(y, -60.0, 60.0)
+            return y / (1.0 + np.exp(-z))
+        if activation == "tanh":
+            return np.tanh(y)
+        if activation == "relu":
+            return np.maximum(y, 0.0)
+        if activation == "gelu":
+            return 0.5 * y * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (y + 0.044715 * y**3)))
+        raise ValueError(f"Unsupported ANN activation '{activation}'.")
+
+    def _eval(q_query):
+        y = (np.asarray(q_query, dtype=float).reshape(-1) - x_mean) / x_std
+        for i, (W, b) in enumerate(zip(weights, biases)):
+            y = W @ y + b
+            if i != n_layers - 1:
+                y = _act(y)
+        z = y - np.max(y)
+        ez = np.exp(np.clip(z, -700.0, 700.0))
+        return target_sum * ez / max(float(np.sum(ez)), 1.0e-300)
+
+    return _eval
+
+
 def _build_maw_res_target_model(ecm_data, required=False):
     prefix = "maw_res_"
     required_keys = [
@@ -114,34 +223,43 @@ def _build_maw_res_target_model(ecm_data, required=False):
     if renorm_enabled and (prefix + "renorm_target") in ecm_data:
         renorm_target = _as_float_scalar(ecm_data, prefix + "renorm_target")
 
+    rbf_model = {
+        "center_ids": (
+            np.asarray(ecm_data[prefix + "rbf_center_ids"], dtype=np.int64).reshape(-1)
+            if (prefix + "rbf_center_ids") in ecm_data
+            else np.arange(np.asarray(ecm_data[prefix + "rbf_centers"], dtype=float).shape[0], dtype=np.int64)
+        ),
+        "centers": np.asarray(ecm_data[prefix + "rbf_centers"], dtype=float),
+        "length_scales": np.asarray(ecm_data[prefix + "rbf_length_scales"], dtype=float),
+        "Alpha": np.asarray(ecm_data[prefix + "rbf_alpha"], dtype=float),
+        "Beta": np.asarray(ecm_data[prefix + "rbf_beta"], dtype=float),
+        "scale": np.asarray(ecm_data[prefix + "rbf_scale"], dtype=float),
+        "poly_mode": int(np.ravel(ecm_data[prefix + "rbf_poly_mode"])[0]),
+        "lambda_reg": (
+            _as_float_scalar(ecm_data, prefix + "rbf_lambda")
+            if (prefix + "rbf_lambda") in ecm_data
+            else 0.0
+        ),
+        "n_centers": (
+            _as_int_scalar(ecm_data, prefix + "rbf_n_centers")
+            if (prefix + "rbf_n_centers") in ecm_data
+            else int(np.asarray(ecm_data[prefix + "rbf_centers"], dtype=float).shape[0])
+        ),
+    }
+    fast_eval, fast_eval_with_jacobian = _build_fast_rbf_single_query_eval(
+        rbf_model,
+        clip_nonnegative=clip_nonnegative,
+        renorm_target=renorm_target,
+    )
+
     return {
         "target": "res",
         "z_support_full": z_support_full,
-        "rbf_model": {
-            "center_ids": (
-                np.asarray(ecm_data[prefix + "rbf_center_ids"], dtype=np.int64).reshape(-1)
-                if (prefix + "rbf_center_ids") in ecm_data
-                else np.arange(np.asarray(ecm_data[prefix + "rbf_centers"], dtype=float).shape[0], dtype=np.int64)
-            ),
-            "centers": np.asarray(ecm_data[prefix + "rbf_centers"], dtype=float),
-            "length_scales": np.asarray(ecm_data[prefix + "rbf_length_scales"], dtype=float),
-            "Alpha": np.asarray(ecm_data[prefix + "rbf_alpha"], dtype=float),
-            "Beta": np.asarray(ecm_data[prefix + "rbf_beta"], dtype=float),
-            "scale": np.asarray(ecm_data[prefix + "rbf_scale"], dtype=float),
-            "poly_mode": int(np.ravel(ecm_data[prefix + "rbf_poly_mode"])[0]),
-            "lambda_reg": (
-                _as_float_scalar(ecm_data, prefix + "rbf_lambda")
-                if (prefix + "rbf_lambda") in ecm_data
-                else 0.0
-            ),
-            "n_centers": (
-                _as_int_scalar(ecm_data, prefix + "rbf_n_centers")
-                if (prefix + "rbf_n_centers") in ecm_data
-                else int(np.asarray(ecm_data[prefix + "rbf_centers"], dtype=float).shape[0])
-            ),
-        },
+        "rbf_model": rbf_model,
         "renorm_target": renorm_target,
         "clip_nonnegative": clip_nonnegative,
+        "fast_eval": fast_eval,
+        "fast_eval_with_jacobian": fast_eval_with_jacobian,
     }
 
 
@@ -210,6 +328,7 @@ def _build_maw_hom_target_model(ecm_data, target, prefix=None, z_key=None, targe
 
     rbf_model = None
     ann_model = None
+    fast_ann_eval = None
     w_fixed = None
     coord_train = None
     W_train = None
@@ -259,6 +378,7 @@ def _build_maw_hom_target_model(ecm_data, target, prefix=None, z_key=None, targe
                 )
             ann_model[f"W_{i}"] = np.asarray(ecm_data[w_key], dtype=float)
             ann_model[f"b_{i}"] = np.asarray(ecm_data[b_key], dtype=float)
+        fast_ann_eval = _build_fast_maw_ann_single_query_eval(ann_model)
     else:
         rbf_model = {
             "center_ids": (
@@ -290,6 +410,7 @@ def _build_maw_hom_target_model(ecm_data, target, prefix=None, z_key=None, targe
         "regressor_type": regressor_type,
         "rbf_model": rbf_model,
         "ann_model": ann_model,
+        "fast_ann_eval": fast_ann_eval,
         "w_fixed": w_fixed,
         "coord_train": coord_train,
         "W_train": W_train,
@@ -368,6 +489,9 @@ def _map_support_to_current(z_support_full, full_to_local):
 
 
 def _evaluate_maw_res_support_weights(q_p, target_model):
+    fast_eval = target_model.get("fast_eval", None)
+    if fast_eval is not None:
+        return np.asarray(fast_eval(q_p), dtype=float).reshape(-1)
     q_vec = np.asarray(q_p, dtype=float).reshape(1, -1)
     return np.asarray(
         eval_mawecm_rbf(
@@ -381,6 +505,10 @@ def _evaluate_maw_res_support_weights(q_p, target_model):
 
 
 def _evaluate_maw_res_support_weights_and_jacobian(q_p, target_model):
+    fast_eval = target_model.get("fast_eval_with_jacobian", None)
+    if fast_eval is not None:
+        w, dw = fast_eval(q_p)
+        return np.asarray(w, dtype=float).reshape(-1), np.asarray(dw, dtype=float)
     q_vec = np.asarray(q_p, dtype=float).reshape(1, -1)
     w, dw = eval_mawecm_rbf_with_jacobian(
         q_query=q_vec,
@@ -457,6 +585,21 @@ class _DynamicWeightedResidualAssembler:
         )
         self.n_sel = int(self.elem_idx.size)
         self._rhs = np.zeros(int(n_dof), dtype=float)
+        self._free_ids = None
+        self._free_valid = None
+        self._free_row_idx = None
+        self._n_free = None
+        self._rhs_free = None
+
+    def prepare_reduced_action(self, free_dofs):
+        free_map = _build_free_dof_index_map(self.n_dof, free_dofs)
+        free_ids = np.asarray(free_map, dtype=np.int64)[self._assembler.local_eq_ids]
+        valid = free_ids >= 0
+        self._free_ids = free_ids
+        self._free_valid = valid
+        self._free_row_idx = free_ids[valid]
+        self._n_free = int(np.asarray(free_dofs, dtype=np.int64).size)
+        self._rhs_free = np.zeros(self._n_free, dtype=float)
 
     def assemble(self, u_eq, elem_weights):
         w = np.asarray(elem_weights, dtype=float).reshape(-1)
@@ -481,6 +624,40 @@ class _DynamicWeightedResidualAssembler:
             shape=(self.n_dof, self.n_dof),
         ).tocsr()
         return K, self._rhs
+
+    def assemble_reduced_action(self, u_eq, elem_weights, J_free):
+        if self._free_ids is None:
+            raise RuntimeError("[HPROM-ANN] Dynamic residual reduced-action cache was not prepared.")
+        w = np.asarray(elem_weights, dtype=float).reshape(-1)
+        if w.size != self.n_sel:
+            raise RuntimeError(
+                f"[HPROM-ANN] residual MAW weight length {w.size} != support size {self.n_sel}."
+            )
+
+        assembler = self._assembler
+        assembler.ComputeLocalArrays(np.asarray(u_eq, dtype=float).reshape(-1))
+
+        rhs_unit_loc = -assembler._f_int.reshape(self.n_sel, int(assembler.n_local_dof))
+        self._rhs_free.fill(0.0)
+        np.add.at(
+            self._rhs_free,
+            self._free_row_idx,
+            (w[:, None] * rhs_unit_loc)[self._free_valid],
+        )
+
+        J = np.asarray(J_free, dtype=float)
+        n_primary = int(J.shape[1])
+        J_loc = np.zeros((self.n_sel, int(assembler.n_local_dof), n_primary), dtype=float)
+        J_loc[self._free_valid] = J[self._free_ids[self._free_valid], :]
+        local_KJ = np.einsum(
+            "eij,ejp->eip",
+            w[:, None, None] * assembler._K_total,
+            J_loc,
+            optimize=True,
+        )
+        KJ = np.zeros((self._n_free, n_primary), dtype=float)
+        np.add.at(KJ, self._free_row_idx, local_KJ[self._free_valid])
+        return KJ, self._rhs_free
 
 
 def _evaluate_nearest_maw_hom_support_weights(q_query, target_model):
@@ -540,7 +717,11 @@ def _evaluate_maw_hom_weights_current(
     elif eval_mode == "nearest":
         w_support = _evaluate_nearest_maw_hom_support_weights(q_query, target_model)
     elif regressor_type == "ann":
-        w_support = eval_mawecm_ann(q_query, target_model["ann_model"]).reshape(-1)
+        fast_eval = target_model.get("fast_ann_eval", None)
+        if fast_eval is not None:
+            w_support = np.asarray(fast_eval(q_query), dtype=float).reshape(-1)
+        else:
+            w_support = eval_mawecm_ann(q_query, target_model["ann_model"]).reshape(-1)
     else:
         w_support = eval_mawecm_rbf(
             q_query=q_query,
@@ -892,6 +1073,154 @@ def RunHpromAnnBatchSimulation(
     def _build_ann_input(q_tensor, e_tensor):
         return q_tensor
 
+    def _build_manual_mlp_eval_and_jacobian(model):
+        """Exact NumPy forward/Jacobian for the Stage-7 MLP in eval mode.
+
+        This avoids per-Newton-step autograd overhead. If an unsupported layer is
+        found, return None and the solver falls back to the PyTorch path.
+        """
+        try:
+            x_mean = model.input_scaler.mean.detach().cpu().numpy().astype(np.float32).reshape(-1)
+            x_std = model.input_scaler.std.detach().cpu().numpy().astype(np.float32).reshape(-1)
+            y_mean = model.output_unscaler.mean.detach().cpu().numpy().astype(np.float32).reshape(-1)
+            y_std = model.output_unscaler.std.detach().cpu().numpy().astype(np.float32).reshape(-1)
+            modules = list(model.mlp.net)
+        except Exception:
+            return None
+
+        inv_x_std = (1.0 / (x_std + np.float32(1.0e-10))).astype(np.float32)
+        ops = []
+        for layer in modules:
+            if isinstance(layer, torch.nn.Linear):
+                W = layer.weight.detach().cpu().numpy().astype(np.float32, copy=True)
+                b = layer.bias.detach().cpu().numpy().astype(np.float32, copy=True)
+                ops.append(("linear", W, b))
+            elif isinstance(layer, torch.nn.BatchNorm1d):
+                if bool(layer.training):
+                    return None
+                running_mean = layer.running_mean.detach().cpu().numpy().astype(np.float32)
+                running_var = layer.running_var.detach().cpu().numpy().astype(np.float32)
+                if layer.affine:
+                    gamma = layer.weight.detach().cpu().numpy().astype(np.float32)
+                    beta = layer.bias.detach().cpu().numpy().astype(np.float32)
+                else:
+                    gamma = np.ones_like(running_mean, dtype=np.float32)
+                    beta = np.zeros_like(running_mean, dtype=np.float32)
+                scale = (gamma / np.sqrt(running_var + np.float32(layer.eps))).astype(np.float32)
+                shift = (beta - running_mean * scale).astype(np.float32)
+                ops.append(("batchnorm", scale, shift))
+            elif isinstance(layer, torch.nn.Dropout):
+                # Dropout is identity in eval mode.
+                if bool(layer.training):
+                    return None
+            elif isinstance(layer, torch.nn.ReLU):
+                ops.append(("activation", "relu", None))
+            elif isinstance(layer, torch.nn.Tanh):
+                ops.append(("activation", "tanh", None))
+            elif isinstance(layer, torch.nn.ELU):
+                ops.append(("activation", "elu", float(layer.alpha)))
+            elif isinstance(layer, torch.nn.SiLU):
+                ops.append(("activation", "silu", None))
+            elif isinstance(layer, torch.nn.GELU):
+                ops.append(("activation", "gelu", str(getattr(layer, "approximate", "none"))))
+            else:
+                print(
+                    "  [HPROM-ANN] Manual ANN Jacobian disabled: unsupported layer "
+                    f"{layer.__class__.__name__}."
+                )
+                return None
+
+        def _activation_and_derivative(name, param, z):
+            z = np.asarray(z, dtype=np.float32)
+            if name == "relu":
+                return np.maximum(z, np.float32(0.0)), (z > 0.0).astype(np.float32)
+            if name == "tanh":
+                y = np.tanh(z).astype(np.float32)
+                return y, (1.0 - y * y).astype(np.float32)
+            if name == "elu":
+                alpha = np.float32(param)
+                pos = z > 0.0
+                ez = np.exp(z).astype(np.float32)
+                y = np.where(pos, z, alpha * (ez - 1.0)).astype(np.float32)
+                dy = np.where(pos, 1.0, alpha * ez).astype(np.float32)
+                return y, dy
+            if name == "silu":
+                sig = (1.0 / (1.0 + np.exp(-z))).astype(np.float32)
+                y = (z * sig).astype(np.float32)
+                dy = (sig * (1.0 + z * (1.0 - sig))).astype(np.float32)
+                return y, dy
+            if name == "gelu":
+                approximate = str(param).lower()
+                if approximate == "tanh":
+                    c = np.float32(0.044715)
+                    k = np.float32(np.sqrt(2.0 / np.pi))
+                    u = k * (z + c * z * z * z)
+                    t = np.tanh(u).astype(np.float32)
+                    y = (0.5 * z * (1.0 + t)).astype(np.float32)
+                    du = (k * (1.0 + 3.0 * c * z * z)).astype(np.float32)
+                    dy = (0.5 * (1.0 + t) + 0.5 * z * (1.0 - t * t) * du).astype(np.float32)
+                    return y, dy
+                sqrt2 = np.float32(np.sqrt(2.0))
+                inv_sqrt_2pi = np.float32(1.0 / np.sqrt(2.0 * np.pi))
+                phi = (0.5 * (1.0 + erf(z / sqrt2))).astype(np.float32)
+                pdf = (np.exp(-0.5 * z * z) * inv_sqrt_2pi).astype(np.float32)
+                y = (z * phi).astype(np.float32)
+                dy = (phi + z * pdf).astype(np.float32)
+                return y, dy
+            raise RuntimeError(f"Unsupported activation '{name}'.")
+
+        def _mlp_forward_scaled(x_scaled):
+            z = np.asarray(x_scaled, dtype=np.float32).reshape(-1)
+            for op in ops:
+                if op[0] == "linear":
+                    z = (op[1] @ z + op[2]).astype(np.float32)
+                elif op[0] == "batchnorm":
+                    z = (op[1] * z + op[2]).astype(np.float32)
+                elif op[0] == "activation":
+                    z, _ = _activation_and_derivative(op[1], op[2], z)
+                else:
+                    raise RuntimeError(f"Unsupported manual MLP op '{op[0]}'.")
+            return z
+
+        zero_scaled = ((np.zeros_like(x_mean, dtype=np.float32) - x_mean) * inv_x_std).astype(np.float32)
+        y0_scaled = _mlp_forward_scaled(zero_scaled) if bool(getattr(model, "origin_anchored", False)) else None
+
+        def _eval(qp_vec, with_jacobian=True):
+            q = np.asarray(qp_vec, dtype=np.float32).reshape(-1)
+            if q.size != x_mean.size:
+                raise RuntimeError(f"Manual ANN input size mismatch: got {q.size}, expected {x_mean.size}.")
+            z = ((q - x_mean) * inv_x_std).astype(np.float32)
+            J = np.diag(inv_x_std).astype(np.float32)
+            for op in ops:
+                if op[0] == "linear":
+                    W, b = op[1], op[2]
+                    z = (W @ z + b).astype(np.float32)
+                    if with_jacobian:
+                        J = (W @ J).astype(np.float32)
+                elif op[0] == "batchnorm":
+                    scale, shift = op[1], op[2]
+                    z = (scale * z + shift).astype(np.float32)
+                    if with_jacobian:
+                        J = (scale[:, None] * J).astype(np.float32)
+                elif op[0] == "activation":
+                    z, dz = _activation_and_derivative(op[1], op[2], z)
+                    if with_jacobian:
+                        J = (dz[:, None] * J).astype(np.float32)
+                else:
+                    raise RuntimeError(f"Unsupported manual MLP op '{op[0]}'.")
+            if bool(getattr(model, "origin_anchored", False)):
+                y = ((z - y0_scaled) * y_std).astype(np.float32)
+            else:
+                y = (z * y_std + y_mean).astype(np.float32)
+            if not with_jacobian:
+                return y
+            J = (y_std[:, None] * J).astype(np.float32)
+            return y, J
+
+        return _eval
+
+    manual_ann_eval = _build_manual_mlp_eval_and_jacobian(ann_model)
+
     qp_init_mode = str(qp_init_mode).strip().lower()
     if qp_init_mode not in ("continuation", "previous", "zero", "mu_affine"):
         raise ValueError(
@@ -905,7 +1234,7 @@ def RunHpromAnnBatchSimulation(
             "in the ANN model directory."
         )
 
-    def _evaluate_qs_and_jac(qp_vec, e_vec, collect_timing=False):
+    def _evaluate_qs_and_jac_torch(qp_vec, e_vec, collect_timing=False):
         qp_arr = np.asarray(qp_vec, dtype=float).reshape(-1)
         e_arr = np.asarray(e_vec, dtype=float).reshape(3)
 
@@ -951,7 +1280,47 @@ def RunHpromAnnBatchSimulation(
             return q_s_map, jac_np, t_forward, t_jacobian
         return q_s_map, jac_np
 
+    if manual_ann_eval is not None:
+        try:
+            q_ref, j_ref = _evaluate_qs_and_jac_torch(
+                np.zeros(n_primary, dtype=float),
+                np.zeros(3, dtype=float),
+            )
+            q_man, j_man = manual_ann_eval(np.zeros(n_primary, dtype=float), with_jacobian=True)
+            q_err = float(np.linalg.norm(q_man - q_ref) / (np.linalg.norm(q_ref) + 1.0e-30))
+            j_err = float(np.linalg.norm(j_man - j_ref) / (np.linalg.norm(j_ref) + 1.0e-30))
+            if q_err > 5.0e-6 or j_err > 5.0e-5:
+                print(
+                    "  [HPROM-ANN] Manual ANN Jacobian disabled: validation failed "
+                    f"(q_rel={q_err:.3e}, J_rel={j_err:.3e})."
+                )
+                manual_ann_eval = None
+            else:
+                print(
+                    "  [HPROM-ANN] Manual ANN Jacobian active "
+                    f"(validation q_rel={q_err:.3e}, J_rel={j_err:.3e})."
+                )
+        except Exception as exc:
+            print(f"  [HPROM-ANN] Manual ANN Jacobian disabled: validation error: {exc}")
+            manual_ann_eval = None
+
+    ann_jacobian_backend = "manual_numpy" if manual_ann_eval is not None else (
+        "torch_jacfwd" if _torch_jacfwd is not None else "torch_autograd"
+    )
+
+    def _evaluate_qs_and_jac(qp_vec, e_vec, collect_timing=False):
+        if manual_ann_eval is not None:
+            t0 = time.perf_counter()
+            q_s_map, jac_np = manual_ann_eval(qp_vec, with_jacobian=True)
+            t_jacobian = time.perf_counter() - t0
+            if collect_timing:
+                return q_s_map, jac_np, 0.0, t_jacobian
+            return q_s_map, jac_np
+        return _evaluate_qs_and_jac_torch(qp_vec, e_vec, collect_timing=collect_timing)
+
     def _evaluate_qs_only(qp_vec, e_vec):
+        if manual_ann_eval is not None:
+            return manual_ann_eval(qp_vec, with_jacobian=False)
         qp_arr = np.asarray(qp_vec, dtype=float).reshape(-1)
         e_arr = np.asarray(e_vec, dtype=float).reshape(3)
         qp_tensor = torch.from_numpy(qp_arr.astype(np.float32)).unsqueeze(0).to(device)
@@ -1089,6 +1458,7 @@ def RunHpromAnnBatchSimulation(
     else:
         print("  [HPROM-ANN] Residual mode: fixed ECM weights.")
     print("  [HPROM-ANN] LS decoder active: u = Phi_m A_m q_m + Phi_s q_s(q_m).")
+    print(f"  [HPROM-ANN] ANN/Jacobian backend: {ann_jacobian_backend}")
     print(f"  [HPROM-ANN] q_m initializer mode: {qp_init_mode}")
     if qp_init_mode in ("continuation", "mu_affine") and qp_aff is not None:
         print(f"  [HPROM-ANN] Using affine initializer: {qp_aff['path']}")
@@ -1139,6 +1509,7 @@ def RunHpromAnnBatchSimulation(
             elements=elements,
             selected_indices=Z_res,
         )
+        dyn_res_assembler.prepare_reduced_action(free_dofs)
         unit_rhs_scatter = _prepare_unit_rhs_scatter(
             assembler_unit=dyn_res_assembler._assembler,
             free_dof_index_map=_build_free_dof_index_map(n_total_dof, free_dofs),
@@ -1213,7 +1584,7 @@ def RunHpromAnnBatchSimulation(
             t_final_apply_state += time.perf_counter() - t0
 
             t0 = time.perf_counter()
-            _, _ = vec_full_assembler.Assemble(disp_vec_final)
+            vec_full_assembler.ComputeStrainStressOnly(disp_vec_final)
             t_full_sync += time.perf_counter() - t0
 
             if hom_mode == "maw_dynamic":
@@ -1382,12 +1753,18 @@ def RunHpromAnnBatchSimulation(
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
             t0 = time.perf_counter()
             dw_res_local = None
+            K_free_sparse = None
+            KJ = None
             if dynamic_residual_weights:
                 t1 = time.perf_counter()
                 w_res_iter, dw_res_local = _evaluate_residual_weights_and_jacobian_local(q_p)
                 t_res_weight_eval += time.perf_counter() - t1
                 t1 = time.perf_counter()
-                K_hp, rhs_hp = dyn_res_assembler.assemble(u_eq_curr, w_res_iter)
+                KJ, r_full = dyn_res_assembler.assemble_reduced_action(
+                    u_eq_curr,
+                    w_res_iter,
+                    J_manifold,
+                )
                 t_res_assembly += time.perf_counter() - t1
             else:
                 t1 = time.perf_counter()
@@ -1395,19 +1772,21 @@ def RunHpromAnnBatchSimulation(
                     mp, n_total_dof, elements, Z_res, w_res_selected, u_eq=u_eq_curr
                 )
                 t_res_assembly += time.perf_counter() - t1
+                r_full = rhs_hp[free_dofs]
+                K_free_sparse = K_hp[free_dofs][:, free_dofs]
             t_assembly += time.perf_counter() - t0
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
-            r_full = rhs_hp[free_dofs]
-            K_free_sparse = K_hp[free_dofs][:, free_dofs]
-            if (not _is_finite(r_full)) or (not _is_finite(K_free_sparse.data)):
+            tangent_is_finite = _is_finite(KJ) if dynamic_residual_weights else _is_finite(K_free_sparse.data)
+            if (not _is_finite(r_full)) or (not tangent_is_finite):
                 print("  [HPROM-ANN] WARNING: non-finite full residual/stiffness detected.")
                 nonfinite_detected = True
                 break
 
             t0 = time.perf_counter()
             t1 = time.perf_counter()
-            KJ = K_free_sparse @ J_manifold
+            if KJ is None:
+                KJ = K_free_sparse @ J_manifold
             r_r = J_manifold.T @ r_full
             K_std = J_manifold.T @ KJ
             t_projection_sparse += time.perf_counter() - t1
@@ -1655,25 +2034,13 @@ def RunHpromAnnBatchSimulation(
         disp_vec_final = np.asarray(disp_base_step, dtype=float).copy()
         disp_vec_final[free_dofs] = np.asarray(u_aff_free + u_fluc_final, dtype=float).reshape(-1)
         t_apply_state_copy += time.perf_counter() - t1
-        if not direct_no_corrector:
-            t1 = time.perf_counter()
-            SetDisplacementFromEquationVector(disp_vec_final, eq_id_map, ta)
-            t_apply_state_set += time.perf_counter() - t1
-            t1 = time.perf_counter()
-            UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
-            t_apply_state_update_coords += time.perf_counter() - t1
         t_final_apply_state += time.perf_counter() - t0
 
         if not direct_no_corrector:
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
-        if direct_no_corrector:
-            u_curr = disp_vec_final
-        else:
-            t0 = time.perf_counter()
-            u_curr = _capture_current_displacement_vector()
-            t_capture_current += time.perf_counter() - t0
+        u_curr = disp_vec_final
         t0 = time.perf_counter()
-        _, _ = vec_full_assembler.Assemble(u_curr)
+        vec_full_assembler.ComputeStrainStressOnly(u_curr)
         t_full_sync += time.perf_counter() - t0
         if not direct_no_corrector:
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
@@ -1818,6 +2185,7 @@ def RunHpromAnnBatchSimulation(
         "newton_iters_mean_per_step": float(np.mean(iters)) if iters.size else 0.0,
         "newton_iters_max_per_step": int(np.max(iters)) if iters.size else 0,
         "include_manifold_curvature": float(include_manifold_curvature),
+        "manual_ann_jacobian": float(manual_ann_eval is not None),
         "map": float(t_map),
         "map_forward": float(t_map_forward),
         "map_jacobian": float(t_map_jacobian),

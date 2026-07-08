@@ -217,6 +217,132 @@ class VectorizedAssembler:
         print(f"[{log_label}] {self.n_elems} elements, {self.n_gauss} GPs, "
               f"total area={np.sum(self.w_detJ):.6e}")
 
+    def ComputeStrainStressOnly(self, u_global):
+        """Update element-local strain/stress buffers without force or tangent assembly."""
+        if self.n_elems == 0:
+            return self._E_voigt, self._S_voigt
+
+        ne, ng = self.n_elems, self.n_gauss
+
+        self._u_node[:] = u_global[self.local_eq_ids].reshape(self.n_elems, self.n_nodes, 2)
+
+        np.matmul(np.swapaxes(self._u_node[:, None, :, :], 2, 3), self.DN, out=self._grad_u)
+        self._F[:] = self._grad_u
+        self._F[..., 0, 0] += 1.0
+        self._F[..., 1, 1] += 1.0
+
+        np.matmul(np.swapaxes(self._F, 2, 3), self._F, out=self._FtF)
+        self._E_voigt[..., 0] = 0.5 * (self._FtF[..., 0, 0] - 1.0)
+        self._E_voigt[..., 1] = 0.5 * (self._FtF[..., 1, 1] - 1.0)
+        self._E_voigt[..., 2] = self._FtF[..., 0, 1]
+        E_flat = self._E_voigt.reshape(-1, 3)
+
+        if self._uniform_material:
+            S_flat, _ = _neo_hookean_pk2_2d_vectorized(
+                E_flat, self._young_scalar, self._poisson_scalar)
+        else:
+            young_gp = np.repeat(self.young, ng)
+            poisson_gp = np.repeat(self.poisson, ng)
+            S_flat = np.empty_like(E_flat)
+            for (y, p) in set(zip(self.young, self.poisson)):
+                mask = (young_gp == y) & (poisson_gp == p)
+                S_flat[mask], _ = _neo_hookean_pk2_2d_vectorized(E_flat[mask], y, p)
+
+        self._S_voigt[:] = S_flat.reshape(ne, ng, 3)
+        return self._E_voigt, self._S_voigt
+
+    def ComputeLocalArrays(self, u_global):
+        """Update element-local stiffness and internal force buffers without global COO assembly."""
+        if self.n_elems == 0:
+            return self._K_total, self._f_int
+
+        ne, ng, nn = self.n_elems, self.n_gauss, self.n_nodes
+
+        # 1. Gather nodal displacements -> (ne, nn, 2)
+        self._u_node[:] = u_global[self.local_eq_ids].reshape(self.n_elems, self.n_nodes, 2)
+
+        # 2. Kinematics
+        # grad_u[e,g,i,j] = sum_a u[e,a,i] * DN[e,g,a,j]
+        np.matmul(np.swapaxes(self._u_node[:, None, :, :], 2, 3), self.DN, out=self._grad_u)
+        self._F[:] = self._grad_u
+        self._F[..., 0, 0] += 1.0
+        self._F[..., 1, 1] += 1.0
+
+        # Green-Lagrange: E = 0.5*(F^T F - I)
+        np.matmul(np.swapaxes(self._F, 2, 3), self._F, out=self._FtF)
+        self._E_voigt[..., 0] = 0.5 * (self._FtF[..., 0, 0] - 1.0)
+        self._E_voigt[..., 1] = 0.5 * (self._FtF[..., 1, 1] - 1.0)
+        self._E_voigt[..., 2] = self._FtF[..., 0, 1]  # 2*E12
+        E_flat = self._E_voigt.reshape(-1, 3)
+
+        # 3. Constitutive law
+        if self._uniform_material:
+            S_flat, CC_flat = _neo_hookean_pk2_2d_vectorized(
+                E_flat, self._young_scalar, self._poisson_scalar)
+        else:
+            young_gp = np.repeat(self.young, ng)
+            poisson_gp = np.repeat(self.poisson, ng)
+            S_flat = np.empty_like(E_flat)
+            CC_flat = np.empty((E_flat.shape[0], 3, 3))
+            for (y, p) in set(zip(self.young, self.poisson)):
+                mask = (young_gp == y) & (poisson_gp == p)
+                S_flat[mask], CC_flat[mask] = _neo_hookean_pk2_2d_vectorized(
+                    E_flat[mask], y, p)
+
+        self._S_voigt[:] = S_flat.reshape(ne, ng, 3)
+        self._CC[:] = CC_flat.reshape(ne, ng, 3, 3)
+
+        # S tensor (ne, ng, 2, 2)
+        self._St[..., 0, 0] = self._S_voigt[..., 0]
+        self._St[..., 1, 1] = self._S_voigt[..., 1]
+        self._St[..., 0, 1] = self._S_voigt[..., 2]
+        self._St[..., 1, 0] = self._S_voigt[..., 2]
+
+        # 4. Internal forces: f_int[e,a,i] = sum_g F_ij S_jk DN_ak * w
+        np.matmul(self._F, self._St, out=self._P)
+        np.matmul(self.DN, np.swapaxes(self._P, 2, 3), out=self._tmp_ag_ai)
+        np.multiply(self._tmp_ag_ai, self.w_detJ[..., None, None], out=self._tmp_ag_ai)
+        np.sum(self._tmp_ag_ai, axis=1, out=self._f_int)
+
+        # 5. Tangent stiffness
+        # B-matrix: B[e,g,v,(a*2+i)] for Voigt v, node a, dof i
+        B = self._B
+        B.fill(0.0)
+        F00 = self._F[..., 0, 0]
+        F01 = self._F[..., 0, 1]
+        F10 = self._F[..., 1, 0]
+        F11 = self._F[..., 1, 1]
+        for a in range(nn):
+            c0 = 2 * a
+            c1 = c0 + 1
+            dn0 = self.DN[..., a, 0]
+            dn1 = self.DN[..., a, 1]
+            B[..., 0, c0] = F00 * dn0
+            B[..., 0, c1] = F10 * dn0
+            B[..., 1, c0] = F01 * dn1
+            B[..., 1, c1] = F11 * dn1
+            B[..., 2, c0] = F00 * dn1 + F01 * dn0
+            B[..., 2, c1] = F10 * dn1 + F11 * dn0
+
+        # K_mat = sum_g B^T C B * w_detJ
+        np.matmul(self._CC, B, out=self._CB)
+        np.matmul(np.swapaxes(B, 2, 3), self._CB, out=self._K_gp)
+        np.multiply(self._K_gp, self.w_detJ[..., None, None], out=self._K_gp)
+        np.sum(self._K_gp, axis=1, out=self._K_mat)
+
+        # K_geo: K_geo[(a,i),(b,i)] += sum_g,k,l S_kl DN_ak DN_bl * w_detJ
+        np.matmul(self.DN, self._St, out=self._DNSt)
+        np.matmul(self._DNSt, np.swapaxes(self.DN, 2, 3), out=self._S_DN_DN_gp)
+        np.multiply(self._S_DN_DN_gp, self.w_detJ[..., None, None], out=self._S_DN_DN_gp)
+        np.sum(self._S_DN_DN_gp, axis=1, out=self._S_DN_DN)
+
+        self._K_geo.fill(0.0)
+        self._K_geo[:, 0::2, 0::2] = self._S_DN_DN
+        self._K_geo[:, 1::2, 1::2] = self._S_DN_DN
+
+        np.add(self._K_mat, self._K_geo, out=self._K_total)
+        return self._K_total, self._f_int
+
     def Assemble(self, u_global):
         """Compute global K (sparse CSR) and RHS from current displacement vector."""
         if self.n_elems == 0:
