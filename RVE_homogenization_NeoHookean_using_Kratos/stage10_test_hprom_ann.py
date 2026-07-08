@@ -87,6 +87,24 @@ def _load_first_existing_npy(out_dir, candidates):
     return None, None
 
 
+def _load_hprom_ann_timing_stats(out_dir):
+    path = os.path.join(out_dir, "hprom_ann_timing_stats.npz")
+    if not os.path.exists(path):
+        return {}
+    try:
+        data = np.load(path, allow_pickle=True)
+    except Exception:
+        return {}
+
+    stats = {}
+    for key in data.files:
+        try:
+            stats[key] = float(np.ravel(data[key])[0])
+        except Exception:
+            continue
+    return stats
+
+
 def plot_hprom_ann_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir, timings=None):
     n = min(len(f_sig), len(p_sig), len(h_sig), len(f_eps), len(p_eps), len(h_eps))
 
@@ -156,12 +174,20 @@ def plot_hprom_ann_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir,
         plt.figure(figsize=(7, 6))
         methods = list(timings.keys())
         values = [timings[m] for m in methods]
-        colors = {"FOM": "gray", "PROM-ANN": "red", "HPROM-ANN": "blue"}
-        bars = plt.bar(methods, values, color=[colors.get(m, "green") for m in methods], alpha=0.8)
+        def _bar_color(method):
+            if method.startswith("FOM"):
+                return "gray"
+            if method.startswith("PROM-ANN"):
+                return "red"
+            if method.startswith("HPROM-ANN"):
+                return "blue"
+            return "green"
+
+        bars = plt.bar(methods, values, color=[_bar_color(m) for m in methods], alpha=0.8)
         for bar, t in zip(bars, values):
             plt.text(bar.get_x() + bar.get_width() / 2.0, bar.get_height(), f"{t:.1f}s", ha="center", va="bottom")
         plt.title("Computational Performance")
-        plt.ylabel("Wall-Clock Time [s]")
+        plt.ylabel("Time [s]")
         plt.grid(True, axis="y", linestyle="--", alpha=0.7)
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "hprom_ann_performance.png"), dpi=150)
@@ -247,6 +273,11 @@ def run_stage10(
     parameters = setup_kratos_parameters(mesh_fom_prom)
     parameters_hprom = setup_kratos_parameters(mesh_hprom)
     timings = {}
+    timing_sources = {}
+    hprom_wall_time = None
+    hprom_rve_kernel = None
+    hprom_rve_kernel_per_step = None
+    hprom_rve_kernel_steps_per_second = None
 
     fom_eps_file = os.path.join(out_dir, "fom_strain.npy")
     fom_sig_file = os.path.join(out_dir, "fom_stress.npy")
@@ -263,6 +294,7 @@ def run_stage10(
             reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
         )
         timings["FOM"] = time.perf_counter() - t0
+        timing_sources["FOM"] = "script wall"
         f_eps = np.asarray(f_eps, dtype=float)
         f_sig = np.asarray(f_sig, dtype=float)
         np.save(fom_eps_file, f_eps)
@@ -294,6 +326,7 @@ def run_stage10(
             reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
         )
         timings["PROM-ANN"] = time.perf_counter() - t0
+        timing_sources["PROM-ANN"] = "script wall"
         p_eps = np.asarray(p_eps, dtype=float)
         p_sig = np.asarray(p_sig, dtype=float)
         np.save(prom_eps_file, p_eps)
@@ -325,7 +358,7 @@ def run_stage10(
             hprom_ann_dir=hprom_ann_dir,
         )
         t0 = time.perf_counter()
-        h_eps, h_sig = RunHpromAnnBatchSimulation(
+        h_eps, h_sig, hprom_stats = RunHpromAnnBatchSimulation(
             parameters_hprom,
             phi_p_h,
             phi_s_h,
@@ -345,8 +378,14 @@ def run_stage10(
             maw_hom_eval_mode=hprom_maw_hom_eval_mode,
             max_its=int(hprom_corrector_iters),
             qp_init_mode=qp_init_mode,
+            return_stats=True,
         )
-        timings["HPROM-ANN"] = time.perf_counter() - t0
+        hprom_wall_time = time.perf_counter() - t0
+        hprom_rve_kernel = float(hprom_stats.get("rve_kernel", hprom_wall_time))
+        hprom_rve_kernel_per_step = hprom_stats.get("rve_kernel_per_step", None)
+        hprom_rve_kernel_steps_per_second = hprom_stats.get("rve_kernel_steps_per_second", None)
+        timings["HPROM-ANN"] = hprom_rve_kernel
+        timing_sources["HPROM-ANN"] = "RVE online kernel"
         h_eps = np.asarray(h_eps, dtype=float)
         h_sig = np.asarray(h_sig, dtype=float)
         np.save(hprom_eps_file, h_eps)
@@ -355,6 +394,14 @@ def run_stage10(
         print("\n[Stage 10] Loading cached HPROM-ANN.")
         h_eps = np.load(hprom_eps_file)
         h_sig = np.load(hprom_sig_file)
+        hprom_stats = _load_hprom_ann_timing_stats(out_dir)
+        if "rve_kernel" in hprom_stats:
+            hprom_rve_kernel = float(hprom_stats["rve_kernel"])
+            hprom_rve_kernel_per_step = hprom_stats.get("rve_kernel_per_step", None)
+            hprom_rve_kernel_steps_per_second = hprom_stats.get("rve_kernel_steps_per_second", None)
+            hprom_wall_time = hprom_stats.get("total_after_save", hprom_stats.get("total", None))
+            timings["HPROM-ANN"] = hprom_rve_kernel
+            timing_sources["HPROM-ANN"] = "cached RVE online kernel"
 
     n = min(len(f_sig), len(p_sig), len(h_sig), len(f_eps), len(p_eps), len(h_eps))
     err_prom = _rel_error(p_sig[:n], f_sig[:n])
@@ -442,7 +489,16 @@ def run_stage10(
         summary_lines.append(f"  q_m PROM/HPROM comparison skipped (missing {', '.join(missing)}).")
 
     for method, t in timings.items():
-        summary_lines.append(f"  {method} time: {t:.2f}s")
+        source = timing_sources.get(method, "time")
+        summary_lines.append(f"  {method} time ({source}): {t:.2f}s")
+    if hprom_rve_kernel is not None:
+        summary_lines.append(f"  HPROM-ANN RVE online kernel time: {hprom_rve_kernel:.3f}s")
+    if hprom_rve_kernel_per_step is not None:
+        summary_lines.append(f"  HPROM-ANN RVE online kernel per step: {1e3 * float(hprom_rve_kernel_per_step):.3f} ms")
+    if hprom_rve_kernel_steps_per_second is not None:
+        summary_lines.append(f"  HPROM-ANN RVE online kernel throughput: {float(hprom_rve_kernel_steps_per_second):.1f} steps/s")
+    if hprom_wall_time is not None:
+        summary_lines.append(f"  HPROM-ANN script wall time: {float(hprom_wall_time):.2f}s")
 
     summary_path = os.path.join(out_dir, "stage10_error_summary.txt")
     summary_lines.append(f"  Error summary saved: {summary_path}")
@@ -451,7 +507,14 @@ def run_stage10(
     with open(summary_path, "w", encoding="utf-8") as f:
         f.write("\n".join(summary_lines).lstrip() + "\n")
 
-    plot_hprom_ann_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir, timings)
+    plot_timings = {}
+    for method, value in timings.items():
+        label = method
+        source = timing_sources.get(method, "")
+        if method == "HPROM-ANN" and "kernel" in source.lower():
+            label = "HPROM-ANN\nRVE kernel"
+        plot_timings[label] = value
+    plot_hprom_ann_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir, plot_timings)
 
 
 if __name__ == "__main__":

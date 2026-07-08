@@ -471,13 +471,19 @@ def RunHpromAnnBatchSimulation(
     )
     phi_p = phi_p_ref[basis_rows, :]
     phi_s = phi_s_ref[basis_rows, :]
-    Z_res, w_res_selected, using_hrom_mesh = ResolveResidualHyperReductionSelection(
-        ecm_data,
-        n_current_elements=len(elements),
-        solver_label="HPROM-ANN",
-    )
-    Z_union = np.asarray(ecm_data["Z_union"], dtype=np.int64).reshape(-1) if "Z_union" in ecm_data else Z_res
     n_elem_reference = int(np.ravel(ecm_data["n_elem"])[0]) if "n_elem" in ecm_data else len(elements)
+    direct_no_corrector = bool(int(max_its) == 0)
+    if direct_no_corrector:
+        Z_res = np.zeros(0, dtype=np.int64)
+        w_res_selected = np.zeros(0, dtype=float)
+        using_hrom_mesh = bool(int(len(elements)) != int(n_elem_reference))
+    else:
+        Z_res, w_res_selected, using_hrom_mesh = ResolveResidualHyperReductionSelection(
+            ecm_data,
+            n_current_elements=len(elements),
+            solver_label="HPROM-ANN",
+        )
+    Z_union = np.asarray(ecm_data["Z_union"], dtype=np.int64).reshape(-1) if "Z_union" in ecm_data else Z_res
     hom_mode = str(homogenization_mode).strip().lower()
     if hom_mode in ("maw", "maw_separate"):
         hom_mode = "maw_dynamic"
@@ -674,6 +680,15 @@ def RunHpromAnnBatchSimulation(
         jac_np = jac_ann.detach().cpu().numpy()
         return q_s_map, jac_np
 
+    def _evaluate_qs_only(qp_vec, e_vec):
+        qp_arr = np.asarray(qp_vec, dtype=float).reshape(-1)
+        e_arr = np.asarray(e_vec, dtype=float).reshape(3)
+        qp_tensor = torch.from_numpy(qp_arr.astype(np.float32)).unsqueeze(0).to(device)
+        e_tensor = torch.from_numpy(e_arr.astype(np.float32)).unsqueeze(0).to(device)
+        with torch.no_grad():
+            q_s_map_tensor = ann_model(_build_ann_input(qp_tensor, e_tensor))
+        return q_s_map_tensor.detach().cpu().numpy().reshape(-1)
+
     def _compute_weighted_decoder_hessian(qp_vec, e_vec, output_weights):
         qp_arr = np.asarray(qp_vec, dtype=float).reshape(-1)
         e_arr = np.asarray(e_vec, dtype=float).reshape(3)
@@ -771,41 +786,188 @@ def RunHpromAnnBatchSimulation(
     t_projection = 0.0
     t_solve = 0.0
     t_full_sync = 0.0
+    t_step_setup = 0.0
+    t_q_init = 0.0
+    t_final_ann_eval = 0.0
+    t_final_reconstruct = 0.0
+    t_final_apply_state = 0.0
+    t_maw_hom_weights = 0.0
+    t_homogenization = 0.0
+    t_finalize_step = 0.0
+    t_history_append = 0.0
+    t_step_process_info = 0.0
+    t_step_strain_interp = 0.0
+    t_step_affine_free = 0.0
+    t_step_base_disp = 0.0
+    t_online_printing = 0.0
+    t_capture_current = 0.0
+    t_sim_finalize = 0.0
+    t_apply_state_copy = 0.0
+    t_apply_state_set = 0.0
+    t_apply_state_update_coords = 0.0
+    t_timing_stats_write = 0.0
+    t_result_stack = 0.0
+    t_result_save = 0.0
     step_iters = []
     ResetHyperReductionAssemblyStats()
 
     for step in range(1, n_steps_total + 1):
+        t0_setup = time.perf_counter()
         time_val = float(step) * float(dt)
-        mp.CloneTimeStep(time_val)
+        t0 = time.perf_counter()
+        if not direct_no_corrector:
+            mp.CloneTimeStep(time_val)
         mp.ProcessInfo[KM.DELTA_TIME] = dt
         mp.ProcessInfo[KM.TIME] = time_val
         mp.ProcessInfo[KM.STEP] = step
 
         sim.time, sim.step, sim.end_time = time_val, step, end_time
-        sim.InitializeSolutionStep()
+        if not direct_no_corrector:
+            sim.InitializeSolutionStep()
+        t_step_process_info += time.perf_counter() - t0
 
+        t0 = time.perf_counter()
         s = int(np.searchsorted(step_offsets, step, side="left") - 1)
         s = max(0, min(s, n_seg - 1))
         xi = float(step - step_offsets[s]) / float(max(seg_steps[s], 1))
         E = (1.0 - xi) * E_wp[s, :] + xi * E_wp[s + 1, :]
+        t_step_strain_interp += time.perf_counter() - t0
+        t0 = time.perf_counter()
         u_aff_free = _compute_affine_free_displacement(E)
+        t_step_affine_free += time.perf_counter() - t0
         sim.batch_strain = E.copy()
 
+        t0 = time.perf_counter()
         if use_fast_dirichlet_bc:
             disp_base_step = np.zeros(n_total_dof, dtype=float)
             disp_base_step[dir_dofs] = _compute_affine_dirichlet_displacement(E)
         else:
             sim.ApplyBoundaryConditions()
             disp_base_step = _capture_current_displacement_vector()
+        t_step_base_disp += time.perf_counter() - t0
+        t_step_setup += time.perf_counter() - t0_setup
 
+        t0 = time.perf_counter()
         if step == 1 or step % 100 == 0 or step == n_steps_total:
             print(f"\n[HPROM-ANN] Step {step:04d}/{n_steps_total} | E={E}")
+        t_online_printing += time.perf_counter() - t0
         verbose_step = bool(verbose_iterations)
 
         it = 0
         res_norm_0 = None
+        t0 = time.perf_counter()
         q_prev_np = q_p.copy()
         q_p = _initial_qp_guess(E, q_prev_np, step)
+        t_q_init += time.perf_counter() - t0
+
+        if direct_no_corrector:
+            t0 = time.perf_counter()
+            q_s_final_map = _evaluate_qs_only(q_p, E)
+            t_final_ann_eval += time.perf_counter() - t0
+
+            t0 = time.perf_counter()
+            q_s_final = q_s_final_map - q0_const - J0_const @ q_p
+            u_fluc_final = w0_const + phi_p_eff @ q_p + phi_s @ q_s_final
+            if not _is_finite(u_fluc_final):
+                raise RuntimeError("HPROM-ANN direct accepted state is non-finite.")
+            t_final_reconstruct += time.perf_counter() - t0
+
+            t0 = time.perf_counter()
+            t1 = time.perf_counter()
+            disp_vec_final = np.asarray(disp_base_step, dtype=float).copy()
+            disp_vec_final[free_dofs] = np.asarray(u_aff_free + u_fluc_final, dtype=float).reshape(-1)
+            t_apply_state_copy += time.perf_counter() - t1
+            t_final_apply_state += time.perf_counter() - t0
+
+            t0 = time.perf_counter()
+            _, _ = vec_full_assembler.Assemble(disp_vec_final)
+            t_full_sync += time.perf_counter() - t0
+
+            if hom_mode == "maw_dynamic":
+                t0 = time.perf_counter()
+                if maw_hom_componentwise:
+                    w_eps_step = np.vstack(
+                        [
+                            _evaluate_maw_hom_weights_current(
+                                q_p,
+                                E,
+                                model,
+                                n_elem_reference=n_elem_reference,
+                                n_current_elements=len(elements),
+                                full_to_local=full_to_local_hom,
+                                eval_mode=maw_hom_eval_mode,
+                            )
+                            for model in maw_eps_hom
+                        ]
+                    )
+                    w_sig_step = np.vstack(
+                        [
+                            _evaluate_maw_hom_weights_current(
+                                q_p,
+                                E,
+                                model,
+                                n_elem_reference=n_elem_reference,
+                                n_current_elements=len(elements),
+                                full_to_local=full_to_local_hom,
+                                eval_mode=maw_hom_eval_mode,
+                            )
+                            for model in maw_sig_hom
+                        ]
+                    )
+                else:
+                    w_eps_step = _evaluate_maw_hom_weights_current(
+                        q_p,
+                        E,
+                        maw_eps_hom,
+                        n_elem_reference=n_elem_reference,
+                        n_current_elements=len(elements),
+                        full_to_local=full_to_local_hom,
+                        eval_mode=maw_hom_eval_mode,
+                    )
+                    w_sig_step = _evaluate_maw_hom_weights_current(
+                        q_p,
+                        E,
+                        maw_sig_hom,
+                        n_elem_reference=n_elem_reference,
+                        n_current_elements=len(elements),
+                        full_to_local=full_to_local_hom,
+                        eval_mode=maw_hom_eval_mode,
+                    )
+                t_maw_hom_weights += time.perf_counter() - t0
+                t0 = time.perf_counter()
+                hom_eps, hom_sig = CalculateHomogenizedFromAssemblerWithElementWeights(
+                    vec_full_assembler,
+                    w_eps=w_eps_step,
+                    w_sig=w_sig_step,
+                    reference_measure=hom_reference_measure,
+                )
+                t_homogenization += time.perf_counter() - t0
+            elif using_weighted_hom:
+                t0 = time.perf_counter()
+                hom_eps, hom_sig = CalculateHomogenizedFromAssemblerWithElementWeights(
+                    vec_full_assembler,
+                    w_eps=w_eps_hom,
+                    w_sig=w_sig_hom,
+                    reference_measure=hom_reference_measure,
+                )
+                t_homogenization += time.perf_counter() - t0
+            else:
+                t0 = time.perf_counter()
+                hom_eps, hom_sig = CalculateHomogenizedStressAndStrainKratosReference(
+                    mp,
+                    reference_area_e=np.asarray(vec_full_assembler.area_e, dtype=float),
+                    reference_measure=hom_reference_measure,
+                )
+                t_homogenization += time.perf_counter() - t0
+
+            step_iters.append(0)
+            t0 = time.perf_counter()
+            q_hist.append(q_p.copy())
+            results_eps.append(hom_eps)
+            results_sig.append(hom_sig)
+            t_history_append += time.perf_counter() - t0
+            continue
+
         converged = bool(max_its == 0)
         nonfinite_detected = False
         Kr_last = None
@@ -1085,30 +1247,58 @@ def RunHpromAnnBatchSimulation(
         else:
             Kr_old = None
 
-        q_s_final_map, _ = _evaluate_qs_and_jac(q_p, E)
+        t0 = time.perf_counter()
+        q_s_final_map = _evaluate_qs_only(q_p, E)
+        t_final_ann_eval += time.perf_counter() - t0
+        t0 = time.perf_counter()
         q_s_final = q_s_final_map - q0_const - J0_const @ q_p
         u_fluc_final = w0_const + phi_p_eff @ q_p + phi_s @ q_s_final
         if not _is_finite(u_fluc_final):
             q_p = q_step_start.copy()
-            q_s_final_map, _ = _evaluate_qs_and_jac(q_p, E)
+            t_final_reconstruct += time.perf_counter() - t0
+            t0 = time.perf_counter()
+            q_s_final_map = _evaluate_qs_only(q_p, E)
+            t_final_ann_eval += time.perf_counter() - t0
+            t0 = time.perf_counter()
             q_s_final = q_s_final_map - q0_const - J0_const @ q_p
             u_fluc_final = w0_const + phi_p_eff @ q_p + phi_s @ q_s_final
         if not _is_finite(u_fluc_final):
             raise RuntimeError("HPROM-ANN accepted state is non-finite after rollback.")
+        t_final_reconstruct += time.perf_counter() - t0
 
+        t0 = time.perf_counter()
         if not use_fast_dirichlet_bc:
             sim.ApplyBoundaryConditions()
             disp_base_step = _capture_current_displacement_vector()
-        _apply_total_free_displacement(u_aff_free + u_fluc_final, base_disp_vec=disp_base_step)
+        t1 = time.perf_counter()
+        disp_vec_final = np.asarray(disp_base_step, dtype=float).copy()
+        disp_vec_final[free_dofs] = np.asarray(u_aff_free + u_fluc_final, dtype=float).reshape(-1)
+        t_apply_state_copy += time.perf_counter() - t1
+        if not direct_no_corrector:
+            t1 = time.perf_counter()
+            SetDisplacementFromEquationVector(disp_vec_final, eq_id_map, ta)
+            t_apply_state_set += time.perf_counter() - t1
+            t1 = time.perf_counter()
+            UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
+            t_apply_state_update_coords += time.perf_counter() - t1
+        t_final_apply_state += time.perf_counter() - t0
 
-        InitializeNonLinearIteration(entities, mp.ProcessInfo)
-        u_curr = _capture_current_displacement_vector()
+        if not direct_no_corrector:
+            InitializeNonLinearIteration(entities, mp.ProcessInfo)
+        if direct_no_corrector:
+            u_curr = disp_vec_final
+        else:
+            t0 = time.perf_counter()
+            u_curr = _capture_current_displacement_vector()
+            t_capture_current += time.perf_counter() - t0
         t0 = time.perf_counter()
         _, _ = vec_full_assembler.Assemble(u_curr)
         t_full_sync += time.perf_counter() - t0
-        FinalizeNonLinearIteration(entities, mp.ProcessInfo)
+        if not direct_no_corrector:
+            FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
         if hom_mode == "maw_dynamic":
+            t0 = time.perf_counter()
             if maw_hom_componentwise:
                 w_eps_step = np.vstack(
                     [
@@ -1157,35 +1347,85 @@ def RunHpromAnnBatchSimulation(
                     full_to_local=full_to_local_hom,
                     eval_mode=maw_hom_eval_mode,
                 )
+            t_maw_hom_weights += time.perf_counter() - t0
+            t0 = time.perf_counter()
             hom_eps, hom_sig = CalculateHomogenizedFromAssemblerWithElementWeights(
                 vec_full_assembler,
                 w_eps=w_eps_step,
                 w_sig=w_sig_step,
                 reference_measure=hom_reference_measure,
             )
+            t_homogenization += time.perf_counter() - t0
         elif using_weighted_hom:
+            t0 = time.perf_counter()
             hom_eps, hom_sig = CalculateHomogenizedFromAssemblerWithElementWeights(
                 vec_full_assembler,
                 w_eps=w_eps_hom,
                 w_sig=w_sig_hom,
                 reference_measure=hom_reference_measure,
             )
+            t_homogenization += time.perf_counter() - t0
         else:
+            t0 = time.perf_counter()
             hom_eps, hom_sig = CalculateHomogenizedStressAndStrainKratosReference(
                 mp,
                 reference_area_e=np.asarray(vec_full_assembler.area_e, dtype=float),
                 reference_measure=hom_reference_measure,
             )
-        sim.FinalizeSolutionStep()
+            t_homogenization += time.perf_counter() - t0
+        t0 = time.perf_counter()
+        if not direct_no_corrector:
+            sim.FinalizeSolutionStep()
+        t_finalize_step += time.perf_counter() - t0
         step_iters.append(int(it_step_count))
 
+        t0 = time.perf_counter()
         q_hist.append(q_p.copy())
         results_eps.append(hom_eps)
         results_sig.append(hom_sig)
+        t_history_append += time.perf_counter() - t0
 
+    t0 = time.perf_counter()
     sim.Finalize()
+    t_sim_finalize += time.perf_counter() - t0
     t_wall_total = time.perf_counter() - t_wall_total_start
-    t_accounted = t_map + t_assembly + t_projection + t_solve + t_full_sync
+    # RVE kernel time: what a deployed constitutive/RVE call would actually pay
+    # after models/mesh are loaded and without benchmark I/O, plotting, or comparisons.
+    t_rve_kernel = (
+        t_q_init
+        + t_step_affine_free
+        + t_step_base_disp
+        + t_map
+        + t_assembly
+        + t_projection
+        + t_solve
+        + t_final_ann_eval
+        + t_final_reconstruct
+        + t_final_apply_state
+        + t_full_sync
+        + t_maw_hom_weights
+        + t_homogenization
+    )
+    t_rve_kernel_per_step = t_rve_kernel / max(float(len(step_iters)), 1.0)
+    t_accounted = (
+        t_map
+        + t_assembly
+        + t_projection
+        + t_solve
+        + t_full_sync
+        + t_step_setup
+        + t_q_init
+        + t_final_ann_eval
+        + t_final_reconstruct
+        + t_final_apply_state
+        + t_maw_hom_weights
+        + t_homogenization
+        + t_finalize_step
+        + t_history_append
+        + t_online_printing
+        + t_capture_current
+        + t_sim_finalize
+    )
     t_other = max(t_wall_total - t_accounted, 0.0)
     iters = np.asarray(step_iters, dtype=float)
     hr_stats = GetHyperReductionAssemblyStats()
@@ -1199,6 +1439,28 @@ def RunHpromAnnBatchSimulation(
         "projection": float(t_projection),
         "solve": float(t_solve),
         "full_sync": float(t_full_sync),
+        "step_setup": float(t_step_setup),
+        "q_init": float(t_q_init),
+        "final_ann_eval": float(t_final_ann_eval),
+        "final_reconstruct": float(t_final_reconstruct),
+        "final_apply_state": float(t_final_apply_state),
+        "maw_hom_weight_eval": float(t_maw_hom_weights),
+        "homogenization": float(t_homogenization),
+        "finalize_step": float(t_finalize_step),
+        "history_append": float(t_history_append),
+        "step_process_info": float(t_step_process_info),
+        "step_strain_interp": float(t_step_strain_interp),
+        "step_affine_free": float(t_step_affine_free),
+        "step_base_disp": float(t_step_base_disp),
+        "online_printing": float(t_online_printing),
+        "capture_current": float(t_capture_current),
+        "sim_finalize": float(t_sim_finalize),
+        "apply_state_copy": float(t_apply_state_copy),
+        "apply_state_set": float(t_apply_state_set),
+        "apply_state_update_coords": float(t_apply_state_update_coords),
+        "rve_kernel": float(t_rve_kernel),
+        "rve_kernel_per_step": float(t_rve_kernel_per_step),
+        "rve_kernel_steps_per_second": float(1.0 / max(t_rve_kernel_per_step, 1.0e-30)),
         "accounted": float(t_accounted),
         "other": float(t_other),
         "total": float(t_wall_total),
@@ -1223,6 +1485,39 @@ def RunHpromAnnBatchSimulation(
         f"iters(total={timing_stats['newton_iters_total']}, mean/step={timing_stats['newton_iters_mean_per_step']:.2f})"
     )
     print(
+        "  [HPROM-ANN] Timing detail: "
+        f"step_setup={t_step_setup:.3f}s, q_init={t_q_init:.3f}s, "
+        f"final_ann_eval={t_final_ann_eval:.3f}s, "
+        f"final_reconstruct={t_final_reconstruct:.3f}s, "
+        f"final_apply_state={t_final_apply_state:.3f}s, "
+        f"maw_hom_weights={t_maw_hom_weights:.3f}s, "
+        f"homogenization={t_homogenization:.3f}s, "
+        f"finalize_step={t_finalize_step:.3f}s, "
+        f"history_append={t_history_append:.3f}s"
+    )
+    print(
+        "  [HPROM-ANN] Timing setup detail: "
+        f"process_info/lifecycle={t_step_process_info:.3f}s, "
+        f"strain_interp={t_step_strain_interp:.3f}s, "
+        f"affine_free={t_step_affine_free:.3f}s, "
+        f"base_disp={t_step_base_disp:.3f}s"
+    )
+    print(
+        "  [HPROM-ANN] Timing state/detail: "
+        f"apply_copy={t_apply_state_copy:.3f}s, "
+        f"apply_set_nodes={t_apply_state_set:.3f}s, "
+        f"apply_update_coords={t_apply_state_update_coords:.3f}s, "
+        f"capture_current={t_capture_current:.3f}s, "
+        f"online_printing={t_online_printing:.3f}s, "
+        f"sim_finalize={t_sim_finalize:.3f}s"
+    )
+    print(
+        "  [HPROM-ANN] RVE online kernel time: "
+        f"total={t_rve_kernel:.3f}s, "
+        f"per_step={1e3*t_rve_kernel_per_step:.3f}ms, "
+        f"steps_per_second={1.0 / max(t_rve_kernel_per_step, 1.0e-30):.1f}"
+    )
+    print(
         f"  [HPROM-ANN] Hyper-assembly stats: calls={int(hr_stats['calls_total'])}, "
         f"vec={int(hr_stats['vectorized_calls'])}, local={int(hr_stats['local_calls'])}, "
         f"vec_fail={int(hr_stats['vectorized_failures'])}, "
@@ -1232,18 +1527,46 @@ def RunHpromAnnBatchSimulation(
         f"mean_local={1e3*hr_stats['mean_local_time_per_call']:.3f}ms"
     )
 
+    t0 = time.perf_counter()
     np.savez(os.path.join(out_dir, "hprom_ann_timing_stats.npz"), **{
         k: np.array([v], dtype=float) for k, v in timing_stats.items()
     })
     with open(os.path.join(out_dir, "hprom_ann_timing_stats.txt"), "w", encoding="utf-8") as f:
         for k, v in timing_stats.items():
             f.write(f"{k}={v}\n")
+    t_timing_stats_write += time.perf_counter() - t0
 
     tag = f"trajectory_{trajectory_index}" if trajectory_index is not None else "hprom_ann_run"
-    np.save(os.path.join(out_dir, f"{tag}_q_p.npy"), np.stack(q_hist))
-    np.save(os.path.join(out_dir, f"{tag}_strain.npy"), np.stack(results_eps))
-    np.save(os.path.join(out_dir, f"{tag}_stress.npy"), np.stack(results_sig))
+    t0 = time.perf_counter()
+    q_hist_arr = np.stack(q_hist)
+    results_eps_arr = np.stack(results_eps)
+    results_sig_arr = np.stack(results_sig)
+    t_result_stack += time.perf_counter() - t0
+    t0 = time.perf_counter()
+    np.save(os.path.join(out_dir, f"{tag}_q_p.npy"), q_hist_arr)
+    np.save(os.path.join(out_dir, f"{tag}_strain.npy"), results_eps_arr)
+    np.save(os.path.join(out_dir, f"{tag}_stress.npy"), results_sig_arr)
+    t_result_save += time.perf_counter() - t0
+
+    t_wall_total = time.perf_counter() - t_wall_total_start
+    t_post_accounted = t_timing_stats_write + t_result_stack + t_result_save
+    timing_stats["timing_stats_write"] = float(t_timing_stats_write)
+    timing_stats["result_stack"] = float(t_result_stack)
+    timing_stats["result_save"] = float(t_result_save)
+    timing_stats["post_accounted"] = float(t_post_accounted)
+    timing_stats["total_after_save"] = float(t_wall_total)
+    timing_stats["other_after_save"] = float(
+        max(t_wall_total - t_accounted - t_post_accounted, 0.0)
+    )
+    print(
+        "  [HPROM-ANN] Timing save/detail: "
+        f"timing_write={t_timing_stats_write:.3f}s, "
+        f"result_stack={t_result_stack:.3f}s, "
+        f"result_save={t_result_save:.3f}s, "
+        f"other_after_save={timing_stats['other_after_save']:.3f}s, "
+        f"total_after_save={timing_stats['total_after_save']:.3f}s"
+    )
 
     if return_stats:
-        return np.array(results_eps), np.array(results_sig), timing_stats
-    return np.array(results_eps), np.array(results_sig)
+        return results_eps_arr, results_sig_arr, timing_stats
+    return results_eps_arr, results_sig_arr
