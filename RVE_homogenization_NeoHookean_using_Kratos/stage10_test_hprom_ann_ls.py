@@ -10,12 +10,14 @@ def run_stage10_ann_ls(
     run_fom=False,
     run_prom_ann=False,
     run_hprom_ann=False,
+    run_hprom_ann_direct=False,
     ann_data_dir="stage_7_ann_model_ls_newton",
     hprom_ann_dir="stage_9_hprom_ann_data_ls_independent_sum990",
     out_dir="stage_10_hprom_ann_ls_results_independent_sum990",
     hprom_homogenization_mode="ecm_fixed",
     hprom_maw_hom_eval_mode="model",
     hprom_corrector_iters=25,
+    hprom_include_manifold_curvature=1,
     qp_init_mode="continuation",
 ):
     if int(hprom_corrector_iters) == 0 and str(qp_init_mode).strip().lower() != "mu_affine":
@@ -28,12 +30,14 @@ def run_stage10_ann_ls(
         run_fom=run_fom,
         run_prom_ann=run_prom_ann,
         run_hprom_ann=run_hprom_ann,
+        run_hprom_ann_direct=run_hprom_ann_direct,
         ann_data_dir=ann_data_dir,
         hprom_ann_dir=hprom_ann_dir,
         out_dir=out_dir,
         hprom_homogenization_mode=hprom_homogenization_mode,
         hprom_maw_hom_eval_mode=hprom_maw_hom_eval_mode,
         hprom_corrector_iters=hprom_corrector_iters,
+        hprom_include_manifold_curvature=hprom_include_manifold_curvature,
         qp_init_mode=qp_init_mode,
     )
 
@@ -43,6 +47,11 @@ if __name__ == "__main__":
     p.add_argument("--run-fom", action="store_true", help="Force FOM recompute.")
     p.add_argument("--run-prom-ann", action="store_true", help="Force PROM-ANN recompute.")
     p.add_argument("--run-hprom-ann", action="store_true", help="Force HPROM-ANN recompute.")
+    p.add_argument(
+        "--run-hprom-ann-direct",
+        action="store_true",
+        help="Also run D-HPROM-ANN-LS: direct ANN prediction with no Newton/corrector iterations.",
+    )
     p.add_argument("--ann-data-dir", type=str, default="stage_7_ann_model_ls_newton", help="ANN-LS model/data directory.")
     p.add_argument(
         "--hprom-ann-dir",
@@ -81,6 +90,16 @@ if __name__ == "__main__":
         help="Maximum HPROM-ANN-LS Newton/corrector iterations. Use 0 to evaluate the direct ANN prediction only.",
     )
     p.add_argument(
+        "--hprom-include-manifold-curvature",
+        type=int,
+        default=1,
+        choices=[0, 1],
+        help=(
+            "Include the exact nonlinear-manifold Hessian curvature term in the HPROM-ANN-LS Newton tangent. "
+            "Use 0 for a faster Gauss-Newton/quasi-Newton tangent."
+        ),
+    )
+    p.add_argument(
         "--qp-init-mode",
         type=str,
         default="continuation",
@@ -96,11 +115,13 @@ if __name__ == "__main__":
         run_fom=a.run_fom,
         run_prom_ann=a.run_prom_ann,
         run_hprom_ann=a.run_hprom_ann,
+        run_hprom_ann_direct=a.run_hprom_ann_direct,
         ann_data_dir=a.ann_data_dir,
         hprom_ann_dir=a.hprom_ann_dir,
         out_dir=a.out_dir,
         hprom_homogenization_mode=a.hprom_homogenization_mode,
         hprom_maw_hom_eval_mode=a.hprom_maw_hom_eval_mode,
         hprom_corrector_iters=a.hprom_corrector_iters,
+        hprom_include_manifold_curvature=a.hprom_include_manifold_curvature,
         qp_init_mode=a.qp_init_mode,
     )

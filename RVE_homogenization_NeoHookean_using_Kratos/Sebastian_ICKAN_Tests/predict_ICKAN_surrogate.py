@@ -143,6 +143,8 @@ def main():
             label=args.trajectory_label,
             samples_per_trajectory=samples_per_trajectory,
         )
+        plot_strain_axis_variants = None
+        plot_strain_axis_metadata = []
     else:
         dataset = load_fom_dataset(
             fom_dir=fom_dir,
@@ -150,6 +152,37 @@ def main():
             strain_source=strain_source,
             samples_per_trajectory=samples_per_trajectory,
         )
+        plot_strain_axis_variants = []
+        plot_strain_axis_metadata = []
+
+        for axis_source, axis_label in (
+            ("applied_strain", "applied strain"),
+            ("strain", "homogenized strain"),
+        ):
+            try:
+                axis_dataset = load_fom_dataset(
+                    fom_dir=fom_dir,
+                    trajectory_ids=trajectory_ids,
+                    strain_source=axis_source,
+                    samples_per_trajectory=samples_per_trajectory,
+                )
+            except FileNotFoundError:
+                continue
+
+            axis_strain_normalized = (
+                axis_dataset["strain"] / float(normalization["strain_scale"])
+            )
+            plot_strain_axis_variants.append(
+                (axis_source, axis_label, axis_strain_normalized)
+            )
+            plot_strain_axis_metadata.append(
+                {
+                    "source": axis_source,
+                    "label": axis_label,
+                    "normalized_with": "checkpoint strain_scale",
+                    "is_model_input": axis_source == strain_source,
+                }
+            )
 
     strain_normalized, stress_reference_normalized = apply_normalization(
         dataset["strain"],
@@ -177,18 +210,25 @@ def main():
     )
     metrics_physical = compute_metrics(dataset["stress"], stress_predicted)
 
-    np.savez(
-        os.path.join(out_dir, "predictions.npz"),
-        trajectory_ids=np.asarray(trajectory_ids),
-        strain=dataset["strain"],
-        stress_reference=dataset["stress"],
-        stress_predicted=stress_predicted,
-        strain_normalized=strain_normalized,
-        stress_reference_normalized=stress_reference_normalized,
-        stress_predicted_normalized=stress_predicted_normalized,
-        W_reference_normalized=energy_reference_normalized,
-        W_predicted_normalized=energy_predicted_normalized,
-    )
+    prediction_payload = {
+        "trajectory_ids": np.asarray(trajectory_ids),
+        "strain": dataset["strain"],
+        "stress_reference": dataset["stress"],
+        "stress_predicted": stress_predicted,
+        "strain_normalized": strain_normalized,
+        "stress_reference_normalized": stress_reference_normalized,
+        "stress_predicted_normalized": stress_predicted_normalized,
+        "W_reference_normalized": energy_reference_normalized,
+        "W_predicted_normalized": energy_predicted_normalized,
+    }
+    if plot_strain_axis_variants is not None:
+        for axis_source, _, axis_strain_normalized in plot_strain_axis_variants:
+            prediction_payload[f"{axis_source}_plot_axis_normalized"] = axis_strain_normalized
+            prediction_payload[f"{axis_source}_plot_axis"] = (
+                axis_strain_normalized * float(normalization["strain_scale"])
+            )
+
+    np.savez(os.path.join(out_dir, "predictions.npz"), **prediction_payload)
 
     metadata = {
         "checkpoint": checkpoint_path,
@@ -203,6 +243,7 @@ def main():
         "samples_per_trajectory": dataset["samples_per_trajectory"],
         "normalization": normalization,
         "training_info": training_info,
+        "plot_strain_axes": plot_strain_axis_metadata,
         "metrics_normalized": metrics_normalized,
         "metrics_physical": metrics_physical,
     }
@@ -216,6 +257,7 @@ def main():
         stress_predicted_normalized=stress_predicted_normalized,
         energy_reference_normalized=energy_reference_normalized,
         energy_predicted_normalized=energy_predicted_normalized,
+        strain_axis_variants=plot_strain_axis_variants,
     )
 
     print("\nPrediction finished.")

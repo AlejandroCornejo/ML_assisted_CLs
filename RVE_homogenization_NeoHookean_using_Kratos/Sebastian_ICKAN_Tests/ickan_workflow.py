@@ -302,6 +302,7 @@ def plot_prediction_results(
     stress_predicted_normalized,
     energy_reference_normalized,
     energy_predicted_normalized,
+    strain_axis_variants=None,
 ):
     import matplotlib.pyplot as plt
 
@@ -442,3 +443,78 @@ def plot_prediction_results(
     fig.savefig(os.path.join(out_dir, "W_by_trajectory.png"), dpi=180)
     fig.savefig(os.path.join(out_dir, "W_by_trajectory.eps"))
     plt.close(fig)
+
+    if strain_axis_variants is None:
+        return
+
+    for axis_name, axis_label, axis_strain_normalized in strain_axis_variants:
+        safe_axis_name = (
+            str(axis_name)
+            .replace(" ", "_")
+            .replace("/", "_")
+            .replace(":", "_")
+        )
+
+        for local_index, trajectory_id in enumerate(trajectory_ids):
+            fig, axes = plt.subplots(3, 1, figsize=(8, 8))
+            for component, name in enumerate(COMPONENT_NAMES):
+                axes[component].plot(
+                    axis_strain_normalized[local_index, :, component],
+                    stress_reference_normalized[local_index, :, component],
+                    "--",
+                    label=f"Reference S_{name}",
+                )
+                axes[component].plot(
+                    axis_strain_normalized[local_index, :, component],
+                    stress_predicted_normalized[local_index, :, component],
+                    "-",
+                    label=f"ICKAN S_{name}",
+                )
+                axes[component].set_xlabel(f"Normalized {axis_label} {name}")
+                axes[component].set_ylabel(f"Normalized stress {name}")
+                axes[component].grid(True)
+                axes[component].legend()
+            fig.suptitle(f"trajectory_{trajectory_id}: stress path vs {axis_label}")
+            fig.tight_layout()
+            fig.savefig(
+                os.path.join(
+                    trajectory_dir,
+                    f"trajectory_{trajectory_id}_stress_vs_{safe_axis_name}_axis.png",
+                ),
+                dpi=180,
+            )
+            plt.close(fig)
+
+        for component, name in enumerate(COMPONENT_NAMES):
+            fig, ax = plt.subplots(figsize=(8, 5))
+            for local_index, _ in enumerate(trajectory_ids):
+                label_ref = "Reference" if local_index == 0 else None
+                label_pred = "ICKAN" if local_index == 0 else None
+                ax.plot(
+                    axis_strain_normalized[local_index, :, component],
+                    stress_reference_normalized[local_index, :, component],
+                    "--",
+                    label=label_ref,
+                    alpha=0.85,
+                )
+                ax.plot(
+                    axis_strain_normalized[local_index, :, component],
+                    stress_predicted_normalized[local_index, :, component],
+                    "-",
+                    label=label_pred,
+                    alpha=0.85,
+                )
+            ax.set_xlabel(f"Normalized {axis_label} {name}")
+            ax.set_ylabel(f"Normalized stress {name}")
+            ax.set_title(f"S_{name} over each trajectory vs {axis_label}")
+            ax.grid(True)
+            ax.legend()
+            fig.tight_layout()
+            fig.savefig(
+                os.path.join(out_dir, f"S_{name}_by_trajectory_vs_{safe_axis_name}.png"),
+                dpi=180,
+            )
+            fig.savefig(
+                os.path.join(out_dir, f"S_{name}_by_trajectory_vs_{safe_axis_name}.eps")
+            )
+            plt.close(fig)

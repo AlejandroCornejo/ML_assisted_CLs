@@ -87,9 +87,14 @@ def _load_first_existing_npy(out_dir, candidates):
     return None, None
 
 
-def _load_hprom_ann_timing_stats(out_dir):
-    path = os.path.join(out_dir, "hprom_ann_timing_stats.npz")
-    if not os.path.exists(path):
+def _load_hprom_ann_timing_stats(out_dir, filenames=("hprom_ann_timing_stats.npz",)):
+    path = None
+    for filename in filenames:
+        candidate = os.path.join(out_dir, filename)
+        if os.path.exists(candidate):
+            path = candidate
+            break
+    if path is None:
         return {}
     try:
         data = np.load(path, allow_pickle=True)
@@ -105,8 +110,59 @@ def _load_hprom_ann_timing_stats(out_dir):
     return stats
 
 
-def plot_hprom_ann_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir, timings=None):
-    n = min(len(f_sig), len(p_sig), len(h_sig), len(f_eps), len(p_eps), len(h_eps))
+def _save_timing_stats_copy(out_dir, filename, stats):
+    if not stats:
+        return
+    payload = {}
+    for key, value in stats.items():
+        try:
+            payload[key] = np.array([float(value)], dtype=float)
+        except Exception:
+            continue
+    if payload:
+        np.savez(os.path.join(out_dir, filename), **payload)
+
+
+def _q_history_metrics(q_ref, q_pred):
+    if q_ref is None or q_pred is None:
+        return None
+    q_ref = np.asarray(q_ref, dtype=float)
+    q_pred = np.asarray(q_pred, dtype=float)
+    nq = min(len(q_ref), len(q_pred))
+    ncomp_q = min(q_ref.shape[1], q_pred.shape[1]) if q_ref.ndim == 2 and q_pred.ndim == 2 else 0
+    if nq <= 0 or ncomp_q <= 0:
+        return None
+    q_ref_a = q_ref[:nq, :ncomp_q]
+    q_pred_a = q_pred[:nq, :ncomp_q]
+    q_diff = q_pred_a - q_ref_a
+    return {
+        "rel": _rel_error(q_pred_a, q_ref_a),
+        "components": {
+            f"q_{i + 1}": _rel_error(q_pred_a[:, i], q_ref_a[:, i])
+            for i in range(ncomp_q)
+        },
+        "rmse": float(np.sqrt(np.mean(q_diff * q_diff))),
+        "max_abs": float(np.max(np.abs(q_diff))),
+    }
+
+
+def plot_hprom_ann_comparison(
+    f_eps,
+    f_sig,
+    p_eps,
+    p_sig,
+    h_eps,
+    h_sig,
+    out_dir,
+    timings=None,
+    d_eps=None,
+    d_sig=None,
+):
+    arrays = [f_sig, p_sig, h_sig, f_eps, p_eps, h_eps]
+    if d_eps is not None and d_sig is not None:
+        arrays.extend([d_eps, d_sig])
+    n = min(len(a) for a in arrays)
+    has_direct = d_eps is not None and d_sig is not None
 
     plt.rcParams.update(
         {
@@ -127,6 +183,8 @@ def plot_hprom_ann_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir,
         plt.plot(f_eps[:n, i], f_sig[:n, i], "k-", label="FOM", linewidth=2.0)
         plt.plot(p_eps[:n, i], p_sig[:n, i], "r--", label="PROM-ANN", linewidth=1.5)
         plt.plot(h_eps[:n, i], h_sig[:n, i], "b:", label="HPROM-ANN", linewidth=1.5)
+        if has_direct:
+            plt.plot(d_eps[:n, i], d_sig[:n, i], "g-.", label="D-HPROM-ANN", linewidth=1.5)
         plt.title(f"HPROM-ANN Benchmark: {label_sig}")
         plt.xlabel(f"{label_eps} [-]")
         plt.ylabel(f"{label_sig} [Pa]")
@@ -139,11 +197,15 @@ def plot_hprom_ann_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir,
     f_eps_eq, f_sig_eq = _compute_equivalent_stress_strain(f_eps[:n], f_sig[:n])
     p_eps_eq, p_sig_eq = _compute_equivalent_stress_strain(p_eps[:n], p_sig[:n])
     h_eps_eq, h_sig_eq = _compute_equivalent_stress_strain(h_eps[:n], h_sig[:n])
+    if has_direct:
+        d_eps_eq, d_sig_eq = _compute_equivalent_stress_strain(d_eps[:n], d_sig[:n])
 
     plt.figure(figsize=(7, 6))
     plt.plot(f_eps_eq, f_sig_eq, "k-", label="FOM", linewidth=2.0)
     plt.plot(p_eps_eq, p_sig_eq, "r--", label="PROM-ANN", linewidth=1.5)
     plt.plot(h_eps_eq, h_sig_eq, "b:", label="HPROM-ANN", linewidth=1.5)
+    if has_direct:
+        plt.plot(d_eps_eq, d_sig_eq, "g-.", label="D-HPROM-ANN", linewidth=1.5)
     plt.title(r"HPROM-ANN Benchmark: $\sigma_{eq}$ vs $\varepsilon_{eq}$")
     plt.xlabel(r"$\varepsilon_{eq}$ [-]")
     plt.ylabel(r"$\sigma_{eq}$ [Pa]")
@@ -156,10 +218,14 @@ def plot_hprom_ann_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir,
     fom_norm = np.linalg.norm(f_sig[:n], axis=1) + 1e-30
     err_prom_ann = np.linalg.norm(f_sig[:n] - p_sig[:n], axis=1) / fom_norm
     err_hprom_ann = np.linalg.norm(f_sig[:n] - h_sig[:n], axis=1) / fom_norm
+    if has_direct:
+        err_direct_hprom_ann = np.linalg.norm(f_sig[:n] - d_sig[:n], axis=1) / fom_norm
 
     plt.figure(figsize=(7, 6))
     plt.plot(err_prom_ann, "r-", label="PROM-ANN Error", linewidth=1.5)
     plt.plot(err_hprom_ann, "b-", label="HPROM-ANN Error", linewidth=1.5)
+    if has_direct:
+        plt.plot(err_direct_hprom_ann, "g-", label="D-HPROM-ANN Error", linewidth=1.5)
     plt.title("Relative Stress Error Comparison")
     plt.xlabel("Step")
     plt.ylabel("Relative Error [-]")
@@ -179,6 +245,8 @@ def plot_hprom_ann_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir,
                 return "gray"
             if method.startswith("PROM-ANN"):
                 return "red"
+            if method.startswith("D-HPROM-ANN"):
+                return "green"
             if method.startswith("HPROM-ANN"):
                 return "blue"
             return "green"
@@ -200,12 +268,14 @@ def run_stage10(
     run_fom=False,
     run_prom_ann=False,
     run_hprom_ann=False,
+    run_hprom_ann_direct=False,
     ann_data_dir="stage_7_ann_data",
     hprom_ann_dir="stage_9_hprom_ann_data",
     out_dir="stage_10_hprom_ann_results",
     hprom_homogenization_mode="ecm_fixed",
     hprom_maw_hom_eval_mode="model",
     hprom_corrector_iters=25,
+    hprom_include_manifold_curvature=1,
     qp_init_mode="continuation",
 ):
     os.makedirs(out_dir, exist_ok=True)
@@ -260,6 +330,8 @@ def run_stage10(
     print(f"  HPROM homogenization mode: {hprom_homogenization_mode}")
     print(f"  HPROM MAW hom eval mode: {hprom_maw_hom_eval_mode}")
     print(f"  HPROM corrector iterations: {hprom_corrector_iters}")
+    print(f"  HPROM include manifold curvature: {int(bool(hprom_include_manifold_curvature))}")
+    print(f"  Include D-HPROM-ANN direct comparison: {int(bool(run_hprom_ann_direct))}")
     print(f"  HPROM q_m initializer mode: {qp_init_mode}")
 
     mesh_fom_prom = "rve_geometry"
@@ -272,12 +344,17 @@ def run_stage10(
 
     parameters = setup_kratos_parameters(mesh_fom_prom)
     parameters_hprom = setup_kratos_parameters(mesh_hprom)
+    parameters_hprom_direct = setup_kratos_parameters(mesh_hprom)
     timings = {}
     timing_sources = {}
     hprom_wall_time = None
     hprom_rve_kernel = None
     hprom_rve_kernel_per_step = None
     hprom_rve_kernel_steps_per_second = None
+    dhprom_wall_time = None
+    dhprom_rve_kernel = None
+    dhprom_rve_kernel_per_step = None
+    dhprom_rve_kernel_steps_per_second = None
 
     fom_eps_file = os.path.join(out_dir, "fom_strain.npy")
     fom_sig_file = os.path.join(out_dir, "fom_stress.npy")
@@ -377,6 +454,7 @@ def run_stage10(
             homogenization_mode=hprom_homogenization_mode,
             maw_hom_eval_mode=hprom_maw_hom_eval_mode,
             max_its=int(hprom_corrector_iters),
+            include_manifold_curvature=bool(int(hprom_include_manifold_curvature)),
             qp_init_mode=qp_init_mode,
             return_stats=True,
         )
@@ -386,6 +464,7 @@ def run_stage10(
         hprom_rve_kernel_steps_per_second = hprom_stats.get("rve_kernel_steps_per_second", None)
         timings["HPROM-ANN"] = hprom_rve_kernel
         timing_sources["HPROM-ANN"] = "RVE online kernel"
+        _save_timing_stats_copy(out_dir, "hprom_ann_iter_timing_stats.npz", hprom_stats)
         h_eps = np.asarray(h_eps, dtype=float)
         h_sig = np.asarray(h_sig, dtype=float)
         np.save(hprom_eps_file, h_eps)
@@ -394,7 +473,10 @@ def run_stage10(
         print("\n[Stage 10] Loading cached HPROM-ANN.")
         h_eps = np.load(hprom_eps_file)
         h_sig = np.load(hprom_sig_file)
-        hprom_stats = _load_hprom_ann_timing_stats(out_dir)
+        hprom_stats = _load_hprom_ann_timing_stats(
+            out_dir,
+            filenames=("hprom_ann_iter_timing_stats.npz", "hprom_ann_timing_stats.npz"),
+        )
         if "rve_kernel" in hprom_stats:
             hprom_rve_kernel = float(hprom_stats["rve_kernel"])
             hprom_rve_kernel_per_step = hprom_stats.get("rve_kernel_per_step", None)
@@ -403,10 +485,89 @@ def run_stage10(
             timings["HPROM-ANN"] = hprom_rve_kernel
             timing_sources["HPROM-ANN"] = "cached RVE online kernel"
 
+    dhprom_eps_file = os.path.join(out_dir, "dhprom_ann_strain.npy")
+    dhprom_sig_file = os.path.join(out_dir, "dhprom_ann_stress.npy")
+    d_eps = None
+    d_sig = None
+    include_direct_hprom = bool(run_hprom_ann_direct)
+    if include_direct_hprom:
+        if run_hprom_ann_direct or not (os.path.exists(dhprom_eps_file) and os.path.exists(dhprom_sig_file)):
+            print("\n[Stage 10] Running D-HPROM-ANN (direct/no-corrector)...")
+            (
+                phi_p_d,
+                phi_s_d,
+                free_dofs_d,
+                _dir_dofs_d,
+                eq_map_d,
+                Xc_d,
+                Yc_d,
+                ann_model_d,
+                device_d,
+                ecm_data_d,
+                _include_macro_d,
+            ) = LoadHpromAnnModel(
+                basis_dir="stage_2_pod_rve",
+                ann_data_dir=ann_data_dir,
+                hprom_ann_dir=hprom_ann_dir,
+            )
+            t0 = time.perf_counter()
+            d_eps, d_sig, dhprom_stats = RunHpromAnnBatchSimulation(
+                parameters_hprom_direct,
+                phi_p_d,
+                phi_s_d,
+                free_dofs_d,
+                ann_model_d,
+                device_d,
+                ecm_data_d,
+                out_dir=out_dir,
+                strain_path=strain_path,
+                trajectory_index="direct_hprom_ann",
+                reference_amplitude=emax,
+                reference_steps=REFERENCE_STEPS_FOR_UNIT_AMPLITUDE,
+                eq_map_full=eq_map_d,
+                Xc=Xc_d,
+                Yc=Yc_d,
+                homogenization_mode=hprom_homogenization_mode,
+                maw_hom_eval_mode=hprom_maw_hom_eval_mode,
+                max_its=0,
+                include_manifold_curvature=bool(int(hprom_include_manifold_curvature)),
+                qp_init_mode="mu_affine",
+                return_stats=True,
+            )
+            dhprom_wall_time = time.perf_counter() - t0
+            dhprom_rve_kernel = float(dhprom_stats.get("rve_kernel", dhprom_wall_time))
+            dhprom_rve_kernel_per_step = dhprom_stats.get("rve_kernel_per_step", None)
+            dhprom_rve_kernel_steps_per_second = dhprom_stats.get("rve_kernel_steps_per_second", None)
+            timings["D-HPROM-ANN"] = dhprom_rve_kernel
+            timing_sources["D-HPROM-ANN"] = "RVE online kernel"
+            _save_timing_stats_copy(out_dir, "dhprom_ann_timing_stats.npz", dhprom_stats)
+            d_eps = np.asarray(d_eps, dtype=float)
+            d_sig = np.asarray(d_sig, dtype=float)
+            np.save(dhprom_eps_file, d_eps)
+            np.save(dhprom_sig_file, d_sig)
+        else:
+            print("\n[Stage 10] Loading cached D-HPROM-ANN.")
+            d_eps = np.load(dhprom_eps_file)
+            d_sig = np.load(dhprom_sig_file)
+            dhprom_stats = _load_hprom_ann_timing_stats(
+                out_dir,
+                filenames=("dhprom_ann_timing_stats.npz",),
+            )
+            if "rve_kernel" in dhprom_stats:
+                dhprom_rve_kernel = float(dhprom_stats["rve_kernel"])
+                dhprom_rve_kernel_per_step = dhprom_stats.get("rve_kernel_per_step", None)
+                dhprom_rve_kernel_steps_per_second = dhprom_stats.get("rve_kernel_steps_per_second", None)
+                dhprom_wall_time = dhprom_stats.get("total_after_save", dhprom_stats.get("total", None))
+                timings["D-HPROM-ANN"] = dhprom_rve_kernel
+                timing_sources["D-HPROM-ANN"] = "cached RVE online kernel"
+
     n = min(len(f_sig), len(p_sig), len(h_sig), len(f_eps), len(p_eps), len(h_eps))
     err_prom = _rel_error(p_sig[:n], f_sig[:n])
     err_hprom = _rel_error(h_sig[:n], f_sig[:n])
     err_hprom_vs_prom = _rel_error(h_sig[:n], p_sig[:n])
+    has_direct_hprom = d_eps is not None and d_sig is not None
+    err_dhprom = None
+    err_dhprom_vs_prom = None
 
     stress_labels = ["sigma_xx", "sigma_yy", "sigma_xy"]
     strain_labels = ["eps_xx", "eps_yy", "gamma_xy"]
@@ -416,6 +577,14 @@ def run_stage10(
     strain_prom_fom = _component_rel_errors(p_eps[:n], f_eps[:n], strain_labels)
     strain_hprom_fom = _component_rel_errors(h_eps[:n], f_eps[:n], strain_labels)
     strain_hprom_prom = _component_rel_errors(h_eps[:n], p_eps[:n], strain_labels)
+    if has_direct_hprom:
+        nd = min(n, len(d_sig), len(d_eps))
+        err_dhprom = _rel_error(d_sig[:nd], f_sig[:nd])
+        err_dhprom_vs_prom = _rel_error(d_sig[:nd], p_sig[:nd])
+        stress_dhprom_fom = _component_rel_errors(d_sig[:nd], f_sig[:nd], stress_labels)
+        stress_dhprom_prom = _component_rel_errors(d_sig[:nd], p_sig[:nd], stress_labels)
+        strain_dhprom_fom = _component_rel_errors(d_eps[:nd], f_eps[:nd], strain_labels)
+        strain_dhprom_prom = _component_rel_errors(d_eps[:nd], p_eps[:nd], strain_labels)
 
     q_prom, q_prom_path = _load_first_existing_npy(
         out_dir,
@@ -431,27 +600,17 @@ def run_stage10(
             "hprom_ann_q_p.npy",
         ],
     )
+    q_dhprom, q_dhprom_path = _load_first_existing_npy(
+        out_dir,
+        [
+            "trajectory_direct_hprom_ann_q_p.npy",
+            "dhprom_ann_run_q_p.npy",
+            "dhprom_ann_q_p.npy",
+        ],
+    )
 
-    q_error = None
-    q_comp_errors = None
-    q_rmse = None
-    q_max_abs = None
-    if q_prom is not None and q_hprom is not None:
-        q_prom = np.asarray(q_prom, dtype=float)
-        q_hprom = np.asarray(q_hprom, dtype=float)
-        nq = min(len(q_prom), len(q_hprom))
-        ncomp_q = min(q_prom.shape[1], q_hprom.shape[1]) if q_prom.ndim == 2 and q_hprom.ndim == 2 else 0
-        if nq > 0 and ncomp_q > 0:
-            q_prom_a = q_prom[:nq, :ncomp_q]
-            q_hprom_a = q_hprom[:nq, :ncomp_q]
-            q_diff = q_hprom_a - q_prom_a
-            q_error = _rel_error(q_hprom_a, q_prom_a)
-            q_comp_errors = {
-                f"q_{i + 1}": _rel_error(q_hprom_a[:, i], q_prom_a[:, i])
-                for i in range(ncomp_q)
-            }
-            q_rmse = float(np.sqrt(np.mean(q_diff * q_diff)))
-            q_max_abs = float(np.max(np.abs(q_diff)))
+    q_metrics = _q_history_metrics(q_prom, q_hprom)
+    q_direct_metrics = _q_history_metrics(q_prom, q_dhprom)
 
     summary_lines = [
         "",
@@ -461,23 +620,52 @@ def run_stage10(
         f"  PROM-ANN  vs FOM: Rel. Stress Error = {err_prom:.4e}",
         f"  HPROM-ANN vs FOM: Rel. Stress Error = {err_hprom:.4e}",
         f"  HPROM-ANN vs PROM-ANN: Rel. Stress Error = {err_hprom_vs_prom:.4e}",
-        "  Stress component relative errors [reference in denominator]:",
-        f"    PROM/FOM       : {_format_component_errors(stress_prom_fom, stress_labels)}",
-        f"    HPROM/FOM      : {_format_component_errors(stress_hprom_fom, stress_labels)}",
-        f"    HPROM/PROM     : {_format_component_errors(stress_hprom_prom, stress_labels)}",
-        "  Strain component relative errors [reference in denominator]:",
-        f"    PROM/FOM       : {_format_component_errors(strain_prom_fom, strain_labels)}",
-        f"    HPROM/FOM      : {_format_component_errors(strain_hprom_fom, strain_labels)}",
-        f"    HPROM/PROM     : {_format_component_errors(strain_hprom_prom, strain_labels)}",
     ]
-
-    if q_error is not None:
-        q_labels = list(q_comp_errors.keys())
+    if has_direct_hprom:
         summary_lines.extend(
             [
-                f"  HPROM-ANN vs PROM-ANN: Rel. q_m Error = {q_error:.4e}",
-                f"    q_m component relative errors: {_format_component_errors(q_comp_errors, q_labels)}",
-                f"    q_m RMSE / max |difference|: {q_rmse:.4e} / {q_max_abs:.4e}",
+                f"  D-HPROM-ANN vs FOM: Rel. Stress Error = {err_dhprom:.4e}",
+                f"  D-HPROM-ANN vs PROM-ANN: Rel. Stress Error = {err_dhprom_vs_prom:.4e}",
+            ]
+        )
+    summary_lines.extend(
+        [
+            "  Stress component relative errors [reference in denominator]:",
+            f"    PROM/FOM       : {_format_component_errors(stress_prom_fom, stress_labels)}",
+            f"    HPROM/FOM      : {_format_component_errors(stress_hprom_fom, stress_labels)}",
+            f"    HPROM/PROM     : {_format_component_errors(stress_hprom_prom, stress_labels)}",
+        ]
+    )
+    if has_direct_hprom:
+        summary_lines.extend(
+            [
+                f"    D-HPROM/FOM    : {_format_component_errors(stress_dhprom_fom, stress_labels)}",
+                f"    D-HPROM/PROM   : {_format_component_errors(stress_dhprom_prom, stress_labels)}",
+            ]
+        )
+    summary_lines.extend(
+        [
+            "  Strain component relative errors [reference in denominator]:",
+            f"    PROM/FOM       : {_format_component_errors(strain_prom_fom, strain_labels)}",
+            f"    HPROM/FOM      : {_format_component_errors(strain_hprom_fom, strain_labels)}",
+            f"    HPROM/PROM     : {_format_component_errors(strain_hprom_prom, strain_labels)}",
+        ]
+    )
+    if has_direct_hprom:
+        summary_lines.extend(
+            [
+                f"    D-HPROM/FOM    : {_format_component_errors(strain_dhprom_fom, strain_labels)}",
+                f"    D-HPROM/PROM   : {_format_component_errors(strain_dhprom_prom, strain_labels)}",
+            ]
+        )
+
+    if q_metrics is not None:
+        q_labels = list(q_metrics["components"].keys())
+        summary_lines.extend(
+            [
+                f"  HPROM-ANN vs PROM-ANN: Rel. q_m Error = {q_metrics['rel']:.4e}",
+                f"    q_m component relative errors: {_format_component_errors(q_metrics['components'], q_labels)}",
+                f"    q_m RMSE / max |difference|: {q_metrics['rmse']:.4e} / {q_metrics['max_abs']:.4e}",
             ]
         )
     else:
@@ -487,6 +675,18 @@ def run_stage10(
         if q_hprom is None:
             missing.append("HPROM q history")
         summary_lines.append(f"  q_m PROM/HPROM comparison skipped (missing {', '.join(missing)}).")
+    if has_direct_hprom:
+        if q_direct_metrics is not None:
+            q_direct_labels = list(q_direct_metrics["components"].keys())
+            summary_lines.extend(
+                [
+                    f"  D-HPROM-ANN vs PROM-ANN: Rel. q_m Error = {q_direct_metrics['rel']:.4e}",
+                    f"    D-q_m component relative errors: {_format_component_errors(q_direct_metrics['components'], q_direct_labels)}",
+                    f"    D-q_m RMSE / max |difference|: {q_direct_metrics['rmse']:.4e} / {q_direct_metrics['max_abs']:.4e}",
+                ]
+            )
+        else:
+            summary_lines.append("  q_m PROM/D-HPROM comparison skipped (missing direct q history).")
 
     for method, t in timings.items():
         source = timing_sources.get(method, "time")
@@ -499,6 +699,14 @@ def run_stage10(
         summary_lines.append(f"  HPROM-ANN RVE online kernel throughput: {float(hprom_rve_kernel_steps_per_second):.1f} steps/s")
     if hprom_wall_time is not None:
         summary_lines.append(f"  HPROM-ANN script wall time: {float(hprom_wall_time):.2f}s")
+    if dhprom_rve_kernel is not None:
+        summary_lines.append(f"  D-HPROM-ANN RVE online kernel time: {dhprom_rve_kernel:.3f}s")
+    if dhprom_rve_kernel_per_step is not None:
+        summary_lines.append(f"  D-HPROM-ANN RVE online kernel per step: {1e3 * float(dhprom_rve_kernel_per_step):.3f} ms")
+    if dhprom_rve_kernel_steps_per_second is not None:
+        summary_lines.append(f"  D-HPROM-ANN RVE online kernel throughput: {float(dhprom_rve_kernel_steps_per_second):.1f} steps/s")
+    if dhprom_wall_time is not None:
+        summary_lines.append(f"  D-HPROM-ANN script wall time: {float(dhprom_wall_time):.2f}s")
 
     summary_path = os.path.join(out_dir, "stage10_error_summary.txt")
     summary_lines.append(f"  Error summary saved: {summary_path}")
@@ -513,8 +721,21 @@ def run_stage10(
         source = timing_sources.get(method, "")
         if method == "HPROM-ANN" and "kernel" in source.lower():
             label = "HPROM-ANN\nRVE kernel"
+        if method == "D-HPROM-ANN" and "kernel" in source.lower():
+            label = "D-HPROM-ANN\nRVE kernel"
         plot_timings[label] = value
-    plot_hprom_ann_comparison(f_eps, f_sig, p_eps, p_sig, h_eps, h_sig, out_dir, plot_timings)
+    plot_hprom_ann_comparison(
+        f_eps,
+        f_sig,
+        p_eps,
+        p_sig,
+        h_eps,
+        h_sig,
+        out_dir,
+        plot_timings,
+        d_eps=d_eps,
+        d_sig=d_sig,
+    )
 
 
 if __name__ == "__main__":
@@ -524,6 +745,11 @@ if __name__ == "__main__":
     p.add_argument("--run-fom", action="store_true", help="Force FOM recompute.")
     p.add_argument("--run-prom-ann", action="store_true", help="Force PROM-ANN recompute.")
     p.add_argument("--run-hprom-ann", action="store_true", help="Force HPROM-ANN recompute.")
+    p.add_argument(
+        "--run-hprom-ann-direct",
+        action="store_true",
+        help="Also run D-HPROM-ANN: direct ANN prediction with no Newton/corrector iterations.",
+    )
     p.add_argument(
         "--ann-data-dir",
         type=str,
@@ -567,6 +793,16 @@ if __name__ == "__main__":
         help="Maximum HPROM-ANN Newton/corrector iterations. Use 0 to evaluate the direct ANN prediction only.",
     )
     p.add_argument(
+        "--hprom-include-manifold-curvature",
+        type=int,
+        default=1,
+        choices=[0, 1],
+        help=(
+            "Include the exact nonlinear-manifold Hessian curvature term in the HPROM-ANN Newton tangent. "
+            "Use 0 for a faster Gauss-Newton/quasi-Newton tangent."
+        ),
+    )
+    p.add_argument(
         "--qp-init-mode",
         type=str,
         default="continuation",
@@ -582,11 +818,13 @@ if __name__ == "__main__":
         run_fom=args.run_fom,
         run_prom_ann=args.run_prom_ann,
         run_hprom_ann=args.run_hprom_ann,
+        run_hprom_ann_direct=args.run_hprom_ann_direct,
         ann_data_dir=args.ann_data_dir,
         hprom_ann_dir=args.hprom_ann_dir,
         out_dir=args.out_dir,
         hprom_homogenization_mode=args.hprom_homogenization_mode,
         hprom_maw_hom_eval_mode=args.hprom_maw_hom_eval_mode,
         hprom_corrector_iters=args.hprom_corrector_iters,
+        hprom_include_manifold_curvature=args.hprom_include_manifold_curvature,
         qp_init_mode=args.qp_init_mode,
     )

@@ -12,10 +12,15 @@ import sys
 import time
 import numpy as np
 import torch
+from scipy.sparse import coo_matrix
 try:
     from torch.func import jacfwd as _torch_jacfwd
 except Exception:
     _torch_jacfwd = None
+try:
+    from torch.func import hessian as _torch_hessian
+except Exception:
+    _torch_hessian = None
 
 # Add Kratos path
 KRATOS_PATH = "/home/kratos/Kratos_Eigen_Check/bin/Release"
@@ -51,8 +56,11 @@ from hprom_solver_rve import (
     GetReferenceIntegrationMeasureFromMesh,
 )
 from prom_ann_solver_rve import LoadPromAnnModel
-from mawecm_rbf_weights import eval_mawecm_rbf
+from mawecm_rbf_weights import eval_mawecm_rbf, eval_mawecm_rbf_with_jacobian
 from mawecm_ann_weights import eval_mawecm_ann
+
+
+WEIGHT_ZERO_TOL = 1.0e-14
 
 
 def _as_int_scalar(arr, key):
@@ -67,6 +75,74 @@ def _as_str_scalar(arr, key, default=""):
     if key not in arr:
         return str(default)
     return str(np.ravel(arr[key])[0])
+
+
+def _build_maw_res_target_model(ecm_data, required=False):
+    prefix = "maw_res_"
+    required_keys = [
+        "Z_res",
+        prefix + "rbf_centers",
+        prefix + "rbf_length_scales",
+        prefix + "rbf_alpha",
+        prefix + "rbf_beta",
+        prefix + "rbf_scale",
+        prefix + "rbf_poly_mode",
+    ]
+    missing = [k for k in required_keys if k not in ecm_data]
+    if missing:
+        if bool(required):
+            raise RuntimeError(f"[HPROM-ANN] Missing residual MAW keys: {missing}")
+        return None
+
+    z_support_full = np.asarray(ecm_data["Z_res"], dtype=np.int64).reshape(-1)
+    if z_support_full.size == 0:
+        if bool(required):
+            raise RuntimeError("[HPROM-ANN] Empty residual MAW support.")
+        return None
+
+    renorm_enabled = (
+        bool(_as_int_scalar(ecm_data, "maw_rbf_renorm"))
+        if "maw_rbf_renorm" in ecm_data
+        else True
+    )
+    clip_nonnegative = (
+        bool(_as_int_scalar(ecm_data, "maw_rbf_clip_nonnegative"))
+        if "maw_rbf_clip_nonnegative" in ecm_data
+        else True
+    )
+    renorm_target = None
+    if renorm_enabled and (prefix + "renorm_target") in ecm_data:
+        renorm_target = _as_float_scalar(ecm_data, prefix + "renorm_target")
+
+    return {
+        "target": "res",
+        "z_support_full": z_support_full,
+        "rbf_model": {
+            "center_ids": (
+                np.asarray(ecm_data[prefix + "rbf_center_ids"], dtype=np.int64).reshape(-1)
+                if (prefix + "rbf_center_ids") in ecm_data
+                else np.arange(np.asarray(ecm_data[prefix + "rbf_centers"], dtype=float).shape[0], dtype=np.int64)
+            ),
+            "centers": np.asarray(ecm_data[prefix + "rbf_centers"], dtype=float),
+            "length_scales": np.asarray(ecm_data[prefix + "rbf_length_scales"], dtype=float),
+            "Alpha": np.asarray(ecm_data[prefix + "rbf_alpha"], dtype=float),
+            "Beta": np.asarray(ecm_data[prefix + "rbf_beta"], dtype=float),
+            "scale": np.asarray(ecm_data[prefix + "rbf_scale"], dtype=float),
+            "poly_mode": int(np.ravel(ecm_data[prefix + "rbf_poly_mode"])[0]),
+            "lambda_reg": (
+                _as_float_scalar(ecm_data, prefix + "rbf_lambda")
+                if (prefix + "rbf_lambda") in ecm_data
+                else 0.0
+            ),
+            "n_centers": (
+                _as_int_scalar(ecm_data, prefix + "rbf_n_centers")
+                if (prefix + "rbf_n_centers") in ecm_data
+                else int(np.asarray(ecm_data[prefix + "rbf_centers"], dtype=float).shape[0])
+            ),
+        },
+        "renorm_target": renorm_target,
+        "clip_nonnegative": clip_nonnegative,
+    }
 
 
 def _build_maw_hom_target_model(ecm_data, target, prefix=None, z_key=None, target_label=None):
@@ -267,6 +343,146 @@ def _build_full_to_local_map(ecm_data, n_elem_reference, n_current_elements):
     return {int(full_idx): int(local_idx) for local_idx, full_idx in enumerate(full_ids.tolist())}
 
 
+def _map_support_to_current(z_support_full, full_to_local):
+    z_full = np.asarray(z_support_full, dtype=np.int64).reshape(-1)
+    if full_to_local is None:
+        return z_full.copy(), np.arange(z_full.size, dtype=np.int64), np.zeros(0, dtype=np.int64)
+
+    local = []
+    pos = []
+    missing = []
+    for i, full_idx in enumerate(z_full.tolist()):
+        local_idx = full_to_local.get(int(full_idx))
+        if local_idx is None:
+            missing.append(int(full_idx))
+        else:
+            local.append(int(local_idx))
+            pos.append(int(i))
+    if not local:
+        raise RuntimeError("[HPROM-ANN] Residual MAW support mapping to current mesh is empty.")
+    return (
+        np.asarray(local, dtype=np.int64),
+        np.asarray(pos, dtype=np.int64),
+        np.asarray(missing, dtype=np.int64),
+    )
+
+
+def _evaluate_maw_res_support_weights(q_p, target_model):
+    q_vec = np.asarray(q_p, dtype=float).reshape(1, -1)
+    return np.asarray(
+        eval_mawecm_rbf(
+            q_query=q_vec,
+            model=target_model["rbf_model"],
+            clip_nonnegative=bool(target_model.get("clip_nonnegative", True)),
+            renorm_target=target_model.get("renorm_target", None),
+        ),
+        dtype=float,
+    ).reshape(-1)
+
+
+def _evaluate_maw_res_support_weights_and_jacobian(q_p, target_model):
+    q_vec = np.asarray(q_p, dtype=float).reshape(1, -1)
+    w, dw = eval_mawecm_rbf_with_jacobian(
+        q_query=q_vec,
+        model=target_model["rbf_model"],
+        clip_nonnegative=bool(target_model.get("clip_nonnegative", True)),
+        renorm_target=target_model.get("renorm_target", None),
+    )
+    return (
+        np.asarray(w, dtype=float).reshape(-1),
+        np.asarray(dw[:, 0, :], dtype=float),
+    )
+
+
+def _build_free_dof_index_map(n_dof, free_dofs):
+    idx = -np.ones(int(n_dof), dtype=np.int64)
+    f = np.asarray(free_dofs, dtype=np.int64).reshape(-1)
+    idx[f] = np.arange(f.size, dtype=np.int64)
+    return idx
+
+
+def _prepare_unit_rhs_scatter(assembler_unit, free_dof_index_map):
+    ne = int(assembler_unit.n_elems)
+    ndl = int(assembler_unit.n_local_dof)
+    eq_ids = np.asarray(assembler_unit.local_eq_ids, dtype=np.int64).reshape(ne, ndl)
+    free_ids = np.asarray(free_dof_index_map, dtype=np.int64)[eq_ids]
+    valid = free_ids >= 0
+    if not np.any(valid):
+        return {
+            "ne": ne,
+            "ndl": ndl,
+            "valid": valid,
+            "row_idx": np.zeros(0, dtype=np.int64),
+            "col_idx": np.zeros(0, dtype=np.int64),
+        }
+    row_idx = free_ids[valid]
+    col_idx = np.broadcast_to(np.arange(ne, dtype=np.int64)[:, None], (ne, ndl))[valid]
+    return {
+        "ne": ne,
+        "ndl": ndl,
+        "valid": valid,
+        "row_idx": row_idx,
+        "col_idx": col_idx,
+    }
+
+
+def _scatter_rhs_loc_by_element_free(rhs_loc, n_free, scatter_cache):
+    ne = int(scatter_cache["ne"])
+    ndl = int(scatter_cache["ndl"])
+    rhs = np.asarray(rhs_loc, dtype=float).reshape(ne, ndl)
+    row_idx = np.asarray(scatter_cache["row_idx"], dtype=np.int64)
+    col_idx = np.asarray(scatter_cache["col_idx"], dtype=np.int64)
+    if row_idx.size == 0:
+        return np.zeros((int(n_free), ne), dtype=float)
+    out = np.zeros((int(n_free), ne), dtype=float)
+    np.add.at(out, (row_idx, col_idx), rhs[scatter_cache["valid"]])
+    return out
+
+
+class _DynamicWeightedResidualAssembler:
+    def __init__(self, mp, n_dof, eq_map, elements, selected_indices):
+        self.n_dof = int(n_dof)
+        self.elem_idx = np.asarray(selected_indices, dtype=np.int64).reshape(-1)
+        if self.elem_idx.size == 0:
+            raise RuntimeError("[HPROM-ANN] Empty residual MAW support set.")
+
+        selected_elements = [elements[int(i)] for i in self.elem_idx.tolist()]
+        self._assembler = VectorizedAssembler(
+            mp,
+            int(n_dof),
+            eq_map,
+            elements=selected_elements,
+            element_scales=np.ones(self.elem_idx.size, dtype=float),
+            log_label="HPROMANNMAWResidualAssembler",
+        )
+        self.n_sel = int(self.elem_idx.size)
+        self._rhs = np.zeros(int(n_dof), dtype=float)
+
+    def assemble(self, u_eq, elem_weights):
+        w = np.asarray(elem_weights, dtype=float).reshape(-1)
+        if w.size != self.n_sel:
+            raise RuntimeError(
+                f"[HPROM-ANN] residual MAW weight length {w.size} != support size {self.n_sel}."
+            )
+
+        self._assembler.Assemble(np.asarray(u_eq, dtype=float).reshape(-1))
+
+        rhs_elem = -self._assembler._f_int.reshape(self.n_sel, -1)
+        self._rhs.fill(0.0)
+        np.add.at(
+            self._rhs,
+            self._assembler.rows_R,
+            (w[:, None] * rhs_elem).reshape(-1),
+        )
+
+        k_vals = (w[:, None, None] * self._assembler._K_total).reshape(-1)
+        K = coo_matrix(
+            (k_vals, (self._assembler.rows_K, self._assembler.cols_K)),
+            shape=(self.n_dof, self.n_dof),
+        ).tocsr()
+        return K, self._rhs
+
+
 def _evaluate_nearest_maw_hom_support_weights(q_query, target_model):
     coord_train = target_model.get("coord_train", None)
     W_train = target_model.get("W_train", None)
@@ -418,6 +634,7 @@ def RunHpromAnnBatchSimulation(
     fail_on_nonconvergence=False,
     homogenization_mode="ecm_fixed",
     maw_hom_eval_mode="model",
+    include_manifold_curvature=True,
     return_stats=False,
 ):
     t_wall_total_start = time.perf_counter()
@@ -473,16 +690,46 @@ def RunHpromAnnBatchSimulation(
     phi_s = phi_s_ref[basis_rows, :]
     n_elem_reference = int(np.ravel(ecm_data["n_elem"])[0]) if "n_elem" in ecm_data else len(elements)
     direct_no_corrector = bool(int(max_its) == 0)
+    include_manifold_curvature = bool(int(include_manifold_curvature))
+    full_to_local_res = _build_full_to_local_map(
+        ecm_data,
+        n_elem_reference=n_elem_reference,
+        n_current_elements=len(elements),
+    )
+    maw_res = None
+    dynamic_residual_weights = False
+    z_res_pos = None
+    w_res_anchor_local = None
     if direct_no_corrector:
         Z_res = np.zeros(0, dtype=np.int64)
         w_res_selected = np.zeros(0, dtype=float)
         using_hrom_mesh = bool(int(len(elements)) != int(n_elem_reference))
     else:
-        Z_res, w_res_selected, using_hrom_mesh = ResolveResidualHyperReductionSelection(
-            ecm_data,
-            n_current_elements=len(elements),
-            solver_label="HPROM-ANN",
-        )
+        maw_res = _build_maw_res_target_model(ecm_data, required=False)
+        dynamic_residual_weights = maw_res is not None
+        if dynamic_residual_weights:
+            Z_res, z_res_pos, miss_res = _map_support_to_current(
+                maw_res["z_support_full"],
+                full_to_local_res,
+            )
+            using_hrom_mesh = full_to_local_res is not None
+            if miss_res.size:
+                print(
+                    f"[HPROM-ANN] WARNING: residual MAW support lost {miss_res.size} "
+                    "full-mesh indices when mapping to current mesh."
+                )
+            w_anchor = np.asarray(ecm_data["w_res"], dtype=float).reshape(-1) if "w_res" in ecm_data else None
+            if w_anchor is not None and w_anchor.size == maw_res["z_support_full"].size:
+                w_res_anchor_local = np.asarray(w_anchor[z_res_pos], dtype=float)
+            else:
+                w_res_anchor_local = np.ones(Z_res.size, dtype=float)
+            w_res_selected = np.asarray(w_res_anchor_local, dtype=float)
+        else:
+            Z_res, w_res_selected, using_hrom_mesh = ResolveResidualHyperReductionSelection(
+                ecm_data,
+                n_current_elements=len(elements),
+                solver_label="HPROM-ANN",
+            )
     Z_union = np.asarray(ecm_data["Z_union"], dtype=np.int64).reshape(-1) if "Z_union" in ecm_data else Z_res
     hom_mode = str(homogenization_mode).strip().lower()
     if hom_mode in ("maw", "maw_separate"):
@@ -634,6 +881,14 @@ def RunHpromAnnBatchSimulation(
         UpdateCurrentCoordinatesFromDisplacement(mp, step=0)
         return disp_vec
 
+    def _build_total_free_displacement_vector(u_total_free, base_disp_vec=None):
+        if base_disp_vec is None:
+            disp_vec = _capture_current_displacement_vector()
+        else:
+            disp_vec = np.asarray(base_disp_vec, dtype=float).copy()
+        disp_vec[free_dofs] = np.asarray(u_total_free, dtype=float).reshape(-1)
+        return disp_vec
+
     def _build_ann_input(q_tensor, e_tensor):
         return q_tensor
 
@@ -650,16 +905,16 @@ def RunHpromAnnBatchSimulation(
             "in the ANN model directory."
         )
 
-    def _evaluate_qs_and_jac(qp_vec, e_vec):
+    def _evaluate_qs_and_jac(qp_vec, e_vec, collect_timing=False):
         qp_arr = np.asarray(qp_vec, dtype=float).reshape(-1)
         e_arr = np.asarray(e_vec, dtype=float).reshape(3)
 
         qp_tensor = torch.from_numpy(qp_arr.astype(np.float32)).unsqueeze(0).to(device)
         e_tensor = torch.from_numpy(e_arr.astype(np.float32)).unsqueeze(0).to(device)
 
-        with torch.no_grad():
-            q_s_map_tensor = ann_model(_build_ann_input(qp_tensor, e_tensor))
-
+        q_s_map_tensor = None
+        t_forward = 0.0
+        t0_eval = time.perf_counter()
         with torch.enable_grad():
             qp_in_vec = qp_tensor.squeeze(0).clone().detach().requires_grad_(True)
 
@@ -670,14 +925,30 @@ def RunHpromAnnBatchSimulation(
 
             if _torch_jacfwd is not None:
                 try:
-                    jac_ann = _torch_jacfwd(ann_from_qvec)(qp_in_vec)
+                    def ann_from_qvec_with_aux(q_vec):
+                        out = ann_from_qvec(q_vec)
+                        return out, out
+
+                    jac_ann, q_s_map_tensor = _torch_jacfwd(
+                        ann_from_qvec_with_aux,
+                        has_aux=True,
+                    )(qp_in_vec)
                 except Exception:
                     jac_ann = torch.autograd.functional.jacobian(ann_from_qvec, qp_in_vec)
             else:
                 jac_ann = torch.autograd.functional.jacobian(ann_from_qvec, qp_in_vec)
+        t_jacobian = time.perf_counter() - t0_eval
+
+        if q_s_map_tensor is None:
+            t0_eval = time.perf_counter()
+            with torch.no_grad():
+                q_s_map_tensor = ann_model(_build_ann_input(qp_tensor, e_tensor))
+            t_forward = time.perf_counter() - t0_eval
 
         q_s_map = q_s_map_tensor.detach().cpu().numpy().reshape(-1)
         jac_np = jac_ann.detach().cpu().numpy()
+        if collect_timing:
+            return q_s_map, jac_np, t_forward, t_jacobian
         return q_s_map, jac_np
 
     def _evaluate_qs_only(qp_vec, e_vec):
@@ -710,11 +981,21 @@ def RunHpromAnnBatchSimulation(
                 q_s_raw = ann_model(_build_ann_input(q_local, e_tensor)).reshape(-1)
                 return torch.dot(weights, q_s_raw)
 
-            hessian = torch.autograd.functional.hessian(
-                weighted_ann_output,
-                qp_in,
-                vectorize=True,
-            )
+            if _torch_hessian is not None:
+                try:
+                    hessian = _torch_hessian(weighted_ann_output)(qp_in)
+                except Exception:
+                    hessian = torch.autograd.functional.hessian(
+                        weighted_ann_output,
+                        qp_in,
+                        vectorize=True,
+                    )
+            else:
+                hessian = torch.autograd.functional.hessian(
+                    weighted_ann_output,
+                    qp_in,
+                    vectorize=True,
+                )
         return hessian.detach().cpu().numpy().reshape(n_primary, n_primary)
 
     def _solve_reduced_system(K_sys, rhs):
@@ -731,6 +1012,29 @@ def RunHpromAnnBatchSimulation(
         except np.linalg.LinAlgError:
             dq_loc, *_ = np.linalg.lstsq(K_reg, rhs, rcond=None)
         return dq_loc
+
+    def _evaluate_residual_weights_local(qp_vec):
+        w_support_all = _evaluate_maw_res_support_weights(qp_vec, maw_res)
+        w_local = np.asarray(w_support_all[z_res_pos], dtype=float)
+        if np.flatnonzero(np.abs(w_local) > WEIGHT_ZERO_TOL).size == 0:
+            return np.asarray(w_res_anchor_local, dtype=float).copy()
+        return w_local
+
+    def _evaluate_residual_weights_and_jacobian_local(qp_vec):
+        w_support_all, dw_support_all = _evaluate_maw_res_support_weights_and_jacobian(qp_vec, maw_res)
+        w_local = np.asarray(w_support_all[z_res_pos], dtype=float)
+        dw_local = np.asarray(dw_support_all[z_res_pos, :], dtype=float)
+        if dw_local.shape != (Z_res.size, n_primary):
+            raise RuntimeError(
+                "[HPROM-ANN] residual MAW weight Jacobian shape mismatch: "
+                f"got {dw_local.shape}, expected ({Z_res.size}, {n_primary})."
+            )
+        if np.flatnonzero(np.abs(w_local) > WEIGHT_ZERO_TOL).size == 0:
+            return (
+                np.asarray(w_res_anchor_local, dtype=float).copy(),
+                np.zeros((Z_res.size, n_primary), dtype=float),
+            )
+        return w_local, dw_local
 
     def _initial_qp_guess(e_vec, q_prev, step_index):
         if qp_init_mode == "continuation" and int(step_index) > 1:
@@ -777,15 +1081,30 @@ def RunHpromAnnBatchSimulation(
     )
     if using_hrom_mesh:
         print("  [HPROM-ANN] Using reduced HROM mesh residual weights (w_res_hrom).")
+    if dynamic_residual_weights:
+        print(
+            "  [HPROM-ANN] Residual mode: dynamic MAW-ECM weights "
+            f"(|Z_res|={len(Z_res)}, tangent=on)."
+        )
+    else:
+        print("  [HPROM-ANN] Residual mode: fixed ECM weights.")
     print("  [HPROM-ANN] LS decoder active: u = Phi_m A_m q_m + Phi_s q_s(q_m).")
     print(f"  [HPROM-ANN] q_m initializer mode: {qp_init_mode}")
     if qp_init_mode in ("continuation", "mu_affine") and qp_aff is not None:
         print(f"  [HPROM-ANN] Using affine initializer: {qp_aff['path']}")
     t_map = 0.0
+    t_map_forward = 0.0
+    t_map_jacobian = 0.0
     t_assembly = 0.0
+    t_res_weight_eval = 0.0
+    t_res_assembly = 0.0
     t_projection = 0.0
+    t_projection_sparse = 0.0
+    t_projection_curvature = 0.0
+    t_projection_weight_tangent = 0.0
     t_solve = 0.0
     t_full_sync = 0.0
+    t_newton_apply_state = 0.0
     t_step_setup = 0.0
     t_q_init = 0.0
     t_final_ann_eval = 0.0
@@ -810,6 +1129,20 @@ def RunHpromAnnBatchSimulation(
     t_result_save = 0.0
     step_iters = []
     ResetHyperReductionAssemblyStats()
+    dyn_res_assembler = None
+    unit_rhs_scatter = None
+    if dynamic_residual_weights and not direct_no_corrector:
+        dyn_res_assembler = _DynamicWeightedResidualAssembler(
+            mp=mp,
+            n_dof=n_total_dof,
+            eq_map=eq_id_map,
+            elements=elements,
+            selected_indices=Z_res,
+        )
+        unit_rhs_scatter = _prepare_unit_rhs_scatter(
+            assembler_unit=dyn_res_assembler._assembler,
+            free_dof_index_map=_build_free_dof_index_map(n_total_dof, free_dofs),
+        )
 
     for step in range(1, n_steps_total + 1):
         t0_setup = time.perf_counter()
@@ -986,8 +1319,14 @@ def RunHpromAnnBatchSimulation(
             mp.ProcessInfo[KM.NL_ITERATION_NUMBER] = it + 1
             it_step_count += 1
             t0 = time.perf_counter()
-            q_s_map, J_ann_raw = _evaluate_qs_and_jac(q_p, E)
+            q_s_map, J_ann_raw, dt_forward, dt_jacobian = _evaluate_qs_and_jac(
+                q_p,
+                E,
+                collect_timing=True,
+            )
             t_map += time.perf_counter() - t0
+            t_map_forward += dt_forward
+            t_map_jacobian += dt_jacobian
             q_s = q_s_map - q0_const - J0_const @ q_p
             J_ann = J_ann_raw - J0_const
 
@@ -1033,13 +1372,29 @@ def RunHpromAnnBatchSimulation(
                 nonfinite_detected = True
                 break
 
-            u_eq_curr = _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
+            t0 = time.perf_counter()
+            if dynamic_residual_weights:
+                u_eq_curr = _build_total_free_displacement_vector(u_free, base_disp_vec=disp_base_step)
+            else:
+                u_eq_curr = _apply_total_free_displacement(u_free, base_disp_vec=disp_base_step)
+            t_newton_apply_state += time.perf_counter() - t0
 
             InitializeNonLinearIteration(entities, mp.ProcessInfo)
             t0 = time.perf_counter()
-            K_hp, rhs_hp = AssembleHyperReducedSystem(
-                mp, n_total_dof, elements, Z_res, w_res_selected, u_eq=u_eq_curr
-            )
+            dw_res_local = None
+            if dynamic_residual_weights:
+                t1 = time.perf_counter()
+                w_res_iter, dw_res_local = _evaluate_residual_weights_and_jacobian_local(q_p)
+                t_res_weight_eval += time.perf_counter() - t1
+                t1 = time.perf_counter()
+                K_hp, rhs_hp = dyn_res_assembler.assemble(u_eq_curr, w_res_iter)
+                t_res_assembly += time.perf_counter() - t1
+            else:
+                t1 = time.perf_counter()
+                K_hp, rhs_hp = AssembleHyperReducedSystem(
+                    mp, n_total_dof, elements, Z_res, w_res_selected, u_eq=u_eq_curr
+                )
+                t_res_assembly += time.perf_counter() - t1
             t_assembly += time.perf_counter() - t0
             FinalizeNonLinearIteration(entities, mp.ProcessInfo)
 
@@ -1051,16 +1406,42 @@ def RunHpromAnnBatchSimulation(
                 break
 
             t0 = time.perf_counter()
+            t1 = time.perf_counter()
             KJ = K_free_sparse @ J_manifold
             r_r = J_manifold.T @ r_full
             K_std = J_manifold.T @ KJ
-            # Exact nonlinear-manifold Newton tangent. Since rhs=-f_int,
-            # d(J^T rhs)/dq = H_u:rhs - J^T K J, hence the additive
-            # Newton matrix is J^T K J - H_u:rhs.
-            curvature_weights = phi_s.T @ r_full
-            K_curv = _compute_weighted_decoder_hessian(q_p, E, curvature_weights)
-            K_curv = 0.5 * (K_curv + K_curv.T)
-            K_r = K_std - K_curv
+            t_projection_sparse += time.perf_counter() - t1
+            if include_manifold_curvature:
+                # Exact nonlinear-manifold Newton tangent. Since rhs=-f_int,
+                # d(J^T rhs)/dq = H_u:rhs - J^T K J, hence the additive
+                # Newton matrix is J^T K J - H_u:rhs.
+                curvature_weights = phi_s.T @ r_full
+                t1 = time.perf_counter()
+                K_curv = _compute_weighted_decoder_hessian(q_p, E, curvature_weights)
+                K_curv = 0.5 * (K_curv + K_curv.T)
+                t_projection_curvature += time.perf_counter() - t1
+                K_r = K_std - K_curv
+            else:
+                # Gauss-Newton / quasi-Newton tangent on the nonlinear manifold:
+                # keep J^T K J and skip the expensive Hessian curvature term.
+                K_r = K_std
+            if dynamic_residual_weights and dw_res_local is not None:
+                # Same sign convention as the validated MAWECM-GPR solver:
+                # R = rhs = -f_int and K_alg = -dR/dq. Therefore the
+                # weight-dependency contribution is -sum_e R_e \otimes dw_e/dq.
+                t1 = time.perf_counter()
+                rhs_unit_loc = -np.asarray(dyn_res_assembler._assembler._f_int, dtype=float).reshape(
+                    dyn_res_assembler.n_sel,
+                    int(dyn_res_assembler._assembler.n_local_dof),
+                )
+                r_free_e = _scatter_rhs_loc_by_element_free(
+                    rhs_loc=rhs_unit_loc,
+                    n_free=free_dofs.size,
+                    scatter_cache=unit_rhs_scatter,
+                )
+                drw_dqp = r_free_e @ dw_res_local
+                K_r = K_r - (J_manifold.T @ drw_dqp)
+                t_projection_weight_tangent += time.perf_counter() - t1
             t_projection += time.perf_counter() - t0
             Kr_last = K_r
             if (not _is_finite(r_r)) or (not _is_finite(K_r)):
@@ -1395,6 +1776,7 @@ def RunHpromAnnBatchSimulation(
         t_q_init
         + t_step_affine_free
         + t_step_base_disp
+        + t_newton_apply_state
         + t_map
         + t_assembly
         + t_projection
@@ -1413,6 +1795,7 @@ def RunHpromAnnBatchSimulation(
         + t_projection
         + t_solve
         + t_full_sync
+        + t_newton_apply_state
         + t_step_setup
         + t_q_init
         + t_final_ann_eval
@@ -1434,11 +1817,20 @@ def RunHpromAnnBatchSimulation(
         "newton_iters_total": int(np.sum(iters)) if iters.size else 0,
         "newton_iters_mean_per_step": float(np.mean(iters)) if iters.size else 0.0,
         "newton_iters_max_per_step": int(np.max(iters)) if iters.size else 0,
+        "include_manifold_curvature": float(include_manifold_curvature),
         "map": float(t_map),
+        "map_forward": float(t_map_forward),
+        "map_jacobian": float(t_map_jacobian),
         "assembly": float(t_assembly),
+        "res_weight_eval": float(t_res_weight_eval),
+        "res_assembly": float(t_res_assembly),
         "projection": float(t_projection),
+        "projection_sparse": float(t_projection_sparse),
+        "projection_curvature": float(t_projection_curvature),
+        "projection_weight_tangent": float(t_projection_weight_tangent),
         "solve": float(t_solve),
         "full_sync": float(t_full_sync),
+        "newton_apply_state": float(t_newton_apply_state),
         "step_setup": float(t_step_setup),
         "q_init": float(t_q_init),
         "final_ann_eval": float(t_final_ann_eval),
@@ -1494,6 +1886,21 @@ def RunHpromAnnBatchSimulation(
         f"homogenization={t_homogenization:.3f}s, "
         f"finalize_step={t_finalize_step:.3f}s, "
         f"history_append={t_history_append:.3f}s"
+    )
+    print(
+        "  [HPROM-ANN] Timing Newton detail: "
+        f"map_forward={t_map_forward:.3f}s, "
+        f"map_jacobian={t_map_jacobian:.3f}s, "
+        f"newton_apply_state={t_newton_apply_state:.3f}s, "
+        f"res_weight_eval={t_res_weight_eval:.3f}s, "
+        f"res_assembly={t_res_assembly:.3f}s"
+    )
+    print(
+        "  [HPROM-ANN] Timing projection detail: "
+        f"sparse={t_projection_sparse:.3f}s, "
+        f"curvature={t_projection_curvature:.3f}s, "
+        f"weight_tangent={t_projection_weight_tangent:.3f}s, "
+        f"include_curvature={int(include_manifold_curvature)}"
     )
     print(
         "  [HPROM-ANN] Timing setup detail: "
