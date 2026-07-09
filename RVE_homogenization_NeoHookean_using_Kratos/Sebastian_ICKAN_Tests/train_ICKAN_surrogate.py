@@ -43,6 +43,14 @@ def parse_args():
         help="Directory where the checkpoint and training diagnostics are written.",
     )
     parser.add_argument(
+        "--resume-checkpoint",
+        default=None,
+        help=(
+            "Optional Sebastian checkpoint used to initialize the model and reuse "
+            "its model configuration and normalization before continuing training."
+        ),
+    )
+    parser.add_argument(
         "--train-trajectories",
         default="1-8",
         help="Trajectory ids used for training. Examples: '1-8', '1,3,5', or 'all'.",
@@ -52,6 +60,12 @@ def parse_args():
         default="strain",
         choices=("strain", "applied_strain"),
         help="Use homogenized strain or imposed applied strain as model input.",
+    )
+    parser.add_argument(
+        "--model-type",
+        default="ickan",
+        choices=("ickan", "icnn"),
+        help="Energy surrogate family. 'icnn' uses a smooth input-convex neural network.",
     )
     parser.add_argument(
         "--samples-per-trajectory",
@@ -118,13 +132,17 @@ def parse_args():
             "hybrid",
             "orthotropic_invariants",
             "orthotropic_invariants_signed",
+            "ickan_invariants",
+            "ickan_invariants_linear",
         ),
         help=(
             "'direct_strain' learns W(E_xx,E_yy,G_xy). "
             "'principal' uses the original principal-stretch/logJ features. "
             "'hybrid' appends [E_xx,E_yy,G_xy] to the principal features for diagnostics. "
             "'orthotropic_invariants' learns W(C_xx-1,C_yy-1,C_xy^2,logJ). "
-            "'orthotropic_invariants_signed' learns W(C_xx-1,C_yy-1,C_xy,C_xy^2,logJ)."
+            "'orthotropic_invariants_signed' learns W(C_xx-1,C_yy-1,C_xy,C_xy^2,logJ). "
+            "'ickan_invariants' uses the transformed invariant inputs from the upstream ICKAN driver. "
+            "'ickan_invariants_linear' uses the upstream core/features.py variant."
         ),
     )
     parser.add_argument(
@@ -165,6 +183,23 @@ def parse_args():
         help="KAN grid interpolation: 1 is uniform, 0 is fully sample-adaptive.",
     )
     parser.add_argument(
+        "--icnn-activation",
+        default="softplus",
+        choices=("softplus", "relu"),
+        help="Convex non-decreasing activation used by --model-type icnn.",
+    )
+    parser.add_argument(
+        "--icnn-softplus-beta",
+        type=float,
+        default=5.0,
+        help="Softplus beta used by --model-type icnn when --icnn-activation softplus.",
+    )
+    parser.add_argument(
+        "--no-icnn-quadratic",
+        action="store_true",
+        help="Disable the non-negative diagonal quadratic term in the ICNN energy.",
+    )
+    parser.add_argument(
         "--grad-clip",
         type=float,
         default=1.0,
@@ -179,10 +214,20 @@ def parse_args():
     parser.add_argument(
         "--stress-loss",
         default="component",
-        choices=("global", "component"),
+        choices=("global", "component", "blended"),
         help=(
             "'global' is one relative MSE over all stress components. "
-            "'component' averages per-component relative MSE so S_xy is not ignored."
+            "'component' averages per-component relative MSE so S_xy is not ignored. "
+            "'blended' combines both losses."
+        ),
+    )
+    parser.add_argument(
+        "--component-loss-weight",
+        type=float,
+        default=0.25,
+        help=(
+            "Weight of the component-balanced term when --stress-loss blended is used. "
+            "0 gives global loss, 1 gives pure component loss."
         ),
     )
     parser.add_argument(
@@ -221,6 +266,8 @@ def make_model_config(args):
     order_stretches = int(args.order_stretches)
     if args.input_mode == "direct_strain":
         input_size = 3
+    elif args.input_mode in ("ickan_invariants", "ickan_invariants_linear"):
+        input_size = 3
     elif args.input_mode == "orthotropic_invariants":
         input_size = 4
     elif args.input_mode == "orthotropic_invariants_signed":
@@ -244,6 +291,10 @@ def make_model_config(args):
         "base_fun": args.kan_base_fun,
         "noise_scale": float(args.kan_noise_scale),
         "grid_eps": float(args.kan_grid_eps),
+        "model_type": args.model_type,
+        "icnn_activation": args.icnn_activation,
+        "icnn_softplus_beta": float(args.icnn_softplus_beta),
+        "icnn_quadratic": not bool(args.no_icnn_quadratic),
     }
 
 
@@ -253,11 +304,23 @@ def relative_component_mse(prediction, target):
     return torch.mean(numerator / denominator)
 
 
-def compute_stress_loss(model, strain_tensor, stress_tensor, max_w, stress_loss_mode):
+def compute_stress_loss(
+    model,
+    strain_tensor,
+    stress_tensor,
+    max_w,
+    stress_loss_mode,
+    component_loss_weight,
+):
     predicted_stress = model.CalculateNormalizedStress(strain_tensor) * float(max_w)
+    global_loss = l2_relative_error(predicted_stress, stress_tensor)
+    component_loss = relative_component_mse(predicted_stress, stress_tensor)
     if stress_loss_mode == "component":
-        return relative_component_mse(predicted_stress, stress_tensor)
-    return l2_relative_error(predicted_stress, stress_tensor)
+        return component_loss
+    if stress_loss_mode == "blended":
+        alpha = float(component_loss_weight)
+        return (1.0 - alpha) * global_loss + alpha * component_loss
+    return global_loss
 
 
 def compute_total_loss(
@@ -267,6 +330,7 @@ def compute_total_loss(
     energy_tensor,
     max_w,
     stress_loss_mode,
+    component_loss_weight,
     energy_loss_weight,
 ):
     stress_loss = compute_stress_loss(
@@ -275,6 +339,7 @@ def compute_total_loss(
         stress_tensor,
         max_w,
         stress_loss_mode,
+        component_loss_weight,
     )
     if energy_loss_weight <= 0.0:
         return stress_loss
@@ -302,6 +367,7 @@ def train_model(
     verbose_interval,
     grad_clip,
     stress_loss_mode,
+    component_loss_weight,
     energy_loss_weight,
     epoch_offset=0,
     phase="train",
@@ -322,12 +388,13 @@ def train_model(
                     energy_tensor,
                     max_w,
                     stress_loss_mode,
+                    component_loss_weight,
                     energy_loss_weight,
                 )
                 loss_inner.backward()
                 return loss_inner
 
-            loss = optimizer.step(closure)
+            optimizer.step(closure)
         else:
             optimizer.zero_grad()
             loss = compute_total_loss(
@@ -337,6 +404,7 @@ def train_model(
                 energy_tensor,
                 max_w,
                 stress_loss_mode,
+                component_loss_weight,
                 energy_loss_weight,
             )
             loss.backward()
@@ -346,7 +414,20 @@ def train_model(
             if scheduler is not None:
                 scheduler.step()
 
-        loss_value = float(loss.item())
+        # LBFGS and Adam both report a loss evaluated before the parameter
+        # update. Re-evaluate after the step so the printed loss and the saved
+        # best state describe the same model parameters.
+        loss = compute_total_loss(
+            model,
+            strain_tensor,
+            stress_tensor,
+            energy_tensor,
+            max_w,
+            stress_loss_mode,
+            component_loss_weight,
+            energy_loss_weight,
+        )
+        loss_value = float(loss.detach().item())
         global_epoch = epoch_offset + epoch
         grid_update_counter += 1
 
@@ -404,6 +485,7 @@ def train_model(
                 energy_tensor,
                 max_w,
                 stress_loss_mode,
+                component_loss_weight,
                 energy_loss_weight,
             )
             post_update_loss_value = float(post_update_loss.detach().item())
@@ -435,12 +517,20 @@ def main():
     out_dir = ensure_dir(os.path.abspath(args.out_dir))
     fom_dir = os.path.abspath(args.fom_dir)
     train_trajectory_ids = parse_trajectory_ids(args.train_trajectories)
+    resume_checkpoint = None
+    resume_checkpoint_path = None
+    if args.resume_checkpoint:
+        resume_checkpoint_path = os.path.abspath(args.resume_checkpoint)
+        resume_checkpoint = torch.load(resume_checkpoint_path, map_location="cpu")
 
     print("[SEBASTIAN-ICKAN][TRAIN]")
     print(f"FOM input dir          : {fom_dir}")
     print(f"Output dir             : {out_dir}")
+    if resume_checkpoint_path is not None:
+        print(f"Resume checkpoint      : {resume_checkpoint_path}")
     print(f"Train trajectories     : {train_trajectory_ids}")
     print(f"Strain source          : {args.strain_source}")
+    print(f"Model type             : {args.model_type}")
     print(f"Samples per trajectory : {args.samples_per_trajectory}")
     print(f"Update grid in training: {args.update_grid_during_training}")
     print(f"Input mode             : {args.input_mode}")
@@ -451,6 +541,10 @@ def main():
     print(f"KAN base function      : {args.kan_base_fun}")
     print(f"KAN noise scale        : {args.kan_noise_scale:.8E}")
     print(f"KAN grid eps           : {args.kan_grid_eps:.8E}")
+    if args.model_type == "icnn":
+        print(f"ICNN activation        : {args.icnn_activation}")
+        print(f"ICNN softplus beta     : {args.icnn_softplus_beta:.8E}")
+        print(f"ICNN quadratic term    : {not bool(args.no_icnn_quadratic)}")
     print(f"Optimizer              : {args.optimizer}")
     if args.optimizer == "lbfgs":
         print(f"LBFGS max iter/epoch   : {args.lbfgs_max_iter}")
@@ -459,6 +553,8 @@ def main():
     print(f"Adam warmup LR/max LR  : {args.adam_warmup_lr:.8E} / {args.adam_warmup_max_lr:.8E}")
     print(f"Adam warmup scheduler  : {args.adam_warmup_scheduler}")
     print(f"Stress loss            : {args.stress_loss}")
+    if args.stress_loss == "blended":
+        print(f"Component loss weight  : {args.component_loss_weight:.8E}")
     print(f"Energy loss weight     : {args.energy_loss_weight:.8E}")
 
     if args.device == "auto":
@@ -472,6 +568,8 @@ def main():
             "--update-grid-during-training is disabled for CUDA runs in this script. "
             "The initial grid update is done on CPU before moving the model to CUDA."
         )
+    if args.update_grid_during_training and args.model_type == "icnn":
+        raise ValueError("--update-grid-during-training is only meaningful for --model-type ickan.")
     print(f"Device                 : {device}")
 
     if args.learning_rate is None:
@@ -487,7 +585,18 @@ def main():
         samples_per_trajectory=args.samples_per_trajectory,
     )
 
-    normalization = compute_normalization(dataset["strain"], dataset["stress"])
+    if resume_checkpoint is not None:
+        checkpoint_normalization = resume_checkpoint.get("normalization", {})
+        if "strain_scale" not in checkpoint_normalization or "stress_scale" not in checkpoint_normalization:
+            raise ValueError(
+                "The resume checkpoint does not contain strain_scale and stress_scale normalization."
+            )
+        normalization = {
+            "strain_scale": float(checkpoint_normalization["strain_scale"]),
+            "stress_scale": float(checkpoint_normalization["stress_scale"]),
+        }
+    else:
+        normalization = compute_normalization(dataset["strain"], dataset["stress"])
     strain_normalized, stress_normalized = apply_normalization(
         dataset["strain"],
         dataset["stress"],
@@ -495,7 +604,10 @@ def main():
     )
 
     energy_raw = compute_reference_energy(strain_normalized, stress_normalized)
-    max_w = float(np.max(np.abs(energy_raw)))
+    if resume_checkpoint is not None and "max_w" in resume_checkpoint.get("normalization", {}):
+        max_w = float(resume_checkpoint["normalization"]["max_w"])
+    else:
+        max_w = float(np.max(np.abs(energy_raw)))
     if max_w <= 0.0:
         raise ValueError("Cannot normalize W: max(abs(W)) is zero.")
     energy_normalized = energy_raw / max_w
@@ -520,12 +632,23 @@ def main():
     print(f"Stress scale                : {normalization['stress_scale']:.8E}")
     print(f"Energy normalization max_W  : {max_w:.8E}")
 
-    model_config = make_model_config(args)
+    if resume_checkpoint is not None:
+        if "model_config" not in resume_checkpoint:
+            raise ValueError("The resume checkpoint does not contain model_config.")
+        model_config = dict(resume_checkpoint["model_config"])
+    else:
+        model_config = make_model_config(args)
     model, model_config = create_model(model_config)
     kan_backend = getattr(model, "kan_backend", "unknown")
-    print(f"KAN backend             : {kan_backend}")
-    print("\nInitial KAN grid update from training samples on CPU:")
-    model.UpdateGridFromSamples(train_strain_cpu)
+    print(f"Model backend           : {kan_backend}")
+    if resume_checkpoint is not None:
+        model.load_state_dict(resume_checkpoint["model_state_dict"])
+        print("Loaded model weights from resume checkpoint.")
+    elif getattr(model, "uses_grid", False):
+        print("\nInitial KAN grid update from training samples on CPU:")
+        model.UpdateGridFromSamples(train_strain_cpu)
+    else:
+        print("\nInitial KAN grid update skipped: ICNN does not use spline grids.")
     model.to(device)
     train_strain = train_strain_cpu.to(device)
     train_stress = train_stress_cpu.to(device)
@@ -539,6 +662,23 @@ def main():
     best_loss = float("inf")
     best_state_global = None
     epoch_offset = 0
+    if resume_checkpoint is not None:
+        resume_initial_loss = compute_total_loss(
+            model=model,
+            strain_tensor=train_strain,
+            stress_tensor=train_stress,
+            energy_tensor=train_energy,
+            max_w=max_w,
+            stress_loss_mode=args.stress_loss,
+            component_loss_weight=args.component_loss_weight,
+            energy_loss_weight=args.energy_loss_weight,
+        )
+        best_loss = float(resume_initial_loss.detach().item())
+        best_state_global = {
+            key: value.detach().clone()
+            for key, value in model.state_dict().items()
+        }
+        print(f"Initial resumed loss    : {best_loss:.8E}")
 
     if args.adam_warmup_epochs > 0:
         print("\nStarting Adam warmup...")
@@ -576,6 +716,7 @@ def main():
             verbose_interval=args.verbose_interval,
             grad_clip=args.grad_clip,
             stress_loss_mode=args.stress_loss,
+            component_loss_weight=args.component_loss_weight,
             energy_loss_weight=args.energy_loss_weight,
             epoch_offset=epoch_offset,
             phase="adam",
@@ -621,6 +762,7 @@ def main():
         verbose_interval=args.verbose_interval,
         grad_clip=args.grad_clip,
         stress_loss_mode=args.stress_loss,
+        component_loss_weight=args.component_loss_weight,
         energy_loss_weight=args.energy_loss_weight,
         epoch_offset=epoch_offset,
         phase=args.optimizer,
@@ -665,6 +807,7 @@ def main():
             "best_loss": best_loss_for_metadata,
             "loss_target": "normalized stress plus optional normalized energy",
             "stress_loss": args.stress_loss,
+            "component_loss_weight": args.component_loss_weight,
             "energy_loss_weight": args.energy_loss_weight,
             "update_grid_during_training": args.update_grid_during_training,
             "grid_update_interval": args.grid_update_interval,

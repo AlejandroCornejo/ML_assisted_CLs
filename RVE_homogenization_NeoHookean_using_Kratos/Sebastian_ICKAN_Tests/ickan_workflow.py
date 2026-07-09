@@ -7,6 +7,7 @@ import torch
 
 COMPONENT_NAMES = ("xx", "yy", "xy")
 DEFAULT_MODEL_CONFIG = {
+    "model_type": "ickan",
     "order_stretches": 1,
     "grid_size": 100,
     "k": 3,
@@ -15,6 +16,9 @@ DEFAULT_MODEL_CONFIG = {
     "base_fun": "silu",
     "noise_scale": 0.0,
     "grid_eps": 0.01,
+    "icnn_activation": "softplus",
+    "icnn_softplus_beta": 5.0,
+    "icnn_quadratic": True,
 }
 
 
@@ -205,8 +209,36 @@ def create_model(model_config=None):
         # Backward compatibility with old checkpoints saved before input_mode existed.
         if "input_mode" not in model_config:
             config["input_mode"] = "principal"
-    model = surrogate.ICKAN_W_Surrogate(**config)
-    model.kan_backend = getattr(surrogate, "KAN_BACKEND", "unknown")
+        if "model_type" not in model_config:
+            config["model_type"] = "ickan"
+
+    model_type = config.get("model_type", "ickan")
+    if model_type == "icnn":
+        model_kwargs = {
+            "order_stretches": config["order_stretches"],
+            "W_width": config["W_width"],
+            "input_mode": config["input_mode"],
+            "icnn_activation": config.get("icnn_activation", "softplus"),
+            "icnn_softplus_beta": config.get("icnn_softplus_beta", 5.0),
+            "icnn_quadratic": config.get("icnn_quadratic", True),
+        }
+        model = surrogate.ICNN_W_Surrogate(**model_kwargs)
+        model.kan_backend = "icnn"
+    elif model_type == "ickan":
+        model_kwargs = {
+            "order_stretches": config["order_stretches"],
+            "grid_size": config["grid_size"],
+            "k": config["k"],
+            "W_width": config["W_width"],
+            "input_mode": config["input_mode"],
+            "base_fun": config.get("base_fun", "silu"),
+            "noise_scale": config.get("noise_scale", 0.0),
+            "grid_eps": config.get("grid_eps", 0.01),
+        }
+        model = surrogate.ICKAN_W_Surrogate(**model_kwargs)
+        model.kan_backend = getattr(surrogate, "KAN_BACKEND", "unknown")
+    else:
+        raise ValueError(f"Unsupported model_type '{model_type}'.")
     return model, config
 
 
@@ -303,6 +335,7 @@ def plot_prediction_results(
     energy_reference_normalized,
     energy_predicted_normalized,
     strain_axis_variants=None,
+    prediction_label="ICKAN",
 ):
     import matplotlib.pyplot as plt
 
@@ -323,7 +356,7 @@ def plot_prediction_results(
                 steps,
                 stress_predicted_normalized[local_index, :, component],
                 "-",
-                label=f"ICKAN S_{name}",
+                label=f"{prediction_label} S_{name}",
             )
             axes[component].set_ylabel(f"S_{name}")
             axes[component].grid(True)
@@ -349,7 +382,7 @@ def plot_prediction_results(
                 strain_normalized[local_index, :, component],
                 stress_predicted_normalized[local_index, :, component],
                 "-",
-                label=f"ICKAN S_{name}",
+                label=f"{prediction_label} S_{name}",
             )
             axes[component].set_xlabel(f"Normalized strain {name}")
             axes[component].set_ylabel(f"Normalized stress {name}")
@@ -374,7 +407,7 @@ def plot_prediction_results(
             steps,
             energy_predicted_normalized[local_index, :, 0],
             "-",
-            label="ICKAN W",
+            label=f"{prediction_label} W",
         )
         ax.set_xlabel("Trajectory sample index")
         ax.set_ylabel("Normalized energy")
@@ -391,7 +424,7 @@ def plot_prediction_results(
         fig, ax = plt.subplots(figsize=(8, 5))
         for local_index, _ in enumerate(trajectory_ids):
             label_ref = "Reference" if local_index == 0 else None
-            label_pred = "ICKAN" if local_index == 0 else None
+            label_pred = prediction_label if local_index == 0 else None
             ax.plot(
                 strain_normalized[local_index, :, component],
                 stress_reference_normalized[local_index, :, component],
@@ -419,7 +452,7 @@ def plot_prediction_results(
     fig, ax = plt.subplots(figsize=(8, 5))
     for local_index, _ in enumerate(trajectory_ids):
         label_ref = "Reference" if local_index == 0 else None
-        label_pred = "ICKAN" if local_index == 0 else None
+        label_pred = prediction_label if local_index == 0 else None
         ax.plot(
             steps,
             energy_reference_normalized[local_index, :, 0],
@@ -468,7 +501,7 @@ def plot_prediction_results(
                     axis_strain_normalized[local_index, :, component],
                     stress_predicted_normalized[local_index, :, component],
                     "-",
-                    label=f"ICKAN S_{name}",
+                    label=f"{prediction_label} S_{name}",
                 )
                 axes[component].set_xlabel(f"Normalized {axis_label} {name}")
                 axes[component].set_ylabel(f"Normalized stress {name}")
@@ -489,7 +522,7 @@ def plot_prediction_results(
             fig, ax = plt.subplots(figsize=(8, 5))
             for local_index, _ in enumerate(trajectory_ids):
                 label_ref = "Reference" if local_index == 0 else None
-                label_pred = "ICKAN" if local_index == 0 else None
+                label_pred = prediction_label if local_index == 0 else None
                 ax.plot(
                     axis_strain_normalized[local_index, :, component],
                     stress_reference_normalized[local_index, :, component],

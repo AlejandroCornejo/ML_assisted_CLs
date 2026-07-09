@@ -134,7 +134,8 @@ def main():
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
     kan_backend = getattr(model, "kan_backend", checkpoint.get("kan_backend", "unknown"))
-    print(f"KAN backend             : {kan_backend}")
+    prediction_label = "ICNN" if model_config.get("model_type") == "icnn" else "ICKAN"
+    print(f"Model backend           : {kan_backend}")
 
     if using_external_history:
         dataset = load_external_history(
@@ -258,6 +259,7 @@ def main():
         energy_reference_normalized=energy_reference_normalized,
         energy_predicted_normalized=energy_predicted_normalized,
         strain_axis_variants=plot_strain_axis_variants,
+        prediction_label=prediction_label,
     )
 
     print("\nPrediction finished.")
