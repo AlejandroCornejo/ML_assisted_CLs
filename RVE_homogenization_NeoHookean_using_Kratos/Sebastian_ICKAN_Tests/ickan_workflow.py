@@ -6,6 +6,11 @@ import torch
 
 
 COMPONENT_NAMES = ("xx", "yy", "xy")
+STRAIN_COMPONENT_TEX = {
+    "xx": r"E_{xx}",
+    "yy": r"E_{yy}",
+    "xy": r"\gamma_{xy}",
+}
 DEFAULT_MODEL_CONFIG = {
     "model_type": "ickan",
     "order_stretches": 1,
@@ -19,12 +24,49 @@ DEFAULT_MODEL_CONFIG = {
     "icnn_activation": "softplus",
     "icnn_softplus_beta": 5.0,
     "icnn_quadratic": True,
+    "train_feature_powers": True,
 }
 
 
 def ensure_dir(path):
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def configure_latex_matplotlib(plt):
+    plt.rcParams.update(
+        {
+            "text.usetex": True,
+            "font.family": "serif",
+            "font.serif": ["Computer Modern Roman"],
+            "text.latex.preamble": r"\usepackage{amsmath}",
+            "axes.labelsize": 14,
+            "axes.titlesize": 16,
+            "legend.fontsize": 12,
+            "xtick.labelsize": 12,
+            "ytick.labelsize": 12,
+        }
+    )
+
+
+def stress_component_tex(name):
+    return rf"S_{{{name}}}"
+
+
+def strain_component_tex(name):
+    return STRAIN_COMPONENT_TEX.get(name, rf"E_{{{name}}}")
+
+
+def normalized_stress_component_tex(name):
+    return rf"\widehat{{S}}_{{{name}}}"
+
+
+def normalized_strain_component_tex(name):
+    if name in ("xx", "yy"):
+        return rf"\widehat{{E}}_{{{name}}}"
+    if name == "xy":
+        return r"\widehat{\gamma}_{xy}"
+    return rf"\widehat{{E}}_{{{name}}}"
 
 
 def parse_trajectory_ids(spec):
@@ -221,6 +263,7 @@ def create_model(model_config=None):
             "icnn_activation": config.get("icnn_activation", "softplus"),
             "icnn_softplus_beta": config.get("icnn_softplus_beta", 5.0),
             "icnn_quadratic": config.get("icnn_quadratic", True),
+            "train_feature_powers": config.get("train_feature_powers", True),
         }
         model = surrogate.ICNN_W_Surrogate(**model_kwargs)
         model.kan_backend = "icnn"
@@ -234,6 +277,7 @@ def create_model(model_config=None):
             "base_fun": config.get("base_fun", "silu"),
             "noise_scale": config.get("noise_scale", 0.0),
             "grid_eps": config.get("grid_eps", 0.01),
+            "train_feature_powers": config.get("train_feature_powers", True),
         }
         model = surrogate.ICKAN_W_Surrogate(**model_kwargs)
         model.kan_backend = getattr(surrogate, "KAN_BACKEND", "unknown")
@@ -322,7 +366,6 @@ def plot_loss_history(loss_history, out_dir):
     ax.legend()
     fig.tight_layout()
     fig.savefig(os.path.join(out_dir, "loss_history.png"), dpi=180)
-    fig.savefig(os.path.join(out_dir, "loss_history.eps"))
     plt.close(fig)
 
 
@@ -339,6 +382,21 @@ def plot_prediction_results(
 ):
     import matplotlib.pyplot as plt
 
+    configure_latex_matplotlib(plt)
+
+    def prediction_color(label):
+        lower_label = str(label).lower()
+        if "ickan" in lower_label:
+            return "#d62728"  # red
+        if "icnn" in lower_label:
+            return "#1f77b4"  # blue
+        return "#006400"  # dark green fallback
+
+    reference_color = "#000000"
+    model_color = prediction_color(prediction_label)
+    reference_alpha = 0.72
+    model_alpha = 0.72
+
     ensure_dir(out_dir)
     trajectory_dir = ensure_dir(os.path.join(out_dir, "trajectories"))
 
@@ -346,23 +404,31 @@ def plot_prediction_results(
     for local_index, trajectory_id in enumerate(trajectory_ids):
         fig, axes = plt.subplots(3, 1, figsize=(8, 8), sharex=True)
         for component, name in enumerate(COMPONENT_NAMES):
+            stress_name = stress_component_tex(name)
+            stress_hat = normalized_stress_component_tex(name)
             axes[component].plot(
                 steps,
                 stress_reference_normalized[local_index, :, component],
                 "--",
-                label=f"Reference S_{name}",
+                label=rf"Reference ${stress_name}$",
+                color=reference_color,
+                alpha=reference_alpha,
+                linewidth=1.8,
             )
             axes[component].plot(
                 steps,
                 stress_predicted_normalized[local_index, :, component],
                 "-",
-                label=f"{prediction_label} S_{name}",
+                label=rf"{prediction_label} ${stress_name}$",
+                color=model_color,
+                alpha=model_alpha,
+                linewidth=1.8,
             )
-            axes[component].set_ylabel(f"S_{name}")
+            axes[component].set_ylabel(rf"Normalized stress ${stress_hat}$")
             axes[component].grid(True)
             axes[component].legend()
-        axes[-1].set_xlabel("Trajectory sample index")
-        fig.suptitle(f"trajectory_{trajectory_id}: stress over path")
+        axes[-1].set_xlabel(r"Trajectory sample index")
+        fig.suptitle(rf"Trajectory {trajectory_id}: stress over path")
         fig.tight_layout()
         fig.savefig(
             os.path.join(trajectory_dir, f"trajectory_{trajectory_id}_stress_vs_step.png"),
@@ -372,23 +438,32 @@ def plot_prediction_results(
 
         fig, axes = plt.subplots(3, 1, figsize=(8, 8))
         for component, name in enumerate(COMPONENT_NAMES):
+            stress_name = stress_component_tex(name)
+            stress_hat = normalized_stress_component_tex(name)
+            strain_hat = normalized_strain_component_tex(name)
             axes[component].plot(
                 strain_normalized[local_index, :, component],
                 stress_reference_normalized[local_index, :, component],
                 "--",
-                label=f"Reference S_{name}",
+                label=rf"Reference ${stress_name}$",
+                color=reference_color,
+                alpha=reference_alpha,
+                linewidth=1.8,
             )
             axes[component].plot(
                 strain_normalized[local_index, :, component],
                 stress_predicted_normalized[local_index, :, component],
                 "-",
-                label=f"{prediction_label} S_{name}",
+                label=rf"{prediction_label} ${stress_name}$",
+                color=model_color,
+                alpha=model_alpha,
+                linewidth=1.8,
             )
-            axes[component].set_xlabel(f"Normalized strain {name}")
-            axes[component].set_ylabel(f"Normalized stress {name}")
+            axes[component].set_xlabel(rf"Normalized strain ${strain_hat}$")
+            axes[component].set_ylabel(rf"Normalized stress ${stress_hat}$")
             axes[component].grid(True)
             axes[component].legend()
-        fig.suptitle(f"trajectory_{trajectory_id}: stress-strain path")
+        fig.suptitle(rf"Trajectory {trajectory_id}: stress-strain path")
         fig.tight_layout()
         fig.savefig(
             os.path.join(trajectory_dir, f"trajectory_{trajectory_id}_stress_vs_strain.png"),
@@ -401,16 +476,22 @@ def plot_prediction_results(
             steps,
             energy_reference_normalized[local_index, :, 0],
             "--",
-            label="Reference W",
+            label=r"Reference $W$",
+            color=reference_color,
+            alpha=reference_alpha,
+            linewidth=1.8,
         )
         ax.plot(
             steps,
             energy_predicted_normalized[local_index, :, 0],
             "-",
-            label=f"{prediction_label} W",
+            label=rf"{prediction_label} $W$",
+            color=model_color,
+            alpha=model_alpha,
+            linewidth=1.8,
         )
-        ax.set_xlabel("Trajectory sample index")
-        ax.set_ylabel("Normalized energy")
+        ax.set_xlabel(r"Trajectory sample index")
+        ax.set_ylabel(r"Normalized energy $W$")
         ax.grid(True)
         ax.legend()
         fig.tight_layout()
@@ -421,6 +502,9 @@ def plot_prediction_results(
         plt.close(fig)
 
     for component, name in enumerate(COMPONENT_NAMES):
+        stress_name = stress_component_tex(name)
+        stress_hat = normalized_stress_component_tex(name)
+        strain_hat = normalized_strain_component_tex(name)
         fig, ax = plt.subplots(figsize=(8, 5))
         for local_index, _ in enumerate(trajectory_ids):
             label_ref = "Reference" if local_index == 0 else None
@@ -430,23 +514,26 @@ def plot_prediction_results(
                 stress_reference_normalized[local_index, :, component],
                 "--",
                 label=label_ref,
-                alpha=0.85,
+                color=reference_color,
+                alpha=reference_alpha,
+                linewidth=1.8,
             )
             ax.plot(
                 strain_normalized[local_index, :, component],
                 stress_predicted_normalized[local_index, :, component],
                 "-",
                 label=label_pred,
-                alpha=0.85,
+                color=model_color,
+                alpha=model_alpha,
+                linewidth=1.8,
             )
-        ax.set_xlabel(f"Normalized strain {name}")
-        ax.set_ylabel(f"Normalized stress {name}")
-        ax.set_title(f"S_{name} over each trajectory")
+        ax.set_xlabel(rf"Normalized strain ${strain_hat}$")
+        ax.set_ylabel(rf"Normalized stress ${stress_hat}$")
+        ax.set_title(rf"${stress_name}$ over each trajectory")
         ax.grid(True)
         ax.legend()
         fig.tight_layout()
         fig.savefig(os.path.join(out_dir, f"S_{name}_by_trajectory.png"), dpi=180)
-        fig.savefig(os.path.join(out_dir, f"S_{name}_by_trajectory.eps"))
         plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(8, 5))
@@ -458,23 +545,26 @@ def plot_prediction_results(
             energy_reference_normalized[local_index, :, 0],
             "--",
             label=label_ref,
-            alpha=0.85,
+            color=reference_color,
+            alpha=reference_alpha,
+            linewidth=1.8,
         )
         ax.plot(
             steps,
             energy_predicted_normalized[local_index, :, 0],
             "-",
             label=label_pred,
-            alpha=0.85,
+            color=model_color,
+            alpha=model_alpha,
+            linewidth=1.8,
         )
-    ax.set_xlabel("Trajectory sample index")
-    ax.set_ylabel("Normalized energy")
-    ax.set_title("Energy over each trajectory")
+    ax.set_xlabel(r"Trajectory sample index")
+    ax.set_ylabel(r"Normalized energy $W$")
+    ax.set_title(r"Energy over each trajectory")
     ax.grid(True)
     ax.legend()
     fig.tight_layout()
     fig.savefig(os.path.join(out_dir, "W_by_trajectory.png"), dpi=180)
-    fig.savefig(os.path.join(out_dir, "W_by_trajectory.eps"))
     plt.close(fig)
 
     if strain_axis_variants is None:
@@ -491,23 +581,32 @@ def plot_prediction_results(
         for local_index, trajectory_id in enumerate(trajectory_ids):
             fig, axes = plt.subplots(3, 1, figsize=(8, 8))
             for component, name in enumerate(COMPONENT_NAMES):
+                stress_name = stress_component_tex(name)
+                stress_hat = normalized_stress_component_tex(name)
+                strain_hat = normalized_strain_component_tex(name)
                 axes[component].plot(
                     axis_strain_normalized[local_index, :, component],
                     stress_reference_normalized[local_index, :, component],
                     "--",
-                    label=f"Reference S_{name}",
+                    label=rf"Reference ${stress_name}$",
+                    color=reference_color,
+                    alpha=reference_alpha,
+                    linewidth=1.8,
                 )
                 axes[component].plot(
                     axis_strain_normalized[local_index, :, component],
                     stress_predicted_normalized[local_index, :, component],
                     "-",
-                    label=f"{prediction_label} S_{name}",
+                    label=rf"{prediction_label} ${stress_name}$",
+                    color=model_color,
+                    alpha=model_alpha,
+                    linewidth=1.8,
                 )
-                axes[component].set_xlabel(f"Normalized {axis_label} {name}")
-                axes[component].set_ylabel(f"Normalized stress {name}")
+                axes[component].set_xlabel(rf"Normalized {axis_label} ${strain_hat}$")
+                axes[component].set_ylabel(rf"Normalized stress ${stress_hat}$")
                 axes[component].grid(True)
                 axes[component].legend()
-            fig.suptitle(f"trajectory_{trajectory_id}: stress path vs {axis_label}")
+            fig.suptitle(rf"Trajectory {trajectory_id}: stress path vs {axis_label}")
             fig.tight_layout()
             fig.savefig(
                 os.path.join(
@@ -519,6 +618,9 @@ def plot_prediction_results(
             plt.close(fig)
 
         for component, name in enumerate(COMPONENT_NAMES):
+            stress_name = stress_component_tex(name)
+            stress_hat = normalized_stress_component_tex(name)
+            strain_hat = normalized_strain_component_tex(name)
             fig, ax = plt.subplots(figsize=(8, 5))
             for local_index, _ in enumerate(trajectory_ids):
                 label_ref = "Reference" if local_index == 0 else None
@@ -528,26 +630,27 @@ def plot_prediction_results(
                     stress_reference_normalized[local_index, :, component],
                     "--",
                     label=label_ref,
-                    alpha=0.85,
+                    color=reference_color,
+                    alpha=reference_alpha,
+                    linewidth=1.8,
                 )
                 ax.plot(
                     axis_strain_normalized[local_index, :, component],
                     stress_predicted_normalized[local_index, :, component],
                     "-",
                     label=label_pred,
-                    alpha=0.85,
+                    color=model_color,
+                    alpha=model_alpha,
+                    linewidth=1.8,
                 )
-            ax.set_xlabel(f"Normalized {axis_label} {name}")
-            ax.set_ylabel(f"Normalized stress {name}")
-            ax.set_title(f"S_{name} over each trajectory vs {axis_label}")
+            ax.set_xlabel(rf"Normalized {axis_label} ${strain_hat}$")
+            ax.set_ylabel(rf"Normalized stress ${stress_hat}$")
+            ax.set_title(rf"${stress_name}$ over each trajectory vs {axis_label}")
             ax.grid(True)
             ax.legend()
             fig.tight_layout()
             fig.savefig(
                 os.path.join(out_dir, f"S_{name}_by_trajectory_vs_{safe_axis_name}.png"),
                 dpi=180,
-            )
-            fig.savefig(
-                os.path.join(out_dir, f"S_{name}_by_trajectory_vs_{safe_axis_name}.eps")
             )
             plt.close(fig)

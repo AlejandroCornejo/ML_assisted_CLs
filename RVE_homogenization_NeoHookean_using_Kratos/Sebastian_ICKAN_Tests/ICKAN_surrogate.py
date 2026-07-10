@@ -250,6 +250,7 @@ class ICNN_W_Surrogate(nn.Module):
         icnn_activation="softplus",
         icnn_softplus_beta=5.0,
         icnn_quadratic=True,
+        train_feature_powers=True,
     ):
         super(ICNN_W_Surrogate, self).__init__()
         _validate_input_mode(input_mode)
@@ -275,6 +276,9 @@ class ICNN_W_Surrogate(nn.Module):
             nn.Parameter(torch.tensor(p + 1.0)) for p in range(self.order_stretches + 1)
         ])
         self.ki[-1] = nn.Parameter(torch.tensor(1.0))
+        if not train_feature_powers:
+            for parameter in self.ki:
+                parameter.requires_grad_(False)
 
         self.energy_net = SmoothICNN(
             input_size=self.input_size,
@@ -395,6 +399,7 @@ class ICKAN_W_Surrogate(nn.Module):
         base_fun="silu",
         noise_scale=0.0,
         grid_eps=0.01,
+        train_feature_powers=True,
     ):
         super(ICKAN_W_Surrogate, self).__init__()
 
@@ -468,6 +473,9 @@ class ICKAN_W_Surrogate(nn.Module):
         # The parameter multiplying the log(J) is initially set to 1.0
         # self.ki[-1] = 1.0
         self.ki[-1] = nn.Parameter(torch.tensor(1.0))
+        if not train_feature_powers:
+            for parameter in self.ki:
+                parameter.requires_grad_(False)
         
         # for k in self.ki:
         #     print(f"Initial ki: {k.item()}")

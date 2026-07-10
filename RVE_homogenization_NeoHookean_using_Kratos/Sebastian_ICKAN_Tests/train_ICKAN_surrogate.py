@@ -155,6 +155,14 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--freeze-feature-powers",
+        action="store_true",
+        help=(
+            "Keep the principal-stretch powers fixed instead of training them. "
+            "This is a more conservative diagnostic when using principal/hybrid inputs."
+        ),
+    )
+    parser.add_argument(
         "--hidden-widths",
         default="16,16,8",
         help="Comma-separated hidden layer widths for the KAN energy network.",
@@ -295,6 +303,7 @@ def make_model_config(args):
         "icnn_activation": args.icnn_activation,
         "icnn_softplus_beta": float(args.icnn_softplus_beta),
         "icnn_quadratic": not bool(args.no_icnn_quadratic),
+        "train_feature_powers": not bool(args.freeze_feature_powers),
     }
 
 
@@ -535,6 +544,7 @@ def main():
     print(f"Update grid in training: {args.update_grid_during_training}")
     print(f"Input mode             : {args.input_mode}")
     print(f"Order stretches        : {args.order_stretches}")
+    print(f"Train feature powers   : {not bool(args.freeze_feature_powers)}")
     print(f"Hidden widths          : {parse_hidden_widths(args.hidden_widths)}")
     print(f"Grid size              : {args.grid_size}")
     print(f"Spline degree          : {args.spline_degree}")
@@ -641,6 +651,14 @@ def main():
     model, model_config = create_model(model_config)
     kan_backend = getattr(model, "kan_backend", "unknown")
     print(f"Model backend           : {kan_backend}")
+    print(
+        "Effective model config  : "
+        f"type={model_config.get('model_type')}, "
+        f"input={model_config.get('input_mode')}, "
+        f"order={model_config.get('order_stretches')}, "
+        f"train_feature_powers={model_config.get('train_feature_powers', True)}, "
+        f"W_width={model_config.get('W_width')}"
+    )
     if resume_checkpoint is not None:
         model.load_state_dict(resume_checkpoint["model_state_dict"])
         print("Loaded model weights from resume checkpoint.")
