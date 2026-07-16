@@ -24,6 +24,7 @@ DEFAULT_MODEL_CONFIG = {
     "icnn_activation": "softplus",
     "icnn_softplus_beta": 5.0,
     "icnn_quadratic": True,
+    "icnn_quadratic_mode": "diag",
     "train_feature_powers": True,
 }
 
@@ -109,7 +110,13 @@ def sample_equally_spaced(data, n_samples):
     return data[indices].copy()
 
 
-def load_fom_dataset(fom_dir, trajectory_ids, strain_source="strain", samples_per_trajectory=500):
+def load_fom_dataset(
+    fom_dir,
+    trajectory_ids,
+    strain_source="strain",
+    samples_per_trajectory=500,
+    concatenate=False,
+):
     raw_strains = []
     raw_stresses = []
     original_lengths = []
@@ -149,6 +156,39 @@ def load_fom_dataset(fom_dir, trajectory_ids, strain_source="strain", samples_pe
         original_lengths.append(strain.shape[0])
 
     available_min_steps = min(original_lengths)
+    if concatenate:
+        strains = []
+        stresses = []
+        slices = []
+        counts = []
+        offset = 0
+        for strain, stress in zip(raw_strains, raw_stresses):
+            if samples_per_trajectory is None:
+                n_samples_i = strain.shape[0]
+            else:
+                n_samples_i = min(int(samples_per_trajectory), strain.shape[0])
+            strain_i = sample_equally_spaced(strain, n_samples_i)
+            stress_i = sample_equally_spaced(stress, n_samples_i)
+            strains.append(strain_i)
+            stresses.append(stress_i)
+            counts.append(int(n_samples_i))
+            slices.append((int(offset), int(offset + n_samples_i)))
+            offset += n_samples_i
+
+        return {
+            "trajectory_ids": list(trajectory_ids),
+            "strain": np.concatenate(strains, axis=0).astype(np.float32),
+            "stress": np.concatenate(stresses, axis=0).astype(np.float32),
+            "original_lengths": original_lengths,
+            "samples_per_trajectory": counts,
+            "trajectory_sample_counts": counts,
+            "trajectory_slices": slices,
+            "available_min_steps": available_min_steps,
+            "total_samples": int(offset),
+            "strain_source": strain_source,
+            "concatenated": True,
+        }
+
     if samples_per_trajectory is None:
         n_samples = available_min_steps
     else:
@@ -163,8 +203,15 @@ def load_fom_dataset(fom_dir, trajectory_ids, strain_source="strain", samples_pe
         "stress": np.stack(stresses, axis=0).astype(np.float32),
         "original_lengths": original_lengths,
         "samples_per_trajectory": n_samples,
+        "trajectory_sample_counts": [int(n_samples)] * len(raw_strains),
+        "trajectory_slices": [
+            (int(i * n_samples), int((i + 1) * n_samples))
+            for i in range(len(raw_strains))
+        ],
         "available_min_steps": available_min_steps,
+        "total_samples": int(len(raw_strains) * n_samples),
         "strain_source": strain_source,
+        "concatenated": False,
     }
 
 
@@ -238,6 +285,35 @@ def compute_reference_energy(strain_normalized, stress_normalized):
     return np.concatenate([energy_zero, energy_cumulative], axis=1)
 
 
+def compute_reference_energy_for_slices(strain_normalized, stress_normalized, trajectory_slices):
+    strain_normalized = np.asarray(strain_normalized)
+    stress_normalized = np.asarray(stress_normalized)
+    if strain_normalized.ndim != 2 or stress_normalized.ndim != 2:
+        raise ValueError(
+            "compute_reference_energy_for_slices expects flattened arrays with shape [n_samples, n_components]."
+        )
+    if strain_normalized.shape != stress_normalized.shape:
+        raise ValueError(
+            f"Shape mismatch: strain={strain_normalized.shape}, stress={stress_normalized.shape}."
+        )
+
+    energy = np.zeros((strain_normalized.shape[0], 1), dtype=strain_normalized.dtype)
+    for start, stop in trajectory_slices:
+        start = int(start)
+        stop = int(stop)
+        if stop <= start:
+            continue
+        strain_i = strain_normalized[start:stop]
+        stress_i = stress_normalized[start:stop]
+        delta = np.zeros_like(strain_i)
+        if strain_i.shape[0] > 1:
+            delta[1:] = strain_i[1:] - strain_i[:-1]
+            stress_avg = 0.5 * (stress_i[1:] + stress_i[:-1])
+            increments = np.sum(stress_avg * delta[1:], axis=1, keepdims=True)
+            energy[start + 1:stop] = np.cumsum(increments, axis=0)
+    return energy
+
+
 def flatten_history(array):
     return array.reshape(-1, array.shape[-1])
 
@@ -263,6 +339,7 @@ def create_model(model_config=None):
             "icnn_activation": config.get("icnn_activation", "softplus"),
             "icnn_softplus_beta": config.get("icnn_softplus_beta", 5.0),
             "icnn_quadratic": config.get("icnn_quadratic", True),
+            "icnn_quadratic_mode": config.get("icnn_quadratic_mode", "diag"),
             "train_feature_powers": config.get("train_feature_powers", True),
         }
         model = surrogate.ICNN_W_Surrogate(**model_kwargs)

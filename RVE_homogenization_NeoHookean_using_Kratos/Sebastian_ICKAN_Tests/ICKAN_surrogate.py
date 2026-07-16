@@ -187,16 +187,21 @@ class SmoothICNN(nn.Module):
         activation="softplus",
         softplus_beta=5.0,
         use_quadratic=True,
+        quadratic_mode="diag",
     ):
         super().__init__()
         if not hidden_widths:
             raise ValueError("ICNN requires at least one hidden layer.")
         if activation not in ("softplus", "relu"):
             raise ValueError(f"Unsupported ICNN activation '{activation}'.")
+        if not use_quadratic:
+            quadratic_mode = "none"
+        if quadratic_mode not in ("none", "diag", "psd"):
+            raise ValueError(f"Unsupported ICNN quadratic mode '{quadratic_mode}'.")
 
         self.activation = activation
         self.softplus_beta = float(softplus_beta)
-        self.use_quadratic = bool(use_quadratic)
+        self.quadratic_mode = quadratic_mode
         self.x_layers = nn.ModuleList()
         self.z_layers = nn.ModuleList()
 
@@ -207,10 +212,17 @@ class SmoothICNN(nn.Module):
 
         self.final_x = nn.Linear(input_size, 1)
         self.final_z = PositiveLinear(hidden_widths[-1], 1)
-        if self.use_quadratic:
+        if self.quadratic_mode == "diag":
             self.raw_quadratic = nn.Parameter(torch.full((input_size,), -4.0))
+            self.register_parameter("quadratic_factor", None)
+        elif self.quadratic_mode == "psd":
+            factor = 0.02 * torch.eye(input_size)
+            factor = factor + 0.005 * torch.randn(input_size, input_size)
+            self.quadratic_factor = nn.Parameter(factor)
+            self.register_parameter("raw_quadratic", None)
         else:
             self.register_parameter("raw_quadratic", None)
+            self.register_parameter("quadratic_factor", None)
 
         self.reset_parameters()
 
@@ -234,9 +246,12 @@ class SmoothICNN(nn.Module):
             )
 
         output = self.final_x(x) + self.final_z(z)
-        if self.raw_quadratic is not None:
+        if self.quadratic_mode == "diag":
             quadratic_weight = F.softplus(self.raw_quadratic).view(1, -1)
             output = output + 0.5 * torch.sum(quadratic_weight * x * x, dim=1, keepdim=True)
+        elif self.quadratic_mode == "psd":
+            quadratic_features = x.matmul(self.quadratic_factor.t())
+            output = output + 0.5 * torch.sum(quadratic_features * quadratic_features, dim=1, keepdim=True)
         return output
 
 
@@ -250,6 +265,7 @@ class ICNN_W_Surrogate(nn.Module):
         icnn_activation="softplus",
         icnn_softplus_beta=5.0,
         icnn_quadratic=True,
+        icnn_quadratic_mode="diag",
         train_feature_powers=True,
     ):
         super(ICNN_W_Surrogate, self).__init__()
@@ -286,6 +302,7 @@ class ICNN_W_Surrogate(nn.Module):
             activation=icnn_activation,
             softplus_beta=icnn_softplus_beta,
             use_quadratic=icnn_quadratic,
+            quadratic_mode=icnn_quadratic_mode,
         )
 
     def UpdateGridFromSamples(self, strain_database):

@@ -2,7 +2,7 @@ import argparse
 import os
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-os.environ["MPLCONFIGDIR"] = os.path.join(_SCRIPT_DIR, ".mplconfig")
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/mplcfg")
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 import numpy as np

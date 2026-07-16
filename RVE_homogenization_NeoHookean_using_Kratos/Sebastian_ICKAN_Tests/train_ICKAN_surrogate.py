@@ -1,8 +1,9 @@
 import argparse
 import os
+import random
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-os.environ["MPLCONFIGDIR"] = os.path.join(_SCRIPT_DIR, ".mplconfig")
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/mplcfg")
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 import numpy as np
@@ -14,6 +15,7 @@ from ickan_workflow import (
     apply_normalization,
     compute_normalization,
     compute_reference_energy,
+    compute_reference_energy_for_slices,
     create_model,
     ensure_dir,
     flatten_history,
@@ -72,6 +74,14 @@ def parse_args():
         type=int,
         default=500,
         help="Equally spaced samples taken from each selected trajectory.",
+    )
+    parser.add_argument(
+        "--use-all-available-samples",
+        action="store_true",
+        help=(
+            "Use every sample from every selected trajectory by concatenating histories. "
+            "Energy is still integrated trajectory-by-trajectory before concatenation."
+        ),
     )
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--learning-rate", type=float, default=None)
@@ -208,16 +218,50 @@ def parse_args():
         help="Disable the non-negative diagonal quadratic term in the ICNN energy.",
     )
     parser.add_argument(
+        "--icnn-quadratic-mode",
+        default="diag",
+        choices=("diag", "psd", "none"),
+        help=(
+            "Convex quadratic term used by --model-type icnn. 'diag' preserves the previous "
+            "non-negative diagonal term; 'psd' uses a full positive-semidefinite quadratic "
+            "0.5||Lx||^2; 'none' disables it."
+        ),
+    )
+    parser.add_argument(
         "--grad-clip",
         type=float,
         default=1.0,
         help="Gradient clipping norm for Adam. Ignored by LBFGS.",
     )
     parser.add_argument(
+        "--training-batch-size",
+        type=int,
+        default=0,
+        help=(
+            "Mini-batch size for Adam training. 0 keeps the previous full-batch "
+            "behavior. LBFGS remains full-batch."
+        ),
+    )
+    parser.add_argument(
+        "--full-loss-interval",
+        type=int,
+        default=1,
+        help=(
+            "For mini-batch Adam, evaluate the exact full-dataset loss every N epochs. "
+            "Use a larger value to reduce overhead during long sweeps."
+        ),
+    )
+    parser.add_argument(
         "--device",
         default="auto",
         choices=("auto", "cpu", "cuda"),
         help="Use CUDA if available. 'auto' selects CUDA when torch can see it.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Optional random seed for reproducible model initialization and Adam batching.",
     )
     parser.add_argument(
         "--stress-loss",
@@ -244,7 +288,16 @@ def parse_args():
         default=0.0,
         help="Weight for an auxiliary normalized W loss. 0 means stress-only training.",
     )
-    parser.add_argument("--early-stopping-threshold", type=float, default=1.0e-3)
+    parser.add_argument(
+        "--early-stopping-threshold",
+        type=float,
+        default=1.0e-3,
+        help=(
+            "Stop when an exact checkpoint loss falls below this value. "
+            "Use <= 0 to disable early stopping. For mini-batch Adam, batch-average "
+            "losses are never used for early stopping."
+        ),
+    )
     parser.add_argument(
         "--update-grid-during-training",
         action="store_true",
@@ -255,6 +308,20 @@ def parse_args():
     parser.add_argument("--final-grid-update-step", type=int, default=50)
     parser.add_argument("--verbose-interval", type=int, default=1)
     return parser.parse_args()
+
+
+def set_random_seed(seed):
+    if seed is None:
+        return
+    seed = int(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    if hasattr(torch.backends, "cudnn"):
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
 
 
 def parse_hidden_widths(text):
@@ -302,7 +369,8 @@ def make_model_config(args):
         "model_type": args.model_type,
         "icnn_activation": args.icnn_activation,
         "icnn_softplus_beta": float(args.icnn_softplus_beta),
-        "icnn_quadratic": not bool(args.no_icnn_quadratic),
+        "icnn_quadratic": (not bool(args.no_icnn_quadratic)) and args.icnn_quadratic_mode != "none",
+        "icnn_quadratic_mode": "none" if args.no_icnn_quadratic else args.icnn_quadratic_mode,
         "train_feature_powers": not bool(args.freeze_feature_powers),
     }
 
@@ -358,6 +426,82 @@ def compute_total_loss(
     return stress_loss + float(energy_loss_weight) * energy_loss
 
 
+def evaluate_total_loss_batched(
+    model,
+    strain_tensor,
+    stress_tensor,
+    energy_tensor,
+    max_w,
+    stress_loss_mode,
+    component_loss_weight,
+    energy_loss_weight,
+    batch_size,
+    device,
+):
+    n_samples = int(strain_tensor.shape[0])
+    if batch_size <= 0 or batch_size >= n_samples:
+        strain_eval = strain_tensor.to(device)
+        stress_eval = stress_tensor.to(device)
+        energy_eval = energy_tensor.to(device)
+        loss = compute_total_loss(
+            model,
+            strain_eval,
+            stress_eval,
+            energy_eval,
+            max_w,
+            stress_loss_mode,
+            component_loss_weight,
+            energy_loss_weight,
+        )
+        return float(loss.detach().cpu().item())
+
+    stress_sse = 0.0
+    stress_den = 0.0
+    comp_sse = torch.zeros(3, dtype=torch.float64)
+    comp_den = torch.zeros(3, dtype=torch.float64)
+    energy_sse = 0.0
+    energy_den = 0.0
+
+    was_training = model.training
+    model.eval()
+    for start in range(0, n_samples, batch_size):
+        stop = min(start + batch_size, n_samples)
+        strain_batch = strain_tensor[start:stop].to(device).detach().clone()
+        stress_batch = stress_tensor[start:stop].to(device)
+        energy_batch = energy_tensor[start:stop].to(device)
+
+        predicted_stress = model.CalculateNormalizedStress(strain_batch) * float(max_w)
+        diff = predicted_stress - stress_batch
+        stress_sse += float(torch.sum(diff * diff).detach().cpu().item())
+        stress_den += float(torch.sum(stress_batch * stress_batch).detach().cpu().item())
+        comp_sse += torch.sum(diff * diff, dim=0).detach().cpu().double()
+        comp_den += torch.sum(stress_batch * stress_batch, dim=0).detach().cpu().double()
+
+        if energy_loss_weight > 0.0:
+            predicted_energy = model.CalculateCorrectedW(strain_batch)
+            energy_diff = predicted_energy - energy_batch
+            energy_sse += float(torch.sum(energy_diff * energy_diff).detach().cpu().item())
+            energy_den += float(torch.sum(energy_batch * energy_batch).detach().cpu().item())
+
+    if was_training:
+        model.train()
+
+    global_loss = stress_sse / (stress_den + 1.0e-12)
+    component_loss = float(torch.mean(comp_sse / (comp_den + 1.0e-12)).item())
+    if stress_loss_mode == "component":
+        stress_loss = component_loss
+    elif stress_loss_mode == "blended":
+        alpha = float(component_loss_weight)
+        stress_loss = (1.0 - alpha) * global_loss + alpha * component_loss
+    else:
+        stress_loss = global_loss
+
+    if energy_loss_weight <= 0.0:
+        return float(stress_loss)
+    energy_loss = energy_sse / (energy_den + 1.0e-12)
+    return float(stress_loss + float(energy_loss_weight) * energy_loss)
+
+
 def train_model(
     model,
     optimizer,
@@ -378,9 +522,25 @@ def train_model(
     stress_loss_mode,
     component_loss_weight,
     energy_loss_weight,
+    training_batch_size=0,
+    full_loss_interval=1,
+    device=None,
     epoch_offset=0,
     phase="train",
 ):
+    if device is None:
+        device = strain_tensor.device
+    training_batch_size = int(training_batch_size or 0)
+    n_samples = int(strain_tensor.shape[0])
+    use_minibatch = (
+        optimizer_name == "adam"
+        and training_batch_size > 0
+        and training_batch_size < n_samples
+    )
+    if optimizer_name == "lbfgs" and training_batch_size > 0:
+        raise ValueError("--training-batch-size is only supported with --optimizer adam.")
+    full_loss_interval = max(int(full_loss_interval or 1), 1)
+
     best_loss = float("inf")
     best_state = None
     grid_update_counter = 0
@@ -404,6 +564,39 @@ def train_model(
                 return loss_inner
 
             optimizer.step(closure)
+        elif use_minibatch:
+            permutation = torch.randperm(n_samples)
+            running_loss = 0.0
+            running_count = 0
+            for start in range(0, n_samples, training_batch_size):
+                stop = min(start + training_batch_size, n_samples)
+                indices = permutation[start:stop]
+                strain_batch = strain_tensor[indices].to(device).detach().clone()
+                stress_batch = stress_tensor[indices].to(device)
+                energy_batch = energy_tensor[indices].to(device)
+
+                optimizer.zero_grad(set_to_none=True)
+                loss = compute_total_loss(
+                    model,
+                    strain_batch,
+                    stress_batch,
+                    energy_batch,
+                    max_w,
+                    stress_loss_mode,
+                    component_loss_weight,
+                    energy_loss_weight,
+                )
+                loss.backward()
+                if grad_clip is not None and grad_clip > 0.0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip))
+                optimizer.step()
+                if scheduler is not None:
+                    scheduler.step()
+
+                batch_count = stop - start
+                running_loss += float(loss.detach().cpu().item()) * batch_count
+                running_count += batch_count
+            loss_value = running_loss / max(running_count, 1)
         else:
             optimizer.zero_grad()
             loss = compute_total_loss(
@@ -426,17 +619,43 @@ def train_model(
         # LBFGS and Adam both report a loss evaluated before the parameter
         # update. Re-evaluate after the step so the printed loss and the saved
         # best state describe the same model parameters.
-        loss = compute_total_loss(
-            model,
-            strain_tensor,
-            stress_tensor,
-            energy_tensor,
-            max_w,
-            stress_loss_mode,
-            component_loss_weight,
-            energy_loss_weight,
-        )
-        loss_value = float(loss.detach().item())
+        loss_is_exact_checkpoint_metric = True
+        if use_minibatch:
+            should_eval_full_loss = (
+                epoch == 0
+                or epoch == n_epochs - 1
+                or ((epoch + 1) % full_loss_interval == 0)
+            )
+            if should_eval_full_loss:
+                report_loss_value = evaluate_total_loss_batched(
+                    model,
+                    strain_tensor,
+                    stress_tensor,
+                    energy_tensor,
+                    max_w,
+                    stress_loss_mode,
+                    component_loss_weight,
+                    energy_loss_weight,
+                    batch_size=max(training_batch_size, 1),
+                    device=device,
+                )
+                loss_value = float(report_loss_value)
+                loss_is_exact_checkpoint_metric = True
+            else:
+                loss_value = float(loss_value)
+                loss_is_exact_checkpoint_metric = False
+        else:
+            loss = compute_total_loss(
+                model,
+                strain_tensor,
+                stress_tensor,
+                energy_tensor,
+                max_w,
+                stress_loss_mode,
+                component_loss_weight,
+                energy_loss_weight,
+            )
+            loss_value = float(loss.detach().item())
         global_epoch = epoch_offset + epoch
         grid_update_counter += 1
 
@@ -449,7 +668,7 @@ def train_model(
                 model.load_state_dict(best_state)
             break
 
-        if loss_value < best_loss:
+        if loss_is_exact_checkpoint_metric and loss_value < best_loss:
             best_loss = loss_value
             best_state = {
                 key: value.detach().clone()
@@ -464,19 +683,25 @@ def train_model(
                 "loss": loss_value,
                 "best_loss": float(best_loss),
                 "lr": float(optimizer.param_groups[0]["lr"]),
+                "exact_checkpoint_metric": bool(loss_is_exact_checkpoint_metric),
             }
         )
 
         if epoch % verbose_interval == 0:
+            loss_label = "Loss" if loss_is_exact_checkpoint_metric else "Loss(batch-avg)"
             print(
                 f"{phase} Epoch {epoch:04d} "
                 f"(global {global_epoch:04d}), "
-                f"Loss: {loss_value:.8E}, "
+                f"{loss_label}: {loss_value:.8E}, "
                 f"Best Loss: {best_loss:.8E}, "
                 f"LR: {optimizer.param_groups[0]['lr']:.3E}"
             )
 
-        if loss_value < early_stopping_threshold:
+        if (
+            early_stopping_threshold > 0.0
+            and loss_is_exact_checkpoint_metric
+            and loss_value < early_stopping_threshold
+        ):
             print(f"Early stopping at epoch {epoch} with loss {loss_value:.8E}")
             break
 
@@ -523,6 +748,7 @@ def train_model(
 
 def main():
     args = parse_args()
+    set_random_seed(args.seed)
     out_dir = ensure_dir(os.path.abspath(args.out_dir))
     fom_dir = os.path.abspath(args.fom_dir)
     train_trajectory_ids = parse_trajectory_ids(args.train_trajectories)
@@ -535,12 +761,14 @@ def main():
     print("[SEBASTIAN-ICKAN][TRAIN]")
     print(f"FOM input dir          : {fom_dir}")
     print(f"Output dir             : {out_dir}")
+    print(f"Random seed            : {args.seed if args.seed is not None else 'not fixed'}")
     if resume_checkpoint_path is not None:
         print(f"Resume checkpoint      : {resume_checkpoint_path}")
     print(f"Train trajectories     : {train_trajectory_ids}")
     print(f"Strain source          : {args.strain_source}")
     print(f"Model type             : {args.model_type}")
     print(f"Samples per trajectory : {args.samples_per_trajectory}")
+    print(f"Use all avail. samples : {bool(args.use_all_available_samples)}")
     print(f"Update grid in training: {args.update_grid_during_training}")
     print(f"Input mode             : {args.input_mode}")
     print(f"Order stretches        : {args.order_stretches}")
@@ -554,11 +782,14 @@ def main():
     if args.model_type == "icnn":
         print(f"ICNN activation        : {args.icnn_activation}")
         print(f"ICNN softplus beta     : {args.icnn_softplus_beta:.8E}")
-        print(f"ICNN quadratic term    : {not bool(args.no_icnn_quadratic)}")
+        quadratic_mode = "none" if args.no_icnn_quadratic else args.icnn_quadratic_mode
+        print(f"ICNN quadratic term    : {quadratic_mode}")
     print(f"Optimizer              : {args.optimizer}")
     if args.optimizer == "lbfgs":
         print(f"LBFGS max iter/epoch   : {args.lbfgs_max_iter}")
         print(f"LBFGS history size     : {args.lbfgs_history_size}")
+    print(f"Training batch size    : {args.training_batch_size}")
+    print(f"Full loss interval     : {args.full_loss_interval}")
     print(f"Adam warmup epochs     : {args.adam_warmup_epochs}")
     print(f"Adam warmup LR/max LR  : {args.adam_warmup_lr:.8E} / {args.adam_warmup_max_lr:.8E}")
     print(f"Adam warmup scheduler  : {args.adam_warmup_scheduler}")
@@ -592,7 +823,8 @@ def main():
         fom_dir=fom_dir,
         trajectory_ids=train_trajectory_ids,
         strain_source=args.strain_source,
-        samples_per_trajectory=args.samples_per_trajectory,
+        samples_per_trajectory=None if args.use_all_available_samples else args.samples_per_trajectory,
+        concatenate=bool(args.use_all_available_samples),
     )
 
     if resume_checkpoint is not None:
@@ -613,7 +845,14 @@ def main():
         normalization,
     )
 
-    energy_raw = compute_reference_energy(strain_normalized, stress_normalized)
+    if dataset.get("concatenated", False):
+        energy_raw = compute_reference_energy_for_slices(
+            strain_normalized,
+            stress_normalized,
+            dataset["trajectory_slices"],
+        )
+    else:
+        energy_raw = compute_reference_energy(strain_normalized, stress_normalized)
     if resume_checkpoint is not None and "max_w" in resume_checkpoint.get("normalization", {}):
         max_w = float(resume_checkpoint["normalization"]["max_w"])
     else:
@@ -637,6 +876,10 @@ def main():
 
     print(f"Original trajectory lengths : {dataset['original_lengths']}")
     print(f"Used samples per trajectory : {dataset['samples_per_trajectory']}")
+    if dataset.get("concatenated", False):
+        print("Dataset mode                : concatenated trajectories")
+    else:
+        print("Dataset mode                : rectangular trajectories")
     print(f"Training samples            : {train_strain_cpu.shape[0]}")
     print(f"Strain scale                : {normalization['strain_scale']:.8E}")
     print(f"Stress scale                : {normalization['stress_scale']:.8E}")
@@ -650,6 +893,10 @@ def main():
         model_config = make_model_config(args)
     model, model_config = create_model(model_config)
     kan_backend = getattr(model, "kan_backend", "unknown")
+    total_parameters = int(sum(parameter.numel() for parameter in model.parameters()))
+    trainable_parameters = int(
+        sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
+    )
     print(f"Model backend           : {kan_backend}")
     print(
         "Effective model config  : "
@@ -659,6 +906,10 @@ def main():
         f"train_feature_powers={model_config.get('train_feature_powers', True)}, "
         f"W_width={model_config.get('W_width')}"
     )
+    print(f"Total/trainable params  : {total_parameters} / {trainable_parameters}")
+    if trainable_parameters > 0:
+        print(f"Samples per train param : {train_strain_cpu.shape[0] / trainable_parameters:.3f}")
+        print(f"Stress vals per param   : {3.0 * train_strain_cpu.shape[0] / trainable_parameters:.3f}")
     if resume_checkpoint is not None:
         model.load_state_dict(resume_checkpoint["model_state_dict"])
         print("Loaded model weights from resume checkpoint.")
@@ -668,9 +919,36 @@ def main():
     else:
         print("\nInitial KAN grid update skipped: ICNN does not use spline grids.")
     model.to(device)
-    train_strain = train_strain_cpu.to(device)
-    train_stress = train_stress_cpu.to(device)
-    train_energy = train_energy_cpu.to(device)
+    requested_batch_size = int(args.training_batch_size)
+    n_train_samples = int(train_strain_cpu.shape[0])
+    use_adam_batches = requested_batch_size > 0 and requested_batch_size < n_train_samples
+    if requested_batch_size > 0 and args.optimizer == "lbfgs" and args.adam_warmup_epochs > 0:
+        print("Training batch size    : applies to Adam warmup only; LBFGS remains full-batch.")
+    elif requested_batch_size > 0 and args.optimizer == "lbfgs":
+        print("Training batch size    : ignored because LBFGS remains full-batch.")
+
+    train_strain_full = train_strain_cpu.to(device)
+    train_stress_full = train_stress_cpu.to(device)
+    train_energy_full = train_energy_cpu.to(device)
+    if use_adam_batches:
+        train_strain_adam = train_strain_cpu
+        train_stress_adam = train_stress_cpu
+        train_energy_adam = train_energy_cpu
+    else:
+        train_strain_adam = train_strain_full
+        train_stress_adam = train_stress_full
+        train_energy_adam = train_energy_full
+
+    if args.optimizer == "adam" and use_adam_batches:
+        train_strain_main = train_strain_adam
+        train_stress_main = train_stress_adam
+        train_energy_main = train_energy_adam
+        main_training_batch_size = requested_batch_size
+    else:
+        train_strain_main = train_strain_full
+        train_stress_main = train_stress_full
+        train_energy_main = train_energy_full
+        main_training_batch_size = 0
 
     print("Check null W at null strain: ", model.CalculateCorrectedW(torch.zeros(1, 3, device=device)))
     print("Check null S at null strain: ", model.CalculateNormalizedStress(torch.zeros(1, 3, device=device)))
@@ -681,17 +959,31 @@ def main():
     best_state_global = None
     epoch_offset = 0
     if resume_checkpoint is not None:
-        resume_initial_loss = compute_total_loss(
-            model=model,
-            strain_tensor=train_strain,
-            stress_tensor=train_stress,
-            energy_tensor=train_energy,
-            max_w=max_w,
-            stress_loss_mode=args.stress_loss,
-            component_loss_weight=args.component_loss_weight,
-            energy_loss_weight=args.energy_loss_weight,
-        )
-        best_loss = float(resume_initial_loss.detach().item())
+        if use_adam_batches:
+            best_loss = evaluate_total_loss_batched(
+                model=model,
+                strain_tensor=train_strain_adam,
+                stress_tensor=train_stress_adam,
+                energy_tensor=train_energy_adam,
+                max_w=max_w,
+                stress_loss_mode=args.stress_loss,
+                component_loss_weight=args.component_loss_weight,
+                energy_loss_weight=args.energy_loss_weight,
+                batch_size=requested_batch_size,
+                device=device,
+            )
+        else:
+            resume_initial_loss = compute_total_loss(
+                model=model,
+                strain_tensor=train_strain_full,
+                stress_tensor=train_stress_full,
+                energy_tensor=train_energy_full,
+                max_w=max_w,
+                stress_loss_mode=args.stress_loss,
+                component_loss_weight=args.component_loss_weight,
+                energy_loss_weight=args.energy_loss_weight,
+            )
+            best_loss = float(resume_initial_loss.detach().item())
         best_state_global = {
             key: value.detach().clone()
             for key, value in model.state_dict().items()
@@ -721,9 +1013,9 @@ def main():
             optimizer=warmup_optimizer,
             optimizer_name="adam",
             scheduler=warmup_scheduler,
-            strain_tensor=train_strain,
-            stress_tensor=train_stress,
-            energy_tensor=train_energy,
+            strain_tensor=train_strain_adam,
+            stress_tensor=train_stress_adam,
+            energy_tensor=train_energy_adam,
             max_w=max_w,
             n_epochs=args.adam_warmup_epochs,
             early_stopping_threshold=args.early_stopping_threshold,
@@ -736,6 +1028,9 @@ def main():
             stress_loss_mode=args.stress_loss,
             component_loss_weight=args.component_loss_weight,
             energy_loss_weight=args.energy_loss_weight,
+            training_batch_size=requested_batch_size,
+            full_loss_interval=int(args.full_loss_interval),
+            device=device,
             epoch_offset=epoch_offset,
             phase="adam",
         )
@@ -767,9 +1062,9 @@ def main():
         optimizer=optimizer,
         optimizer_name=args.optimizer,
         scheduler=None,
-        strain_tensor=train_strain,
-        stress_tensor=train_stress,
-        energy_tensor=train_energy,
+        strain_tensor=train_strain_main,
+        stress_tensor=train_stress_main,
+        energy_tensor=train_energy_main,
         max_w=max_w,
         n_epochs=args.epochs,
         early_stopping_threshold=args.early_stopping_threshold,
@@ -782,6 +1077,9 @@ def main():
         stress_loss_mode=args.stress_loss,
         component_loss_weight=args.component_loss_weight,
         energy_loss_weight=args.energy_loss_weight,
+        training_batch_size=main_training_batch_size,
+        full_loss_interval=int(args.full_loss_interval),
+        device=device,
         epoch_offset=epoch_offset,
         phase=args.optimizer,
     )
@@ -809,7 +1107,24 @@ def main():
             "strain_source": args.strain_source,
             "train_trajectories": train_trajectory_ids,
             "samples_per_trajectory": dataset["samples_per_trajectory"],
+            "trajectory_sample_counts": dataset.get("trajectory_sample_counts"),
+            "trajectory_slices": dataset.get("trajectory_slices"),
+            "use_all_available_samples": bool(args.use_all_available_samples),
+            "concatenated_training_histories": bool(dataset.get("concatenated", False)),
+            "total_samples": int(dataset.get("total_samples", train_strain_cpu.shape[0])),
             "original_lengths": dataset["original_lengths"],
+            "total_parameters": total_parameters,
+            "trainable_parameters": trainable_parameters,
+            "samples_per_trainable_parameter": (
+                float(train_strain_cpu.shape[0]) / float(trainable_parameters)
+                if trainable_parameters > 0
+                else None
+            ),
+            "stress_values_per_trainable_parameter": (
+                3.0 * float(train_strain_cpu.shape[0]) / float(trainable_parameters)
+                if trainable_parameters > 0
+                else None
+            ),
             "epochs_requested": args.epochs,
             "epochs_completed": len(loss_history),
             "learning_rate": learning_rate,
@@ -822,6 +1137,9 @@ def main():
             "adam_warmup_step_size": args.adam_warmup_step_size,
             "adam_warmup_scheduler": args.adam_warmup_scheduler,
             "device": str(device),
+            "seed": args.seed,
+            "training_batch_size": int(args.training_batch_size),
+            "full_loss_interval": int(args.full_loss_interval),
             "best_loss": best_loss_for_metadata,
             "loss_target": "normalized stress plus optional normalized energy",
             "stress_loss": args.stress_loss,
@@ -844,6 +1162,9 @@ def main():
         strain_normalized=strain_normalized,
         stress_normalized=stress_normalized,
         W_normalized=energy_normalized,
+        trajectory_slices=np.asarray(dataset.get("trajectory_slices", []), dtype=np.int64),
+        trajectory_sample_counts=np.asarray(dataset.get("trajectory_sample_counts", []), dtype=np.int64),
+        concatenated=np.asarray([bool(dataset.get("concatenated", False))]),
     )
 
     if loss_history:
