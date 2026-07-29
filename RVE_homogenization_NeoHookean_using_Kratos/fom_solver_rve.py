@@ -952,6 +952,38 @@ def CalculateHomogenizedFromAssemblerWithElementWeights(
     return hom_eps, hom_sig
 
 
+def ComputeMicroscopicNeoHookeanEnergyDensityFromAssembler(assembler):
+    """Return the RVE-average Neo-Hookean energy at the assembler's current state.
+
+    This is an optional post-processing quantity for energy-based surrogate
+    workflows.  It reuses the already assembled converged Gauss-point strain
+    field and therefore does not instantiate a second Kratos model.
+    """
+    if getattr(assembler, "n_elems", 0) == 0:
+        return 0.0
+
+    strain_gp = np.asarray(assembler._E_voigt, dtype=float)
+    c11 = 1.0 + 2.0 * strain_gp[..., 0]
+    c22 = 1.0 + 2.0 * strain_gp[..., 1]
+    c12 = strain_gp[..., 2]
+    det_c = c11 * c22 - c12 * c12
+    if np.min(det_c) <= 0.0:
+        raise RuntimeError("Cannot evaluate microscopic energy: det(C)<=0 at a Gauss point.")
+    log_j = 0.5 * np.log(det_c)
+
+    young = np.asarray(assembler.young, dtype=float)[:, None]
+    poisson = np.asarray(assembler.poisson, dtype=float)[:, None]
+    shear_modulus = young / (2.0 * (1.0 + poisson))
+    lame_lambda = young * poisson / ((1.0 + poisson) * (1.0 - 2.0 * poisson))
+    psi_gp = (
+        0.5 * shear_modulus * (c11 + c22 - 2.0)
+        - shear_modulus * log_j
+        + 0.5 * lame_lambda * log_j * log_j
+    )
+    psi_element = np.mean(psi_gp, axis=1)
+    return float(np.dot(assembler.area_e, psi_element) / np.sum(assembler.area_e))
+
+
 def ComputeEquivalentStressStrain2D(strain_hist, stress_hist):
     Exx = strain_hist[:, 0]
     Eyy = strain_hist[:, 1]
@@ -1559,6 +1591,7 @@ def RunFomBatchSimulation(
     hom_weights_sig_full=None,
     hom_reference_measure=None,
     initial_displacement=None,
+    return_final_energy=False,
 ):
     """Executes the RVE simulation for a given strain trajectory."""
     os.makedirs(out_dir, exist_ok=True)
@@ -1668,6 +1701,7 @@ def RunFomBatchSimulation(
     applied_strain_hist.append(np.zeros(3, dtype=float))
     
     K_old = None
+    final_energy = None
 
     for step in range(1, n_steps_total + 1):
         time_val = float(step) * float(dt)
@@ -1834,6 +1868,8 @@ def RunFomBatchSimulation(
         strain_hist.append(eps_h)
         stress_hist.append(sig_h)
         U_hist.append(u.copy())
+        if return_final_energy:
+            final_energy = ComputeMicroscopicNeoHookeanEnergyDensityFromAssembler(assembler)
 
         sim.FinalizeSolutionStep()
         
@@ -1850,6 +1886,8 @@ def RunFomBatchSimulation(
         if save_plot:
             _save_diagnostic_plots(np.stack(strain_hist), np.stack(stress_hist), out_dir, tag)
 
+    if return_final_energy:
+        return strain_hist, stress_hist, final_energy
     return strain_hist, stress_hist
 
 

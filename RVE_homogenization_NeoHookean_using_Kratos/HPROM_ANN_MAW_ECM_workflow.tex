@@ -1,0 +1,982 @@
+\documentclass[11pt,a4paper]{article}
+
+% Self-contained technical handoff for the RVE PROM--ANN/HPROM--ANN workflow.
+\usepackage[margin=25mm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,mathtools,bm}
+\usepackage{booktabs,array,longtable,enumitem}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage[nameinlink,capitalise]{cleveref}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\transpose}{^{\mathsf T}}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\frobnorm}[1]{\left\lVert #1 \right\rVert_{\mathrm F}}
+\newcommand{\avg}[1]{\left\langle #1 \right\rangle}
+\newcommand{\vect}[1]{\mathbf{#1}}
+\newcommand{\mat}[1]{\mathbf{#1}}
+\newcommand{\set}[1]{\mathcal{#1}}
+\newcommand{\code}[1]{\url{#1}}
+
+\title{\textbf{PROM--ANN, HPROM--ANN, and MAW--ECM}\\
+\large Technical formulation and implementation handoff from the finite-deformation RVE workflow}
+\author{Project technical note}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document is the implementation-level description of the RVE workflow in
+\url{RVE_homogenization_NeoHookean_using_Kratos}.  It explains the
+complete chain from macro-strain trajectories and full-order snapshots to the
+structured PROM--ANN coordinates, the intrusive HPROM--ANN correction, the
+direct D-HPROM--ANN variant, and state-dependent MAW--ECM hyper-reduction.
+The notation follows the WCCM 2026 slides: the primary coordinates are
+\(\vect q\), the primary and secondary bases are \(\mat V\) and
+\(\overline{\mat V}\), and the ANN predicts \(\overline{\vect q}\).
+
+The note is intentionally self-contained.  A future implementation for
+\code{burgers1d-rom-workbench} should read this file together with the source
+files listed in \cref{sec:source-map}, then port the algorithmic roles rather
+than copying RVE-specific details such as finite-deformation lifting or stress
+homogenization.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Purpose, scope, and current RVE configuration}
+\label{sec:scope}
+
+The objective is to approximate the nonlinear solution map of a finite-
+deformation representative volume element (RVE), while preserving an
+intrusive equilibrium correction when desired and evaluating both equilibrium
+and homogenized quantities from a very small set of elements.
+
+The current RVE instance has the following numerical configuration.  These
+numbers document the present experiment; they are \emph{not} assumptions of
+the method.
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Quantity & Current value \\
+\midrule
+Total displacement degrees of freedom & \(4244\) \\
+Free displacement degrees of freedom & \(N_f=3924\) \\
+Strong Dirichlet degrees of freedom & \(320\) \\
+Training snapshots & \(N_s=109460\) \\
+Truncated POD dimension & \(n_{\rm tot}=39\) \\
+Primary and secondary dimensions & \(n=3\), \(\bar n=36\) \\
+Full RVE elements & \(N_e=990\) \\
+Final MAW residual support & \(|\set Z_{\rm res}|=10\) \\
+Final MAW strain and stress supports & \(|\set Z_{\varepsilon}|=|\set Z_{\sigma}|=10\) \\
+Union of the three final supports & \(29\) elements \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+There are two online models.
+\begin{description}[leftmargin=33mm,style=nextline]
+  \item[HPROM--ANN] The affine map supplies an initial \(\vect q^0\), then
+  a reduced Galerkin/Newton correction solves equilibrium on the
+  ANN-defined nonlinear manifold.  MAW--ECM accelerates the residual and the
+  homogenization.
+  \item[D-HPROM--ANN] The direct approximation sets \(\vect q=\vect q^0\),
+  decodes the state once, and applies the hyper-reduced homogenization.  It
+  skips the residual evaluation and all reduced Newton iterations.
+\end{description}
+
+\section{Full-order RVE problem}
+\label{sec:fom}
+
+\subsection{Macro input and affine boundary lifting}
+
+For each loading state, the physical macro input is either a deformation
+gradient \(\mat F\) or, equivalently for the present workflow, its Green--
+Lagrange strain
+\begin{equation}
+  \mat E
+  = \frac{1}{2}\left(\mat F\transpose\mat F-\mat I\right),
+  \qquad
+  \vect\mu
+  =
+  \begin{bmatrix}
+    E_{xx} & E_{yy} & G_{xy}
+  \end{bmatrix}\transpose
+  \in\R^3.
+  \label{eq:macro-input}
+\end{equation}
+The code reconstructs the chosen two-dimensional branch of \(\mat F\) from
+\(\mat E\).  Let \(\vect X\) denote a reference material point and
+\(\vect X_c\) the RVE reference-domain center.  The imposed affine
+displacement is
+\begin{equation}
+  \vect u_{\rm aff}(\vect X;\vect\mu)
+  = \left(\mat F(\vect\mu)-\mat I\right)(\vect X-\vect X_c).
+  \label{eq:affine-lifting}
+\end{equation}
+The total displacement is decomposed as
+\begin{equation}
+  \vect u(\vect\mu)
+  = \vect u_{\rm aff}(\vect\mu)+\vect s(\vect\mu),
+  \label{eq:state-decomposition}
+\end{equation}
+where the fluctuation \(\vect s\) is zero on the strongly prescribed
+Dirichlet degrees of freedom.  All reduced bases and coordinates below act on
+the \(N_f\) free entries of \(\vect s\).
+
+At element level, let \(\vect r_e(\vect u;\vect\mu)\) and
+\(\mat K_e(\vect u;\vect\mu)\) denote the element residual and its tangent.
+The full internal equilibrium residual and tangent are assembled as
+\begin{equation}
+  \vect r(\vect u;\vect\mu)=\sum_{e=1}^{N_e}\vect r_e(\vect u;\vect\mu),
+  \qquad
+  \mat K(\vect u;\vect\mu)=\sum_{e=1}^{N_e}\mat K_e(\vect u;\vect\mu).
+  \label{eq:full-assembly}
+\end{equation}
+The full-order model (FOM) solves \(\vect r=\vect 0\), with the sign
+convention used by the underlying finite-element assembly.  All reduced
+equations must retain that convention consistently.
+
+\subsection{Homogenized strain and stress}
+
+Let \(A_e\) be the reference measure of element \(e\), \(A_0=\sum_e A_e\)
+the reference RVE measure, and \(\avg{\cdot}_e\) the element Gauss-point
+average.  The code returns the same strain and stress measures that are
+stored by the finite-element constitutive law.  Their full-order
+homogenizations have the generic form
+\begin{equation}
+  \overline{\mat E}
+  = \frac{1}{A_0}\sum_{e=1}^{N_e} A_e\avg{\mat E_e}_e,
+  \qquad
+  \overline{\mat S}
+  = \frac{1}{A_0}\sum_{e=1}^{N_e} A_e\avg{\mat S_e}_e.
+  \label{eq:full-homogenization}
+\end{equation}
+The symbol \(\mat S\) in \cref{eq:full-homogenization} is a stress tensor;
+the snapshot matrix later in the document is written in bold as \(\mat S\)
+only within the POD section.  Context and dimensions distinguish the two.
+
+\section{Training trajectories and FOM data}
+\label{sec:trajectories}
+
+\subsection{Macro-strain domain}
+
+The current training domain is a box in the three physical macro-strain
+components.  With a prescribed positive and negative extent in each
+direction, it can be written as
+\begin{equation}
+  \mathcal D_\mu
+  = [E_{xx}^{-},E_{xx}^{+}]
+    \times[E_{yy}^{-},E_{yy}^{+}]
+    \times[G_{xy}^{-},G_{xy}^{+}].
+  \label{eq:parameter-domain}
+\end{equation}
+For the WCCM data, \texttt{stage0\_training\_trajectory.py} uses
+\(E_{\max}=2\) and relative bounds
+\begin{equation}
+  (1,0.05,1,0.05,0.05,0.05),
+\end{equation}
+giving the asymmetric box used in the trajectory figures.
+
+\subsection{Serpentine paths}
+
+The loading set is deliberately a collection of continuous paths rather than
+an unordered cloud.  Five shear layers are used,
+\begin{equation}
+  G_{xy}\in\{0,+G_1,+G_2,-G_1,-G_2\},
+  \label{eq:shear-layers}
+\end{equation}
+and each layer contains two scans starting from the origin:
+an upper scan and a lower scan.  Within each fixed-shear plane, the trajectory
+visits a sequence of \(E_{yy}\) rows and alternates the direction of its
+\(E_{xx}\) sweep.  Consequently, the default construction contains ten
+continuous serpentine trajectories.  This gives coverage of the macro domain
+while avoiding unrelated jumps between FOM states.
+
+For a path with waypoints \(\{\vect\mu_\ell\}_{\ell=0}^{L}\), the actual FOM
+path is piecewise linear,
+\begin{equation}
+  \vect\mu(\lambda)
+  =(1-\lambda)\vect\mu_\ell+\lambda\vect\mu_{\ell+1},
+  \qquad \lambda\in[0,1].
+  \label{eq:piecewise-linear-path}
+\end{equation}
+The number of increments on a segment is proportional to its scaled length.
+In the present script the visualization and increment metric use
+\begin{equation}
+  \widehat{\vect\mu}
+  = [E_{xx},E_{yy},G_{xy}/2]\transpose,
+  \qquad
+  n_\ell
+  =\max\!\left(1,
+  \left\lceil
+  n_{\rm ref}\,
+  \frac{\norm{\widehat{\vect\mu}_{\ell+1}-\widehat{\vect\mu}_{\ell}}}
+       {a_{\rm ref}}
+  \right\rceil\right).
+  \label{eq:segment-steps}
+\end{equation}
+The scaling is an RVE trajectory-design choice, not part of PROM--ANN.
+Its purpose is to keep nonlinear increments manageable and maintain a
+comparable spatial resolution on every path.
+
+\subsection{Snapshot collection}
+
+The FOM is run on every trajectory.  At each increment \(j\), it stores
+\begin{equation}
+  \left\{\vect u^{(j)},\;\vect\mu^{(j)},\;
+  \overline{\mat E}^{(j)},\;\overline{\mat S}^{(j)}\right\}.
+  \label{eq:snapshot-tuple}
+\end{equation}
+The affine-free free-DOF snapshot is
+\begin{equation}
+  \vect s^{(j)}
+  = \left.\left(\vect u^{(j)}-\vect u_{\rm aff}(\vect\mu^{(j)})\right)
+    \right|_{\rm free}
+  \in\R^{N_f}.
+  \label{eq:fluctuation-snapshot}
+\end{equation}
+The exact vanishing of the Dirichlet entries of this quantity is checked in
+Stage 2.  It is essential: otherwise the reduced coordinates would mix a
+known boundary lifting with the unknown fluctuation.
+
+\section{POD and the structured coordinate system}
+\label{sec:coordinates}
+
+\subsection{Truncated POD representation}
+
+Collect the snapshots as columns:
+\begin{equation}
+  \mat S
+  =\begin{bmatrix}
+    \vect s^{(1)} & \cdots & \vect s^{(N_s)}
+  \end{bmatrix}
+  \in\R^{N_f\times N_s}.
+  \label{eq:snapshot-matrix}
+\end{equation}
+The POD of \(\mat S\) gives the truncated orthonormal basis
+\(\mat V_{\rm tot}\in\R^{N_f\times n_{\rm tot}}\).  In the present RVE,
+\(n_{\rm tot}=39\) captures \(1-9.01\times10^{-11}\) of the snapshot
+energy.  Define the standard POD coordinate matrix
+\begin{equation}
+  \mat Q_{\rm tot}
+  = \mat V_{\rm tot}\transpose\mat S
+  \in\R^{n_{\rm tot}\times N_s},
+  \qquad
+  \mat S\approx\mat V_{\rm tot}\mat Q_{\rm tot}.
+  \label{eq:standard-pod-coordinates}
+\end{equation}
+
+The first three standard POD coordinates are excellent for minimizing a
+linear reconstruction error.  They need not be the best three coordinates
+for regression from \(\vect\mu\): a nonlinear loading manifold can appear
+curved, coupled, or folded when projected onto those first modes.  The
+following construction therefore uses \emph{all} retained POD coordinates to
+identify a three-dimensional subspace aligned with macro loading.
+
+\subsection{Linear alignment with macro strain}
+
+Collect the same macro inputs as columns,
+\begin{equation}
+  \mat M
+  = \begin{bmatrix}
+    \vect\mu^{(1)} & \cdots & \vect\mu^{(N_s)}
+  \end{bmatrix}
+  \in\R^{3\times N_s}.
+  \label{eq:macro-snapshot-matrix}
+\end{equation}
+The least-squares alignment matrix is
+\begin{equation}
+  \mat T
+  = \underset{\widehat{\mat T}\in\R^{3\times n_{\rm tot}}}
+            {\operatorname*{arg\,min}}
+      \frobnorm{\widehat{\mat T}\mat Q_{\rm tot}-\mat M}^{2}.
+  \label{eq:fit-T}
+\end{equation}
+Thus \(\mat T\mat Q_{\rm tot}\) is the best linear prediction of the three
+macro-strain components available from the entire retained POD coordinate
+set.  The implementation stores the row-sample equivalent of
+\cref{eq:fit-T}: \(\mat Q_{\rm tot}\transpose\mat T\transpose\approx
+\mat M\transpose\).
+
+Map the aligned directions to physical free-DOF space and factor them by a
+compact singular value decomposition,
+\begin{equation}
+  \mat V_{\rm tot}\mat T\transpose
+  = \mat U\mat\Sigma\mat R\transpose
+  = \mat V\mat A,
+  \qquad
+  \mat V=\mat U\in\R^{N_f\times3},
+  \qquad
+  \mat A=\mat\Sigma\mat R\transpose\in\R^{3\times3}.
+  \label{eq:VA-factorization}
+\end{equation}
+The matrix \(\mat V\) is orthonormal.  The non-orthogonal scaling and
+rotation required by the macro-aligned directions are retained in \(\mat A\).
+This is why the state decoder contains \(\mat V\mat A\vect q\), not merely
+\(\mat V\vect q\).
+
+\subsection{Primary and secondary coordinates}
+
+For an affine-free state \(\vect s\), define the structured primary
+coordinates by
+\begin{equation}
+  \vect q
+  = \mat A^{-1}\mat V\transpose\vect s\in\R^3.
+  \label{eq:structured-q}
+\end{equation}
+For the whole data set this gives
+\begin{equation}
+  \mat V\transpose\mat S=\mat A\mat Q,
+  \qquad
+  \mat Q=\mat A^{-1}\mat V\transpose\mat S
+  \in\R^{3\times N_s}.
+  \label{eq:structured-Q}
+\end{equation}
+The remaining directions are an orthonormal complement in the retained POD
+space.  In the code, if \(\mat C_m=\mat V_{\rm tot}\transpose\mat V\), then
+\(\mat C_s\) spans the complement of \(\mat C_m\), and
+\begin{equation}
+  \overline{\mat V}=\mat V_{\rm tot}\mat C_s,
+  \qquad
+  \overline{\mat Q}=\overline{\mat V}\transpose\mat S
+  \in\R^{36\times N_s}.
+  \label{eq:secondary-coordinates}
+\end{equation}
+The truncated-POD reconstruction is therefore equivalently
+\begin{equation}
+  \mat S
+  \approx
+  \mat V\mat A\mat Q
+  +\overline{\mat V}\overline{\mat Q}.
+  \label{eq:split-reconstruction}
+\end{equation}
+
+\paragraph{Important distinction.}
+The coordinates \(\vect q\) are \emph{not} the first three raw standard POD
+coordinates.  They are the coordinates of a three-dimensional subspace
+identified from all 39 retained modes through \cref{eq:fit-T} and then
+factored through \cref{eq:VA-factorization}.  This is the precise meaning of
+``structured coordinates better suited to regression.''
+
+\section{PROM--ANN state approximation}
+\label{sec:prom-ann}
+
+\subsection{Affine primary-coordinate initialization}
+
+The map from macro strain to the structured primary coordinate is very nearly
+affine in the current data.  Define the row-sample design matrix
+\begin{equation}
+  \mat M_{\rm aff}
+  =\begin{bmatrix}\mat M\transpose&\vect 1\end{bmatrix}
+  \in\R^{N_s\times4}.
+  \label{eq:maff}
+\end{equation}
+The coefficient matrix \(\mat B_{\rm aff}\in\R^{4\times3}\) is obtained by
+\begin{equation}
+  \mat B_{\rm aff}
+  =\underset{\mat B\in\R^{4\times3}}
+           {\operatorname*{arg\,min}}
+   \frobnorm{\mat M_{\rm aff}\mat B-\mat Q\transpose}^{2}.
+  \label{eq:Baff}
+\end{equation}
+For one macro state, the affine prediction is
+\begin{equation}
+  \left(\vect q^0(\vect\mu)\right)\transpose
+  =\begin{bmatrix}\vect\mu\transpose&1\end{bmatrix}\mat B_{\rm aff}.
+  \label{eq:q0}
+\end{equation}
+In the current RVE, the relative fit error of this map is
+\(6.88\times10^{-4}\).  This makes \(\vect q^0\) an excellent initialization
+for an intrusive solve and a meaningful direct prediction.
+
+The role of \(\mat A\) deserves a precise statement.  It influences
+\(\vect q\) through \cref{eq:structured-q}, so it influences the data used to
+fit \(\mat B_{\rm aff}\).  However, \(\mat A\) does \emph{not} appear
+explicitly in the least-squares problem \cref{eq:Baff}; that problem directly
+fits \(\vect\mu\mapsto\vect q\).
+
+\subsection{ANN closure of secondary coordinates}
+
+The closure network learns the discarded coordinates as a function of the
+three structured coordinates,
+\begin{equation}
+  \overline{\vect q}
+  \approx\mathcal N_\theta(\vect q),
+  \qquad
+  \vect q\in\R^3,
+  \qquad
+  \overline{\vect q}\in\R^{36}.
+  \label{eq:ann-closure}
+\end{equation}
+It is trained from the pairs
+\(\{\vect q^{(j)},\overline{\vect q}^{(j)}\}\).  The production solver uses
+a closure with its constant and linear terms removed:
+\begin{equation}
+  \mathcal N_\theta^{\circ}(\vect q)
+  =\mathcal N_\theta(\vect q)-\mathcal N_\theta(\vect 0)
+   -\left.\frac{\partial\mathcal N_\theta}{\partial\vect q}\right|_{\vect0}\vect q.
+  \label{eq:origin-correction}
+\end{equation}
+Hence \(\mathcal N_\theta^{\circ}(\vect0)=\vect0\) and
+\(\partial\mathcal N_\theta^{\circ}/\partial\vect q(\vect0)=\mat0\).
+For concise notation, the superscript \(\circ\) is omitted below and
+\(\mathcal N_\theta\) denotes the corrected closure.
+
+The nonlinear PROM--ANN decoder is
+\begin{equation}
+  \widetilde{\vect u}(\vect q,\vect\mu)
+  =\vect u_{\rm aff}(\vect\mu)
+   +\mat V\mat A\vect q
+   +\overline{\mat V}\mathcal N_\theta(\vect q).
+  \label{eq:prom-ann-decoder}
+\end{equation}
+Its tangent with respect to the primary coordinates is the nonlinear-manifold
+test basis
+\begin{equation}
+  \mat W(\vect q)
+  =\frac{\partial\widetilde{\vect u}}{\partial\vect q}
+  =\mat V\mat A
+   +\overline{\mat V}
+    \frac{\partial\mathcal N_\theta}{\partial\vect q}(\vect q)
+  \in\R^{N_f\times3}.
+  \label{eq:W}
+\end{equation}
+The restriction of \(\mat W\) to element \(e\) is denoted by \(\mat W_e\).
+
+\section{Intrusive PROM--ANN and HPROM--ANN}
+\label{sec:hprom}
+
+\subsection{PROM--ANN Galerkin correction}
+
+The intrusive reduced equilibrium equation is a Galerkin projection using the
+tangent of the nonlinear decoder:
+\begin{equation}
+  \vect g(\vect q;\vect\mu)
+  =\mat W(\vect q)\transpose
+    \vect r\!\left(\widetilde{\vect u}(\vect q,\vect\mu);\vect\mu\right)
+  =\vect0.
+  \label{eq:prom-galerkin}
+\end{equation}
+The online solve initializes from \(\vect q^0(\vect\mu)\) in
+\cref{eq:q0}, then applies reduced Newton iterations,
+\begin{equation}
+  \mat K_{\rm red}(\vect q^k)\Delta\vect q^k
+  =-\vect g(\vect q^k;\vect\mu),
+  \qquad
+  \vect q^{k+1}=\vect q^k+\Delta\vect q^k.
+  \label{eq:reduced-newton}
+\end{equation}
+Ignoring manifold curvature gives the standard Gauss--Newton-style reduced
+tangent
+\begin{equation}
+  \mat K_{\rm GN}
+  =\mat W\transpose\mat K\mat W.
+  \label{eq:gn-tangent}
+\end{equation}
+The exact derivative of \cref{eq:prom-galerkin} also contains the curvature
+term \(\mathrm D\mat W\transpose[\vect r]\).  The code has an option to
+include that term.  This distinction is separate from MAW--ECM.
+
+\subsection{Elementwise hyper-reduction}
+
+Directly forming \cref{eq:prom-galerkin} still visits all \(N_e\) elements.
+For a fixed empirical cubature rule with support \(\set Z_{\rm res}\) and
+weights \(\xi_e^{\rm res}\), the hyper-reduced Galerkin residual is
+\begin{equation}
+  \vect g_{\rm HR}(\vect q;\vect\mu)
+  \approx
+  \sum_{e\in\set Z_{\rm res}}
+  \xi_e^{\rm res}\,
+  \mat W_e(\vect q)\transpose
+  \vect r_e\!\left(\widetilde{\vect u}(\vect q,\vect\mu);\vect\mu\right).
+  \label{eq:fixed-ecm-residual}
+\end{equation}
+Classical ECM selects a small positive support and weights offline, after a
+randomized SVD compression of sampled elementwise operators.  Stage 9 builds
+the residual data block for sampled state \(j\) as
+\begin{equation}
+  \mat Q_j^{\rm res}
+  =\begin{bmatrix}
+     \mat W_1\transpose\vect r_1 & \cdots &
+     \mat W_{N_e}\transpose\vect r_{N_e}
+   \end{bmatrix}
+  \in\R^{3\times N_e},
+  \qquad
+  \vect b_j^{\rm res}=\mat Q_j^{\rm res}\vect1.
+  \label{eq:ecm-residual-data}
+\end{equation}
+The column associated with element \(e\) is exactly its contribution to the
+Galerkin residual.  Fixed ECM finds a support and weights that reproduce the
+sampled blocks to the requested tolerance.
+
+\subsection{D-HPROM--ANN}
+
+The direct variant is not an equilibrium solve.  It uses
+\begin{equation}
+  \vect q=\vect q^0(\vect\mu),
+  \qquad
+  \widetilde{\vect u}_{\rm D}
+  =\widetilde{\vect u}(\vect q^0(\vect\mu),\vect\mu),
+  \label{eq:direct-state}
+\end{equation}
+then evaluates the homogenized quantities with the hyper-reduced output rule
+in \cref{sec:hom-maw}.  It does not evaluate \cref{eq:fixed-ecm-residual} and
+does not perform the correction \cref{eq:reduced-newton}.  Therefore its
+quality relies on the affine initialization and ANN decoder being sufficiently
+accurate over the deployment domain.
+
+\section{MAW--ECM: state-dependent cubature weights}
+\label{sec:maw}
+
+\subsection{Core idea}
+
+MAW--ECM keeps a \emph{common sparse element support} but allows its weights
+to vary smoothly with the state.  For any target \(\tau\) (residual, strain,
+or stress), let \(\set Z_\tau\) be its selected support and let
+\(\vect\xi^\tau(\vect z)\) contain the support weights.  The generic
+hyper-reduced operator is
+\begin{equation}
+  \sum_{e=1}^{N_e}\vect a_e^\tau
+  \ \approx\
+  \sum_{e\in\set Z_\tau}
+    \xi_e^\tau(\vect z)\vect a_e^\tau.
+  \label{eq:maw-generic}
+\end{equation}
+The support is fixed after offline pruning; only
+\(\vect\xi^\tau(\vect z)\) changes online.  This is important for a reduced
+mesh implementation because the mesh connectivity can stay fixed.
+
+\subsection{Local MAW constraints and common-support pruning}
+
+Start from a feasible classical ECM candidate support
+\(\set Z_{\tau,\rm ini}\) with weights \(\vect\xi_{\rm ini}^\tau\).
+At each training state \(\vect z_j\), build a local linear constraint
+\begin{equation}
+  \mat A_j^\tau\vect\xi_j^\tau=\vect b_j^\tau,
+  \qquad
+  \vect\xi_j^\tau\geq\vect0,
+  \qquad
+  \vect1\transpose\vect\xi_j^\tau=\alpha_\tau.
+  \label{eq:maw-local-constraints}
+\end{equation}
+The last equality is used in the present final model with
+\(\alpha_\tau=990\), the number of full RVE elements.  It preserves the
+reference integration measure and makes the weights nonnegative and
+comparable across states.
+
+For residual MAW,
+\begin{equation}
+  \mat A_j^{\rm res}
+  =\mat Q_j^{\rm res}(:,\set Z_{{\rm res},\rm ini}).
+  \label{eq:maw-res-A}
+\end{equation}
+For strain and stress MAW, the elementwise homogenization data are
+\begin{equation}
+  \mat C_j^{\varepsilon}(:,e)=A_e\avg{\mat E_e}_e,
+  \qquad
+  \mat C_j^{\sigma}(:,e)=A_e\avg{\mat S_e}_e,
+  \label{eq:maw-hom-data}
+\end{equation}
+and the corresponding \(\mat A_j^\tau\) is the restriction of the required
+columns to the candidate support.  In a full-target variant,
+\(\vect b_j^\tau\) is the sum over all elements.  In the final RVE MAW run,
+\texttt{rhs\_mode=anchor}: the right hand side is
+\begin{equation}
+  \vect b_j^\tau
+  =\mat A_j^\tau\vect\xi_{\rm ini}^\tau.
+  \label{eq:maw-anchor-target}
+\end{equation}
+This preserves the classical ECM rule locally while MAW pruning seeks a
+smaller common support and a smooth state-dependent weight field.
+
+The pruning routine eliminates candidate elements while maintaining the
+feasibility of \cref{eq:maw-local-constraints} over all sampled states.
+Its optional second phase introduces state-space smoothness, schematically
+\begin{equation}
+  \min_{\{\vect\xi_j\}}\ 
+  \sum_{(i,j)\in\set E_{\rm graph}}
+  \norm{\vect\xi_i-\vect\xi_j}^2
+  \quad\text{subject to the local constraints.}
+  \label{eq:maw-smoothness}
+\end{equation}
+The exact pruning procedure is an active-set elimination algorithm; it
+returns the common support and the feasible training matrix
+\begin{equation}
+  \mat\Xi_\tau
+  =\begin{bmatrix}
+    \vect\xi^\tau(\vect z_1)&\cdots&\vect\xi^\tau(\vect z_{N_\tau})
+  \end{bmatrix}.
+  \label{eq:maw-weight-training-data}
+\end{equation}
+
+\subsection{Weight regressors}
+
+The support weights must be evaluated at new online states.  The final RVE
+uses two regressor families.
+\paragraph{Residual MAW--RBF.}
+The residual support weights depend on the structured coordinates,
+\(\vect z_{\rm res}=\vect q\).  A multi-output Gaussian RBF has the form
+\begin{equation}
+  \widehat{\vect\xi}^{\rm res}(\vect q)
+  =\mat D\left[
+     \mat\Phi(\vect q)\mat A_{\rm RBF}+\mat p(\vect q)\mat B_{\rm RBF}
+    \right]\transpose,
+  \qquad
+  \Phi_\ell(\vect q)
+  =\exp\!\left[-\frac12
+      \sum_a\left(\frac{q_a-c_{\ell a}}{\ell_a}\right)^2\right].
+  \label{eq:maw-rbf}
+\end{equation}
+Here \(\mat D\) restores output scaling and \(\mat p\) is an optional
+constant or affine polynomial block.  The online implementation clips to
+nonnegative values and renormalizes the weight sum to \(\alpha_{\rm res}\).
+It also evaluates \(\partial\vect\xi^{\rm res}/\partial\vect q\)
+analytically.
+
+\paragraph{Homogenization MAW--ANN.}
+The final strain and stress support weights depend on macro input,
+\begin{equation}
+  \vect z_{\varepsilon}=\vect z_{\sigma}=\vect\mu.
+  \label{eq:hom-weight-input}
+\end{equation}
+Their ANN output is converted to positive, sum-preserving weights by
+\begin{equation}
+  \vect\xi^\tau(\vect\mu)
+  =\alpha_\tau\,\operatorname{softmax}
+    \left(\mathcal W^\tau_\omega(\vect\mu)\right),
+  \qquad \tau\in\{\varepsilon,\sigma\}.
+  \label{eq:maw-ann}
+\end{equation}
+This gives nonnegative weights with exactly the desired total by construction.
+
+\paragraph{Current final MAW model.}
+The saved file
+\code{stage_12_hprom_ann_mawecm_res_eps_sig_phase1to40_phase2to10_sum990_ann/ecm_weights_all.npz}
+uses a three-dimensional \(\vect q\), an RBF residual-weight map, ANN strain
+and stress weight maps driven by \(\vect\mu\), and ten elements per target.
+
+\section{HPROM--ANN with MAW--ECM}
+\label{sec:maw-hprom}
+
+\subsection{Dynamic residual and consistent tangent}
+
+With state-dependent residual weights, the online projected residual becomes
+\begin{equation}
+  \vect g_{\rm MAW}(\vect q;\vect\mu)
+  =\sum_{e\in\set Z_{\rm res}}
+   \xi_e^{\rm res}(\vect q)
+   \mat W_e(\vect q)\transpose
+   \vect r_e\!\left(\widetilde{\vect u}(\vect q,\vect\mu);\vect\mu\right).
+  \label{eq:maw-residual}
+\end{equation}
+Let \(\vect a_e=\mat W_e\transpose\vect r_e\).  Its exact directional
+derivative has three contributions,
+\begin{equation}
+  \mathrm D\vect g_{\rm MAW}
+  =\sum_{e\in\set Z_{\rm res}}
+    \left[
+      \xi_e^{\rm res}\,(\mathrm D\mat W_e\transpose)[\vect r_e]
+      +\xi_e^{\rm res}\,\mat W_e\transpose\mat K_e\mat W_e
+      +\vect a_e\left(\nabla_{\vect q}\xi_e^{\rm res}\right)\transpose
+    \right].
+  \label{eq:maw-tangent}
+\end{equation}
+The first term is the nonlinear-manifold curvature, the second is the usual
+Galerkin stiffness term, and the third is the MAW weight-tangent term.  If the
+weights are fixed, the last term vanishes.  If a Gauss--Newton manifold tangent
+is used, the first term is neglected.  The production HPROM--ANN solver can
+include both the manifold curvature and the MAW weight tangent; the
+state-dependent weight tangent must not be silently omitted when using
+\cref{eq:maw-residual}.
+
+The Newton correction is
+\begin{equation}
+  \mat K_{\rm MAW}(\vect q^k)\Delta\vect q^k
+  =-\vect g_{\rm MAW}(\vect q^k;\vect\mu),
+  \qquad
+  \vect q^{k+1}=\vect q^k+\Delta\vect q^k.
+  \label{eq:maw-newton}
+\end{equation}
+
+\subsection{Hyper-reduced homogenization}
+\label{sec:hom-maw}
+
+After obtaining the accepted state, homogenized strain and stress are
+approximated from their own selected supports:
+\begin{align}
+  \overline{\mat E}_{\rm HR}
+  &\approx
+  \frac{1}{A_0}
+  \sum_{e\in\set Z_{\varepsilon}}
+    \xi_e^{\varepsilon}(\vect\mu)
+    A_e\avg{\mat E_e}_e,
+  \label{eq:maw-hom-eps}\\
+  \overline{\mat S}_{\rm HR}
+  &\approx
+  \frac{1}{A_0}
+  \sum_{e\in\set Z_{\sigma}}
+    \xi_e^{\sigma}(\vect\mu)
+    A_e\avg{\mat S_e}_e.
+  \label{eq:maw-hom-sig}
+\end{align}
+The residual, strain, and stress supports may overlap, but they have distinct
+purposes and should be treated as independent rules.  A reduced HROM mesh is
+formed from their union plus the nodes and conditions required by the strong
+boundary conditions.
+
+\subsection{Online algorithms}
+
+\paragraph{HPROM--ANN with MAW--ECM.}
+For each macro increment \(\vect\mu^n\):
+\begin{enumerate}[label=\arabic*.,leftmargin=8mm]
+  \item Compute \(\mat F(\vect\mu^n)\) and
+  \(\vect u_{\rm aff}(\vect\mu^n)\).
+  \item Form \(\vect q^0(\vect\mu^n)\) from \cref{eq:q0}.  Continuation
+  from the previous converged \(\vect q\) may be used after the first step.
+  \item Decode \(\widetilde{\vect u}\), evaluate \(\mat W\), and evaluate
+  the residual MAW weights and their derivative.
+  \item Assemble \cref{eq:maw-residual} and its selected tangent terms, then
+  solve \cref{eq:maw-newton} until the reduced convergence criterion is met.
+  \item Evaluate \cref{eq:maw-hom-eps}--\cref{eq:maw-hom-sig} with the
+  accepted state and the strain/stress MAW weights.
+\end{enumerate}
+
+\paragraph{D-HPROM--ANN.}
+For each macro increment \(\vect\mu^n\):
+\begin{enumerate}[label=\arabic*.,leftmargin=8mm]
+  \item Compute \(\vect q=\vect q^0(\vect\mu^n)\).
+  \item Decode \(\widetilde{\vect u}_{\rm D}\) through
+  \cref{eq:prom-ann-decoder}.
+  \item Evaluate only the hyper-reduced homogenization
+  \cref{eq:maw-hom-eps}--\cref{eq:maw-hom-sig}.
+\end{enumerate}
+This direct path is appropriate only after verifying that its lack of
+equilibrium correction is acceptable on unseen trajectories.
+
+\section{Offline workflow and source map}
+\label{sec:source-map}
+
+\begin{longtable}{@{}p{16mm}p{48mm}p{90mm}@{}}
+\toprule
+Stage & Main files & Role \\
+\midrule
+\endhead
+0 & \code{stage0_training_trajectory.py} & Builds the ten serpentine macro-strain paths and writes \code{stage_0_trajectories.npz}. \\
+1 & \code{stage1_training_fom_solver_rve.py}, \code{fom_solver_rve.py} & Runs the FOM for each path and saves displacement, macro-strain, homogenized strain, and homogenized stress histories. \\
+2 & \code{stage2_pod_rve.py} & Removes \(\vect u_{\rm aff}\), checks strong Dirichlet consistency, and computes \(\mat V_{\rm tot}\). \\
+7a & \code{stage7a_prepare_rbf_dataset_ls.py}; wrapper \code{stage7a_prepare_ann_dataset_ls.py} & Implements \cref{eq:fit-T}--\cref{eq:Baff}; saves \(\mat V\), \(\overline{\mat V}\), \(\mat A\), \(\mat B_{\rm aff}\), and ANN data. \\
+7b & \code{stage7b_train_ann_manifold.py} & Trains \(\mathcal N_\theta:\vect q\mapsto\overline{\vect q}\). \\
+9a & \code{stage9_build_ecm_dataset_ann.py} & Builds sampled elementwise residual and homogenization operators. \\
+9b & \code{stage9_compute_ecm_weights_ann.py} & Builds the classical fixed ECM rule used as the MAW anchor. \\
+10 & \code{stage10_test_hprom_ann_ls.py}, \code{hprom_ann_solver_rve.py} & Runs and benchmarks PROM--ANN, HPROM--ANN, and D-HPROM--ANN. \\
+12 & \code{stage12b_build_mawecm_model_gpr.py}, \code{mawecm_pruning.py}, \code{mawecm_rbf_weights.py}, \code{mawecm_ann_weights.py} & Builds the common supports, local feasible MAW weights, and online RBF/ANN weight regressors.  The builder name is historical; it supports the ANN workflow. \\
+\bottomrule
+\end{longtable}
+
+The two most important persisted artifacts for the current case are:
+\begin{itemize}[leftmargin=7mm]
+  \item \code{stage_7_ann_data_ls/}: structured coordinates,
+  primary/secondary bases, \(\mat A\), \(\mat T\), and the affine
+  initialization fit;
+  \item \code{stage_12_hprom_ann_mawecm_res_eps_sig_phase1to40_phase2to10_sum990_ann/ecm_weights_all.npz}:
+  all MAW supports, models, HROM mesh metadata, and diagnostic data.
+\end{itemize}
+
+\section{Validation logic and error decomposition}
+\label{sec:validation}
+
+The method has several distinct approximation layers.  They should be
+validated separately before interpreting a final stress error.
+\begin{enumerate}[label=\arabic*.,leftmargin=8mm]
+  \item \textbf{POD truncation:} compare \(\vect s\) with
+  \(\mat V_{\rm tot}\mat V_{\rm tot}\transpose\vect s\).
+  \item \textbf{Coordinate construction:} check
+  \(\frobnorm{\mat T\mat Q_{\rm tot}-\mat M}\), the invertibility and
+  conditioning of \(\mat A\), and the exact split reconstruction in
+  \cref{eq:split-reconstruction}.
+  \item \textbf{Affine initialization:} evaluate the unseen-trajectory error
+  of \(\vect q^0(\vect\mu)\) from \cref{eq:q0}.
+  \item \textbf{ANN closure:} evaluate the error in
+  \(\overline{\vect q}\), in the decoded state, and in the nonlinear tangent
+  \(\mat W\) if it is used intrusively.
+  \item \textbf{Fixed ECM and MAW constraints:} verify every sampled local
+  constraint \(\mat A_j\vect\xi_j=\vect b_j\), positivity, and the required
+  weight sum.  Validate regressed weights away from the fitting nodes.
+  \item \textbf{HPROM correction:} compare the corrected \(\vect q\) and
+  reduced residual convergence against the non-hyper-reduced PROM--ANN.
+  \item \textbf{Output accuracy:} compare FOM, PROM--ANN, HPROM--ANN, and
+  D-HPROM--ANN homogenized stress histories on trajectories excluded from
+  the offline construction.
+\end{enumerate}
+
+This order localizes failures.  For example, a good ANN state with a poor
+stress curve points to output hyper-reduction, whereas a poor direct state but
+good corrected HPROM state points to \(\vect q^0\), not to MAW--ECM.
+
+\section{Porting the technology to Burgers 1D}
+\label{sec:burgers}
+
+\subsection{What transfers unchanged}
+
+The reusable architecture is independent of the RVE:
+\begin{equation}
+  \begin{gathered}
+    \text{training trajectories}
+    \longrightarrow \text{snapshots}
+    \longrightarrow \text{POD}
+    \longrightarrow \text{structured coordinates}
+    \\[0.3em]
+    \longrightarrow \text{ANN closure}
+    \longrightarrow \text{Galerkin correction and MAW--ECM}.
+  \end{gathered}
+  \label{eq:portable-chain}
+\end{equation}
+For Burgers, replace the RVE state, residual, and homogenized stress by the
+finite-element or finite-volume Burgers state, time-discrete residual, and
+the desired output functional.  The coordinate construction,
+\(\mat V\mat A\vect q+\overline{\mat V}\mathcal N_\theta(\vect q)\), and
+the elementwise MAW residual construction remain the same.
+
+\subsection{Transient residual}
+
+For example, a backward-Euler semi-discretization of Burgers at time step
+\(n\) has a residual of the generic form
+\begin{equation}
+  \vect r^n(\vect u^n;\vect u^{n-1},\vect\mu^n)
+  =\frac{1}{\Delta t}\mat M_h(\vect u^n-\vect u^{n-1})
+   +\vect f_{\rm conv}(\vect u^n)
+   +\vect f_{\rm diff}(\vect u^n;\vect\mu^n)
+   -\vect f_{\rm ext}(\vect\mu^n).
+  \label{eq:burgers-residual}
+\end{equation}
+The PROM--ANN Galerkin residual becomes
+\begin{equation}
+  \vect g^n(\vect q^n)
+  =\mat W(\vect q^n)\transpose
+    \vect r^n\!\left(
+      \widetilde{\vect u}(\vect q^n,\vect\mu^n);
+      \widetilde{\vect u}(\vect q^{n-1},\vect\mu^{n-1}),
+      \vect\mu^n
+    \right).
+  \label{eq:burgers-prom}
+\end{equation}
+The elementwise residual operator used by ECM must include both the spatial
+terms and the time-discrete mass contribution assigned to each element.
+
+\subsection{Critical modeling decision for a transient problem}
+
+For the RVE, \(\vect\mu\) identifies a quasi-static state well enough that
+the affine map \(\vect q^0(\vect\mu)\) is highly accurate.  This is not
+automatically true for Burgers.  Two states can have the same viscosity or
+forcing parameter but differ because of time history.  Before porting
+\cref{eq:Baff}, decide what identifies the current state:
+\begin{enumerate}[label=\arabic*.,leftmargin=8mm]
+  \item If the dynamics are deterministic from a known initial condition,
+  include time and the active forcing descriptors in \(\vect\mu^n\), then fit
+  \(\vect q^0(\vect\mu^n)\).
+  \item If history matters beyond the chosen input, use continuation
+  \(\vect q^{0,n}=\vect q^{n-1}\) as the principal initializer and retain the
+  intrusive reduced solve.
+  \item If a direct model is needed, augment the ANN input with enough state
+  history or learn a recurrent/time-step map.  Do not claim a direct map from
+  an insufficient parameter vector to a history-dependent state.
+\end{enumerate}
+
+\subsection{Burgers-specific offline plan}
+
+\begin{enumerate}[label=\arabic*.,leftmargin=8mm]
+  \item Define parameter/time trajectories that cover viscosity, forcing,
+  boundary conditions, initial-condition families, and the time interval of
+  interest.
+  \item Generate FOM snapshots.  If inhomogeneous Dirichlet conditions are
+  present, remove an exact lifting as in \cref{eq:affine-lifting}; otherwise
+  use the state directly.
+  \item Compute a POD basis and select the primary dimension from the
+  parameter/state dimension that is physically meaningful for the intended
+  latent representation.
+  \item Fit \(\mat T\) using \cref{eq:fit-T}, factor
+  \(\mat V_{\rm tot}\mat T\transpose=\mat V\mat A\), form \(\vect q\), and
+  train the secondary-coordinate closure.
+  \item Build residual ECM blocks using
+  \(\mat W_e\transpose\vect r_e^n\) at sampled time states.  Build a separate
+  output ECM block only if a spatial integral, flux, energy, or other output
+  requires it.
+  \item Build classical ECM first, then MAW supports and weight regressors.
+  The residual MAW input should normally be \(\vect q\); an output MAW input
+  can be \(\vect q\), \(\vect\mu\), or both, provided it identifies the
+  integrand reliably.
+  \item Validate fixed PROM, fixed HPROM, MAW HPROM, and a direct variant on
+  unseen trajectories, including long-time stability and residual convergence.
+\end{enumerate}
+
+\section{Implementation checklist for a future coding session}
+\label{sec:checklist}
+
+Before implementing the Burgers version, establish the following explicitly.
+\begin{enumerate}[label=\arabic*.,leftmargin=8mm]
+  \item Snapshot orientation: this document uses states as columns in
+  \(\mat S\), whereas several NumPy files store samples as rows.  Transpose
+  equations consistently rather than mixing conventions.
+  \item Lifting: define whether the reduced state is the full field or an
+  affine-free fluctuation.  Do not build a basis from mixed boundary data.
+  \item Coordinate definition: retain the exact sequence
+  \(\mat Q_{\rm tot}\), \(\mat T\), \(\mat V\mat A\), then \(\mat Q\).
+  Avoid introducing a second, ambiguously named ``master'' coordinate.
+  \item Decoder: use
+  \(\widetilde{\vect u}=\vect u_{\rm aff}+\mat V\mat A\vect q+
+  \overline{\mat V}\mathcal N_\theta(\vect q)\), and differentiate it to
+  obtain the Galerkin test basis \(\mat W\).
+  \item Direct versus intrusive path: the direct path is an approximation;
+  the intrusive path enforces a projected residual.  Benchmark both instead
+  of assuming that a good closure automatically gives a good direct solver.
+  \item MAW: supports are fixed, weights are dynamic.  Include
+  \(\partial\vect\xi/\partial\vect q\) in the reduced tangent when residual
+  weights depend on \(\vect q\).
+  \item Outputs: use a separate hyper-reduced rule for every quantity whose
+  elementwise integrand differs materially from the residual.
+\end{enumerate}
+
+\section{Compact formula reference}
+\label{sec:formula-reference}
+
+\begin{align}
+  \mat E &= \tfrac12(\mat F\transpose\mat F-\mat I),
+  & \vect\mu&=[E_{xx},E_{yy},G_{xy}]\transpose,
+  \\
+  \vect u&=\vect u_{\rm aff}+\vect s,
+  & \mat Q_{\rm tot}&=\mat V_{\rm tot}\transpose\mat S,
+  \\
+  \mat T&=\operatorname*{arg\,min}_{\widehat{\mat T}}
+  \frobnorm{\widehat{\mat T}\mat Q_{\rm tot}-\mat M}^{2},
+  & \mat V_{\rm tot}\mat T\transpose&=\mat V\mat A,
+  \\
+  \mat Q&=\mat A^{-1}\mat V\transpose\mat S,
+  & \overline{\mat Q}&=\overline{\mat V}\transpose\mat S,
+  \\
+  \mat B_{\rm aff}&=\operatorname*{arg\,min}_{\mat B}
+  \frobnorm{[\mat M\transpose,\vect1]\mat B-\mat Q\transpose}^{2},
+  & (\vect q^0)\transpose&=[\vect\mu\transpose,1]\mat B_{\rm aff},
+  \\
+  \widetilde{\vect u}(\vect q,\vect\mu)
+  &=\vect u_{\rm aff}(\vect\mu)+\mat V\mat A\vect q+
+  \overline{\mat V}\mathcal N_\theta(\vect q),
+  & \mat W&=\frac{\partial\widetilde{\vect u}}{\partial\vect q},
+  \\
+  \vect g_{\rm MAW}
+  &=\sum_{e\in\set Z_{\rm res}}
+  \xi_e^{\rm res}(\vect q)\mat W_e\transpose\vect r_e,
+  & \mat K_{\rm MAW}\Delta\vect q&=-\vect g_{\rm MAW},
+  \\
+  \overline{\mat S}_{\rm HR}
+  &\approx\frac{1}{A_0}\sum_{e\in\set Z_\sigma}
+   \xi_e^\sigma(\vect\mu)A_e\avg{\mat S_e}_e.
+\end{align}
+
+\end{document}
