@@ -95,6 +95,8 @@ def main() -> None:
         names.update({
             "FreeMatchedEnergyError": percentage(free_matched_result["energy_relative_l2"]),
             "FreeMatchedStressError": percentage(free_matched_result["stress_relative_l2"]),
+            "FreeMatchedSxxError": percentage(free_matched_result["stress_component_relative_l2"][0]),
+            "FreeMatchedSyyError": percentage(free_matched_result["stress_component_relative_l2"][1]),
             "FreeMatchedSxyError": percentage(free_matched_result["stress_component_relative_l2"][2]),
             "FreeMatchedVonMisesError": percentage(free_matched_result["von_mises_relative_l2"]),
             "FreeMatchedWidths": ",".join(str(w) for w in free_matched_result["widths"]),
