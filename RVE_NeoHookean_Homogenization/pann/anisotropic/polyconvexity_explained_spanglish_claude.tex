@@ -1,0 +1,526 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[spanish,es-tabla]{babel}
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm,bm,booktabs,graphicx,xcolor,mathtools}
+\newtheorem{fact}{Fact}
+\newtheorem{worked}{Worked example}
+\newcommand{\Cof}{\operatorname{cof}}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\SO}{\mathrm{SO}(2)}
+
+\newenvironment{takeaway}
+ {\begin{quote}\small\itshape\color{blue!60!black}}
+ {\end{quote}}
+
+\title{Polyconvexity, los invariants, y por qu\'e construimos los nuestros as\'i\\
+\large Versi\'on Spanglish del documento did\'actico sobre la construcci\'on anisotropic del PANN}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\textbf{Nota del traductor.} Este documento mantiene en \textbf{ingl\'es}
+los t\'erminos t\'ecnicos centrales tal como aparecen en la literatura
+(\emph{polyconvex/polyconvexity}, \emph{convex/convexity},
+\emph{objectivity}, \emph{invariant(s)}, \emph{ICNN}, \emph{Green--Lagrange
+strain}, \emph{deformation gradient}); el resto est\'a en espa\~nol
+natural. Si prefieres que algo espec\'ifico tambi\'en quede en ingl\'es
+(o al rev\'es), dime y lo ajusto.
+
+Este es un documento did\'actico, no un paper. Su \'unico objetivo es que
+entiendas, \emph{de verdad} y desde cero, qu\'e es \emph{polyconvexity},
+por qu\'e la hyperelasticity necesita esta condici\'on tan espec\'ifica
+(y un poco rara a primera vista) en lugar de la \emph{convexity} normal,
+qu\'e son en realidad los ``tres \emph{invariants} famosos'' $I_1,I_2,I_3$
+y por qu\'e son \emph{polyconvex}, y --la parte que es genuinamente
+espec\'ifica de este proyecto-- qu\'e son nuestras propias $15$
+features, por qu\'e tienen esa forma, si son una generalizaci\'on de
+$I_1,I_2,I_3$ o algo completamente distinto, y de d\'onde sali\'o la
+idea. Cada ejemplo num\'erico de abajo fue calculado y verificado, no
+inventado, as\'i que puedes reproducir cada n\'umero t\'u mismo.
+\end{abstract}
+
+\tableofcontents
+
+\section{¿Por qu\'e nos importa la convexity, para empezar?}
+\label{sec:motivation}
+
+Empecemos por la pregunta m\'as b\'asica posible, sin nada de
+elasticity todav\'ia: ¿por qu\'e la \emph{convexity} es tan importante
+en optimizaci\'on y en f\'isica?
+
+\begin{takeaway}
+Una funci\'on \emph{convex} no tiene m\'inimos locales ``falsos'' en los
+que quedarte atascado, y una l\'inea que conecta dos puntos cualquiera
+de su gr\'afica siempre queda por encima de la gr\'afica. Este \'unico
+hecho geom\'etrico es lo que hace que los problemas de minimizaci\'on
+construidos a partir de funciones \emph{convex} se comporten bien:
+los solvers basados en gradiente (incluyendo el m\'etodo de Newton)
+convergen de forma confiable, y la existencia de un minimizador est\'a
+garantizada bajo condiciones adicionales bastante suaves.
+\end{takeaway}
+
+Toma el ejemplo m\'as simple posible, $f(x)=x^2$. Tiene un solo m\'inimo,
+en $x=0$, y el m\'etodo de Newton lo encuentra en un solo paso desde
+cualquier punto de partida. Ahora compara $g(x)=x^4-3x^2$ (una forma de
+``doble pozo''): tiene \emph{dos} m\'inimos locales y un m\'aximo local
+en medio. Un solver basado en gradiente que arranque cerca del pozo
+``equivocado'' converger\'a tranquilamente a un minimizador que no es
+el global, y si est\'as minimizando una energ\'ia que se supone
+representa un equilibrio f\'isico real, converger al m\'inimo local
+equivocado es una respuesta f\'isicamente incorrecta de verdad, no
+simplemente un inconveniente num\'erico.
+
+En hyperelasticity, el ``problema de optimizaci\'on'' es: encontrar el
+campo de desplazamientos que minimiza la energ\'ia el\'astica total,
+sujeto a las condiciones de frontera. Si la densidad de energ\'ia $W$
+(como funci\'on de la deformaci\'on) es \emph{convex}, resultados
+cl\'asicos (el \emph{direct method of the calculus of variations}) te dan
+la existencia de un minimizador casi gratis, y el m\'etodo de Newton
+sobre el problema discretizado tiende a comportarse bien. Esta es toda
+la motivaci\'on para querer alg\'un tipo de \emph{convexity}. La
+pregunta es: \emph{convexity} ¿de qu\'e, exactamente?
+
+\section{La respuesta ingenua falla: $W$ no puede ser \emph{convex} en $F$}
+\label{sec:naive-fails}
+
+Lo m\'as ingenuo que se puede pedir es que $W$, como funci\'on del
+\emph{deformation gradient} $F$ (una matriz $2\times2$, en nuestro caso
+2D), sea \emph{convex} en $F$. Esto falla, y falla por una raz\'on
+limpia y verificable que no tiene nada que ver con ning\'un material en
+particular: la \emph{objectivity} (indiferencia al marco de referencia)
+lo hace imposible.
+
+La \emph{objectivity} dice que $W(QF)=W(F)$ para toda rotaci\'on
+$Q\in\SO$: rotar r\'igidamente el cuerpo deformado, sin deformarlo m\'as,
+no puede cambiar la energ\'ia almacenada. Toma $Q=-I$ (una rotaci\'on de
+$180^\circ$, que es un elemento genuino de $\SO$ en dos dimensiones). La
+\emph{objectivity} obliga a que
+\[
+ W(-F)=W(F).
+\]
+Ahora bien, si $W$ fuera \emph{convex} en $F$, el valor en el punto
+medio del segmento entre $F$ y $-F$ tendr\'ia que ser, como m\'aximo,
+el promedio de los extremos:
+\[
+ W\!\left(\tfrac12F+\tfrac12(-F)\right) = W(\bm 0) \;\leq\; \tfrac12W(F)+\tfrac12W(-F) = W(F).
+\]
+Pero el punto medio es la \emph{matriz cero}, $F=\bm 0$, que tiene
+$\det F=0$: f\'isicamente, este es un estado en el que el material ha
+sido aplastado hasta volumen cero, y cualquier energ\'ia f\'isicamente
+sensata tiene que explotar ah\'i ($W\to\infty$), no quedarse finita y
+por debajo de $W(F)$. La \emph{convexity} en $F$ y la \emph{objectivity}
+son sencillamente incompatibles. Esto no es un defecto de ning\'un
+modelo en particular; es un teorema (se remonta a Coleman y Noll, y se
+discute en pr\'acticamente todo tratamiento moderno del tema, por
+ejemplo el libro de texto de Ciarlet~\cite{Ciarlet1988}).
+
+\begin{takeaway}
+No puedes pedir que $W$ sea una funci\'on \emph{convex} ordinaria de
+$F$. Cualquier noci\'on de \emph{convexity} utilizable para elasticity
+tiene que ser algo m\'as d\'ebil, compatible con $W(-F)=W(F)$ y con
+$W\to\infty$ cuando el material es aplastado.
+\end{takeaway}
+
+\section{El truco de Ball: levantar el problema a un espacio m\'as grande}
+\label{sec:lifting-trick}
+
+Aqu\'i est\'a la idea central, y vale la pena entenderla una vez, en
+abstracto, completamente separada de la elasticity, porque despu\'es la
+versi\'on de elasticity deja de parecer misteriosa.
+
+\begin{takeaway}
+Una funci\'on puede no ser \emph{convex} en su variable
+\emph{original}, y sin embargo volverse \emph{convex} en el momento en
+que le das, como si fuera un input independiente, alguna cantidad
+\emph{extra, derivada} de la original.
+\end{takeaway}
+
+\begin{worked}[El truco del ``lifting'', sin nada de elasticity]
+\label{ex:lifting}
+Sea $F=\begin{psmallmatrix}a&b\\c&d\end{psmallmatrix}$ y considera la
+funci\'on $h(F)=\det F=ad-bc$. Como funci\'on de los cuatro n\'umeros
+$(a,b,c,d)$, $h$ es una forma bilineal con forma de silla de montar: su
+Hessian es indefinido (tiene autovalores positivos y negativos), as\'i
+que $h$ \emph{no} es \emph{convex} en $F$. Mover $b$ y $c$ en la
+direcci\'on correcta puede hacer que $h$ baje por debajo del promedio de
+dos puntos donde es grande --exactamente lo que la \emph{convexity}
+proh\'ibe.
+
+Ahora hagamos un truco: introduzcamos un s\'imbolo nuevo, extra,
+$\delta$, declaremos $\delta:=\det F$, y consideremos la funci\'on del
+\emph{par} $(F,\delta)$ dada por
+\[
+ \tilde h(F,\delta) := \delta.
+\]
+¡Esto ahora es trivialmente \emph{convex} (de hecho es af\'in/lineal) en
+el par $(F,\delta)$, porque ya no depende de $F$ en absoluto una vez
+que $\delta$ se trata como una coordenada independiente! Por supuesto,
+$\tilde h(F,\det F) = h(F)$ recupera la funci\'on original, no
+\emph{convex} --nada f\'isico cambi\'o. Lo que cambi\'o es que ahora
+podemos hacer una pregunta \emph{distinta, m\'as f\'acil}: ¿es $\tilde
+h$ conjuntamente \emph{convex} en el par ampliado de variables
+independientes $(F,\delta)$, en lugar de en $F$ solo, restringido al
+conjunto curvo $\{(F,\det F)\}$? La respuesta puede ser s\'i incluso
+cuando la respuesta a la pregunta original es no.
+\end{worked}
+
+Esto es, casi literalmente, lo que hace Ball~\cite{Ball1977} para la
+elasticity. En vez de preguntar si $W$ es \emph{convex} en $F$,
+pregunta si existe una funci\'on $G$ de \emph{tres variables de bloque
+independientes} $(F,\Cof F,\det F)$ --tratando la matriz cofactor
+$\Cof F$ y el determinante $\det F$ como si fueran inputs extra,
+independientes, exactamente como $\delta$ arriba-- tal que
+\begin{equation}
+ W(F)=G(F,\Cof F,\det F),\qquad G\text{ conjuntamente \emph{convex} en }
+ \R^{2\times2}\times\R^{2\times2}\times\R.
+ \label{eq:polyconvex-def}
+\end{equation}
+Esto es \emph{polyconvexity}. Es estrictamente m\'as d\'ebil que la
+\emph{convexity} en $F$ (toda funci\'on \emph{convex} en $F$ es
+trivialmente \emph{polyconvex}, ignorando los bloques extra, pero no al
+rev\'es), es compatible con la \emph{objectivity} (porque
+$\Cof(-F)=\Cof F$ y $\det(-F)=\det F$ en 2D, as\'i que
+$G(-F,\Cof F,\det F)$ no tiene por qu\'e ser igual a
+$G(F,\Cof F,\det F)$ por la misma raz\'on por la que a $\delta$ no le
+importaba el truco del cambio de signo de arriba --la parte no
+\emph{convex}, sensible al signo, del problema es exactamente la parte
+que qued\'o ``absorbida'' en los bloques extra), y es exactamente la
+condici\'on que Ball necesitaba, junto con una \emph{growth condition},
+para probar la existencia de minimizadores de energ\'ia mediante el
+\emph{direct method}. No dice nada, por s\'i sola, sobre el signo de
+$\partial^2W/\partial F^2$ en una deformaci\'on dada --esa es una
+pregunta completamente distinta, y estrictamente m\'as fuerte, que se
+discute en el paper principal.
+
+\section{Los tres \emph{invariants} famosos}
+\label{sec:classical-invariants}
+
+Vamos directo a tu pregunta: s\'i, has o\'ido hablar de tres
+\emph{invariants} famosos, y aqu\'i est\'an. Para el right
+Cauchy--Green tensor $C=F^TF$ (sim\'etrico, definido positivo), los
+\emph{invariants} cl\'asicos usados en pr\'acticamente todo libro de
+texto de hyperelasticity (ver Ogden~\cite{Ogden1984}, o
+Ciarlet~\cite{Ciarlet1988}) son
+\begin{align}
+ I_1 &= \tr C, \label{eq:I1}\\
+ I_2 &= \tfrac12\big[(\tr C)^2-\tr(C^2)\big]
+       = \tr\!\big(\Cof(C)\big)\quad\text{(en 3D)}, \label{eq:I2}\\
+ I_3 &= \det C = J^2. \label{eq:I3}
+\end{align}
+F\'isicamente: $I_1$ es (el doble de) la suma de los cuadrados de los
+principal stretches, as\'i que mide cu\'anto se ha estirado el material
+en total, combinando todas las direcciones; $I_3=J^2$ mide el cambio de
+volumen al cuadrado; $I_2$ tiene que ver con cu\'anto han cambiado las
+\emph{\'areas} (en lugar de las longitudes), y por eso se construye a
+partir de $\Cof(C)$, el objeto que describe c\'omo se transforman los
+elementos de \'area orientados bajo $F$.
+
+Los dos modelos hyperelastic compresibles/incompresibles m\'as famosos
+que existen se construyen directamente a partir de estos:
+\[
+ W_{\rm neo\text{-}Hookean}=c_1(I_1-3), \qquad
+ W_{\rm Mooney\text{-}Rivlin}=c_1(I_1-3)+c_2(I_2-3),
+\]
+y ambos son \emph{polyconvex}, por una raz\'on estructural muy limpia
+que ya puedes ver: $I_1=\tr C=|F|^2$ (una suma de cuadrados de las
+entradas de $F$) es \emph{convex} en $F$ directamente --vive
+enteramente en el \emph{primer} bloque de~\eqref{eq:polyconvex-def}-- e
+$I_2$, al estar construido a partir de $\Cof(C)$, vive en el
+\emph{segundo} bloque. Para coeficientes no negativos $c_1,c_2\geq0$,
+una combinaci\'on no negativa de funciones que son cada una \emph{convex}
+en su propio bloque vuelve a ser conjuntamente \emph{convex} en la
+variable combinada $(F,\Cof F,J)$ --exactamente la regla ``suma de
+piezas \emph{convex} es \emph{convex}'' usada en todo el paper
+principal.
+
+\begin{fact}[Una sutileza de 2D que vale la pena conocer]
+\label{fact:2d-degeneracy}
+En tres dimensiones, $I_1,I_2,I_3$ son tres n\'umeros genuinamente
+independientes. En dos dimensiones --nuestro caso-- $C$ solo tiene dos
+autovalores $\lambda_1,\lambda_2$ (principal stretches al cuadrado), y
+el rol de ``$I_2$'' (suma de productos de pares de autovalores) colapsa
+sobre un \'unico par, $\lambda_1\lambda_2=\det C=I_3$. Entonces en 2D,
+el $I_2$ cl\'asico y el $I_3$ cl\'asico son literalmente el mismo
+n\'umero, y la imagen ingenua de ``tres \emph{invariants}'' en realidad
+solo tiene dos escalares independientes, $I_1$ y $J$. Esto es
+exactamente por qu\'e la teor\'ia 2D de Ball se formula usando toda la
+\emph{matriz} $\Cof F$ como bloque, no solo su traza escalar: tratar
+$\Cof F$ como un objeto $2\times2$ completo (no meramente ``el segundo
+\emph{invariant}'') deja espacio para extraer informaci\'on
+genuinamente nueva, no isotropic, de \'el --cosa que su sola traza
+nunca podr\'ia hacer (su traza, como acabamos de ver, solo te devuelve
+$I_1$). Este es precisamente el espacio que usa nuestra propia
+construcci\'on m\'as abajo.
+\end{fact}
+
+\section{¿Usamos $I_1,I_2,I_3$? -- S\'i, generalizados}
+\label{sec:are-we-using-them}
+
+Aqu\'i est\'a la respuesta directa a ``¿usamos los tres \emph{invariants}
+famosos?'', hecha precisa en lugar de vaga.
+
+\begin{fact}[$I_1$ es un caso muy particular de nuestra propia construcci\'on]
+\label{fact:i1-special-case}
+Una identidad b\'asica y exacta: para \emph{cualquier} base ortonormal
+$\{e_1,e_2\}$ de $\R^2$ (no solo la est\'andar),
+\[
+ I_1=\tr C = e_1^TCe_1+e_2^TCe_2 .
+\]
+Es decir, $I_1$ ya es, en secreto, una suma pesada de $d\cdot Cd$ sobre
+dos direcciones unitarias elegidas, con peso $1$ en cada una y potencia
+$p=1$. Compara esto con nuestra propia familia de features (paper
+principal, ecuaci\'on de $Q^F_{k,p}$),
+\[
+ Q_{k,p}^F=\sum_{i=1}^3 w_{ki}\,(d_{ki}\cdot Cd_{ki})^p .
+\]
+$I_1$ es exactamente el caso particular de esta f\'ormula con: solo
+\emph{dos} direcciones en lugar de tres, esas dos direcciones
+\emph{ortogonales} entre s\'i, pesos \emph{iguales} a $1$, y potencia
+$p=1$. Nuestra construcci\'on no es an\'aloga a $I_1$; es una
+generalizaci\'on literal y directa de $I_1$ --m\'as direcciones (tres,
+no dos), sin requerir que sean ortogonales, pesos positivos generales
+(sujetos a la \emph{balance condition} de m\'as abajo, que es
+exactamente lo que reemplaza a ``ortonormal'' una vez que renuncias a
+la ortogonalidad), y potencias m\'as altas $p=2,3$ en lugar de $p=1$.
+\end{fact}
+
+La misma historia se repite un nivel arriba: nuestras features
+$Q_{k,p}^H$ usan $d\cdot\Cof(C)d$ exactamente de la misma forma en que
+$Q^F$ usa $d\cdot Cd$, as\'i que generalizan el \emph{invariant} basado
+en $\Cof$ (con sabor a $I_2$) exactamente en el mismo sentido. Y $J,J^2$
+no se generalizan en absoluto --son $I_3$ e $I_3^2$, usados sin ning\'un
+cambio, porque el \emph{invariant} volum\'etrico no necesita una
+generalizaci\'on anisotropic: el cambio de volumen ya es un \'unico
+escalar independiente de la direcci\'on, y no hay nada anisotropic que
+generalizar ah\'i.
+
+\begin{takeaway}
+Entonces: s\'i, estamos usando $I_1$, $I_2$ (v\'ia $\Cof$), e $I_3=J^2$
+--pero no como tres n\'umeros pelados. Usamos \emph{muchas} versiones
+direccionales de las construcciones tipo-$I_1$ y tipo-$I_2$ (tres
+direction systems, cada uno contribuyendo t\'erminos en potencias
+$p=2,3$), porque un material \emph{sin ninguna symmetry asumida}
+necesita poder responder de forma distinta en direcciones distintas, y
+un solo escalar $I_1$ o $I_2$, al estar construido por suma sobre una
+base ortonormal (o, de hecho, \emph{cualquier} base), es completamente
+ciego a la direcci\'on por construcci\'on.
+\end{takeaway}
+
+\section{Por qu\'e $I_1,I_2,I_3$ solos no pueden describir un material anisotropic}
+\label{sec:isotropy-blindness}
+
+Esto hay que verlo num\'ericamente para que realmente se entienda, as\'i
+que aqu\'i est\'a, calculado de verdad, no simplemente afirmado.
+
+\begin{worked}[Dos materiales distintos que $I_1$ y $J$ no pueden distinguir]
+\label{ex:isotropy-blind}
+Toma dos estados de deformaci\'on,
+\[
+ F_a=\begin{psmallmatrix}1.4&0\\0&0.9\end{psmallmatrix}
+ \quad(\text{estirar }1.4\times\text{ en }x,\ \text{comprimir a }0.9\times\text{ en }y),
+ \qquad
+ F_b=\begin{psmallmatrix}0.9&0\\0&1.4\end{psmallmatrix}
+ \quad(\text{roles de }x,y\text{ intercambiados}).
+\]
+Estos son estados f\'isicamente muy distintos para un material
+anisotropic --uno estira fuerte en $x$ y comprime en $y$, el otro hace
+lo contrario-- y un material cuya rigidez depende de la direcci\'on
+deber\'ia, en general, almacenar una cantidad distinta de energ\'ia en
+cada caso. Sin embargo:
+\[
+ I_1(F_a)=I_1(F_b)=2.77, \qquad J(F_a)=J(F_b)=1.26 .
+\]
+Exactamente iguales, hasta el \'ultimo decimal, porque la traza y el
+determinante literalmente no saben cu\'al eje es cu\'al. \emph{Cualquier}
+energ\'ia construida puramente a partir de $I_1,I_2,I_3$ (es decir,
+cualquier modelo hyperelastic \emph{isotropic}, sin importar c\'omo se
+combinen los \emph{invariants}) es matem\'aticamente incapaz de
+distinguir $F_a$ de $F_b$. Esto no es un error de aproximaci\'on; es
+exacto y estructural.
+\end{worked}
+
+\section{Nuestra construcci\'on: direction systems, \emph{balance}, y por qu\'e la potencia c\'ubica no es decorativa}
+\label{sec:our-construction}
+
+Para arreglar el Ejemplo~\ref{ex:isotropy-blind}, necesitas al menos una
+feature que \emph{no} sea ciega a la direcci\'on. Para eso son los tres
+direction systems (tabla de direction systems en el paper principal).
+Cada sistema $k$ consiste en tres vectores unitarios $d_{k1},d_{k2},
+d_{k3}$ en \'angulos espec\'ificos, con pesos positivos espec\'ificos
+$w_{k1},w_{k2},w_{k3}$, que satisfacen la \emph{balance condition}
+\begin{equation}
+ \sum_{i=1}^3 w_{ki}\,d_{ki}\otimes d_{ki} = I .
+ \label{eq:balance}
+\end{equation}
+Esta condici\'on es la generalizaci\'on directa en 2D de ``ortonormal
+con pesos unitarios'': dice que las direcciones elegidas (posiblemente
+obl\'icuas, no ortogonales), pesadas apropiadamente, siguen sumando la
+identidad, de la misma forma en que $e_1\otimes e_1+e_2\otimes e_2=I$
+lo hace para un par ortonormal. Esto es exactamente lo que hace que la
+prueba de \emph{stress-free reference state} (C4 en el paper principal)
+funcione con una sola correcci\'on escalar, y es por qu\'e el modelo se
+comporta \emph{isotropically en el estado no deformado} aunque sea
+completamente anisotropic lejos de \'el --un material real con una
+textura o un tejido normalmente se ve localmente isotropic justo en
+reposo, y solo revela su anisotropy una vez que lo deformas, que es
+exactamente el comportamiento que esta construcci\'on reproduce por
+dise\~no.
+
+\begin{worked}[Calculando $Q^F_{1,2}$ y $Q^F_{1,3}$ a mano, de verdad]
+\label{ex:worked-full}
+El sistema~1 usa \'angulos $0^\circ,50^\circ,130^\circ$ con pesos
+$0.2959,0.8520,0.8520$. Para $F_a$ de arriba, $C=\mathrm{diag}(1.96,0.81)$.
+Las tres direcciones son $d_1=(1,0)$, $d_2=(0.6428,0.7660)$,
+$d_3=(-0.6428,0.7660)$, lo que da
+\[
+ d_1\cdot Cd_1=1.96,\qquad d_2\cdot Cd_2=d_3\cdot Cd_3=1.2852 .
+\]
+Entonces
+\[
+ Q^F_{1,2}(F_a)=0.2959(1.96)^2+2\times0.8520(1.2852)^2=3.9511,
+\]
+\[
+ Q^F_{1,3}(F_a)=0.2959(1.96)^3+2\times0.8520(1.2852)^3=5.8449.
+\]
+Repitiendo para $F_b$ (intercambiando los roles de $x,y$, as\'i que en
+efecto $d\cdot Cd$ recoge el $0.81$ y el $1.96$ en el patr\'on opuesto)
+se obtiene
+\[
+ Q^F_{1,2}(F_b)=3.95107,\qquad Q^F_{1,3}(F_b)=5.7357.
+\]
+Ahora compara los dos estados directamente:
+\[
+ \big|Q^F_{1,2}(F_a)-Q^F_{1,2}(F_b)\big| \approx 0.00001,
+ \qquad
+ \big|Q^F_{1,3}(F_a)-Q^F_{1,3}(F_b)\big| \approx 0.109 .
+\]
+Este es el n\'umero m\'as importante de todo este documento.
+\textbf{La feature de potencia 2 apenas distingue $F_a$ de $F_b$}
+(una diferencia en el quinto decimal, para este sistema) --resulta
+que un agregado \emph{cuadr\'atico} balanceado en 2D obedece una
+simetr\'ia oculta casi exacta al intercambiar los dos ejes, as\'i que es
+un detector de anisotropy casi ciego, no muy distinto de $I_1$ mismo en
+este aspecto. \textbf{La feature de potencia 3, en cambio, difiere en
+aproximadamente un $1.9\%$ de su propio valor} --una diferencia real,
+estructural, no accidental. Esto es exactamente por qu\'e el modelo usa
+t\'erminos tanto de $p=2$ como de $p=3$ para cada direction system, y
+por qu\'e el paper principal dice que esto ``no es cosm\'etico'': sin
+los t\'erminos c\'ubicos, el modelo estar\'ia mucho m\'as cerca de ser
+isotropic de lo previsto, casi por accidente, por razones que no tienen
+nada que ver con el entrenamiento y todo que ver con una coincidencia
+geom\'etrica de 2D en potencias pares.
+\end{worked}
+
+¿Por qu\'e \emph{tres} direction systems separados, en lugar de uno?
+Un solo sistema de tres direcciones ya rompe la isotropy (el Ejemplo
+\ref{ex:worked-full} lo demuestra), pero solo muestrea la respuesta
+direccional del material en tres \'angulos espec\'ificos. La rigidez de
+un material anisotropic real puede variar de forma continua y
+complicada con la direcci\'on; tres sistemas independientes, con
+\'angulos distintos entre s\'i (nueve direcciones en total, cada
+sistema individualmente balanceado), le dan al modelo muchas m\'as
+``sondas'' independientes de rigidez direccional para combinar,
+exactamente como usar m\'as sensores en m\'as \'angulos da una imagen
+m\'as rica de una se\~nal direccional desconocida que un solo trio de
+sensores.
+
+\section{¿De d\'onde sali\'o esto -- lo inventamos nosotros?}
+\label{sec:provenance}
+
+Separ\'emoslo honestamente en dos capas, porque la respuesta honesta
+tiene dos partes distintas.
+
+\paragraph{La estrategia general (no es nuestra).} Construir una
+energ\'ia \emph{polyconvex} como una input-convex neural network (ICNN)
+aplicada a \emph{invariants} elegidos a mano, cada uno individualmente
+\emph{polyconvex}, es el enfoque de Klein et
+al.~\cite{Klein2022}, que a su vez se apoya en la teor\'ia original de
+existencia de Ball~\cite{Ball1977} y en la tradici\'on cl\'asica de
+hyperelasticity basada en \emph{invariants} que se remonta a Ogden y
+antes~\cite{Ogden1984}. Klein et al.\ atan sus \emph{invariants} a un
+\emph{named} material symmetry group (c\'ubico, transversalmente
+isotropic, \dots) mediante un structural tensor cl\'asico --una t\'ecnica
+bien establecida, de libro de texto (structural-tensor / integrity-basis
+representation theory para \emph{invariants} anisotropic) aplicada por
+muchos autores antes que ellos.
+
+\paragraph{El mecanismo espec\'ifico (s\'i es nuestro).} Lo que es
+genuinamente construcci\'on propia de este proyecto es la decisi\'on de
+\emph{no} atar los \emph{invariants} a ning\'un named symmetry group en
+absoluto: en cambio, usar varios direction systems gen\'ericos,
+individualmente balanceados v\'ia~\eqref{eq:balance}, sin ninguna
+clausura de rotaci\'on de $90^\circ$ ni ning\'un promedio $D_4$
+incorporado en ninguna parte. Esta es la respuesta espec\'ifica al
+problema abierto que Linden et al.~\cite{Linden2023} se\~nalan
+expl\'icitamente en su propio paper --que puede no existir un conjunto
+de \emph{invariants} completo y compatible con \emph{polyconvexity} para
+una symmetry class general, desconocida-- y es lo que le permite a esta
+construcci\'on reclamar \emph{objectivity} exacta, un \emph{stress-free
+reference state} exacto, y \emph{polyconvexity} exacta \emph{sin nunca
+asumir ni verificar} a qu\'e symmetry class, si acaso alguna, pertenece
+el material. Los \'angulos y pesos num\'ericos espec\'ificos de la
+tabla de direction systems son una soluci\'on v\'alida de la
+\emph{balance condition}~\eqref{eq:balance} (que est\'a subdeterminada)
+--hay infinitas soluciones v\'alidas, y las que se usaron no se derivaron
+de ning\'un principio f\'isico m\'as profundo, m\'as all\'a de satisfacer
+la ecuaci\'on~\eqref{eq:balance} con precisi\'on de m\'aquina y de dar
+tres patrones angulares visiblemente distintos, no relacionados por
+$D_4$; si quieres una elecci\'on m\'as limpia o mejor optimizada, la
+\emph{balance condition} es la \'unica restricci\'on real que hay que
+preservar.
+
+\section{Un resumen corto, en un p\'arrafo}
+\label{sec:recap}
+
+La \emph{convexity} ordinaria en $F$ es imposible para cualquier
+energ\'ia \emph{objective} (Secci\'on~\ref{sec:naive-fails}). La
+soluci\'on de Ball, \emph{polyconvexity}, pide \emph{convexity} no en
+$F$ sino en la tripleta ampliada y ``levantada'' $(F,\Cof F,\det F)$,
+tratada como variables independientes
+(Secci\'on~\ref{sec:lifting-trick}) --exactamente el mismo truco que
+promover $\det F$ a su propia coordenada libre en el
+Ejemplo~\ref{ex:lifting}. Los \emph{invariants} cl\'asicos $I_1,I_2,I_3$
+son la forma de libro de texto de construir energ\'ias
+\emph{polyconvex} a partir de esta tripleta
+(Secci\'on~\ref{sec:classical-invariants}), pero son \emph{isotropic}
+por construcci\'on y demostrablemente ciegos a la direcci\'on
+(Ejemplo~\ref{ex:isotropy-blind}). Nuestras propias features son una
+generalizaci\'on directa y literal de $I_1$ y del \emph{invariant}
+basado en $\Cof$ --m\'as direcciones, pesos generales que satisfacen una
+\emph{balance condition}, y, de forma crucial, potencias tanto
+cuadr\'aticas \emph{como} c\'ubicas, porque la potencia cuadr\'atica
+sola es un detector de anisotropy casi ciego en 2D
+(Ejemplo~\ref{ex:worked-full}). La estrategia general de
+ICNN-sobre-\emph{invariants} es de Klein et al.; la elecci\'on
+espec\'ifica de usar direction systems gen\'ericos, libres de symmetry,
+en lugar de un structural tensor con nombre, es la contribuci\'on
+propia de este proyecto, construida para responder a un problema
+abierto planteado expl\'icitamente en la literatura a la que responde.
+
+\begin{thebibliography}{9}
+\bibitem{Ball1977}
+J.~M. Ball. Convexity conditions and existence theorems in nonlinear
+elasticity. \emph{Archive for Rational Mechanics and Analysis}, 63:337--403,
+1977.
+\bibitem{Ciarlet1988}
+P.~G. Ciarlet. \emph{Mathematical Elasticity, Volume I: Three-Dimensional
+Elasticity}. North-Holland, 1988.
+\bibitem{Ogden1984}
+R.~W. Ogden. \emph{Non-Linear Elastic Deformations}. Ellis Horwood,
+Chichester, 1984 (reprinted by Dover, 1997).
+\bibitem{Klein2022}
+D.~K. Klein, M. Fern\'andez, R.~J. Martin, P. Neff, and O. Weeger.
+Polyconvex anisotropic hyperelasticity with neural networks.
+\emph{Journal of the Mechanics and Physics of Solids}, 159:104703, 2022.
+\bibitem{Linden2023}
+L. Linden, D.~K. Klein, K.~A. Kalina, J. Brummund, O. Weeger, and
+M. K\"astner. Neural networks meet hyperelasticity: a guide to enforcing
+physics. \emph{Journal of the Mechanics and Physics of Solids},
+179:105363, 2023.
+\end{thebibliography}
+
+\end{document}

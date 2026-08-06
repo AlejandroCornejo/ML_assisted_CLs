@@ -1,0 +1,849 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm,bm,graphicx,booktabs}
+\newtheorem{takeaway}{Idea clave}
+\newtheorem{ejemplo}{Ejemplo}
+\newcommand{\Cof}{\operatorname{cof}}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\R}{\mathbb{R}}
+
+\title{Super Ap\'endice B\\
+\large Gu\'ia completa, paso a paso, del paper PANN\\
+(Physics-Augmented Neural Networks and Projection-Based\\
+Reduced-Order Models for Anisotropic Hyperelasticity)}
+\author{Notas de estudio -- construidas junto con Claude}
+\date{Documento vivo -- se construye por cap\'itulos, uno a la vez}
+
+\begin{document}
+\maketitle
+
+\begin{quote}
+\emph{C\'omo usar este documento:} este NO es el paper. Es un compa\~nero
+de estudio, mucho m\'as largo y mucho m\'as lento, que existe para que
+ninguna idea del paper se dé por sentada. Cada vez que el paper
+mencione un objeto por primera vez (por ejemplo $\bm F$), aqu\'i
+encontrar\'as un cap\'itulo dedicado exclusivamente a explicar ese
+objeto desde cero, con ejemplos num\'ericos concretos y gr\'aficas
+reales. Vamos a construirlo un cap\'itulo a la vez, para que puedas
+leer y digerir cada uno antes de seguir con el siguiente.
+\end{quote}
+
+\tableofcontents
+
+\section{El gradiente de deformaci\'on $\bm F$}
+\label{ch:F}
+
+\subsection{El escenario f\'isico}
+
+Imagina un objeto s\'olido antes de deformarse. A esta versi\'on
+``antes'' la llamamos \textbf{configuraci\'on de referencia}, y a cada
+punto material dentro de ella lo llamamos $\bm X$ (may\'uscula, para
+recordar que es la posici\'on \emph{original}).
+
+Ahora deformamos el objeto: lo estiramos, lo comprimimos, lo cortamos,
+lo giramos. Cada punto material $\bm X$ termina en una nueva posici\'on
+$\bm x$ (min\'uscula), en lo que llamamos la \textbf{configuraci\'on
+actual} o \textbf{deformada}.
+
+El \textbf{gradiente de deformaci\'on} $\bm F$ es, por definici\'on, el
+objeto que describe c\'omo cambia esa correspondencia punto a punto, de
+forma \emph{local}:
+\begin{equation}
+ \bm F := \frac{\partial \bm x}{\partial \bm X}.
+ \label{eq:appB-F-def}
+\end{equation}
+En palabras: $\bm F$ te dice, si mueves un poquito el punto material
+de referencia en cierta direcci\'on, cu\'anto y en qu\'e direcci\'on se
+mueve su imagen deformada.
+
+En este proyecto trabajamos con \textbf{deformaciones homog\'eneas}:
+$\bm F$ es la misma matriz constante en todo el cuerpo (no cambia de
+punto a punto). En ese caso especial, la relaci\'on completa entre
+$\bm X$ y $\bm x$ se puede escribir simplemente como
+\begin{equation}
+ \bm x = \bm F\bm X
+ \label{eq:appB-x-FX}
+\end{equation}
+(o $\bm x=\bm F(\bm X-\bm X_c)+\bm x_c$ si medimos posiciones desde un
+centro $\bm X_c$ que no se mueve; esto es exactamente lo que hace
+\texttt{fom\_solver\_rve.py} al imponer la condici\'on de contorno del
+RVE). Por ahora, para entender qu\'e \emph{es} $\bm F$, basta con
+\eqref{eq:appB-x-FX}.
+
+\subsection{La forma matricial en 2D}
+
+En nuestro problema (2D), $\bm F$ es una matriz $2\times2$:
+\begin{equation}
+ \bm F = \begin{pmatrix} a & b \\ c & d \end{pmatrix}.
+ \label{eq:appB-F-matrix}
+\end{equation}
+Cuatro n\'umeros, $a,b,c,d\in\R$, describen completamente la
+deformaci\'on local (siempre que sea homog\'enea).
+
+\subsection{La pregunta m\'as importante: \ ¿qu\'e le pasa a los vectores de la base?}
+
+La forma m\'as directa de entender qu\'e \emph{hace} una matriz es
+preguntar qu\'e le hace a los vectores de la base can\'onica,
+\begin{equation}
+ \bm e_1=\begin{pmatrix}1\\0\end{pmatrix}, \qquad
+ \bm e_2=\begin{pmatrix}0\\1\end{pmatrix}.
+\end{equation}
+Multiplicando:
+\begin{equation}
+ \bm F\bm e_1=\begin{pmatrix}a\\c\end{pmatrix}, \qquad
+ \bm F\bm e_2=\begin{pmatrix}b\\d\end{pmatrix}.
+ \label{eq:appB-Fe1Fe2}
+\end{equation}
+Es decir: \textbf{la primera columna de $\bm F$ es d\'onde termina el
+primer vector de la base, y la segunda columna es d\'onde termina el
+segundo}. Esto no es una coincidencia de notaci\'on -- es literalmente
+la definici\'on de multiplicar una matriz por un vector, columna por
+columna.
+
+Como el cuadrado unidad de referencia (con v\'ertices en $(0,0)$,
+$(1,0)$, $(1,1)$, $(0,1)$) est\'a generado exactamente por $\bm e_1$ y
+$\bm e_2$, conocer $\bm F\bm e_1$ y $\bm F\bm e_2$ es suficiente para
+saber en qu\'e paralelogramo se convierte ese cuadrado.
+
+\subsection{El determinante: cambio de \'area}
+
+El determinante de $\bm F$,
+\begin{equation}
+ J:=\det\bm F = ad-bc,
+ \label{eq:appB-J-def}
+\end{equation}
+mide \emph{cu\'anto cambia el \'area} de cualquier regi\'on al aplicar
+$\bm F$. Concretamente, si una regi\'on de referencia tiene \'area
+$A_0$, su imagen deformada tiene \'area $|J|\,A_0$ (el valor absoluto
+importa; el signo de $J$ es harina de otro costal, ve\'amoslo abajo).
+
+\subsection{Seis ejemplos, para que se vea con los ojos}
+
+La Figura~\ref{fig:appB-F-examples} muestra el cuadrado de referencia
+(l\'inea discontinua gris), su imagen deformada (verde), y las dos
+columnas $\bm F\bm e_1$ (rojo) y $\bm F\bm e_2$ (azul), para seis
+matrices concretas. Vamos uno por uno.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{ch1_F_examples_claude.png}
+\caption{El cuadrado unidad de referencia y su imagen bajo seis
+matrices $\bm F$ distintas, cubriendo los cinco reg\'imenes de $J$
+descritos en el texto (m\'as un ejemplo de corte puro).}
+\label{fig:appB-F-examples}
+\end{figure}
+
+\begin{ejemplo}[Identidad -- panel 1]
+$\bm F=\bm I=\mathrm{diag}(1,1)$. Entonces $\bm F\bm e_1=(1,0)^T$ y
+$\bm F\bm e_2=(0,1)^T$: los vectores de la base no se mueven. El
+cuadrado deformado coincide exactamente con el de referencia (por eso
+no se distingue la l\'inea discontinua del relleno verde). El
+determinante es
+\[
+ J=(1)(1)-(0)(0)=1:
+\]
+\'area exactamente conservada. \'Este es el estado ``sin deformar'',
+$\bm F=\bm I$, que usaremos constantemente como punto de referencia en
+el resto del paper.
+\end{ejemplo}
+
+\begin{ejemplo}[Estiramiento que duplica el \'area -- panel 2]
+$\bm F=\mathrm{diag}(2,1)$. Entonces $\bm F\bm e_1=(2,0)^T$ (el
+vector horizontal se \emph{duplica} en longitud) y $\bm F\bm
+e_2=(0,1)^T$ (el vector vertical no cambia). El cuadrado se convierte
+en un rect\'angulo el doble de ancho. El determinante es
+\[
+ J=(2)(1)-(0)(0)=2,
+\]
+exactamente el factor por el que creci\'o el \'area (el cuadrado
+ten\'ia \'area $1$; el rect\'angulo tiene \'area $2\times1=2$).
+\end{ejemplo}
+
+\begin{ejemplo}[Compresi\'on is\'otropa -- panel 3]
+$\bm F=\mathrm{diag}(0.5,0.5)$. Ambos vectores de la base se
+\emph{reducen} a la mitad de su longitud:
+$\bm F\bm e_1=(0.5,0)^T$, $\bm F\bm e_2=(0,0.5)^T$. El cuadrado se
+encoge uniformemente. El determinante es
+\[
+ J=(0.5)(0.5)-0=0.25,
+\]
+consistente con que el \'area del cuadrado peque\~no es
+$0.5\times0.5=0.25$ veces la original.
+\end{ejemplo}
+
+\begin{ejemplo}[Colapso -- panel 4]
+$\bm F=\mathrm{diag}(2,0)$. Aqu\'i $\bm F\bm e_1=(2,0)^T$ pero
+$\bm F\bm e_2=(0,0)^T$: \textbf{el segundo vector de la base
+desaparece por completo}, se colapsa al origen. El cuadrado, que
+ten\'ia \'area, se aplasta en un segmento de recta (sin altura,
+\'area cero). El determinante es
+\[
+ J=(2)(0)-(0)(0)=0.
+\]
+F\'isicamente, esto representar\'ia un material aplastado hasta
+volumen (\'area, en 2D) cero: una configuraci\'on \emph{no admisible},
+en la que esperamos que cualquier energ\'ia el\'astica razonable
+explote a $+\infty$ (esta es exactamente la condici\'on de crecimiento,
+(C6), que el paper impone m\'as adelante con el t\'ermino $-r\log J$).
+\end{ejemplo}
+
+\begin{ejemplo}[Reflexi\'on -- panel 5]
+$\bm F=\mathrm{diag}(-1,1)$. Ahora $\bm F\bm e_1=(-1,0)^T$: el primer
+vector de la base \emph{se invierte}, apunta en la direcci\'on
+contraria. El cuadrado se refleja como en un espejo vertical. El
+determinante es
+\[
+ J=(-1)(1)-(0)(0)=-1.
+\]
+El \'area en valor absoluto se conserva ($|J|=1$), pero el signo
+negativo señala que \textbf{la orientaci\'on se invirti\'o}: si
+recorr\'ias el borde del cuadrado original en sentido antihorario,
+ahora lo recorres en sentido horario. F\'isicamente, esto
+corresponder\'ia a que el material se ``diera la vuelta'' sobre s\'i
+mismo (como una tela que se voltea), algo que un s\'olido real no
+hace sin romperse. Por eso el paper exige $J>0$ en todo momento (ve\'ase
+la discusi\'on de $\bm C(\bm\varepsilon)\succ0$ en la
+Secci\'on~\ref{ch:F} del paper principal).
+\end{ejemplo}
+
+\begin{ejemplo}[Corte puro (\emph{shear}) -- panel 6]
+$\bm F=\begin{pmatrix}1&0.6\\0&1\end{pmatrix}$. Aqu\'i
+$\bm F\bm e_1=(1,0)^T$ (el vector horizontal no cambia) pero
+$\bm F\bm e_2=(0.6,1)^T$ (el vector vertical se ``inclina'' hacia la
+derecha, sin cambiar su longitud vertical). El cuadrado se convierte en
+un paralelogramo inclinado, \textbf{sin cambiar de \'area}:
+\[
+ J=(1)(1)-(0.6)(0)=1.
+\]
+Este ejemplo es importante porque muestra que $J=1$ (\'area conservada)
+\textbf{no} significa ``nada cambi\'o'': la \emph{forma} cambi\'o
+notablemente (el cuadrado ya no es un cuadrado), aunque el \'area sea
+la misma que en la identidad. Este tipo de deformaci\'on -- cambio de
+forma sin cambio de volumen -- es exactamente lo que en el paper se
+llama deformaci\'on \emph{isoc\'orica}, y es la raz\'on por la que
+$J$ por s\'i solo no basta para describir toda la deformaci\'on: hacen
+falta m\'as invariantes (los que vienen en los pr\'oximos cap\'itulos).
+\end{ejemplo}
+
+\subsection{Resumen de este cap\'itulo}
+
+\begin{takeaway}
+\begin{itemize}
+\item $\bm F$ es una matriz $2\times2$ que describe c\'omo un peque\~no
+entorno de material se estira, comprime, corta o gira, localmente.
+\item Sus columnas, $\bm F\bm e_1$ y $\bm F\bm e_2$, son exactamente
+las im\'agenes de los vectores de la base -- lo m\'as directo posible
+para visualizar qu\'e hace $\bm F$.
+\item $J=\det\bm F$ mide el cambio de \'area (en 2D) o volumen (en 3D).
+\item $J=1$ conserva el \'area pero \textbf{no} implica que no haya
+deformaci\'on (ejemplo del corte); $J>1$ expande; $0<J<1$ comprime;
+$J=0$ es un colapso no f\'isico; $J<0$ invierte la orientaci\'on y
+tampoco es f\'isicamente admisible.
+\item En este proyecto, $\bm F$ \textbf{no} es un dato libre: se
+construye a partir de la deformaci\'on macrosc\'opica
+$\bm\varepsilon=(E_{11},E_{22},\gamma_{12})$ mediante
+$\bm F=\bm U=\sqrt{2\bm E(\bm\varepsilon)+\bm I}$ (la ra\'iz cuadrada
+sim\'etrica, sin rotaci\'on) -- esto lo explicaremos con calma en el
+cap\'itulo dedicado a $\bm E$ y $\bm C$.
+\end{itemize}
+\end{takeaway}
+
+\bigskip
+\noindent\textbf{Antes de seguir:} relee los seis ejemplos y, para cada
+uno, verifica t\'u mismo con l\'apiz y papel que $\bm F\bm e_1$,
+$\bm F\bm e_2$ y $J$ coinciden con lo que dice el texto.
+
+\section{Por qu\'e $\bm F$ solo no basta: objetividad y la aparici\'on de $\bm C$}
+\label{ch:C}
+
+\subsection{El problema: gira el objeto ya deformado, y $\bm F$ cambia}
+
+En el Cap\'itulo~\ref{ch:F} vimos que $\bm F$ describe c\'omo se
+deforma localmente un cuerpo. Ahora hagamos un experimento mental muy
+simple.
+
+Toma el objeto \emph{ya deformado} (el paralelogramo verde de
+cualquiera de nuestros ejemplos) y g\'iralo r\'igidamente en el
+espacio -- sin estirarlo ni comprimirlo m\'as, solo gir\'andolo, como
+si lo tomaras con la mano y lo rotaras. F\'isicamente, esto \textbf{no
+le a\~nade ni le quita energ\'ia el\'astica almacenada}: el material
+sigue teniendo exactamente la misma cantidad de estiramiento interno,
+solo que ahora apunta en otra direcci\'on del espacio. Esta idea tiene
+nombre propio:
+
+\begin{takeaway}[Objetividad, o \emph{frame indifference}]
+La energ\'ia el\'astica almacenada no puede depender de c\'omo est\'a
+orientado el objeto \emph{ya deformado} en el espacio -- solo puede
+depender de cu\'anto se estir\'o o cort\'o internamente. En s\'imbolos,
+si $\bm Q$ es cualquier rotaci\'on r\'igida,
+\[
+ W(\bm Q\bm F)=W(\bm F).
+\]
+\end{takeaway}
+
+Pero aqu\'i est\'a el problema num\'erico: si tomamos, por ejemplo,
+$\bm F=\mathrm{diag}(2,1)$ (nuestro ejemplo de estiramiento del
+Cap\'itulo~\ref{ch:F}) y lo giramos $40^\circ$, la matriz resultante
+$\bm Q\bm F$ tiene entradas completamente distintas de $\bm F$ (lo
+verificamos num\'ericamente m\'as abajo). Si construy\'eramos
+ingenuamente una energ\'ia $W$ que dependiera de las entradas de
+$\bm F$ de cualquier forma arbitraria, casi con toda seguridad
+violar\'iamos $W(\bm Q\bm F)=W(\bm F)$ por accidente. Necesitamos
+construir $W$ a partir de \emph{alg\'un otro objeto} que, por
+construcci\'on, no distinga entre $\bm F$ y $\bm Q\bm F$.
+
+\subsection{¿Qu\'e es exactamente una rotaci\'on $\bm Q$ en 2D?}
+
+Una rotaci\'on r\'igida de \'angulo $\theta$ en 2D es la matriz
+\begin{equation}
+ \bm Q(\theta)=\begin{pmatrix}\cos\theta & -\sin\theta\\ \sin\theta & \cos\theta\end{pmatrix}.
+ \label{eq:appB-Q}
+\end{equation}
+Dos propiedades algebraicas son las \'unicas que vamos a usar:
+\begin{align}
+ \bm Q^T\bm Q&=\bm I \qquad\text{(``ortogonal'': preserva longitudes y \'angulos)},\\
+ \det\bm Q&=1 \qquad\text{(preserva la orientaci\'on, a diferencia de una reflexi\'on)}.
+\end{align}
+Puedes verificar $\bm Q^T\bm Q=\bm I$ t\'u mismo multiplicando
+\eqref{eq:appB-Q} por su transpuesta y usando
+$\cos^2\theta+\sin^2\theta=1$. El conjunto de todas estas matrices se
+llama $\mathrm{SO}(2)$ (\emph{special orthogonal group} en 2D), y es
+exactamente el conjunto $\bm Q$ que aparece en la condici\'on de
+objetividad (C2) del paper.
+
+\subsection{La soluci\'on: $\bm C=\bm F^T\bm F$}
+
+Definimos
+\begin{equation}
+ \bm C:=\bm F^T\bm F.
+ \label{eq:appB-C-def}
+\end{equation}
+Veamos qu\'e le pasa a $\bm C$ cuando remplazamos $\bm F$ por
+$\bm Q\bm F$:
+\begin{equation}
+ (\bm Q\bm F)^T(\bm Q\bm F)
+ =\bm F^T\bm Q^T\bm Q\bm F
+ =\bm F^T\,\underbrace{(\bm Q^T\bm Q)}_{=\bm I}\,\bm F
+ =\bm F^T\bm F=\bm C.
+ \label{eq:appB-C-invariance}
+\end{equation}
+\'Esa es toda la demostraci\'on. No hace falta nada m\'as: el \'unico
+ingrediente que se us\'o es $\bm Q^T\bm Q=\bm I$, la propiedad que
+define a una rotaci\'on. Por tanto,
+\begin{takeaway}
+$\bm C=\bm F^T\bm F$ toma \textbf{exactamente el mismo valor} para
+$\bm F$ y para $\bm Q\bm F$, para cualquier rotaci\'on $\bm Q$. $\bm C$
+``no ve'' la orientaci\'on en el espacio del objeto deformado -- solo
+ve cu\'anto se estir\'o internamente.
+\end{takeaway}
+
+\begin{ejemplo}[Verificaci\'on num\'erica completa]
+Tomemos $\bm F=\begin{pmatrix}2&0.5\\0&1\end{pmatrix}$ y una rotaci\'on
+de $\theta=40^\circ$:
+\[
+ \bm Q=\begin{pmatrix}\cos40^\circ&-\sin40^\circ\\\sin40^\circ&\cos40^\circ\end{pmatrix}
+ \approx\begin{pmatrix}0.766&-0.643\\0.643&0.766\end{pmatrix}.
+\]
+Entonces
+\[
+ \bm F'=\bm Q\bm F\approx\begin{pmatrix}1.532&-0.260\\1.286&1.087\end{pmatrix},
+\]
+que, como puedes ver, \textbf{no se parece en nada} a $\bm F$ entrada
+por entrada. Sin embargo, calculando $\bm C=\bm F^T\bm F$ para ambas:
+\[
+ \bm F^T\bm F=\begin{pmatrix}4&1\\1&1.25\end{pmatrix},
+ \qquad
+ (\bm F')^T\bm F'=\begin{pmatrix}4&1\\1&1.25\end{pmatrix},
+\]
+\textbf{exactamente id\'enticas} (verificado num\'ericamente, no solo
+algebraicamente). La Figura~\ref{fig:appB-C-objectivity} muestra
+geom\'etricamente qu\'e est\'a pasando: el c\'irculo unidad se
+convierte, bajo $\bm F$, en una elipse; bajo $\bm F'=\bm Q\bm F$, en
+\textbf{la misma elipse, solo rotada $40^\circ$ en el espacio}. La
+\emph{forma} de la elipse (sus dos semiejes, cu\'anto se estir\'o en
+cada direcci\'on) es lo \'unico que $\bm C$ registra; hacia d\'onde
+apunta esa elipse en el espacio es exactamente la informaci\'on que
+$\bm C$ descarta.
+\end{ejemplo}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.92\linewidth]{ch2_C_objectivity_claude.png}
+\caption{El mismo estiramiento interno ($\bm C$ id\'entica), visto sin
+rotaci\'on extra (izquierda) y con una rotaci\'on r\'igida de
+$40^\circ$ superpuesta (derecha). La elipse tiene la misma forma en
+ambos paneles; solo cambia su orientaci\'on en el espacio.}
+\label{fig:appB-C-objectivity}
+\end{figure}
+
+\subsection{Qu\'e significa $\bm C$ f\'isicamente: longitudes al cuadrado}
+
+Hay una segunda forma, muy concreta, de entender $\bm C$: para
+cualquier vector material $\bm v$ (un vector dibujado en la
+configuraci\'on de referencia),
+\begin{equation}
+ |\bm F\bm v|^2 = (\bm F\bm v)\cdot(\bm F\bm v) = \bm v^T\bm F^T\bm F\bm v = \bm v^T\bm C\bm v.
+ \label{eq:appB-C-lengths}
+\end{equation}
+Es decir: \textbf{$\bm C$ te permite calcular cu\'anto mide, al
+cuadrado, la imagen deformada de cualquier vector material, sin
+necesidad de calcular $\bm F\bm v$ primero}. Por ejemplo, con
+$\bm v=\bm e_1$:
+\[
+ |\bm F\bm e_1|^2=\bm e_1^T\bm C\bm e_1=C_{11}.
+\]
+Para nuestro ejemplo, $C_{11}=4$, y en efecto
+$\bm F\bm e_1=(2,0)^T$ tiene longitud al cuadrado $2^2=4$. Consistente.
+
+\subsection{De $\bm C$ a $\bm E$: la deformaci\'on de Green--Lagrange}
+
+Definimos ahora
+\begin{equation}
+ \bm E:=\tfrac12(\bm C-\bm I).
+ \label{eq:appB-E-def}
+\end{equation}
+¿Por qu\'e restar $\bm I$? Porque queremos que la medida de
+deformaci\'on sea \textbf{exactamente cero cuando no hay
+deformaci\'on}. Si $\bm F=\bm I$ (nuestro Ejemplo~1 del
+Cap\'itulo~\ref{ch:F}), entonces $\bm C=\bm F^T\bm F=\bm I$, y por
+tanto
+\[
+ \bm E=\tfrac12(\bm I-\bm I)=\bm 0.
+\]
+Sin el $-\bm I$, tendr\'iamos $\bm C=\bm I\neq\bm 0$ incluso sin
+ninguna deformaci\'on, lo cual ser\'ia una convenci\'on mucho menos
+c\'omoda para escribir energ\'ias que deben anularse en el estado de
+referencia (la condici\'on (C4) del paper, $W(\bm 0)=0$, se refiere
+precisamente a $\bm E=\bm 0$).
+
+\subsection{$J$ en t\'erminos de $\bm C$, y por qu\'e $\bm C\succ0$ importa}
+
+Como $\det(\bm F^T\bm F)=\det(\bm F^T)\det(\bm F)=(\det\bm F)^2$, se
+sigue que
+\begin{equation}
+ \det\bm C = J^2 \qquad\Longleftrightarrow\qquad J=\sqrt{\det\bm C}
+ \label{eq:appB-J-C}
+\end{equation}
+(tomando la ra\'iz positiva, ya que exigimos $J>0$ -- recuerda el
+Ejemplo 5 del colapso y la reflexi\'on del Cap\'itulo~\ref{ch:F}). Para
+que esta ra\'iz cuadrada exista como n\'umero real, necesitamos
+$\det\bm C\geq0$; y para que la ra\'iz cuadrada \emph{matricial}
+$\bm F=\bm U=\sqrt{2\bm E+\bm I}$ que el paper usa para construir la
+condici\'on de contorno (la mencionamos al final del
+Cap\'itulo~\ref{ch:F}) tenga sentido como matriz sim\'etrica real, se
+necesita adem\'as que $\bm C=\bm I+2\bm E\succ0$ (positiva definida,
+es decir, todos sus autovalores estrictamente positivos) -- \'esta es
+exactamente la condici\'on que el c\'odigo verifica expl\'icitamente
+antes de construir la deformaci\'on de contorno, y que dispara un
+error en vez de devolver silenciosamente un $\bm F$ esp\'ureo si se
+viola.
+
+\subsection{Resumen de este cap\'itulo}
+
+\begin{takeaway}
+\begin{itemize}
+\item $\bm F$ por s\'i solo no sirve para medir ``cu\'anto se
+deform\'o'' un material de forma que no dependa de la orientaci\'on en
+el espacio: $\bm F$ y $\bm Q\bm F$ representan f\'isicamente lo mismo,
+pero son matrices distintas.
+\item $\bm C:=\bm F^T\bm F$ resuelve esto exactamente:
+$(\bm Q\bm F)^T(\bm Q\bm F)=\bm C$ para toda rotaci\'on $\bm Q$,
+usando \'unicamente $\bm Q^T\bm Q=\bm I$.
+\item Interpretaci\'on f\'isica de $\bm C$: $\bm v^T\bm C\bm v=|\bm F\bm v|^2$,
+longitudes al cuadrado de vectores materiales deformados.
+\item $\bm E:=\tfrac12(\bm C-\bm I)$ es la misma informaci\'on que
+$\bm C$, mont\'ada de forma que $\bm E=\bm 0$ exactamente quiere decir
+``sin deformaci\'on''.
+\item $J=\sqrt{\det\bm C}$, y necesitamos $\bm C\succ0$ para que todo
+esto tenga sentido como n\'umeros reales.
+\end{itemize}
+\end{takeaway}
+
+\bigskip
+\noindent\textbf{Antes de seguir:} confirma con tus propios n\'umeros
+(cambia $\theta$ en el ejemplo, o usa otro $\bm F$ del
+Cap\'itulo~\ref{ch:F}) que $\bm C$ no cambia al rotar.
+
+\section{El truco de lifting de Ball, y la definici\'on de polyconvexidad}
+\label{ch:lifting}
+
+\subsection{Qu\'e esper\'abamos de la convexidad (y qu\'e vamos a perder)}
+\label{sec:appB-expectation}
+
+Antes de tocar $\bm F$ para nada, recordemos \textbf{por qu\'e nos
+import\'o la convexidad desde el principio} -- si no dejamos esto
+clar\'isimo primero, cualquier truco que venga despu\'es va a sonar a
+enga\~no, con raz\'on.
+
+Piensa en $f(x)=x^2$: tiene un \'unico m\'inimo, en $x=0$, y cualquier
+m\'etodo razonable (Newton, descenso de gradiente) lo encuentra sin
+ambig\"uedad, desde donde sea que empieces. Ahora piensa en
+$g(x)=x^4-3x^2$: tiene \textbf{dos} m\'inimos (en $x=\pm\sqrt{1.5}$,
+sim\'etricos) y un m\'aximo local falso en $x=0$ separ\'andolos. Si
+empiezas a optimizar cerca de un m\'inimo, puedes terminar ah\'i sin
+saber que hab\'ia otro igual de v\'alido del otro lado -- y si tu
+problema representa algo f\'isico, quedarte en ``el m\'inimo
+equivocado'' es una respuesta f\'isicamente real pero incompleta.
+
+Y ya que sali\'o en nuestra conversaci\'on, agreguemos tu propio
+ejemplo, $h(x)=x^3$: \'esta ni siquiera es convexa ni c\'oncava (se
+curva hacia arriba para $x>0$ y hacia abajo para $x<0$, con un punto de
+inflexi\'on en $x=0$ que no es ni m\'aximo ni m\'inimo), y de hecho no
+tiene \textbf{ning\'un} m\'inimo global: se va a $-\infty$ sin l\'imite
+conforme $x\to-\infty$. Si tu energ\'ia se comportara as\'i, ni
+siquiera tendr\'ia sentido preguntar ``¿cu\'al es el equilibrio?'' --
+no habr\'ia ninguno, el sistema colapsar\'ia sin fondo. La
+Figura~\ref{fig:appB-motivation} dibuja las tres, una junto a la otra.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=.92\linewidth]{ch3_motivation_claude.png}
+\caption{Tres comportamientos posibles de una funci\'on de una sola
+variable, de mejor a peor para un problema de optimizaci\'on: convexa,
+con un \'unico m\'inimo (izquierda); no convexa pero con m\'inimos
+bien definidos, solo que hay m\'as de uno (centro); y ni convexa ni
+c\'oncava, sin ning\'un m\'inimo global (derecha, tu ejemplo). $W(\bm F)$
+resultar\'a estar, en cierto sentido preciso, m\'as cerca del panel
+central que del derecho -- pero eso es exactamente lo que el resto del
+cap\'itulo tiene que demostrar, no algo que podamos asumir.}
+\label{fig:appB-motivation}
+\end{figure}
+
+\begin{takeaway}[Lo que quer\'iamos, en una frase]
+Si la energ\'ia el\'astica $W(\bm F)$ fuera convexa, sabr\'iamos que el
+problema de encontrar el equilibrio (minimizar la energ\'ia total) tiene
+una \'unica soluci\'on, sin ambig\"uedades, y que la podemos encontrar
+de forma confiable. Eso, y nada menos, es lo que quer\'iamos.
+\end{takeaway}
+
+Vamos a demostrar, en un momento, que \textbf{esto es imposible} para
+nuestra $W(\bm F)$. Y quiero decir esto con toda claridad desde ya,
+para que no se pierda despu\'es entre f\'ormulas: \textbf{no vamos a
+recuperar esa garant\'ia}. Lo que Ball ofrece en su lugar, m\'as
+adelante en este cap\'itulo, es algo \emph{estrictamente m\'as d\'ebil}
+-- no ``un \'unico m\'inimo, f\'acil de encontrar'', sino solamente
+``existe \emph{al menos una} soluci\'on de equilibrio''. Ni siquiera
+promete que no haya otras soluciones igualmente v\'alidas (piensa en
+una regla delgada que, al comprimirla, se puede pandear hacia la
+izquierda o hacia la derecha: ambas son configuraciones de equilibrio
+f\'isicamente reales, no ``trampas'' que un mejor m\'etodo evitar\'ia).
+Guardemos esta distinci\'on -- unicidad y facilidad de optimizaci\'on
+por un lado, mera existencia por el otro -- porque es exactamente lo
+que se perdi\'o, y es importante no confundir lo uno con lo otro m\'as
+adelante.
+
+\subsection{Por qu\'e $W$ no puede ser convexa en $\bm F$}
+
+Ahora que sabemos qu\'e es la objetividad (Cap\'itulo~\ref{ch:C}),
+podemos usarla para descartar la opci\'on m\'as ingenua de todas: pedir
+que $W$ sea una funci\'on convexa ordinaria de $\bm F$.
+
+Recuerda del Cap\'itulo~\ref{ch:C} que $\bm Q=-\bm I$ (una rotaci\'on de
+$180^\circ$) es una rotaci\'on v\'alida en 2D:
+$\det(-\bm I)=(-1)^2=1$ y $(-\bm I)^T(-\bm I)=\bm I$. Por objetividad,
+\begin{equation}
+ W(-\bm F)=W(\bm F)\qquad\text{para todo }\bm F.
+ \label{eq:appB-Wminus}
+\end{equation}
+Supongamos, por contradicci\'on, que $W$ fuera convexa en $\bm F$.
+Entonces, evaluando la desigualdad de convexidad en el punto medio
+entre $\bm F$ y $-\bm F$:
+\begin{equation}
+ W\!\left(\tfrac12\bm F+\tfrac12(-\bm F)\right)
+ \;\leq\;\tfrac12W(\bm F)+\tfrac12W(-\bm F)
+ \;\overset{\eqref{eq:appB-Wminus}}{=}\;W(\bm F).
+ \label{eq:appB-Wzero-bound}
+\end{equation}
+Pero el punto medio $\tfrac12\bm F+\tfrac12(-\bm F)$ es, exactamente,
+la \textbf{matriz cero}, $\bm F=\bm 0$. Con $\bm F=\bm 0$: $\det\bm F=0$,
+que en el Cap\'itulo~\ref{ch:F} identificamos como un \textbf{colapso}
+(el cuadrado de referencia se aplasta a un punto, \'area cero).
+F\'isicamente, cualquier energ\'ia el\'astica razonable debe
+\textbf{explotar} en ese estado, $W(\bm 0)=+\infty$ -- es exactamente
+la condici\'on de crecimiento (C6) que el paper exige. Pero
+\eqref{eq:appB-Wzero-bound} dice $W(\bm 0)\leq W(\bm F)$, un n\'umero
+finito. Contradicci\'on.
+
+\begin{takeaway}
+Convexidad ordinaria en $\bm F$ es incompatible con la objetividad:
+una fuerza a que $W(\bm 0)$ sea finito, la otra exige que sea infinito.
+Esto no es un defecto de ning\'un modelo en particular -- es un
+resultado cl\'asico (se remonta a Coleman y Noll, y aparece en
+pr\'acticamente cualquier libro de texto moderno de elasticidad no
+lineal). Necesitamos una noci\'on de convexidad m\'as d\'ebil,
+compatible con $W(-\bm F)=W(\bm F)$ y con $W\to\infty$ en el colapso.
+\end{takeaway}
+
+\subsection{Un ejemplo muy concreto de que $\det\bm F$ no es convexo}
+
+Antes de buscar la soluci\'on, veamos con n\'umeros por qu\'e ni
+siquiera la funci\'on m\'as simple posible construida a partir de
+$\bm F$ -- el propio determinante $h(\bm F):=\det\bm F$ -- es convexa.
+Vamos a usar este mismo ejemplo num\'erico durante el resto del
+cap\'itulo.
+
+\begin{ejemplo}[Dos matrices con el mismo determinante]
+\label{ex:appB-F1F2}
+Sean
+\[
+ \bm F_1=\begin{pmatrix}2&0\\0&0.5\end{pmatrix},\qquad
+ \bm F_2=\begin{pmatrix}0.5&0\\0&2\end{pmatrix}.
+\]
+Ambas tienen el mismo determinante:
+\[
+ \det\bm F_1=2\times0.5=1,\qquad \det\bm F_2=0.5\times2=1.
+\]
+Su punto medio es
+\[
+ \bm F_m=\tfrac12\bm F_1+\tfrac12\bm F_2
+ =\begin{pmatrix}1.25&0\\0&1.25\end{pmatrix},
+\]
+con determinante
+\[
+ \det\bm F_m=1.25\times1.25=1.5625.
+\]
+Si $h=\det$ fuera convexa, exigir\'iamos
+$h(\bm F_m)\leq\tfrac12h(\bm F_1)+\tfrac12h(\bm F_2)=\tfrac12(1)+\tfrac12(1)=1$.
+Pero obtuvimos $h(\bm F_m)=1.5625>1$. \textbf{Violaci\'on directa}: el
+determinante no es convexo.
+\end{ejemplo}
+
+\subsection{La silla de montar}
+
+¿Por qu\'e ocurre esto? Restrinj\'amonos a matrices diagonales,
+$\bm F=\mathrm{diag}(a,d)$, para poder dibujar la funci\'on completa (en
+4 variables generales, $h(a,b,c,d)=ad-bc$, no cabe en una gr\'afica
+ordinaria, pero en 2 variables s\'i). Con $\bm F$ diagonal,
+\[
+ h(a,d)=ad.
+\]
+El panel izquierdo de la Figura~\ref{fig:appB-lifting} dibuja esta
+funci\'on. Nota la forma de \textbf{silla de montar}: a lo largo de la
+diagonal $d=a$, $h(a,a)=a^2$ crece hacia arriba en ambas direcciones
+(curvatura positiva); a lo largo de la antidiagonal $d=-a$,
+$h(a,-a)=-a^2$ decrece en ambas direcciones (curvatura negativa). Una
+funci\'on convexa no puede curvarse hacia arriba en una direcci\'on y
+hacia abajo en otra -- eso es precisamente lo que le pasa a $h$, y es
+la raz\'on geom\'etrica detr\'as de la Ejemplo~\ref{ex:appB-F1F2}:
+nuestros dos puntos $\bm F_1=(2,0.5)$ y $\bm F_2=(0.5,2)$ (en
+coordenadas $(a,d)$) est\'an situados de tal manera que el segmento
+entre ellos atraviesa la regi\'on ``que se curva hacia arriba'' de la
+silla.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{ch3_lifting_claude.png}
+\caption{Izquierda: $h(a,d)=ad$ sobre matrices diagonales, con
+$\bm F_1$, $\bm F_2$ y su punto medio marcados. Derecha: el valor de
+$\det\bm F(t)$ a lo largo del segmento $\bm F(t)=(1-t)\bm F_1+t\bm F_2$
+(verde), comparado con la cuerda recta que conecta los dos valores
+extremos (gris discontinuo). El \'area sombreada es exactamente la
+violaci\'on de convexidad del Ejemplo~\ref{ex:appB-F1F2}.}
+\label{fig:appB-lifting}
+\end{figure}
+
+El panel derecho muestra lo mismo de otra forma, quiz\'a la m\'as
+directa de todas: a lo largo del segmento que une $\bm F_1$ con
+$\bm F_2$, parametrizado por $t\in[0,1]$,
+\[
+ \det\bm F(t)=1+2.25\,t(1-t)
+\]
+(verif\'icalo t\'u mismo expandiendo $(2-1.5t)(0.5+1.5t)$). Esta curva
+vale $1$ en ambos extremos pero sube hasta $1.5625$ en el medio --
+\textbf{queda por encima} de la cuerda recta (que, al valer lo mismo en
+ambos extremos, es simplemente la l\'inea horizontal en $1$). Una
+funci\'on convexa siempre debe quedar \emph{por debajo} de sus cuerdas;
+\'esta queda por encima. Confirmado, con n\'umeros y con dibujo.
+
+\subsection{El mecanismo de Ball, y qu\'e promete exactamente}
+
+Vamos a repasar el mecanismo -- ya lo entendiste bien la primera vez,
+as\'i que esta vez lo dejamos corto -- y despu\'es vamos a ser muy
+precisos sobre qu\'e obtenemos de \'el, retomando justo la distinci\'on
+de la Secci\'on~\ref{sec:appB-expectation}.
+
+\subsubsection*{El mecanismo, resumido}
+
+Introducimos una variable nueva $\delta$, sin relaci\'on todav\'ia con
+$\bm F$, y definimos
+\[
+ G(\bm F,\delta):=\delta.
+\]
+Como funci\'on de $\delta$ sola (ignorando $\bm F$ por completo), $G$
+es lineal, luego convexa, de la forma m\'as trivial posible: si mueves
+$\delta$ en l\'inea recta de un valor a otro, su valor a mitad de
+camino es exactamente el promedio -- eso es, literalmente, la
+definici\'on de moverse en l\'inea recta. Despu\'es, \textbf{imponemos}
+$\delta:=\det\bm F$, y recuperamos
+\[
+ G(\bm F,\det\bm F)=\det\bm F=h(\bm F).
+\]
+Esto es exactamente lo que hicimos antes, y el mecanismo en s\'i no
+tiene nada m\'as escondido.
+
+\subsubsection*{La pregunta que de verdad importa: ¿qu\'e compramos con esto?}
+
+Aqu\'i es donde hab\'ia una confusi\'on que val\'ia la pena parar a
+corregir. T\'u preguntabas, con toda raz\'on: si a alguien le
+pregunto ``¿$x^3$ es convexa?'' es porque quiero saber si el problema
+de \emph{minimizar} tiene una \'unica soluci\'on, f\'acil de encontrar,
+sin trampas. Entonces, ¿qu\'e tiene que ver con \emph{eso} el que $G$
+sea convexa cuando yo mismo decid\'i que $\delta$ se comportara en
+l\'inea recta?
+
+La respuesta honesta es: \textbf{nada, directamente}. Y no porque el
+mecanismo est\'e mal, sino porque \textbf{no est\'a tratando de darte
+esa garant\'ia}. Como dejamos escrito en la
+Secci\'on~\ref{sec:appB-expectation}: esa garant\'ia completa (\'unica
+soluci\'on, sin trampas, f\'acil de encontrar) ya la perdimos, para
+siempre, en cuanto demostramos que $W$ no puede ser convexa en $\bm F$.
+No hay mecanismo, truco, ni cambio de variable que la vaya a devolver
+-- eso ser\'ia, con toda justicia, hacer trampa.
+
+Lo que el mecanismo de $\delta$ \emph{s\'i} es el primer paso hacia
+algo mucho m\'as modesto: un teorema real, debido a Ball (1977), que
+dice (sin que lo vayamos a demostrar aqu\'i) que si puedes escribir tu
+energ\'ia como $W(\bm F)=G(\bm F,\det\bm F)$ con $G$ convexa (m\'as una
+condici\'on t\'ecnica de crecimiento), entonces el problema de
+equilibrio el\'astico \textbf{tiene al menos una soluci\'on}. Nada de
+unicidad. Nada de ``sin trampas'' -- de hecho, un material el\'astico
+real \emph{puede} tener m\'as de un equilibrio v\'alido para las mismas
+condiciones de frontera (una regla delgada comprimida se puede pandear
+hacia la izquierda o hacia la derecha; ambas son soluciones leg\'itimas,
+ninguna es una ``trampa'' que un mejor m\'etodo evitar\'ia). Ball no
+promete evitar eso. Promete, \'unicamente, que no te vas a quedar sin
+ninguna soluci\'on en absoluto.
+
+\begin{takeaway}
+El mecanismo de $\delta$ (o, con la definici\'on completa,
+$G(\bm F,\Cof\bm F,\det\bm F)$) no es la respuesta a ``¿tiene mi
+problema un \'unico m\'inimo, f\'acil de encontrar?'' -- esa pregunta ya
+la contestamos que no, y sigue siendo no. Es el punto de partida de una
+demostraci\'on \emph{distinta}, de una afirmaci\'on \emph{m\'as d\'ebil}:
+``¿tiene mi problema \emph{al menos una} soluci\'on?''. Confundir estas
+dos preguntas es precisamente lo que hac\'ia sonar al mecanismo como un
+enga\~no; distingui\'endolas, el mecanismo deja de prometer algo que
+nunca quiso prometer.
+\end{takeaway}
+
+\begin{quote}
+\emph{Una honestidad final para este cap\'itulo:} el paso que falta --
+c\'omo, exactamente, ``$G$ es convexa'' implica ``existe al menos una
+soluci\'on de equilibrio'' -- es el contenido real del teorema de Ball
+de 1977, y su demostraci\'on necesita herramientas de an\'alisis
+funcional (convergencia d\'ebil de sucesiones, semicontinuidad
+inferior) que no hemos construido en este documento. No vamos a
+fingir aqu\'i que lo demostramos. Lo dejamos marcado, honestamente,
+como un cap\'itulo pendiente para cuando tengamos esas herramientas.
+Lo que s\'i queda completamente claro, y es lo que quer\'iamos lograr
+en este cap\'itulo, es \textbf{qu\'e pregunta exactamente estamos
+contestando} (existencia) y \textbf{cu\'al ya no} (unicidad, ausencia
+de trampas) -- para que ning\'un resultado posterior se lea como m\'as
+de lo que en realidad es.
+\end{quote}
+
+\subsection{La definici\'on real: $\bm F$, $\Cof\bm F$ y $\det\bm F$ como tres bloques}
+\label{sec:appB-cofF-def}
+
+Ya usamos, en la secci\'on anterior, la matriz auxiliar
+$\Cof\bm F=\begin{pmatrix}d&-c\\-b&a\end{pmatrix}$ para
+$\bm F=\begin{pmatrix}a&b\\c&d\end{pmatrix}$ (le dedicaremos un
+cap\'itulo propio m\'as adelante; por ahora qu\'edate con que es
+\textbf{lineal} en las entradas de $\bm F$, la propiedad que acabamos
+de explotar). Ball construye su definici\'on completa de
+\textbf{polyconvexidad}, usada en el paper (Secci\'on 5), tratando a
+$\bm F$, $\Cof\bm F$ y $\det\bm F$ como \textbf{tres bloques de
+variables independientes}:
+\begin{equation}
+ W(\bm F)=G(\bm F,\Cof\bm F,\det\bm F),
+ \qquad G\text{ conjuntamente convexa en }
+ \R^{2\times2}\times\R^{2\times2}\times\R,
+ \label{eq:appB-polyconvex-def}
+\end{equation}
+exactamente la misma idea de la secci\'on anterior (un segmento recto
+en el espacio elevado, cuando la direcci\'on es de rango uno, hace que
+$G$ eval\'ue algo real sobre $W$), ahora con dos bloques elevados,
+$\Cof\bm F$ y $\det\bm F$, en vez de solo uno.
+Polyconvexidad es estrictamente m\'as d\'ebil que convexidad ordinaria
+en $\bm F$ (toda funci\'on convexa en $\bm F$ es polyconvexa,
+ignorando los bloques extra; pero, como acabamos de ver con
+$\det\bm F$, no toda funci\'on polyconvexa es convexa en $\bm F$).
+
+\subsection{¿Y qu\'e pasa con la objetividad ahora?}
+
+Con la nueva definici\'on en mano, volvamos a la pregunta que abri\'o
+este cap\'itulo: ¿es compatible \eqref{eq:appB-polyconvex-def} con
+$W(-\bm F)=W(\bm F)$? Aqu\'i podemos usar directamente lo que ya
+demostramos en el Cap\'itulo~\ref{ch:C}, sin necesitar ning\'un truco
+adicional: mostramos que $\bm C=\bm F^T\bm F$ es invariante bajo
+\emph{cualquier} rotaci\'on $\bm Q\in\mathrm{SO}(2)$ (no solo
+$\bm Q=-\bm I$), y exactamente la misma identidad algebraica aplicada a
+$\Cof\bm F$ en lugar de $\bm F$ da
+\begin{equation}
+ \Cof(\bm Q\bm F)^T\Cof(\bm Q\bm F)=\Cof(\bm C)
+ \label{eq:appB-cofC-invariance}
+\end{equation}
+para toda $\bm Q\in\mathrm{SO}(2)$ (el paper lo usa exactamente as\'i en
+la prueba de (C2)). Por tanto: \textbf{cualquier} $G$ que dependa de
+$\bm F$ solo a trav\'es de $\bm C=\bm F^T\bm F$, de $\Cof\bm F$ solo a
+trav\'es de $\Cof(\bm F)^T\Cof(\bm F)=\Cof(\bm C)$, y de $\det\bm F$
+directamente, autom\'aticamente hereda $W(\bm Q\bm F)=W(\bm F)$ para
+\emph{toda} rotaci\'on -- no solo para el caso especial
+$\bm Q=-\bm I$ que usamos para romper la convexidad ordinaria. Esta es
+la raz\'on real, completa y correcta por la que el paper puede pedir
+polyconvexidad y objetividad al mismo tiempo sin ninguna tensi\'on
+entre las dos exigencias: no es que los bloques ``no cambien'' bajo
+$\bm F\mapsto-\bm F$ (de hecho $\Cof(-\bm F)=-\Cof\bm F$ en 2D --
+\textbf{s\'i} cambia de signo, a diferencia de $\det(-\bm F)=\det\bm F$
+que no cambia), sino que \textbf{construimos $G$ para que dependa solo
+de combinaciones que ya son invariantes por construcci\'on}, como
+$\bm C$ y $\Cof(\bm C)$, en lugar de depender de $\bm F$ o $\Cof\bm F$
+de cualquier forma arbitraria.
+
+\subsection{Resumen de este cap\'itulo}
+
+\begin{takeaway}
+\begin{itemize}
+\item Objetividad ($\bm Q=-\bm I$) m\'as convexidad ordinaria en
+$\bm F$ fuerza $W(\bm 0)\leq W(\bm F)$, lo cual contradice que la
+energ\'ia deba explotar en el colapso $\bm F=\bm 0$. Convexidad
+ordinaria en $\bm F$ queda descartada.
+\item Confirmamos con un ejemplo num\'erico expl\'icito
+($\bm F_1=\mathrm{diag}(2,0.5)$, $\bm F_2=\mathrm{diag}(0.5,2)$) que
+$\det\bm F$ efectivamente no es convexo: el punto medio da $1.5625$,
+por encima de la cuerda que vale $1$.
+\item La ganancia real, demostrada y no supuesta: a lo largo de
+\textbf{direcciones de rango uno} $\bm H=\bm a\otimes\bm b$
+($\det\bm H=0$), tanto $\det(\bm F+t\bm H)$ como $\Cof(\bm F+t\bm H)$
+son exactamente afines en $t$, as\'i que el camino completo en el
+espacio elevado es una recta gen\'uina -- y por tanto $t\mapsto
+W(\bm F+t\,\bm a\otimes\bm b)$ es realmente convexa (\textbf{convexidad
+de rango uno}), una afirmaci\'on real sobre $W$ misma, no sobre un
+sustituto. Fuera de esas direcciones (como nuestro contraejemplo, donde
+$\det\bm H\neq0$), no hay tal garant\'ia.
+\item Ball generaliza esto a la definici\'on completa de
+\textbf{polyconvexidad}, $W(\bm F)=G(\bm F,\Cof\bm F,\det\bm F)$ con
+$G$ conjuntamente convexa en los tres bloques -- estrictamente m\'as
+d\'ebil que convexidad en $\bm F$, y (por el argumento anterior)
+compatible con ella al menos a lo largo de toda direcci\'on de rango
+uno.
+\item La compatibilidad con objetividad no viene de que los bloques
+elevados se queden fijos bajo $\bm F\mapsto-\bm F$ (el cofactor
+\emph{s\'i} cambia de signo en 2D) -- viene de construir $G$ a partir
+de combinaciones ya invariantes bajo \emph{toda} rotaci\'on, como
+$\bm C$ y $\Cof(\bm C)$, exactamente como en el
+Cap\'itulo~\ref{ch:C}.
+\end{itemize}
+\end{takeaway}
+
+\bigskip
+\noindent\textbf{Antes de seguir:} con l\'apiz y papel, repite el
+c\'alculo del Ejemplo~\ref{ex:appB-F1F2} con otras dos matrices de tu
+elecci\'on que tengan el mismo determinante (por ejemplo
+$\mathrm{diag}(3,1/3)$ y $\mathrm{diag}(1/3,3)$) y confirma que vuelves
+a obtener una violaci\'on. Cuando est\'es listo, seguimos con el
+Cap\'itulo 4: qu\'e es exactamente $\Cof\bm F$, qu\'e significa
+f\'isicamente, y por qu\'e en 2D es, en cierto sentido, ``menos nuevo''
+de lo que parece.
+
+\end{document}

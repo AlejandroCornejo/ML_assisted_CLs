@@ -86,7 +86,7 @@ def main() -> None:
     for name, values, color in energy_models:
         axis.plot(x, np.asarray(values) / 1.0e9, color=color, linewidth=1.0, label=name)
     axis.set_ylabel(r"$W$ [GPa]")
-    axis.set_xlabel("Stage--10 step index")
+    axis.set_xlabel("Held-out test-trajectory step index")
     axis.set_title("Energy (energy-capable tiers only)")
     axis.grid(alpha=0.25)
     axis.legend(loc="best", fontsize=6.5)
@@ -101,7 +101,7 @@ def main() -> None:
         for name, values, color in stress_models:
             axis.plot(x, np.asarray(values)[:, component_index] / 1.0e9, color=color, linewidth=1.0, label=name)
         axis.set_ylabel(ylabel)
-        axis.set_xlabel("Stage--10 step index")
+        axis.set_xlabel("Held-out test-trajectory step index")
         axis.grid(alpha=0.25)
 
     axis = axes[1, 1]
@@ -109,7 +109,7 @@ def main() -> None:
     for name, values, color in von_mises_models:
         axis.plot(x, np.asarray(values) / 1.0e9, color=color, linewidth=1.0, label=name)
     axis.set_ylabel(r"$\sigma_{\rm eq}$ (von Mises) [GPa]")
-    axis.set_xlabel("Stage--10 step index")
+    axis.set_xlabel("Held-out test-trajectory step index")
     axis.grid(alpha=0.25)
 
     axes[1, 2].axis("off")
@@ -151,8 +151,8 @@ def main() -> None:
     axis.set_yscale("log")
     axis.set_xticks(positions)
     axis.set_xticklabels(categories)
-    axis.set_ylabel("Relative $L^2$ error [\\%]")
-    axis.set_title("Stage--10 accuracy: all six model variants")
+    axis.set_ylabel("Relative $L^2$ error [%]")
+    axis.set_title("Held-out test-trajectory accuracy: all six model variants")
     axis.grid(alpha=0.25, axis="y", which="both")
     axis.legend(loc="best", fontsize=7.5, ncol=2)
     fig.tight_layout()
