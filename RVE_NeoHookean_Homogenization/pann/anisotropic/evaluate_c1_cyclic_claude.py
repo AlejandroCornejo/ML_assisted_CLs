@@ -32,16 +32,17 @@ from anisotropic_pann_model_regression_claude import load_anisotropic_regression
 HERE = Path(__file__).resolve().parent
 RESULT_DIR = HERE / "results"
 
-# Each loop is a closed polygon in *physical* [E11, E22, gamma12] space,
-# visited in order and returned to its start. Chosen inside the Stage-1
-# training range (E11, E22 in [-0.1, 2.0], gamma12 in [-0.1, 0.1]) so this
-# is not an extrapolation artifact.
+# Each polygonal loop is a closed polygon in *physical* [E11, E22, gamma12]
+# space, visited in order and returned to its start. Chosen inside the
+# Stage-1 training range (E11, E22 in [-0.1, 2.0], gamma12 in [-0.1, 0.1])
+# so this is not an extrapolation artifact. "origin_ellipse" is not a
+# polygon (see make_origin_ellipse_path below): it is the only loop that
+# actually starts and returns to the true undeformed reference state
+# E = 0, and it is a smooth curve rather than a straight-edged path, so
+# together the four loops cover flat/curved and origin/non-origin cases.
 LOOPS = {
     "small_normal_square": [
         (0.10, 0.10, 0.00), (0.30, 0.10, 0.00), (0.30, 0.30, 0.00), (0.10, 0.30, 0.00), (0.10, 0.10, 0.00),
-    ],
-    "large_normal_square": [
-        (0.20, 0.20, 0.00), (0.80, 0.20, 0.00), (0.80, 0.80, 0.00), (0.20, 0.80, 0.00), (0.20, 0.20, 0.00),
     ],
     "shear_loop": [
         (0.10, 0.05, -0.05), (0.30, 0.05, -0.05), (0.30, 0.05, 0.05), (0.10, 0.05, 0.05), (0.10, 0.05, -0.05),
@@ -50,7 +51,46 @@ LOOPS = {
         (0.05, 0.05, 0.00), (0.40, 0.10, 0.03), (0.15, 0.35, -0.03), (0.05, 0.05, 0.00),
     ],
 }
-POINTS_PER_EDGE = 200
+
+# Smooth loop through the true reference state E=0: E11 traces a full
+# (1-cos) hump (>=0 throughout, as a normal strain physically should stay
+# in tension here), E22 a sine of the same frequency, gamma12 a sine at
+# *twice* the frequency, so the curve genuinely leaves the (E11, E22)
+# plane rather than just living in some tilted flat plane.
+ORIGIN_ELLIPSE_AMPLITUDES = {"e11": 0.25, "e22": 0.20, "g12": 0.06}
+
+
+def make_origin_ellipse_path(n_points: int) -> np.ndarray:
+    t = np.linspace(0.0, 2.0 * np.pi, n_points, endpoint=False)
+    a, b, c = ORIGIN_ELLIPSE_AMPLITUDES["e11"], ORIGIN_ELLIPSE_AMPLITUDES["e22"], ORIGIN_ELLIPSE_AMPLITUDES["g12"]
+    e11 = a * (1.0 - np.cos(t))
+    e22 = b * np.sin(t)
+    g12 = c * np.sin(2.0 * t)
+    path = np.stack([e11, e22, g12], axis=1)
+    return np.concatenate([path, path[:1]], axis=0)
+
+
+LOOP_NAMES = ["small_normal_square", "origin_ellipse", "shear_loop", "mixed_triangle"]
+
+
+def make_path(loop_name: str, points_per_edge: int) -> np.ndarray:
+    if loop_name == "origin_ellipse":
+        # 4 "edges" worth of points, for a point count comparable to the
+        # four-vertex polygons at the same points_per_edge.
+        return make_origin_ellipse_path(4 * points_per_edge)
+    return densify_loop(LOOPS[loop_name], points_per_edge)
+
+
+# Discretization-refinement study (mixed-triangle loop only): demonstrates
+# the O(h^2) trapezoidal convergence *rate* itself, which is the actual
+# evidence that the residual is quadrature error and not a small but
+# genuine violation -- a single number at high resolution, however small,
+# could not distinguish those two cases by itself. The headline per-loop
+# comparison (Table 2) is then reported at REFINEMENT_LEVELS[-1], the
+# finest level actually tested here, rather than at a separate, arbitrary
+# resolution: one continuous computation, not two disconnected ones.
+REFINEMENT_LEVELS = [200, 800, 3200, 12800]
+MAIN_POINTS_PER_EDGE = REFINEMENT_LEVELS[-1]
 
 
 def densify_loop(vertices: list[tuple[float, float, float]], points_per_edge: int) -> np.ndarray:
@@ -134,8 +174,8 @@ def main() -> None:
             "polyconvex_ickan_tier3b": cyclic_work(ickan_stress, path),
         }
 
-    for loop_name, vertices in LOOPS.items():
-        path = densify_loop(vertices, POINTS_PER_EDGE)
+    for loop_name in LOOP_NAMES:
+        path = make_path(loop_name, MAIN_POINTS_PER_EDGE)
         per_model = one_loop_all_models(path)
         for key, value in per_model.items():
             results[key][loop_name] = value
@@ -145,16 +185,15 @@ def main() -> None:
     # (its residual is pure quadrature error, O(h^2)); the residual of a
     # non-conservative field (no potential anywhere, as in the tier-1 baseline)
     # converges to a fixed nonzero constant instead. This distinguishes a real
-    # (C1) violation from a quadrature artifact without relying on the choice
-    # of POINTS_PER_EDGE.
+    # (C1) violation from a quadrature artifact, and is what justifies trusting
+    # MAIN_POINTS_PER_EDGE above rather than picking it arbitrarily.
     refinement_loop = "mixed_triangle"
-    refinement_path = LOOPS[refinement_loop]
-    refinement_levels = [POINTS_PER_EDGE, 4 * POINTS_PER_EDGE, 16 * POINTS_PER_EDGE]
+    refinement_levels = REFINEMENT_LEVELS
     refinement_study = {
         "loop": refinement_loop,
         "points_per_edge_levels": refinement_levels,
         "cyclic_work_per_model_per_level": {
-            key: [one_loop_all_models(densify_loop(refinement_path, ppe))[key] for ppe in refinement_levels]
+            key: [one_loop_all_models(make_path(refinement_loop, ppe))[key] for ppe in refinement_levels]
             for key in results
         },
     }
@@ -165,10 +204,14 @@ def main() -> None:
     summary = {
         "protocol": (
             "oint S.dE (trapezoidal, physical units) around several closed strain "
-            f"loops entirely inside the Stage-1 training range, {POINTS_PER_EDGE} points per edge."
+            f"loops entirely inside the Stage-1 training range, {MAIN_POINTS_PER_EDGE} points per edge "
+            "(justified by the discretization-refinement check below, not chosen arbitrarily)."
         ),
-        "points_per_edge": POINTS_PER_EDGE,
+        "points_per_edge": MAIN_POINTS_PER_EDGE,
         "loops_definition_physical_strain": LOOPS,
+        "origin_ellipse_amplitudes": ORIGIN_ELLIPSE_AMPLITUDES,
+        "origin_ellipse_path_for_plotting": make_origin_ellipse_path(200).tolist(),
+        "loop_order": LOOP_NAMES,
         "cyclic_work_per_model_per_loop": results,
         "discretization_refinement_check": refinement_study,
         "typical_energy_scale_for_context": typical_energy_scale,

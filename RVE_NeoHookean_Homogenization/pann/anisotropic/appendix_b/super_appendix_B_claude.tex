@@ -6,13 +6,14 @@
 \newcommand{\Cof}{\operatorname{cof}}
 \newcommand{\tr}{\operatorname{tr}}
 \newcommand{\R}{\mathbb{R}}
+\input{../results/polyconvex_numbers_claude.tex}
 
 \title{Super Ap\'endice B\\
 \large Gu\'ia completa, paso a paso, del paper PANN\\
 (Physics-Augmented Neural Networks and Projection-Based\\
 Reduced-Order Models for Anisotropic Hyperelasticity)}
-\author{Notas de estudio -- construidas junto con Claude}
-\date{Documento vivo -- se construye por cap\'itulos, uno a la vez}
+\author{Notas de estudio, construidas junto con Claude}
+\date{Documento vivo: se construye por cap\'itulos, uno a la vez}
 
 \begin{document}
 \maketitle
@@ -25,8 +26,129 @@ mencione un objeto por primera vez (por ejemplo $\bm F$), aqu\'i
 encontrar\'as un cap\'itulo dedicado exclusivamente a explicar ese
 objeto desde cero, con ejemplos num\'ericos concretos y gr\'aficas
 reales. Vamos a construirlo un cap\'itulo a la vez, para que puedas
-leer y digerir cada uno antes de seguir con el siguiente.
+leer y digerir cada uno antes de seguir con el siguiente. Este
+documento cumple dos funciones a la vez: es un \textbf{resumen
+ejecutivo} (las p\'aginas que siguen, autocontenidas, pensadas para
+enviarse solas) y, despu\'es, una \textbf{gu\'ia completa cap\'itulo a
+cap\'itulo} que demuestra cada afirmaci\'on del resumen desde cero.
 \end{quote}
+
+\section*{Resumen ejecutivo}
+
+\subsection*{El problema, en una frase}
+
+Queremos una energ\'ia el\'astica $W(\bm F)$ para un material
+anisotr\'opico (con direcciones preferentes, como fibras) que sea
+\textbf{f\'isicamente admisible} (termodin\'amicamente consistente,
+objetiva, sim\'etrica, nula sin deformaci\'on, polyconvexa, y con el
+crecimiento correcto en los extremos) y que adem\'as reproduzca bien
+la respuesta real medida en este RVE. Construimos esa energ\'ia con
+una red neuronal \emph{input-convexa} (ICNN) aplicada, no a $\bm F$
+directamente, sino a quince n\'umeros dise\~nados para que la
+admisibilidad sea automatica.
+
+\subsection*{La f\'ormula completa, de un vistazo}
+
+\begin{equation}
+ W_{\rm pc}(\bm F)=\underbrace{\Phi_\theta\big(\bm z_{\rm pc}(\bm F)\big)}_{\text{red neuronal}}
+ -\underbrace{\Phi_\theta\big(\bm z_{\rm pc}(\bm I)\big)}_{\text{normalizaci\'on}}
+ -\underbrace{r\log J}_{\text{barrera de colapso}}
+ +\underbrace{\frac\beta2(J-1)^2}_{\text{rigidez volum\'etrica}}.
+ \label{eq:appB-master}
+\end{equation}
+Todo el resto de este documento explica, pieza por pieza, de d\'onde
+sale cada s\'imbolo de esta l\'inea. Por ahora, un diccionario r\'apido:
+
+\begin{itemize}
+\item $\bm F$: el gradiente de deformaci\'on, una matriz $2\times2$
+(Cap\'itulo~\ref{ch:F}).
+\item $\bm z_{\rm pc}(\bm F)\in\R^{15}$: un vector de quince n\'umeros
+construidos a partir de $\bm F$ (la lista completa, abajo).
+\item $\Phi_\theta:\R^{15}\to\R$: una red neuronal \emph{input-convex}
+(ICNN) con anchos $(\IcnnWidths{})$, activaciones Softplus, y
+\textbf{todos} sus pesos restringidos a ser $\geq0$ en cada capa.
+\item $J=\det\bm F$: el cambio de volumen (\'area, en 2D).
+\item $r>0$, $\beta>0$: dos escalares aprendidos durante el
+entrenamiento (valores reales del modelo:
+$r=\BarrierCoefficient{}$, $\beta=\QuadraticCoefficient{}$).
+\end{itemize}
+
+\subsection*{Qu\'e garantiza cada pieza}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{3.3cm}p{3.9cm}p{8.2cm}@{}}
+\toprule
+Condici\'on & Qu\'e exige & Qu\'e, en la f\'ormula, la garantiza\\
+\midrule
+(C1) Consistencia termodin\'amica & $\bm\sigma^T\dot{\bm\varepsilon}-\dot W\geq0$ & Autom\'atico: $\bm\sigma:=\partial W/\partial\bm\varepsilon$ es un gradiente.\\
+(C2) Objetividad & $W(\bm Q\bm F)=W(\bm F)$ & $\bm z_{\rm pc}$ se construye solo de $\bm C,\Cof\bm C,J$ (Cap.~\ref{ch:C},~\ref{ch:qfqh}).\\
+(C3) Simetr\'ia & $\bm S=\bm S^T$ & Incorporada en la notaci\'on de ingenier\'ia $(E_{11},E_{22},\gamma_{12})$.\\
+(C4) Normalizaci\'on & $W(\bm 0)=0$, $\bm\sigma(\bm 0)=\bm 0$ & La resta $-\Phi_\theta(\bm z_{\rm pc}(\bm I))$ y el escalar $r$ (pr\'oximo cap\'itulo).\\
+(C5) Polyconvexidad & $W=G(\bm F,\Cof\bm F,J)$, $G$ convexa & $\Phi_\theta$ convexa y mon\'otona en cada bloque (Cap.~\ref{ch:lifting}--\ref{ch:qfqh}).\\
+(C6) Crecimiento & $W\to\infty$ en los extremos & $-r\log J+\tfrac\beta2(J-1)^2$ (colapso y volumen, Cap.~\ref{ch:volumetric}) y $Q_{k,3}\geq\tfrac14|\bm F|^6$ (estiramiento, Cap.~\ref{ch:growth}).\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{Los tres bloques cinem\'aticos}
+
+Todo se construye a partir de tres objetos (la terna de Ball):
+$\bm F$ (c\'omo se transforman vectores tangentes,
+Cap\'itulo~\ref{ch:F}), $\Cof\bm F$ (c\'omo se transforman normales y
+\'areas, Cap\'itulo~\ref{ch:cofF}), y $J=\det\bm F$ (c\'omo se
+transforma el volumen). $\Phi_\theta$ se pide convexa en estos tres
+bloques \emph{tratados como variables independientes}: ese es el
+truco de lifting de Ball (Cap\'itulo~\ref{ch:lifting}) que permite
+polyconvexidad sin exigir convexidad imposible en $\bm F$ directamente.
+
+\subsection*{Las quince features}
+
+\begin{equation}
+ \bm z_{\rm pc}=\Big(I_1,\ \{Q_{k,2}^F,Q_{k,3}^F,Q_{k,2}^H,Q_{k,3}^H\}_{k=1}^3,\ J,\ J^2\Big)\in\R^{15}.
+\end{equation}
+$I_1=\tr\bm C=|\bm F|^2$ es el \'unico invariante cl\'asico usado
+(Cap\'itulo~\ref{ch:invariants}: los dem\'as, por s\'i solos, forzar\'ian
+isotrop\'ia). Los $Q_{k,p}^F=\sum_iw_{ki}(\bm d_{ki}\cdot\bm C\bm
+d_{ki})^p$ y $Q_{k,p}^H$ (id\'enticos pero con $\Cof\bm C$) miden
+estiramiento en tres sistemas de direcciones \emph{balanceados}
+(Cap\'itulo~\ref{ch:balance}), a potencias $p=2,3$
+(Cap\'itulo~\ref{ch:qfqh}). \textbf{Nota de honestidad}, ya discutida
+a fondo y reflejada en el paper: $Q_{k,2}^H=Q_{k,2}^F$ siempre en 2D
+(una redundancia real, demostrada, no solo observada); se mantiene
+por uniformidad con la receta general, no porque aporte informaci\'on.
+
+\subsection*{Mapa de cap\'itulos}
+
+\begin{center}
+\small
+\begin{tabular}{@{}cp{13.5cm}@{}}
+\toprule
+Cap. & Qu\'e demuestra, desde cero\\
+\midrule
+1 & Qu\'e es $\bm F$: columnas, \'area, los seis reg\'imenes de $J$.\\
+2 & Por qu\'e $\bm F$ solo no basta (objetividad); $\bm C=\bm F^T\bm F$; $\bm E$; $J=\sqrt{\det\bm C}$.\\
+3 & Por qu\'e $W$ no puede ser convexa en $\bm F$; el truco de lifting de Ball; polyconvexidad.\\
+4 & Qu\'e es $\Cof\bm F$ (normales y \'areas); por qu\'e es lineal en 2D y cuadr\'atica en 3D.\\
+5 & Invariantes cl\'asicos ($I_1,I_2$); por qu\'e no bastan para anisotrop\'ia.\\
+6 & Direcciones balanceadas: la condici\'on $\sum_iw_i\bm d_i\otimes\bm d_i=\bm I$, y por qu\'e se exige tambi\'en para $p\geq2$.\\
+7 & Las features $Q_{k,p}^F,Q_{k,p}^H$; la redundancia exacta $Q_{k,2}^F=Q_{k,2}^H$ y su consecuencia arquitect\'onica.\\
+8 & La condici\'on de crecimiento: $Q_{k,3}\geq\tfrac14|\bm F|^6$, v\'ia Jensen.\\
+9 & La barrera volum\'etrica $-r\log J+\tfrac\beta2(J-1)^2$: por qu\'e el colapso y el estiramiento en $J$ necesitan un mecanismo propio, y el hallazgo honesto de que $-r\log J$ solo decrece sin l\'imite cuando $J\to\infty$.\\
+10 & Qu\'e es un ICNN; la regla de composici\'on convexa-y-no-decreciente; por qu\'e todos los pesos deben ser $\geq0$; casi toda la Proposici\'on de polyconvexidad.\\
+11 & Por qu\'e $\bm\sigma(\bm0)=\bm0$ exactamente: los quince gradientes isotr\'opicos, el escalar $r$, verificado end-to-end con la red real.\\
+12 & ICKAN: splines en vez de pesos; puntos de control con dos sumas acumuladas; por qu\'e todas las demostraciones se trasladan sin cambios.\\
+13+ & (en construcci\'on) Los resultados num\'ericos del paper.\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\bigskip
+\noindent A partir de aqu\'i, el documento cambia de modo: en vez de
+resumir, \textbf{demuestra}. Cada afirmaci\'on de las p\'aginas
+anteriores se deriva desde cero, con n\'umeros propios y figuras
+reales, empezando por la pregunta m\'as simple de todas: ¿qu\'e es
+$\bm F$?
 
 \tableofcontents
 
@@ -96,7 +218,7 @@ Multiplicando:
 \end{equation}
 Es decir: \textbf{la primera columna de $\bm F$ es d\'onde termina el
 primer vector de la base, y la segunda columna es d\'onde termina el
-segundo}. Esto no es una coincidencia de notaci\'on -- es literalmente
+segundo}. Esto no es una coincidencia de notaci\'on: es literalmente
 la definici\'on de multiplicar una matriz por un vector, columna por
 columna.
 
@@ -133,7 +255,7 @@ descritos en el texto (m\'as un ejemplo de corte puro).}
 \label{fig:appB-F-examples}
 \end{figure}
 
-\begin{ejemplo}[Identidad -- panel 1]
+\begin{ejemplo}[Identidad (panel 1)]
 $\bm F=\bm I=\mathrm{diag}(1,1)$. Entonces $\bm F\bm e_1=(1,0)^T$ y
 $\bm F\bm e_2=(0,1)^T$: los vectores de la base no se mueven. El
 cuadrado deformado coincide exactamente con el de referencia (por eso
@@ -147,7 +269,7 @@ $\bm F=\bm I$, que usaremos constantemente como punto de referencia en
 el resto del paper.
 \end{ejemplo}
 
-\begin{ejemplo}[Estiramiento que duplica el \'area -- panel 2]
+\begin{ejemplo}[Estiramiento que duplica el \'area (panel 2)]
 $\bm F=\mathrm{diag}(2,1)$. Entonces $\bm F\bm e_1=(2,0)^T$ (el
 vector horizontal se \emph{duplica} en longitud) y $\bm F\bm
 e_2=(0,1)^T$ (el vector vertical no cambia). El cuadrado se convierte
@@ -159,7 +281,7 @@ exactamente el factor por el que creci\'o el \'area (el cuadrado
 ten\'ia \'area $1$; el rect\'angulo tiene \'area $2\times1=2$).
 \end{ejemplo}
 
-\begin{ejemplo}[Compresi\'on is\'otropa -- panel 3]
+\begin{ejemplo}[Compresi\'on is\'otropa (panel 3)]
 $\bm F=\mathrm{diag}(0.5,0.5)$. Ambos vectores de la base se
 \emph{reducen} a la mitad de su longitud:
 $\bm F\bm e_1=(0.5,0)^T$, $\bm F\bm e_2=(0,0.5)^T$. El cuadrado se
@@ -171,7 +293,7 @@ consistente con que el \'area del cuadrado peque\~no es
 $0.5\times0.5=0.25$ veces la original.
 \end{ejemplo}
 
-\begin{ejemplo}[Colapso -- panel 4]
+\begin{ejemplo}[Colapso (panel 4)]
 $\bm F=\mathrm{diag}(2,0)$. Aqu\'i $\bm F\bm e_1=(2,0)^T$ pero
 $\bm F\bm e_2=(0,0)^T$: \textbf{el segundo vector de la base
 desaparece por completo}, se colapsa al origen. El cuadrado, que
@@ -187,7 +309,7 @@ explote a $+\infty$ (esta es exactamente la condici\'on de crecimiento,
 (C6), que el paper impone m\'as adelante con el t\'ermino $-r\log J$).
 \end{ejemplo}
 
-\begin{ejemplo}[Reflexi\'on -- panel 5]
+\begin{ejemplo}[Reflexi\'on (panel 5)]
 $\bm F=\mathrm{diag}(-1,1)$. Ahora $\bm F\bm e_1=(-1,0)^T$: el primer
 vector de la base \emph{se invierte}, apunta en la direcci\'on
 contraria. El cuadrado se refleja como en un espejo vertical. El
@@ -206,7 +328,7 @@ la discusi\'on de $\bm C(\bm\varepsilon)\succ0$ en la
 Secci\'on~\ref{ch:F} del paper principal).
 \end{ejemplo}
 
-\begin{ejemplo}[Corte puro (\emph{shear}) -- panel 6]
+\begin{ejemplo}[Corte puro (\emph{shear}) (panel 6)]
 $\bm F=\begin{pmatrix}1&0.6\\0&1\end{pmatrix}$. Aqu\'i
 $\bm F\bm e_1=(1,0)^T$ (el vector horizontal no cambia) pero
 $\bm F\bm e_2=(0.6,1)^T$ (el vector vertical se ``inclina'' hacia la
@@ -218,8 +340,8 @@ un paralelogramo inclinado, \textbf{sin cambiar de \'area}:
 Este ejemplo es importante porque muestra que $J=1$ (\'area conservada)
 \textbf{no} significa ``nada cambi\'o'': la \emph{forma} cambi\'o
 notablemente (el cuadrado ya no es un cuadrado), aunque el \'area sea
-la misma que en la identidad. Este tipo de deformaci\'on -- cambio de
-forma sin cambio de volumen -- es exactamente lo que en el paper se
+la misma que en la identidad. Este tipo de deformaci\'on (cambio de
+forma sin cambio de volumen) es exactamente lo que en el paper se
 llama deformaci\'on \emph{isoc\'orica}, y es la raz\'on por la que
 $J$ por s\'i solo no basta para describir toda la deformaci\'on: hacen
 falta m\'as invariantes (los que vienen en los pr\'oximos cap\'itulos).
@@ -232,7 +354,7 @@ falta m\'as invariantes (los que vienen en los pr\'oximos cap\'itulos).
 \item $\bm F$ es una matriz $2\times2$ que describe c\'omo un peque\~no
 entorno de material se estira, comprime, corta o gira, localmente.
 \item Sus columnas, $\bm F\bm e_1$ y $\bm F\bm e_2$, son exactamente
-las im\'agenes de los vectores de la base -- lo m\'as directo posible
+las im\'agenes de los vectores de la base: lo m\'as directo posible
 para visualizar qu\'e hace $\bm F$.
 \item $J=\det\bm F$ mide el cambio de \'area (en 2D) o volumen (en 3D).
 \item $J=1$ conserva el \'area pero \textbf{no} implica que no haya
@@ -243,7 +365,7 @@ tampoco es f\'isicamente admisible.
 construye a partir de la deformaci\'on macrosc\'opica
 $\bm\varepsilon=(E_{11},E_{22},\gamma_{12})$ mediante
 $\bm F=\bm U=\sqrt{2\bm E(\bm\varepsilon)+\bm I}$ (la ra\'iz cuadrada
-sim\'etrica, sin rotaci\'on) -- esto lo explicaremos con calma en el
+sim\'etrica, sin rotaci\'on); esto lo explicaremos con calma en el
 cap\'itulo dedicado a $\bm E$ y $\bm C$.
 \end{itemize}
 \end{takeaway}
@@ -264,7 +386,7 @@ simple.
 
 Toma el objeto \emph{ya deformado} (el paralelogramo verde de
 cualquiera de nuestros ejemplos) y g\'iralo r\'igidamente en el
-espacio -- sin estirarlo ni comprimirlo m\'as, solo gir\'andolo, como
+espacio, sin estirarlo ni comprimirlo m\'as, solo gir\'andolo, como
 si lo tomaras con la mano y lo rotaras. F\'isicamente, esto \textbf{no
 le a\~nade ni le quita energ\'ia el\'astica almacenada}: el material
 sigue teniendo exactamente la misma cantidad de estiramiento interno,
@@ -273,7 +395,7 @@ nombre propio:
 
 \begin{takeaway}[Objetividad, o \emph{frame indifference}]
 La energ\'ia el\'astica almacenada no puede depender de c\'omo est\'a
-orientado el objeto \emph{ya deformado} en el espacio -- solo puede
+orientado el objeto \emph{ya deformado} en el espacio: solo puede
 depender de cu\'anto se estir\'o o cort\'o internamente. En s\'imbolos,
 si $\bm Q$ es cualquier rotaci\'on r\'igida,
 \[
@@ -333,7 +455,7 @@ define a una rotaci\'on. Por tanto,
 \begin{takeaway}
 $\bm C=\bm F^T\bm F$ toma \textbf{exactamente el mismo valor} para
 $\bm F$ y para $\bm Q\bm F$, para cualquier rotaci\'on $\bm Q$. $\bm C$
-``no ve'' la orientaci\'on en el espacio del objeto deformado -- solo
+``no ve'' la orientaci\'on en el espacio del objeto deformado: solo
 ve cu\'anto se estir\'o internamente.
 \end{takeaway}
 
@@ -424,7 +546,7 @@ sigue que
  \det\bm C = J^2 \qquad\Longleftrightarrow\qquad J=\sqrt{\det\bm C}
  \label{eq:appB-J-C}
 \end{equation}
-(tomando la ra\'iz positiva, ya que exigimos $J>0$ -- recuerda el
+(tomando la ra\'iz positiva, ya que exigimos $J>0$; recuerda el
 Ejemplo 5 del colapso y la reflexi\'on del Cap\'itulo~\ref{ch:F}). Para
 que esta ra\'iz cuadrada exista como n\'umero real, necesitamos
 $\det\bm C\geq0$; y para que la ra\'iz cuadrada \emph{matricial}
@@ -432,7 +554,7 @@ $\bm F=\bm U=\sqrt{2\bm E+\bm I}$ que el paper usa para construir la
 condici\'on de contorno (la mencionamos al final del
 Cap\'itulo~\ref{ch:F}) tenga sentido como matriz sim\'etrica real, se
 necesita adem\'as que $\bm C=\bm I+2\bm E\succ0$ (positiva definida,
-es decir, todos sus autovalores estrictamente positivos) -- \'esta es
+es decir, todos sus autovalores estrictamente positivos). \'Esta es
 exactamente la condici\'on que el c\'odigo verifica expl\'icitamente
 antes de construir la deformaci\'on de contorno, y que dispara un
 error en vez de devolver silenciosamente un $\bm F$ esp\'ureo si se
@@ -471,7 +593,7 @@ Cap\'itulo~\ref{ch:F}) que $\bm C$ no cambia al rotar.
 \label{sec:appB-expectation}
 
 Antes de tocar $\bm F$ para nada, recordemos \textbf{por qu\'e nos
-import\'o la convexidad desde el principio} -- si no dejamos esto
+import\'o la convexidad desde el principio}: si no dejamos esto
 clar\'isimo primero, cualquier truco que venga despu\'es va a sonar a
 enga\~no, con raz\'on.
 
@@ -481,7 +603,7 @@ ambig\"uedad, desde donde sea que empieces. Ahora piensa en
 $g(x)=x^4-3x^2$: tiene \textbf{dos} m\'inimos (en $x=\pm\sqrt{1.5}$,
 sim\'etricos) y un m\'aximo local falso en $x=0$ separ\'andolos. Si
 empiezas a optimizar cerca de un m\'inimo, puedes terminar ah\'i sin
-saber que hab\'ia otro igual de v\'alido del otro lado -- y si tu
+saber que hab\'ia otro igual de v\'alido del otro lado; y si tu
 problema representa algo f\'isico, quedarte en ``el m\'inimo
 equivocado'' es una respuesta f\'isicamente real pero incompleta.
 
@@ -491,7 +613,7 @@ curva hacia arriba para $x>0$ y hacia abajo para $x<0$, con un punto de
 inflexi\'on en $x=0$ que no es ni m\'aximo ni m\'inimo), y de hecho no
 tiene \textbf{ning\'un} m\'inimo global: se va a $-\infty$ sin l\'imite
 conforme $x\to-\infty$. Si tu energ\'ia se comportara as\'i, ni
-siquiera tendr\'ia sentido preguntar ``¿cu\'al es el equilibrio?'' --
+siquiera tendr\'ia sentido preguntar ``¿cu\'al es el equilibrio?'':
 no habr\'ia ninguno, el sistema colapsar\'ia sin fondo. La
 Figura~\ref{fig:appB-motivation} dibuja las tres, una junto a la otra.
 
@@ -504,7 +626,7 @@ con un \'unico m\'inimo (izquierda); no convexa pero con m\'inimos
 bien definidos, solo que hay m\'as de uno (centro); y ni convexa ni
 c\'oncava, sin ning\'un m\'inimo global (derecha, tu ejemplo). $W(\bm F)$
 resultar\'a estar, en cierto sentido preciso, m\'as cerca del panel
-central que del derecho -- pero eso es exactamente lo que el resto del
+central que del derecho; pero eso es exactamente lo que el resto del
 cap\'itulo tiene que demostrar, no algo que podamos asumir.}
 \label{fig:appB-motivation}
 \end{figure}
@@ -520,15 +642,15 @@ Vamos a demostrar, en un momento, que \textbf{esto es imposible} para
 nuestra $W(\bm F)$. Y quiero decir esto con toda claridad desde ya,
 para que no se pierda despu\'es entre f\'ormulas: \textbf{no vamos a
 recuperar esa garant\'ia}. Lo que Ball ofrece en su lugar, m\'as
-adelante en este cap\'itulo, es algo \emph{estrictamente m\'as d\'ebil}
--- no ``un \'unico m\'inimo, f\'acil de encontrar'', sino solamente
+adelante en este cap\'itulo, es algo \emph{estrictamente m\'as d\'ebil}:
+no ``un \'unico m\'inimo, f\'acil de encontrar'', sino solamente
 ``existe \emph{al menos una} soluci\'on de equilibrio''. Ni siquiera
 promete que no haya otras soluciones igualmente v\'alidas (piensa en
 una regla delgada que, al comprimirla, se puede pandear hacia la
 izquierda o hacia la derecha: ambas son configuraciones de equilibrio
 f\'isicamente reales, no ``trampas'' que un mejor m\'etodo evitar\'ia).
-Guardemos esta distinci\'on -- unicidad y facilidad de optimizaci\'on
-por un lado, mera existencia por el otro -- porque es exactamente lo
+Guardemos esta distinci\'on (unicidad y facilidad de optimizaci\'on
+por un lado, mera existencia por el otro), porque es exactamente lo
 que se perdi\'o, y es importante no confundir lo uno con lo otro m\'as
 adelante.
 
@@ -559,7 +681,7 @@ la \textbf{matriz cero}, $\bm F=\bm 0$. Con $\bm F=\bm 0$: $\det\bm F=0$,
 que en el Cap\'itulo~\ref{ch:F} identificamos como un \textbf{colapso}
 (el cuadrado de referencia se aplasta a un punto, \'area cero).
 F\'isicamente, cualquier energ\'ia el\'astica razonable debe
-\textbf{explotar} en ese estado, $W(\bm 0)=+\infty$ -- es exactamente
+\textbf{explotar} en ese estado, $W(\bm 0)=+\infty$: es exactamente
 la condici\'on de crecimiento (C6) que el paper exige. Pero
 \eqref{eq:appB-Wzero-bound} dice $W(\bm 0)\leq W(\bm F)$, un n\'umero
 finito. Contradicci\'on.
@@ -567,7 +689,7 @@ finito. Contradicci\'on.
 \begin{takeaway}
 Convexidad ordinaria en $\bm F$ es incompatible con la objetividad:
 una fuerza a que $W(\bm 0)$ sea finito, la otra exige que sea infinito.
-Esto no es un defecto de ning\'un modelo en particular -- es un
+Esto no es un defecto de ning\'un modelo en particular: es un
 resultado cl\'asico (se remonta a Coleman y Noll, y aparece en
 pr\'acticamente cualquier libro de texto moderno de elasticidad no
 lineal). Necesitamos una noci\'on de convexidad m\'as d\'ebil,
@@ -578,7 +700,7 @@ compatible con $W(-\bm F)=W(\bm F)$ y con $W\to\infty$ en el colapso.
 
 Antes de buscar la soluci\'on, veamos con n\'umeros por qu\'e ni
 siquiera la funci\'on m\'as simple posible construida a partir de
-$\bm F$ -- el propio determinante $h(\bm F):=\det\bm F$ -- es convexa.
+$\bm F$, el propio determinante $h(\bm F):=\det\bm F$, es convexa.
 Vamos a usar este mismo ejemplo num\'erico durante el resto del
 cap\'itulo.
 
@@ -623,7 +745,7 @@ diagonal $d=a$, $h(a,a)=a^2$ crece hacia arriba en ambas direcciones
 (curvatura positiva); a lo largo de la antidiagonal $d=-a$,
 $h(a,-a)=-a^2$ decrece en ambas direcciones (curvatura negativa). Una
 funci\'on convexa no puede curvarse hacia arriba en una direcci\'on y
-hacia abajo en otra -- eso es precisamente lo que le pasa a $h$, y es
+hacia abajo en otra: eso es precisamente lo que le pasa a $h$, y es
 la raz\'on geom\'etrica detr\'as de la Ejemplo~\ref{ex:appB-F1F2}:
 nuestros dos puntos $\bm F_1=(2,0.5)$ y $\bm F_2=(0.5,2)$ (en
 coordenadas $(a,d)$) est\'an situados de tal manera que el segmento
@@ -649,7 +771,7 @@ $\bm F_2$, parametrizado por $t\in[0,1]$,
  \det\bm F(t)=1+2.25\,t(1-t)
 \]
 (verif\'icalo t\'u mismo expandiendo $(2-1.5t)(0.5+1.5t)$). Esta curva
-vale $1$ en ambos extremos pero sube hasta $1.5625$ en el medio --
+vale $1$ en ambos extremos pero sube hasta $1.5625$ en el medio:
 \textbf{queda por encima} de la cuerda recta (que, al valer lo mismo en
 ambos extremos, es simplemente la l\'inea horizontal en $1$). Una
 funci\'on convexa siempre debe quedar \emph{por debajo} de sus cuerdas;
@@ -657,8 +779,8 @@ funci\'on convexa siempre debe quedar \emph{por debajo} de sus cuerdas;
 
 \subsection{El mecanismo de Ball, y qu\'e promete exactamente}
 
-Vamos a repasar el mecanismo -- ya lo entendiste bien la primera vez,
-as\'i que esta vez lo dejamos corto -- y despu\'es vamos a ser muy
+Vamos a repasar el mecanismo (ya lo entendiste bien la primera vez,
+as\'i que esta vez lo dejamos corto) y despu\'es vamos a ser muy
 precisos sobre qu\'e obtenemos de \'el, retomando justo la distinci\'on
 de la Secci\'on~\ref{sec:appB-expectation}.
 
@@ -672,7 +794,7 @@ $\bm F$, y definimos
 Como funci\'on de $\delta$ sola (ignorando $\bm F$ por completo), $G$
 es lineal, luego convexa, de la forma m\'as trivial posible: si mueves
 $\delta$ en l\'inea recta de un valor a otro, su valor a mitad de
-camino es exactamente el promedio -- eso es, literalmente, la
+camino es exactamente el promedio: eso es, literalmente, la
 definici\'on de moverse en l\'inea recta. Despu\'es, \textbf{imponemos}
 $\delta:=\det\bm F$, y recuperamos
 \[
@@ -697,8 +819,8 @@ esa garant\'ia}. Como dejamos escrito en la
 Secci\'on~\ref{sec:appB-expectation}: esa garant\'ia completa (\'unica
 soluci\'on, sin trampas, f\'acil de encontrar) ya la perdimos, para
 siempre, en cuanto demostramos que $W$ no puede ser convexa en $\bm F$.
-No hay mecanismo, truco, ni cambio de variable que la vaya a devolver
--- eso ser\'ia, con toda justicia, hacer trampa.
+No hay mecanismo, truco, ni cambio de variable que la vaya a devolver:
+eso ser\'ia, con toda justicia, hacer trampa.
 
 Lo que el mecanismo de $\delta$ \emph{s\'i} es el primer paso hacia
 algo mucho m\'as modesto: un teorema real, debido a Ball (1977), que
@@ -706,7 +828,7 @@ dice (sin que lo vayamos a demostrar aqu\'i) que si puedes escribir tu
 energ\'ia como $W(\bm F)=G(\bm F,\det\bm F)$ con $G$ convexa (m\'as una
 condici\'on t\'ecnica de crecimiento), entonces el problema de
 equilibrio el\'astico \textbf{tiene al menos una soluci\'on}. Nada de
-unicidad. Nada de ``sin trampas'' -- de hecho, un material el\'astico
+unicidad. Nada de ``sin trampas'': de hecho, un material el\'astico
 real \emph{puede} tener m\'as de un equilibrio v\'alido para las mismas
 condiciones de frontera (una regla delgada comprimida se puede pandear
 hacia la izquierda o hacia la derecha; ambas son soluciones leg\'itimas,
@@ -717,7 +839,7 @@ ninguna soluci\'on en absoluto.
 \begin{takeaway}
 El mecanismo de $\delta$ (o, con la definici\'on completa,
 $G(\bm F,\Cof\bm F,\det\bm F)$) no es la respuesta a ``¿tiene mi
-problema un \'unico m\'inimo, f\'acil de encontrar?'' -- esa pregunta ya
+problema un \'unico m\'inimo, f\'acil de encontrar?'': esa pregunta ya
 la contestamos que no, y sigue siendo no. Es el punto de partida de una
 demostraci\'on \emph{distinta}, de una afirmaci\'on \emph{m\'as d\'ebil}:
 ``¿tiene mi problema \emph{al menos una} soluci\'on?''. Confundir estas
@@ -727,9 +849,9 @@ nunca quiso prometer.
 \end{takeaway}
 
 \begin{quote}
-\emph{Una honestidad final para este cap\'itulo:} el paso que falta --
-c\'omo, exactamente, ``$G$ es convexa'' implica ``existe al menos una
-soluci\'on de equilibrio'' -- es el contenido real del teorema de Ball
+\emph{Una honestidad final para este cap\'itulo:} el paso que falta
+(c\'omo, exactamente, ``$G$ es convexa'' implica ``existe al menos una
+soluci\'on de equilibrio'') es el contenido real del teorema de Ball
 de 1977, y su demostraci\'on necesita herramientas de an\'alisis
 funcional (convergencia d\'ebil de sucesiones, semicontinuidad
 inferior) que no hemos construido en este documento. No vamos a
@@ -738,32 +860,32 @@ como un cap\'itulo pendiente para cuando tengamos esas herramientas.
 Lo que s\'i queda completamente claro, y es lo que quer\'iamos lograr
 en este cap\'itulo, es \textbf{qu\'e pregunta exactamente estamos
 contestando} (existencia) y \textbf{cu\'al ya no} (unicidad, ausencia
-de trampas) -- para que ning\'un resultado posterior se lea como m\'as
+de trampas), para que ning\'un resultado posterior se lea como m\'as
 de lo que en realidad es.
 \end{quote}
 
 \subsection{La definici\'on real: $\bm F$, $\Cof\bm F$ y $\det\bm F$ como tres bloques}
 \label{sec:appB-cofF-def}
 
-Ya usamos, en la secci\'on anterior, la matriz auxiliar
+Adem\'as de $\delta$ (que al final identificamos con $\det\bm F$), Ball
+a\~nade un segundo bloque elevado: la matriz auxiliar
 $\Cof\bm F=\begin{pmatrix}d&-c\\-b&a\end{pmatrix}$ para
 $\bm F=\begin{pmatrix}a&b\\c&d\end{pmatrix}$ (le dedicaremos un
-cap\'itulo propio m\'as adelante; por ahora qu\'edate con que es
-\textbf{lineal} en las entradas de $\bm F$, la propiedad que acabamos
-de explotar). Ball construye su definici\'on completa de
-\textbf{polyconvexidad}, usada en el paper (Secci\'on 5), tratando a
-$\bm F$, $\Cof\bm F$ y $\det\bm F$ como \textbf{tres bloques de
-variables independientes}:
+cap\'itulo propio m\'as adelante). Ball construye su definici\'on
+completa de \textbf{polyconvexidad}, usada en el paper (Secci\'on 5),
+tratando a $\bm F$, $\Cof\bm F$ y $\det\bm F$ como \textbf{tres bloques
+de variables independientes}:
 \begin{equation}
  W(\bm F)=G(\bm F,\Cof\bm F,\det\bm F),
  \qquad G\text{ conjuntamente convexa en }
  \R^{2\times2}\times\R^{2\times2}\times\R,
  \label{eq:appB-polyconvex-def}
 \end{equation}
-exactamente la misma idea de la secci\'on anterior (un segmento recto
-en el espacio elevado, cuando la direcci\'on es de rango uno, hace que
-$G$ eval\'ue algo real sobre $W$), ahora con dos bloques elevados,
-$\Cof\bm F$ y $\det\bm F$, en vez de solo uno.
+exactamente la misma idea del mecanismo de $\delta$ de la secci\'on
+anterior, ahora con dos bloques elevados en vez de uno, y sujeta a la
+misma advertencia que dejamos clar\'isima ah\'i: esto es el punto de
+partida de una demostraci\'on de \emph{existencia}, no una prueba de
+que el problema tenga una \'unica soluci\'on f\'acil de encontrar.
 Polyconvexidad es estrictamente m\'as d\'ebil que convexidad ordinaria
 en $\bm F$ (toda funci\'on convexa en $\bm F$ es polyconvexa,
 ignorando los bloques extra; pero, como acabamos de ver con
@@ -788,12 +910,12 @@ la prueba de (C2)). Por tanto: \textbf{cualquier} $G$ que dependa de
 $\bm F$ solo a trav\'es de $\bm C=\bm F^T\bm F$, de $\Cof\bm F$ solo a
 trav\'es de $\Cof(\bm F)^T\Cof(\bm F)=\Cof(\bm C)$, y de $\det\bm F$
 directamente, autom\'aticamente hereda $W(\bm Q\bm F)=W(\bm F)$ para
-\emph{toda} rotaci\'on -- no solo para el caso especial
+\emph{toda} rotaci\'on, no solo para el caso especial
 $\bm Q=-\bm I$ que usamos para romper la convexidad ordinaria. Esta es
 la raz\'on real, completa y correcta por la que el paper puede pedir
 polyconvexidad y objetividad al mismo tiempo sin ninguna tensi\'on
 entre las dos exigencias: no es que los bloques ``no cambien'' bajo
-$\bm F\mapsto-\bm F$ (de hecho $\Cof(-\bm F)=-\Cof\bm F$ en 2D --
+$\bm F\mapsto-\bm F$ (de hecho $\Cof(-\bm F)=-\Cof\bm F$ en 2D:
 \textbf{s\'i} cambia de signo, a diferencia de $\det(-\bm F)=\det\bm F$
 que no cambia), sino que \textbf{construimos $G$ para que dependa solo
 de combinaciones que ya son invariantes por construcci\'on}, como
@@ -812,24 +934,22 @@ ordinaria en $\bm F$ queda descartada.
 ($\bm F_1=\mathrm{diag}(2,0.5)$, $\bm F_2=\mathrm{diag}(0.5,2)$) que
 $\det\bm F$ efectivamente no es convexo: el punto medio da $1.5625$,
 por encima de la cuerda que vale $1$.
-\item La ganancia real, demostrada y no supuesta: a lo largo de
-\textbf{direcciones de rango uno} $\bm H=\bm a\otimes\bm b$
-($\det\bm H=0$), tanto $\det(\bm F+t\bm H)$ como $\Cof(\bm F+t\bm H)$
-son exactamente afines en $t$, as\'i que el camino completo en el
-espacio elevado es una recta gen\'uina -- y por tanto $t\mapsto
-W(\bm F+t\,\bm a\otimes\bm b)$ es realmente convexa (\textbf{convexidad
-de rango uno}), una afirmaci\'on real sobre $W$ misma, no sobre un
-sustituto. Fuera de esas direcciones (como nuestro contraejemplo, donde
-$\det\bm H\neq0$), no hay tal garant\'ia.
-\item Ball generaliza esto a la definici\'on completa de
-\textbf{polyconvexidad}, $W(\bm F)=G(\bm F,\Cof\bm F,\det\bm F)$ con
-$G$ conjuntamente convexa en los tres bloques -- estrictamente m\'as
-d\'ebil que convexidad en $\bm F$, y (por el argumento anterior)
-compatible con ella al menos a lo largo de toda direcci\'on de rango
-uno.
+\item El mecanismo de Ball: introducir $\delta$ (y, en la definici\'on
+completa, tambi\'en $\Cof\bm F$) como variables \emph{independientes},
+y pedir convexidad conjunta $G(\bm F,\Cof\bm F,\det\bm F)$ en el
+espacio elevado: estrictamente m\'as f\'acil de satisfacer que
+convexidad en $\bm F$ directamente.
+\item \textbf{Lo que esto promete, con precisi\'on:} no ``\'unica
+soluci\'on, f\'acil de encontrar'' (eso ya lo perdimos para siempre).
+S\'olo ``existe al menos una soluci\'on de equilibrio'': un teorema
+real de Ball (1977) cuya demostraci\'on completa necesita herramientas
+de an\'alisis funcional que dejamos pendientes para m\'as adelante.
+Confundir esta garant\'ia d\'ebil con la fuerte que quer\'iamos al
+principio es exactamente lo que hace que el mecanismo parezca
+evasi\'on; distingui\'endolas, deja de parecerlo.
 \item La compatibilidad con objetividad no viene de que los bloques
 elevados se queden fijos bajo $\bm F\mapsto-\bm F$ (el cofactor
-\emph{s\'i} cambia de signo en 2D) -- viene de construir $G$ a partir
+\emph{s\'i} cambia de signo en 2D); viene de construir $G$ a partir
 de combinaciones ya invariantes bajo \emph{toda} rotaci\'on, como
 $\bm C$ y $\Cof(\bm C)$, exactamente como en el
 Cap\'itulo~\ref{ch:C}.
@@ -845,5 +965,2131 @@ a obtener una violaci\'on. Cuando est\'es listo, seguimos con el
 Cap\'itulo 4: qu\'e es exactamente $\Cof\bm F$, qu\'e significa
 f\'isicamente, y por qu\'e en 2D es, en cierto sentido, ``menos nuevo''
 de lo que parece.
+
+\section{El cofactor $\Cof\bm F$: qu\'e es, y qu\'e hace de verdad}
+\label{ch:cofF}
+
+\subsection{El problema: las normales no se comportan como los vectores tangentes}
+
+$\bm F$ nos dice qu\'e le pasa a un vector material peque\~no,
+$d\bm x=\bm F\,d\bm X$ (as\'i lo usamos todo el Cap\'itulo~\ref{ch:F}:
+las columnas de $\bm F$ son las im\'agenes de los vectores de la
+base). Si tienes una l\'inea recta en la referencia con direcci\'on
+(tangente) $\bm t$, su imagen deformada tiene tangente $\bm F\bm t$:
+sin sorpresas, es exactamente para eso que sirve $\bm F$.
+
+Pero ahora pregunta algo distinto: si $\bm n$ es un vector
+\textbf{normal} (perpendicular) a esa l\'inea en la referencia, ¿qu\'e
+vector es normal a la l\'inea \emph{deformada}? La respuesta ingenua
+ser\'ia ``tambi\'en $\bm F\bm n$''; y esa respuesta es, en general,
+\textbf{falsa}.
+
+\begin{ejemplo}[La normal ingenua falla, verificado con n\'umeros]
+\label{ex:appB-cofF-normal}
+Usemos el corte del Cap\'itulo~\ref{ch:F},
+$\bm F=\begin{pmatrix}1&0.6\\0&1\end{pmatrix}$, con una l\'inea de
+tangente $\bm t=(1,1)^T$ y normal $\bm n=(1,-1)^T$ (verifica t\'u mismo:
+$\bm t\cdot\bm n=(1)(1)+(1)(-1)=0$, son perpendiculares).
+
+La tangente deformada es
+\[
+ \bm F\bm t=\begin{pmatrix}1&0.6\\0&1\end{pmatrix}\begin{pmatrix}1\\1\end{pmatrix}
+ =\begin{pmatrix}1.6\\1\end{pmatrix}.
+\]
+Si la normal ingenua $\bm F\bm n$ fuera correcta, deber\'ia seguir
+siendo perpendicular a $\bm F\bm t$. Calculemos:
+\[
+ \bm F\bm n=\begin{pmatrix}1&0.6\\0&1\end{pmatrix}\begin{pmatrix}1\\-1\end{pmatrix}
+ =\begin{pmatrix}0.4\\-1\end{pmatrix},
+ \qquad
+ (\bm F\bm n)\cdot(\bm F\bm t)=(0.4)(1.6)+(-1)(1)=-0.36\neq0.
+\]
+\textbf{No es perpendicular.} $\bm F$ es la matriz correcta para
+tangentes, pero no para normales.
+\end{ejemplo}
+
+\subsection{La soluci\'on: $\Cof\bm F$}
+
+Para $\bm F=\begin{pmatrix}a&b\\c&d\end{pmatrix}$, definimos
+\begin{equation}
+ \Cof\bm F:=\begin{pmatrix}d&-c\\-b&a\end{pmatrix}.
+ \label{eq:appB-cofF-def}
+\end{equation}
+(Ya la usamos, sin detenernos, en el Cap\'itulo~\ref{ch:lifting}; ahora
+le toca su propio cap\'itulo.) Repitamos el Ejemplo~\ref{ex:appB-cofF-normal}
+pero transformando la normal con $\Cof\bm F$ en vez de con $\bm F$:
+para nuestra $\bm F$, $\Cof\bm F=\begin{pmatrix}1&0\\-0.6&1\end{pmatrix}$,
+as\'i que
+\[
+ \Cof(\bm F)\,\bm n=\begin{pmatrix}1&0\\-0.6&1\end{pmatrix}\begin{pmatrix}1\\-1\end{pmatrix}
+ =\begin{pmatrix}1\\-1.6\end{pmatrix},
+ \qquad
+ \big(\Cof(\bm F)\bm n\big)\cdot(\bm F\bm t)=(1)(1.6)+(-1.6)(1)=0.
+\]
+\textbf{Exactamente perpendicular.} La Figura~\ref{fig:appB-cofF}
+dibuja los tres vectores: la tangente correcta $\bm F\bm t$, la normal
+correcta $\Cof(\bm F)\bm n$, y la normal ingenua incorrecta $\bm F\bm n$
+para que veas la diferencia con tus propios ojos.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{ch4_cofF_claude.png}
+\caption{Izquierda: una l\'inea de referencia con su tangente $\bm t$ y
+normal $\bm n$ (perpendiculares). Derecha: bajo la misma $\bm F$
+(el corte del Cap\'itulo~\ref{ch:F}), la tangente se transforma con
+$\bm F$ y sigue siendo tangente a la l\'inea deformada; la normal se
+transforma con $\Cof(\bm F)$ y sigue siendo exactamente perpendicular
+a $\bm F\bm t$, mientras que $\bm F\bm n$ (rojo, discontinuo) no lo
+es.}
+\label{fig:appB-cofF}
+\end{figure}
+
+\subsection{Por qu\'e funciona: una identidad algebraica de tres l\'ineas}
+
+Esto no es coincidencia para nuestro ejemplo: es una identidad
+general. Para cualquier $\bm F$ invertible,
+\begin{equation}
+ \bm F^T\big(\Cof\bm F\big)=(\det\bm F)\,\bm I.
+ \label{eq:appB-cofF-identity}
+\end{equation}
+Verif\'icalo con nuestros n\'umeros:
+$\bm F^T=\begin{pmatrix}1&0\\0.6&1\end{pmatrix}$,
+\[
+ \bm F^T\Cof\bm F=\begin{pmatrix}1&0\\0.6&1\end{pmatrix}\begin{pmatrix}1&0\\-0.6&1\end{pmatrix}
+ =\begin{pmatrix}1&0\\0.6-0.6&1\end{pmatrix}=\begin{pmatrix}1&0\\0&1\end{pmatrix}=\bm I=(\det\bm F)\bm I
+\]
+(aqu\'i $\det\bm F=1$). Con esta identidad, la comprobaci\'on de
+perpendicularidad del Ejemplo~\ref{ex:appB-cofF-normal} sale en una
+l\'inea, para \emph{cualquier} $\bm F$, $\bm t$, $\bm n$ con
+$\bm t\cdot\bm n=0$:
+\[
+ \big(\Cof(\bm F)\bm n\big)\cdot(\bm F\bm t)
+ =\bm n^T\big(\Cof\bm F\big)^T\bm F\,\bm t
+ =\bm n^T\big(\bm F^T\Cof\bm F\big)^T\bm t
+ =\bm n^T(\det\bm F)\bm I\,\bm t
+ =(\det\bm F)\,(\bm n\cdot\bm t)=0.
+\]
+(Usamos que $\big(\Cof\bm F\big)^T\bm F=\big(\bm F^T\Cof\bm F\big)^T$
+porque $\bm F^T\Cof\bm F=(\det\bm F)\bm I$ es sim\'etrica, as\'i que es
+igual a su propia transpuesta.) Esta es, en esencia, la f\'ormula de
+Nanson de la mec\'anica del medio continuo: las \'areas y normales
+orientadas se transportan con $\Cof\bm F$, no con $\bm F$.
+
+Una consecuencia \'util, cuando $\bm F$ es invertible: dividiendo
+\eqref{eq:appB-cofF-identity} por $\det\bm F$,
+\begin{equation}
+ \Cof\bm F=(\det\bm F)\,\bm F^{-T}.
+ \label{eq:appB-cofF-inverse}
+\end{equation}
+Verif\'icalo: $\bm F^{-1}=\begin{pmatrix}1&-0.6\\0&1\end{pmatrix}$
+(comprueba t\'u mismo que $\bm F\bm F^{-1}=\bm I$), as\'i que
+$\bm F^{-T}=\begin{pmatrix}1&0\\-0.6&1\end{pmatrix}=\Cof\bm F$
+exactamente (con $\det\bm F=1$ en este ejemplo).
+
+\subsection{La sutileza de 2D: $\Cof\bm F$ es lineal, no cuadr\'atico}
+
+Mira otra vez la f\'ormula~\eqref{eq:appB-cofF-def}: cada entrada de
+$\Cof\bm F$ es, literalmente, \textbf{una sola entrada de $\bm F$, con
+signo}. No hay productos, no hay cuadrados. Eso es lo que quiere decir
+que $\Cof\bm F$ es una funci\'on \textbf{lineal} de las entradas de
+$\bm F$; ya usamos esto, sin detenernos a justificarlo, en el
+Cap\'itulo~\ref{ch:lifting}.
+
+Esto es \textbf{especial de 2D}. En 3D, cada entrada de $\Cof\bm F$ es
+un menor de $2\times2$ de $\bm F$: un determinante de una submatriz
+$2\times2$, que involucra \emph{productos de dos entradas distintas}
+de $\bm F$, genuinamente \textbf{cuadr\'atico}, no lineal. La raz\'on
+por la que en 2D es distinto es simplemente de tama\~no: un menor
+``de tama\~no $(n-1)$'' de una matriz $n\times n$ es un determinante de
+tama\~no $n-1$, y un determinante de tama\~no $1$ (2D: $n-1=1$) es,
+trivialmente, una sola entrada, mientras que un determinante de
+tama\~no $2$ (3D: $n-1=2$) ya involucra un producto de dos entradas
+menos otro producto de dos entradas, gen\'uinamente cuadr\'atico.
+
+\begin{takeaway}[Por qu\'e esto es ``menos nuevo de lo que parece'']
+Como $\Cof\bm F$ es \textbf{lineal} en $\bm F$ (en 2D), componer
+cualquier funci\'on convexa $q$ con $\Cof\bm F$, es decir, considerar
+$q(\Cof\bm F)$ como funci\'on de $\bm F$, es \textbf{autom\'aticamente
+convexa en $\bm F$ directamente} (una funci\'on convexa compuesta con
+un mapa \emph{lineal} preserva convexidad, sin necesitar ning\'un
+truco de lifting: es el mismo hecho de tres l\'ineas del
+Cap\'itulo~\ref{ch:lifting}, ahora con un mapa lineal en vez de af\'in
+a lo largo de un segmento, que es un caso a\'un m\'as simple). Es decir:
+\textbf{en 2D, el bloque $\Cof\bm F$ nunca fue el que aportaba
+convexidad gen\'uinamente nueva}: eso lo aporta \'unicamente
+$\det\bm F$ (que s\'i es cuadr\'atico, como vimos con nuestro
+contraejemplo $\bm F_1,\bm F_2$). En 3D, en cambio, $\Cof\bm F$
+tambi\'en ser\'ia cuadr\'atico y s\'i aportar\'ia lifting gen\'uino,
+adem\'as de $\det\bm F$.
+\end{takeaway}
+
+Que $\Cof\bm F$ ``no aporte nada nuevo para la convexidad'' en 2D
+\textbf{no} quiere decir que sea in\'util: todo lo contrario. Sigue
+siendo, exactamente como acabamos de ver, el objeto f\'isicamente
+correcto para transformar normales y \'areas, y en el paper se usa
+para construir features direccionales genuinamente distintas de las
+que se construyen con $\bm F$ solo ($Q_{k,p}^H$ construidas a partir
+de $\Cof\bm F$, frente a $Q_{k,p}^F$ construidas a partir de $\bm F$).
+``Menos nuevo para demostrar polyconvexidad'' y ``menos \'util para
+construir un modelo anisotr\'opico'' son afirmaciones completamente
+distintas: lo primero es cierto, lo segundo no.
+
+\subsection{Resumen de este cap\'itulo}
+
+\begin{takeaway}
+\begin{itemize}
+\item $\bm F$ transforma vectores tangentes ($d\bm x=\bm F\,d\bm X$);
+$\Cof\bm F$ transforma vectores normales y \'areas orientadas: son
+objetos f\'isicamente distintos, con reglas de transformaci\'on
+distintas, y confundirlos da un resultado num\'ericamente incorrecto
+(verificado: $\bm F\bm n$ no queda perpendicular a $\bm F\bm t$, pero
+$\Cof(\bm F)\bm n$ s\'i).
+\item La identidad $\bm F^T\Cof\bm F=(\det\bm F)\bm I$ (y, si $\bm F$
+es invertible, $\Cof\bm F=(\det\bm F)\bm F^{-T}$) es la raz\'on
+algebraica exacta de por qu\'e esto funciona, en cualquier dimensi\'on.
+\item En 2D espec\'ificamente, $\Cof\bm F$ es \textbf{lineal} en las
+entradas de $\bm F$ (un menor de tama\~no $1$), a diferencia de 3D
+(menores de tama\~no $2$, cuadr\'aticos). Por eso, en 2D, $\Cof\bm F$
+no aporta convexidad gen\'uinamente nueva para la definici\'on de
+polyconvexidad (solo $\det\bm F$ lo hace), aunque sigue siendo
+\'util f\'isicamente y para construir features anisotr\'opicas.
+\end{itemize}
+\end{takeaway}
+
+\bigskip
+\noindent\textbf{Antes de seguir:} repite el
+Ejemplo~\ref{ex:appB-cofF-normal} con otra $\bm F$ de tu elecci\'on
+(por ejemplo, el estiramiento $\mathrm{diag}(2,1)$ del
+Cap\'itulo~\ref{ch:F}) y otra pareja perpendicular $\bm t,\bm n$, y
+confirma con tus propios n\'umeros que $\Cof(\bm F)\bm n$ se queda
+perpendicular a $\bm F\bm t$ mientras que $\bm F\bm n$ no.
+
+\subsection*{Extra: as\'i se ve $\Cof\bm F$ en 3D}
+
+Todo lo de este cap\'itulo lo hicimos en 2D, pero vale la pena ver el
+caso 3D una vez, con n\'umeros, para que la diferencia entre ``lineal''
+y ``cuadr\'atico'' deje de ser abstracta.
+
+\subsubsection*{La definici\'on general: menores con signo}
+
+Para $\bm F$ de $3\times3$, con entradas $a_{ij}$, la entrada
+$(i,j)$ de $\Cof\bm F$ se define borrando la fila $i$ y la columna $j$
+de $\bm F$ (queda una submatriz $2\times2$), tomando su determinante, y
+multiplicando por el signo $(-1)^{i+j}$:
+\[
+ (\Cof\bm F)_{11}=\det\begin{pmatrix}a_{22}&a_{23}\\a_{32}&a_{33}\end{pmatrix}
+ =a_{22}a_{33}-a_{23}a_{32},
+ \qquad
+ (\Cof\bm F)_{12}=-\det\begin{pmatrix}a_{21}&a_{23}\\a_{31}&a_{33}\end{pmatrix}
+ =a_{23}a_{31}-a_{21}a_{33},
+\]
+y as\'i sucesivamente para las siete entradas restantes. Mira bien
+estas dos f\'ormulas: cada una es un \textbf{producto de dos entradas
+distintas de $\bm F$, menos otro producto de dos entradas distintas}:
+gen\'uinamente \textbf{cuadr\'atico}. Compara con la f\'ormula 2D,
+$\Cof\bm F=\begin{pmatrix}d&-c\\-b&a\end{pmatrix}$, donde cada entrada
+era \emph{una sola} entrada de $\bm F$ con signo, sin ning\'un
+producto. Esa es, literalmente, toda la diferencia entre 2D y 3D: un
+menor de tama\~no $1$ (2D) es trivialmente lineal; un menor de tama\~no
+$2$ (3D) ya involucra productos.
+
+\begin{ejemplo}[Un $\bm F$ de $3\times3$, calculado a mano]
+\label{ex:appB-cofF-3d}
+Tomemos
+\[
+ \bm F=\begin{pmatrix}1&2&0\\0&1&1\\1&0&1\end{pmatrix},
+ \qquad \det\bm F=3
+\]
+(verif\'icalo expandiendo por la primera fila:
+$1(1\cdot1-1\cdot0)-2(0\cdot1-1\cdot1)+0=1-2(-1)=3$). Aplicando la
+receta de menores a las nueve entradas se obtiene
+\[
+ \Cof\bm F=\begin{pmatrix}1&1&-1\\-2&1&2\\2&-1&1\end{pmatrix}.
+\]
+Como comprobaci\'on (la misma identidad~\eqref{eq:appB-cofF-identity}
+que verificamos en 2D, ahora en 3D),
+\[
+ \bm F^T\Cof\bm F=\begin{pmatrix}1&0&1\\2&1&0\\0&1&1\end{pmatrix}
+ \begin{pmatrix}1&1&-1\\-2&1&2\\2&-1&1\end{pmatrix}
+ =\begin{pmatrix}3&0&0\\0&3&0\\0&0&3\end{pmatrix}=(\det\bm F)\,\bm I.
+\]
+Multiplica t\'u mismo un par de entradas para confirmarlo: por
+ejemplo, la entrada $(1,1)$: $(1)(1)+(0)(-2)+(1)(2)=3$. $\checkmark$
+\end{ejemplo}
+
+\subsubsection*{El hecho m\'as bonito: columnas de $\Cof\bm F$ = productos cruz}
+
+En 3D hay una manera todav\'ia m\'as directa de calcular $\Cof\bm F$,
+que conecta perfectamente con el significado f\'isico del
+cap\'itulo (\'areas y normales). Si $\bm f_1,\bm f_2,\bm f_3$ son las
+columnas de $\bm F$ (las im\'agenes de $\bm e_1,\bm e_2,\bm e_3$, como
+en el Cap\'itulo~\ref{ch:F}), entonces
+\begin{equation}
+ (\Cof\bm F)\bm e_1=\bm f_2\times\bm f_3,\qquad
+ (\Cof\bm F)\bm e_2=\bm f_3\times\bm f_1,\qquad
+ (\Cof\bm F)\bm e_3=\bm f_1\times\bm f_2.
+ \label{eq:appB-cofF-cross}
+\end{equation}
+Verif\'iquemoslo con el Ejemplo~\ref{ex:appB-cofF-3d}: las columnas de
+$\bm F$ son $\bm f_1=(1,0,1)^T$, $\bm f_2=(2,1,0)^T$, $\bm f_3=(0,1,1)^T$.
+Calculando el producto cruz:
+\[
+ \bm f_2\times\bm f_3=\begin{pmatrix}1\cdot1-0\cdot1\\0\cdot0-2\cdot1\\2\cdot1-1\cdot0\end{pmatrix}
+ =\begin{pmatrix}1\\-2\\2\end{pmatrix},
+\]
+\textbf{exactamente} la primera columna de $\Cof\bm F$ que calculamos
+arriba por menores. Esto no es casualidad: $\bm e_1$ es la normal a la
+cara del cubo de referencia generada por $\bm e_2,\bm e_3$, y su
+\'area orientada deformada es, por definici\'on geom\'etrica del
+producto cruz, exactamente $\bm f_2\times\bm f_3$: el mismo papel
+que $\Cof\bm F$ jugaba para normales de l\'ineas en 2D, ahora para
+\'areas de caras en 3D.
+
+\begin{takeaway}
+En 2D, transformar una normal era ``multiplicar por una sola entrada
+de $\bm F$, con signo''. En 3D, transformar una normal (de una cara)
+es ``tomar el producto cruz de las otras dos columnas de $\bm F$'',
+gen\'uinamente cuadr\'atico, porque un producto cruz en 3D
+\emph{siempre} multiplica pares de componentes entre s\'i. La f\'ormula
+de menores y la f\'ormula de productos cruz son dos caminos al mismo
+resultado; la segunda es la que de verdad explica, geom\'etricamente,
+por qu\'e $\Cof\bm F$ tiene que ser cuadr\'atica en 3D.
+\end{takeaway}
+
+\section{Invariantes cl\'asicos: qu\'e son, y por qu\'e no bastan}
+\label{ch:invariants}
+
+\subsection{¿Qu\'e es un invariante?}
+
+Todo lo que hemos construido hasta ahora ($\bm C$, $\bm E$, $J$,
+$\Cof\bm F$) depende de $\bm F$ de formas muy concretas. Ahora vamos a
+preguntar algo distinto: dado $\bm C$, ¿qu\'e n\'umeros podemos sacar
+de \'el que no dependan de \emph{c\'omo lo miramos}?
+
+Concretamente: si rotamos $\bm C$ como
+$\bm C\mapsto\bm Q^T\bm C\bm Q$ para una rotaci\'on $\bm Q$
+cualquiera, un \textbf{invariante} es una funci\'on escalar $I(\bm C)$
+que no cambia:
+\begin{equation}
+ I(\bm Q^T\bm C\bm Q)=I(\bm C)\qquad\text{para toda rotaci\'on }\bm Q.
+ \label{eq:appB-invariant-def}
+\end{equation}
+
+\textbf{Alerta importante, para no confundir esto con la
+objetividad del Cap\'itulo~\ref{ch:C}:} ah\'i probamos que
+$\bm C=\bm F^T\bm F$ es invariante bajo $\bm F\mapsto\bm Q\bm F$,
+una rotaci\'on \emph{r\'igida del cuerpo ya deformado}, aplicada por
+la izquierda. Eso es universal, cierto para \emph{cualquier} material,
+y ya qued\'o demostrado para siempre.
+
+Aqu\'i estamos preguntando algo distinto: qu\'e le pasa a $\bm C$ si en
+cambio giramos $\bm F$ por la \textbf{derecha}, $\bm F\mapsto\bm F\bm Q$,
+lo que corresponder\'ia a rotar el material \emph{antes} de
+deformarlo (p.ej., cortar la misma probeta de un tejido, pero
+orientando las fibras en otro \'angulo). Esto da
+$\bm C\mapsto(\bm F\bm Q)^T(\bm F\bm Q)=\bm Q^T\bm C\bm Q$, exactamente
+la transformaci\'on de \eqref{eq:appB-invariant-def}. Que la energ\'ia
+sea invariante bajo \emph{esta} transformaci\'on
+(es decir, $W(\bm F\bm Q)=W(\bm F)$ para toda $\bm Q$) no es una ley
+universal: es la definici\'on de que el material sea
+\textbf{isotr\'opico} (que responde igual sin importar c\'omo est\'e
+orientado internamente). Un material con fibras, como el nuestro, en
+general \textbf{no} es isotr\'opico, as\'i que no esperamos ni
+queremos que $W(\bm F\bm Q)=W(\bm F)$.
+
+\subsection{Los invariantes cl\'asicos}
+
+Los invariantes cl\'asicos son las funciones m\'as simples que
+satisfacen \eqref{eq:appB-invariant-def}. En 2D, donde $\bm C$
+sim\'etrica $2\times2$ tiene exactamente dos autovalores
+$\lambda_1,\lambda_2$, hay dos:
+\begin{equation}
+ I_1:=\tr\bm C=\lambda_1+\lambda_2,\qquad
+ I_2:=\det\bm C=\lambda_1\lambda_2=J^2.
+ \label{eq:appB-classical-2d}
+\end{equation}
+(En 3D, con tres autovalores, hay tres:
+$I_1=\tr\bm C=\lambda_1+\lambda_2+\lambda_3$,
+$I_2=\lambda_1\lambda_2+\lambda_2\lambda_3+\lambda_3\lambda_1$,
+$I_3=\det\bm C=\lambda_1\lambda_2\lambda_3$; lo mencionamos solo para
+contraste, en este proyecto todo es 2D.)
+
+¿Por qu\'e son invariantes? Porque $\bm Q^T\bm C\bm Q$ es una
+\emph{transformaci\'on de semejanza}, y las transformaciones de
+semejanza preservan los autovalores exactamente (\'esa es su
+definici\'on en \'algebra lineal). Como $I_1$, $I_2$ dependen
+\'unicamente de los autovalores de $\bm C$ (nunca de sus autovectores,
+las direcciones principales), no pueden cambiar bajo esta
+transformaci\'on.
+
+\subsection{El problema: los invariantes cl\'asicos olvidan la orientaci\'on}
+
+Aqu\'i est\'a el punto clave: precisamente \emph{porque} $I_1,I_2$ solo
+ven los autovalores, \textbf{cualquier} energ\'ia construida
+\'unicamente a partir de $I_1,I_2$ es autom\'aticamente isotr\'opica.
+Eso es exactamente lo que \textbf{no} queremos para un material con
+fibras.
+
+\begin{ejemplo}[Dos estados distintos, mismos invariantes]
+\label{ex:appB-invariants}
+Tomemos
+\[
+ \bm C_1=\begin{pmatrix}2&0\\0&0.5\end{pmatrix},
+ \qquad
+ \bm C_2=\bm Q^T\bm C_1\bm Q
+ =\begin{pmatrix}1.25&0.75\\0.75&1.25\end{pmatrix}
+\]
+con $\bm Q$ una rotaci\'on de $45^\circ$ (verif\'icalo t\'u mismo
+multiplicando). Ambas tienen los mismos autovalores, $2$ y $0.5$
+(rotar no los cambia), as\'i que
+\[
+ I_1(\bm C_1)=I_1(\bm C_2)=2.5,\qquad
+ I_2(\bm C_1)=I_2(\bm C_2)=1.0.
+\]
+\textbf{Id\'enticos.} Pero $\bm C_1$ y $\bm C_2$ representan
+estiramientos f\'isicamente muy distintos: uno alineado con los ejes,
+el otro girado $45^\circ$. Si nuestro material tiene una fibra fija a
+lo largo de $\bm d=(1,0)^T$, la fibra siente
+\[
+ \bm d\cdot\bm C_1\bm d=2.0,\qquad
+ \bm d\cdot\bm C_2\bm d=1.25,
+\]
+\textbf{claramente distintos}: la fibra se estira el doble en el
+primer caso que en el segundo. Los invariantes cl\'asicos son ciegos a
+esta diferencia; una cantidad que involucra una direcci\'on fija,
+como $\bm d\cdot\bm C\bm d$, no lo es.
+\end{ejemplo}
+
+En la Figura~\ref{fig:appB-invariants}, la l\'inea punteada horizontal
+es $\bm d$, \textbf{fija}, id\'entica en ambos paneles, porque as\'i
+decidimos medir (es la fibra del material, y la fibra no se mueve solo
+porque roten los ejes con los que describimos $\bm C$). La flecha roja
+\textbf{no es $\bm d$}: es $\bm U\bm d$, la imagen de esa fibra despu\'es
+de aplicarle el estiramiento $\bm U=\sqrt{\bm C}$ (exactamente como en
+el Cap\'itulo~\ref{ch:C}, donde usamos $\bm F=\bm U$). Para $\bm C_1$,
+$\bm d$ es una direcci\'on principal (un autovector), as\'i que
+$\bm U_1\bm d$ apunta en la \emph{misma} direcci\'on que $\bm d$, solo
+m\'as largo, por eso ah\'i la flecha s\'i queda horizontal. Para
+$\bm C_2$, $\bm d$ \textbf{no} es una direcci\'on principal (las
+direcciones principales de $\bm C_2$ est\'an giradas $45^\circ$), as\'i
+que $\bm U_2\bm d$ apunta en una direcci\'on distinta de $\bm d$:
+la fibra, embebida en este material girado, no solo se estira, tambi\'en
+gira. Esto es f\'isicamente real, no un error de la figura: lo \'unico
+que estamos comparando entre los dos paneles es la
+\textbf{longitud al cuadrado} de esa flecha,
+$|\bm U\bm d|^2=\bm d\cdot\bm C\bm d$ (exactamente la
+f\'ormula~\eqref{eq:appB-C-lengths} del Cap\'itulo~\ref{ch:C}), no su
+direcci\'on, que es un efecto secundario, correcto, de la anisotrop\'ia.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{ch5_invariants_claude.png}
+\caption{Las elipses de estiramiento de $\bm C_1$ y $\bm C_2$ del
+Ejemplo~\ref{ex:appB-invariants}, id\'enticas en forma (mismos
+$I_1,I_2$), solo rotadas $45^\circ$. La l\'inea punteada es la
+direcci\'on fija $\bm d$ (p.ej., la fibra del material, id\'entica en
+ambos paneles); la flecha roja es $\bm U\bm d$, la imagen deformada de
+esa fibra, horizontal para $\bm C_1$ (donde $\bm d$ es una direcci\'on
+principal) pero girada para $\bm C_2$ (donde no lo es). Lo que
+comparamos es $|\bm U\bm d|^2=\bm d\cdot\bm C\bm d$: $2.0$ en el
+primer panel, $1.25$ en el segundo.}
+\label{fig:appB-invariants}
+\end{figure}
+
+\begin{takeaway}
+Los invariantes cl\'asicos $I_1,I_2$ no est\'an ``mal'': describen
+exactamente y con precisi\'on toda la informaci\'on que le importa a
+un material \textbf{isotr\'opico}. El problema es que nuestro material
+no lo es: tiene direcciones que importan (fibras, orientaciones
+preferentes), y $I_1,I_2$ olvidan exactamente esa informaci\'on por
+construcci\'on (dependen solo de autovalores, nunca de autovectores).
+Para capturar anisotrop\'ia genuina necesitamos features que
+\textbf{s\'i} dependan de una direcci\'on fija, como
+$\bm d\cdot\bm C\bm d$, y que no son invariantes en el sentido de
+\eqref{eq:appB-invariant-def}, \textbf{a prop\'osito}.
+\end{takeaway}
+
+\paragraph{¿De d\'onde viene esta idea?} $\bm d\cdot\bm C\bm d$ no es una
+invenci\'on de este proyecto: es el pseudo-invariante cl\'asico (a menudo
+llamado $I_4$) usado desde los a\~nos 70 en toda la teor\'ia de
+hiperelasticidad anisotr\'opica para un material con una direcci\'on de
+fibra fija. Lo introdujo Spencer~\cite{Spencer1971,Spencer1984}, y
+Boehler~\cite{Boehler1987} lo formaliz\'o dentro de un marco general:
+escribir una funci\'on anisotr\'opica como una funci\'on isotr\'opica de
+$\bm C$ y de un \textbf{tensor estructural} que codifica la simetr\'ia
+del material (en nuestro caso, $\bm d\otimes\bm d$). Si quieres leer los
+textos originales, esos son los dos cl\'asicos.
+
+\bigskip
+\noindent\textbf{Antes de seguir:} repite el
+Ejemplo~\ref{ex:appB-invariants} con otro \'angulo de rotaci\'on (por
+ejemplo $30^\circ$) y otra direcci\'on fija $\bm d$, y confirma que
+$I_1,I_2$ siguen siendo id\'enticos mientras que $\bm d\cdot\bm C\bm d$
+cambia. Cuando est\'es listo, seguimos con el Cap\'itulo 6: c\'omo
+combinar \emph{varias} direcciones fijas, con pesos, en una familia
+de features direccionales controlada: las direcciones balanceadas.
+
+\section{Direcciones balanceadas: c\'omo se construye la anisotrop\'ia}
+\label{ch:balance}
+
+\subsection{El problema: $I_1$ no basta, y ya sabemos por qu\'e}
+
+En el Cap\'itulo~\ref{ch:invariants} vimos que $I_1=\tr\bm C=|\bm F|^2$
+es ciego a la orientaci\'on: no sabe nada de direcciones, y por eso
+no puede describir un material con fibras. Si estiras el material
+$20\%$ hacia la derecha o $20\%$ hacia arriba, $I_1$ da
+exactamente el mismo n\'umero en los dos casos (compru\'ebalo: para
+$\bm F=\mathrm{diag}(1.2,1)$ y $\bm F=\mathrm{diag}(1,1.2)$,
+$I_1=\tr(\bm F^T\bm F)$ es id\'entico en ambos, por simetr\'ia),
+exactamente el mismo fen\'omeno del Ejemplo~\ref{ex:appB-invariants},
+ahora en $\bm F$ en vez de en $\bm C$.
+
+Pero nuestro material (piensa en el RVE con el agujero circular, o en
+cualquier tejido con fibras) \textbf{s\'i} puede responder distinto
+seg\'un la direcci\'on: m\'as r\'igido a lo largo de una fibra, m\'as
+flexible perpendicular a ella. Necesitamos features que sepan
+distinguir direcciones: ah\'i es donde entra la idea de sumar,
+con pesos, la respuesta del material medida en varias direcciones
+concretas $\bm d_1,\bm d_2,\bm d_3$.
+
+\subsection{La idea: promediar (con pesos) sobre varias direcciones}
+
+Para una direcci\'on unitaria $\bm d$, la cantidad
+$\bm d\cdot\bm C\bm d=|\bm F\bm d|^2$ mide cu\'anto se estira el
+material espec\'ificamente en la direcci\'on $\bm d$ (es exactamente
+la f\'ormula de longitudes al cuadrado del
+Cap\'itulo~\ref{ch:C},~\eqref{eq:appB-C-lengths}, aplicada a $\bm d$).
+Eso ya distingue direcciones. La pregunta es c\'omo combinar varias de
+estas medidas, en varias direcciones, en un conjunto de features
+manejable, y el paper lo hace con una suma ponderada
+\begin{equation}
+ \sum_{i=1}^3 w_i\,(\bm d_i\cdot\bm C\bm d_i)^p
+ \label{eq:appB-weighted-sum}
+\end{equation}
+sobre tres direcciones $\bm d_1,\bm d_2,\bm d_3$ con pesos
+$w_1,w_2,w_3$, para distintas potencias $p$. Pero no podemos elegir
+los pesos $w_i$ de cualquier manera: si los elegimos mal, esta suma
+introducir\'ia anisotrop\'ia incluso donde no deber\'ia haberla, o
+duplicar\'ia informaci\'on que $I_1$ ya nos da. Necesitamos una regla.
+
+\subsection{La regla: la condici\'on de balance}
+
+La regla que impone el paper es
+\begin{equation}
+ \sum_{i=1}^3 w_i\,\bm d_i\otimes\bm d_i=\bm I,
+ \label{eq:appB-balance}
+\end{equation}
+donde $\bm d\otimes\bm d$ es la matriz $2\times2$ con entradas
+$(\bm d\otimes\bm d)_{jk}=d_jd_k$ (para $\bm d=(\cos\theta,\sin\theta)$,
+esto es $\begin{pmatrix}\cos^2\theta&\sin\theta\cos\theta\\
+\sin\theta\cos\theta&\sin^2\theta\end{pmatrix}$).
+
+¿Por qu\'e esta condici\'on en particular? Porque garantiza que, para
+$p=1$, la suma ponderada~\eqref{eq:appB-weighted-sum} \textbf{colapsa
+exactamente a $I_1$}, sin importar qu\'e \'angulos elijamos:
+\[
+ \sum_i w_i\,(\bm d_i\cdot\bm C\bm d_i)
+ =\sum_i w_i\,\tr(\bm C\,\bm d_i\otimes\bm d_i)
+ =\tr\!\Big(\bm C\sum_i w_i\,\bm d_i\otimes\bm d_i\Big)
+ \overset{\eqref{eq:appB-balance}}{=}\tr(\bm C\bm I)=\tr\bm C=I_1.
+\]
+(Usamos $\bm d\cdot\bm C\bm d=\tr(\bm C\,\bm d\otimes\bm d)$, cierto
+para cualquier vector $\bm d$ y matriz sim\'etrica $\bm C$; verif\'icalo
+t\'u mismo expandiendo ambos lados en componentes.)
+
+\begin{takeaway}
+La condici\'on de balance no es arbitraria: es exactamente la
+condici\'on que hace que el caso m\'as simple ($p=1$) de la suma
+ponderada no aporte \emph{ninguna} informaci\'on nueva: siempre
+reproduce $I_1$, sea cual sea la elecci\'on de \'angulos. Toda la
+anisotrop\'ia gen\'uina tiene que venir de las potencias $p\geq2$, que
+en general \textbf{no} colapsan a una funci\'on de $I_1$ sola (lo
+veremos en el pr\'oximo cap\'itulo). El balance evita que estemos
+inventando anisotrop\'ia por una elecci\'on descuidada de pesos, en
+vez de por una elecci\'on deliberada de exponente.
+\end{takeaway}
+
+\subsection{Resolvi\'endolo: un sistema lineal $3\times3$}
+
+En 2D, cada direcci\'on $\bm d_i$ es un \'angulo $\theta_i$, y
+$\bm d_i\otimes\bm d_i$ tiene tres entradas independientes (es
+sim\'etrica $2\times2$). Escribiendo~\eqref{eq:appB-balance} entrada
+por entrada se obtiene un sistema lineal de tres ecuaciones para los
+tres pesos $w_1,w_2,w_3$:
+\begin{equation}
+ \begin{pmatrix}
+ \cos^2\theta_1 & \cos^2\theta_2 & \cos^2\theta_3\\
+ \sin^2\theta_1 & \sin^2\theta_2 & \sin^2\theta_3\\
+ \sin\theta_1\cos\theta_1 & \sin\theta_2\cos\theta_2 & \sin\theta_3\cos\theta_3
+ \end{pmatrix}
+ \begin{pmatrix}w_1\\w_2\\w_3\end{pmatrix}
+ =\begin{pmatrix}1\\1\\0\end{pmatrix}.
+ \label{eq:appB-balance-system}
+\end{equation}
+(Las primeras dos filas son las entradas diagonales de
+\eqref{eq:appB-balance}, que deben sumar $1$ cada una, para dar
+$\bm I$; la tercera es la entrada fuera de la diagonal, que debe
+sumar $0$.) Dados tres \'angulos cualesquiera (no todos iguales entre
+s\'i), este sistema tiene soluci\'on \'unica para los pesos.
+
+\begin{ejemplo}[Un sistema balanceado, resuelto y verificado]
+\label{ex:appB-balance}
+Tomemos $\theta_1=0^\circ$, $\theta_2=55^\circ$, $\theta_3=130^\circ$
+(\'angulos arbitrarios, sin ninguna simetr\'ia especial). Resolviendo
+\eqref{eq:appB-balance-system} num\'ericamente se obtiene
+\[
+ w_1=0.412,\qquad w_2=0.812,\qquad w_3=0.775.
+\]
+La Figura~\ref{fig:appB-balance} dibuja las tres direcciones, con el
+grosor de cada l\'inea proporcional a su peso. Verificamos
+directamente~\eqref{eq:appB-balance} sumando las tres matrices
+$w_i\,\bm d_i\otimes\bm d_i$:
+\[
+ \sum_i w_i\,\bm d_i\otimes\bm d_i=
+ \begin{pmatrix}1.000&-6\times10^{-17}\\-6\times10^{-17}&1.000\end{pmatrix}
+ =\bm I
+\]
+(el $6\times10^{-17}$ es puro error num\'erico de redondeo, cero hasta
+la precisi\'on de la m\'aquina). Y, tomando una matriz $\bm C$
+sim\'etrica positiva definida cualquiera (generada al azar en la
+verificaci\'on num\'erica), la suma ponderada con $p=1$ reproduce
+$\tr\bm C$ exactamente, hasta el \'ultimo d\'igito, tal como
+promet\'ia la demostraci\'on de arriba.
+\end{ejemplo}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=.62\linewidth]{ch5_balance_claude.png}
+\caption{Un sistema balanceado de tres direcciones (\'angulos
+arbitrarios $0^\circ,55^\circ,130^\circ$). El grosor de cada l\'inea es
+proporcional a su peso $w_i$; las direcciones se dibujan como
+l\'ineas, no flechas, porque $\bm d$ y $-\bm d$ dan el mismo
+$\bm d\otimes\bm d$ y por tanto son intercambiables para este
+prop\'osito.}
+\label{fig:appB-balance}
+\end{figure}
+
+\subsection{¿Y si $p=2$ o $p=3$? El balance protege algo distinto}
+\label{sec:appB-balance-highp}
+
+Buena pregunta, y la respuesta \textbf{no} es la misma que para $p=1$.
+Para $p=1$, el balance hac\'ia que la suma \emph{colapsara por
+completo} a $I_1$, una identidad v\'alida para \textbf{cualquier}
+$\bm C$, no solo cerca de la referencia. Si el balance hiciera lo
+mismo para $p=2,3$, estar\'iamos tirando exactamente la anisotrop\'ia
+que quer\'iamos capturar, y no tendr\'ia sentido subir la potencia.
+
+Por suerte, no es lo que pasa. Verif\'iquemoslo con los mismos
+$\bm C_1,\bm C_2$ del Cap\'itulo~\ref{ch:invariants} (mismos
+$I_1,I_2$, elipse rotada $45^\circ$) y el mismo sistema balanceado de
+este cap\'itulo:
+\[
+ \begin{array}{c|cc}
+ p & \sum_i w_i(\bm d_i\cdot\bm C_1\bm d_i)^p & \sum_i w_i(\bm d_i\cdot\bm C_2\bm d_i)^p\\\hline
+ 1 & 2.500000 & 2.500000\\
+ 2 & 3.423609 & 3.951391\\
+ 3 & 5.184615 & 6.977254
+ \end{array}
+\]
+Para $p=1$, id\'enticos (ya lo sab\'iamos). Para $p=2,3$,
+\textbf{distintos}: la suma ponderada s\'i distingue $\bm C_1$ de
+$\bm C_2$, exactamente lo que quer\'iamos. El balance, aparentemente,
+no le quita nada a la anisotrop\'ia de $p\geq2$.
+
+Entonces, ¿por qu\'e seguir imponi\'endolo ah\'i? Porque protege algo
+m\'as sutil que ``no colapsar a $I_1$'': protege el comportamiento
+\textbf{exactamente en el estado de referencia}, $\bm C=\bm I$, no
+en todas partes, solo ah\'i.
+
+Fij\'emonos en $t_i:=\bm d_i\cdot\bm C\bm d_i$. En la referencia,
+$\bm C=\bm I$, as\'i que $t_i=\bm d_i\cdot\bm d_i=1$ para
+\textbf{todos} los $i$, sin importar qu\'e \'angulos hayamos elegido
+(los $\bm d_i$ son unitarios). Con esto, la derivada de
+$g_k(\bm C)=\sum_i w_i\,t_i^p$ respecto de $\bm C$, evaluada en la
+referencia, es
+\[
+ \left.\frac{\partial g_k}{\partial\bm C}\right|_{\bm C=\bm I}
+ =\sum_i w_i\;p\,t_i^{p-1}\Big|_{t_i=1}\;\bm d_i\otimes\bm d_i
+ =p\sum_i w_i\,\bm d_i\otimes\bm d_i
+ \overset{\eqref{eq:appB-balance}}{=}p\,\bm I,
+\]
+\textbf{para cualquier $p$}, gracias al balance. Verificado
+num\'ericamente (derivadas por diferencias finitas, con nuestro propio
+sistema de \'angulos $0^\circ,55^\circ,130^\circ$):
+\[
+ p=1:\ \begin{pmatrix}1&0\\0&1\end{pmatrix},\quad
+ p=2:\ \begin{pmatrix}2&0\\0&2\end{pmatrix},\quad
+ p=3:\ \begin{pmatrix}3&0\\0&3\end{pmatrix}
+ \qquad\Big(=p\,\bm I\text{ en cada caso}\Big).
+\]
+
+\begin{takeaway}
+El balance cumple \textbf{dos} papeles distintos, uno por rango de $p$:
+\begin{itemize}
+\item Para $p=1$: colapsa la suma a $I_1$ \textbf{en todo el dominio}
+de $\bm C$, una identidad global, por eso no aporta informaci\'on
+nueva en absoluto.
+\item Para $p\geq2$: \textbf{no} colapsa la suma globalmente (s\'i hay
+anisotrop\'ia gen\'uina, verificado arriba con $\bm C_1\neq\bm C_2$
+pero mismos invariantes): solo fija que su \textbf{derivada, justo
+en $\bm C=\bm I$}, sea $p\,\bm I$: isotr\'opica, sin importar los
+\'angulos.
+\end{itemize}
+Esto no es un capricho: en un cap\'itulo posterior veremos que la
+energ\'ia completa necesita tener tensi\'on exactamente cero en la
+referencia (condici\'on (C4) del paper), y esa demostraci\'on cancela
+el residuo de la red con un \'unico escalar $r$: algo que solo
+funciona porque \textbf{cada} feature $Q^F_{k,p}$, $Q^H_{k,p}$, para
+\textbf{cualquier} $k$ y $p$, aporta un residuo isotr\'opico ($\propto\bm I$)
+en la referencia. Si una sola de estas features usara pesos sin
+balancear, su contribuci\'on al residuo ser\'ia anisotr\'opica, y ning\'un
+escalar \'unico podr\'ia cancelar la suma completa. El balance no
+limita la anisotrop\'ia lejos de la referencia (donde vive toda la
+informaci\'on que nos interesa); solo la prohibe expl\'icitamente
+\emph{en} la referencia (donde, por (C4), no debe haber ninguna).
+\end{takeaway}
+
+\bigskip
+\noindent\textbf{Antes de seguir:} repite la verificaci\'on num\'erica
+de la tabla de arriba con tu propio sistema de \'angulos (el que
+resolviste en el ejercicio del cap\'itulo anterior) y con $\bm C_1,\bm C_2$
+de tu elecci\'on (mismos autovalores, distintos autovectores) para
+$p=2$, y confirma que los valores difieren: la anisotrop\'ia
+sobrevive.
+
+\subsection{Resumen de este cap\'itulo}
+
+\begin{takeaway}
+\begin{itemize}
+\item $I_1$ no distingue direcciones; para capturar anisotrop\'ia
+gen\'uina hace falta medir el estiramiento en direcciones concretas,
+$\bm d\cdot\bm C\bm d=|\bm F\bm d|^2$.
+\item Combinamos varias direcciones con una suma ponderada
+$\sum_i w_i(\bm d_i\cdot\bm C\bm d_i)^p$, pero los pesos no son
+libres: deben satisfacer la \textbf{condici\'on de balance}
+$\sum_i w_i\,\bm d_i\otimes\bm d_i=\bm I$.
+\item Esa condici\'on garantiza, con una demostraci\'on de tres
+l\'ineas, que el caso $p=1$ siempre colapsa exactamente a $I_1$:
+ninguna anisotrop\'ia se cuela por una mala elecci\'on de pesos.
+\item En 2D, la condici\'on de balance es un sistema lineal
+$3\times3$ para los pesos, dados los \'angulos; lo resolvimos y lo
+verificamos num\'ericamente para tres \'angulos arbitrarios.
+\end{itemize}
+\end{takeaway}
+
+\paragraph{¿De d\'onde viene esta idea?} Combinar varias direcciones
+fijas con pesos que satisfacen una condici\'on de exactitud tampoco es
+una invenci\'on de este proyecto. Ba\v{z}ant y Oh~\cite{BazantOh1986}
+construyen, para integraci\'on num\'erica sobre la esfera (no para
+hiperelasticidad), conjuntos discretos de direcciones y pesos que
+reproducen exactamente integrales de polinomios hasta cierto grado; de
+sus propias condiciones de exactitud se sigue, aunque ellos no lo
+escriben as\'i expl\'icitamente, una identidad tensorial equivalente a
+$\sum_i w_i\,\bm d_i\otimes\bm d_i=\bm I$ (salvo normalizaci\'on). Es la
+construcci\'on discreta m\'as cercana a la nuestra que encontramos en la
+literatura, aunque en un campo distinto (integraci\'on num\'erica, no
+hiperelasticidad anisotr\'opica).
+
+\bigskip
+\noindent\textbf{Antes de seguir:} elige tus propios tres \'angulos
+(evita que dos sean iguales) y resuelve t\'u mismo el
+sistema~\eqref{eq:appB-balance-system} (con l\'apiz y papel o con una
+calculadora) y confirma que los pesos que obtienes satisfacen
+\eqref{eq:appB-balance}. Cuando est\'es listo, seguimos con el
+Cap\'itulo 7: qu\'e pasa cuando subimos la potencia a $p=2$ y $p=3$;
+ah\'i es donde aparece la anisotrop\'ia genuina, y donde nacen las
+features $Q^F_{k,p}$ y $Q^H_{k,p}$ del paper.
+
+\section{Las features $Q^F_{k,p}$ y $Q^H_{k,p}$, y una redundancia sorprendente}
+\label{ch:qfqh}
+
+\subsection{Recordatorio: el bloque $F$}
+
+Ya tenemos todo lo necesario para el bloque $F$. Para cada sistema
+balanceado $k$ (\'angulos $\theta_{k1},\theta_{k2},\theta_{k3}$, pesos
+$w_{k1},w_{k2},w_{k3}$ del Cap\'itulo~\ref{ch:balance}), definimos
+\begin{equation}
+ Q_{k,p}^F:=\sum_{i=1}^3 w_{ki}\,(\bm d_{ki}\cdot\bm C\bm d_{ki})^p
+ =\sum_{i=1}^3 w_{ki}\,|\bm F\bm d_{ki}|^{2p},
+ \qquad p=2,3,
+ \label{eq:appB-QF-def}
+\end{equation}
+usando $\bm d\cdot\bm C\bm d=|\bm F\bm d|^2$ del
+Cap\'itulo~\ref{ch:C}. Esto mide, con pesos, cu\'anto se estiran las
+tres direcciones del sistema $k$, elevado a la potencia $p$ para
+que $p=2,3$ (a diferencia de $p=1$) s\'i porten anisotrop\'ia
+gen\'uina, como acabamos de verificar.
+
+\paragraph{¿De d\'onde viene esta idea?} Para una sola direcci\'on y
+$p=1$, $Q_{k,1}^F$ es exactamente el pseudo-invariante cl\'asico
+$\bm d\cdot\bm C\bm d$ del Cap\'itulo~\ref{ch:invariants}
+(Spencer~\cite{Spencer1971,Spencer1984}, Boehler~\cite{Boehler1987}). Que
+elevarlo a \emph{cualquier} potencia $p$, para una sola direcci\'on fija,
+preserva la polyconvexidad ya lo demostraron Schr\"oder y
+Neff~\cite{SchroderNeff2003}, junto con el an\'alogo construido con
+$\Cof\bm C$ en vez de $\bm C$, exactamente el bloque $H$ que
+construiremos m\'as adelante en este cap\'itulo; el paper principal
+extiende esa idea a nuestras sumas balanceadas sobre varias direcciones.
+
+\subsection{¿Por qu\'e no basta con el bloque $F$?}
+
+$\bm F$ nos dice c\'omo se estiran las direcciones materiales
+(Cap\'itulo~\ref{ch:F}). Pero en el Cap\'itulo~\ref{ch:cofF} vimos que
+$\Cof\bm F$ contiene informaci\'on \emph{distinta}: c\'omo se
+transforman normales y \'areas: algo que $\bm F$ solo, por
+construcci\'on, no puede decirnos directamente ($\bm F\bm n$ ni
+siquiera se queda perpendicular a $\bm F\bm t$, lo verificamos con
+n\'umeros en ese cap\'itulo). Si $\Cof\bm F$ trae informaci\'on
+geom\'etrica distinta de la de $\bm F$, tiene sentido preguntarse si
+tambi\'en trae informaci\'on \emph{anisotr\'opica} distinta, y
+construir un segundo bloque de features, an\'alogo al primero, pero
+con $\Cof\bm F$ en vez de $\bm F$.
+
+Definimos, exactamente igual que arriba pero con $\Cof\bm C$ en vez de
+$\bm C$ (recordando, del Cap\'itulo~\ref{ch:cofF}, que
+$\bm d\cdot\Cof(\bm C)\bm d=|\Cof(\bm F)\bm d|^2$, la misma identidad
+de longitudes al cuadrado aplicada a $\Cof\bm F$ en vez de a $\bm F$):
+\begin{equation}
+ Q_{k,p}^H:=\sum_{i=1}^3 w_{ki}\,\big(\bm d_{ki}\cdot\Cof(\bm C)\bm d_{ki}\big)^p
+ =\sum_{i=1}^3 w_{ki}\,|\Cof(\bm F)\bm d_{ki}|^{2p},
+ \qquad p=2,3.
+ \label{eq:appB-QH-def}
+\end{equation}
+Como $\Cof(\bm I)=\bm I$ (compru\'ebalo con la f\'ormula del
+Cap\'itulo~\ref{ch:cofF}), el mismo argumento de balance del
+Cap\'itulo~\ref{ch:balance} (Secci\'on~\ref{sec:appB-balance-highp})
+aplica palabra por palabra a $Q_{k,p}^H$: su derivada en la referencia
+tambi\'en es $p\,\bm I$, isotr\'opica, para cualquier $p$.
+
+\subsection{Una sorpresa: verifiquemos $Q^F_{k,2}$ y $Q^H_{k,2}$ con n\'umeros}
+
+Usemos el corte del Cap\'itulo~\ref{ch:F},
+$\bm F=\begin{pmatrix}1&0.6\\0&1\end{pmatrix}$, con nuestro sistema
+balanceado de \'angulos $0^\circ,55^\circ,130^\circ$ del
+Cap\'itulo~\ref{ch:balance}. Calculando:
+\[
+ \bm C=\begin{pmatrix}1&0.6\\0.6&1.36\end{pmatrix},\qquad
+ \Cof\bm C=\begin{pmatrix}1.36&-0.6\\-0.6&1\end{pmatrix}.
+\]
+Evaluando \eqref{eq:appB-QF-def} y \eqref{eq:appB-QH-def} num\'ericamente:
+\[
+ Q_{k,2}^F=3.358653,\qquad Q_{k,2}^H=3.358653.
+\]
+\textbf{Id\'enticos, hasta el \'ultimo d\'igito.} Esto no parece
+casualidad. Y no lo es.
+
+\subsection{Por qu\'e $Q^F_{k,2}=Q^H_{k,2}$ \textbf{siempre}, en 2D}
+
+La raz\'on es una identidad algebraica de 2D que ya casi tenemos:
+recuerda que, para $\bm C$ sim\'etrica $2\times2$,
+$\Cof\bm C=\begin{pmatrix}C_{22}&-C_{12}\\-C_{12}&C_{11}\end{pmatrix}$
+(Cap\'itulo~\ref{ch:cofF}). Escribiendo $T:=\tr\bm C=C_{11}+C_{22}$,
+\[
+ T\bm I-\bm C=\begin{pmatrix}T-C_{11}&-C_{12}\\-C_{12}&T-C_{22}\end{pmatrix}
+ =\begin{pmatrix}C_{22}&-C_{12}\\-C_{12}&C_{11}\end{pmatrix}=\Cof\bm C
+\]
+(usamos $T-C_{11}=C_{22}$ y $T-C_{22}=C_{11}$, ciertas por definici\'on
+de $T$). Es decir, \textbf{en 2D},
+\begin{equation}
+ \Cof\bm C=T\bm I-\bm C, \qquad T:=\tr\bm C.
+ \label{eq:appB-cofC-identity}
+\end{equation}
+Verif\'icalo con nuestros n\'umeros: $T=1+1.36=2.36$, y
+$T\bm I-\bm C=\begin{pmatrix}2.36-1&-0.6\\-0.6&2.36-1.36\end{pmatrix}
+ =\begin{pmatrix}1.36&-0.6\\-0.6&1\end{pmatrix}$, exactamente
+$\Cof\bm C$ de arriba.
+
+Con esta identidad, y escribiendo $t_i:=\bm d_i\cdot\bm C\bm d_i$ (as\'i
+que $\bm d_i\cdot\Cof(\bm C)\bm d_i=T|\bm d_i|^2-t_i=T-t_i$, usando que
+$\bm d_i$ es unitario):
+\[
+ Q_{k,2}^H=\sum_i w_i\,(T-t_i)^2
+ =\sum_i w_i\big(T^2-2Tt_i+t_i^2\big)
+ =T^2\sum_i w_i-2T\sum_i w_i t_i+\sum_i w_i t_i^2.
+\]
+Necesitamos dos hechos que ya conocemos: $\sum_i w_i t_i=I_1=T$ (el
+colapso a $p=1$ del Cap\'itulo~\ref{ch:balance}), y
+$\sum_i w_i=2$: \'este es nuevo, pero se obtiene tomando la traza de
+la propia condici\'on de balance \eqref{eq:appB-balance}:
+$\tr\big(\sum_i w_i\bm d_i\otimes\bm d_i\big)=\sum_i w_i\,\tr(\bm d_i\otimes\bm d_i)
+=\sum_i w_i|\bm d_i|^2=\sum_i w_i$, y esto debe igualar $\tr\bm I=2$.
+(Verif\'icalo con nuestros pesos: $0.412+0.812+0.775=1.999\approx2$,
+hasta redondeo.) Sustituyendo:
+\[
+ Q_{k,2}^H=T^2(2)-2T(T)+Q_{k,2}^F=2T^2-2T^2+Q_{k,2}^F=Q_{k,2}^F.
+\]
+\begin{takeaway}
+$Q_{k,2}^F=Q_{k,2}^H$ \textbf{exactamente}, siempre, en 2D: no es
+una coincidencia num\'erica de nuestro ejemplo, es una consecuencia
+algebraica directa de $\Cof\bm C=T\bm I-\bm C$ (una identidad
+puramente 2D) combinada con el balance. El bloque $H$, en $p=2$, no
+aporta \textbf{ninguna} informaci\'on que el bloque $F$ no tuviera ya.
+\end{takeaway}
+
+\subsection{¿Y en $p=3$? Ah\'i s\'i aparece informaci\'on nueva}
+
+Repitamos el c\'alculo para $p=3$ con el mismo ejemplo:
+\[
+ Q_{k,3}^F=5.377935,\qquad Q_{k,3}^H=5.257074.
+\]
+\textbf{Distintos.} Repitiendo el mismo truco (expandir
+$(T-t_i)^3=T^3-3T^2t_i+3Tt_i^2-t_i^3$ y sumar con pesos $w_i$,
+usando $\sum w_i=2$, $\sum w_it_i=T$, $\sum w_it_i^2=Q_{k,2}^F$,
+$\sum w_it_i^3=Q_{k,3}^F$) se obtiene una relaci\'on exacta, no una
+igualdad:
+\begin{equation}
+ Q_{k,3}^H=-T^3+3T\,Q_{k,2}^F-Q_{k,3}^F.
+ \label{eq:appB-QH3-formula}
+\end{equation}
+Verif\'iquemosla: $T=2.36$, $Q_{k,2}^F=3.358653$, $Q_{k,3}^F=5.377935$,
+\[
+ -T^3+3T\,Q_{k,2}^F-Q_{k,3}^F
+ =-13.144256+3(2.36)(3.358653)-5.377935=5.257074,
+\]
+que coincide con $Q_{k,3}^H$ calculado directamente arriba, hasta el
+\'ultimo d\'igito.
+
+\begin{takeaway}
+$Q_{k,3}^H$ no es independiente de $T,Q_{k,2}^F,Q_{k,3}^F$ (se puede
+\emph{calcular} a partir de ellos exactamente con
+\eqref{eq:appB-QH3-formula}), pero \textbf{no es igual} a
+$Q_{k,3}^F$ (a diferencia de $p=2$). Es aqu\'i, en $p=3$, donde el
+bloque $H$ finalmente aporta algo que el bloque $F$ no conten\'ia.
+\'Esta es exactamente la raz\'on por la que el paper necesita subir
+hasta $p=3$ (no le bastar\'ia con $p=2$) para que $\Cof\bm F$ deje de
+ser un pasajero redundante y empiece a aportar anisotrop\'ia propia.
+\end{takeaway}
+
+\subsection{Ensamblando las quince features}
+
+Con $I_1$ (Cap\'itulo~\ref{ch:invariants}), $J,J^2$
+(Cap\'itulo~\ref{ch:F}), y $Q_{k,p}^F,Q_{k,p}^H$ para $p=2,3$ y tres
+sistemas de direcciones $k=1,2,3$, el vector de features completo del
+paper es
+\begin{equation}
+ \bm z_{\rm pc}=\big(I_1,\{Q_{k,2}^F,Q_{k,3}^F,Q_{k,2}^H,Q_{k,3}^H\}_{k=1}^3,J,J^2\big)\in\R^{15}
+ \label{eq:appB-features}
+\end{equation}
+Contemos: $1$ (de $I_1$) $+\,3\times4$ (tres sistemas, cuatro
+features cada uno: $Q^F_2,Q^F_3,Q^H_2,Q^H_3$) $+\,2$ (de $J,J^2$)
+$=1+12+2=15$. Y ahora sabemos, con demostraci\'on propia y no solo de
+nombre, exactamente qu\'e tan independientes son estas quince
+entradas entre s\'i: $I_1$ es un caso l\'imite ($p=1$) que colapsa
+para \emph{cualquier} sistema; cada $Q_{k,2}^H$ es id\'entico a su
+$Q_{k,2}^F$ correspondiente; solo $Q_{k,3}^H$ aporta, dentro de cada
+sistema $k$, algo que no estuviera ya en $I_1,Q_{k,2}^F,Q_{k,3}^F$.
+
+\paragraph{Un pariente continuo.} La construcci\'on de este cap\'itulo
+(varias direcciones discretas, cada una con su peso) tiene un pariente
+cercano en la biomec\'anica de tejidos fibrosos: Gasser, Ogden y
+Holzapfel~\cite{Gasser2006} generalizan el mismo pseudo-invariante
+$\bm d\cdot\bm C\bm d$ a una integral continua sobre una distribuci\'on
+de orientaciones de fibra, en vez de una suma discreta sobre unas pocas
+direcciones fijas. Es la misma idea de fondo, con una integral en lugar
+de una suma.
+
+\subsection{Una decisi\'on honesta: ¿quince inputs, o doce?}
+\label{sec:appB-15-or-12}
+
+Dado lo que acabamos de demostrar, surge una pregunta leg\'itima:
+si $Q_{k,2}^H=Q_{k,2}^F$ siempre, ¿no deber\'iamos simplemente
+\textbf{quitar} $Q_{k,2}^H$ del vector de features y entrenar con doce
+en vez de quince? Vale la pena responderla con el mismo rigor que todo
+lo dem\'as, no dejarla como curiosidad.
+
+La red $\Phi_\theta$ (la discutiremos a fondo m\'as adelante) es una
+ICNN \emph{mon\'otona}: todos sus pesos, en cada capa, son
+$\geq0$. Esto tiene una consecuencia directa sobre qu\'e combinaciones
+de las features de entrada puede reconstruir internamente:
+\begin{itemize}
+\item Como $Q_{k,2}^H=Q_{k,2}^F$ tiene coeficiente $+1$ (ning\'un
+signo negativo), una red as\'i \textbf{ya puede} representar
+cualquier m\'ultiplo no negativo de $Q_{k,2}^H$ simplemente ajustando
+el peso que le asigna a $Q_{k,2}^F$. Dar $Q_{k,2}^H$ como input
+separado \textbf{no cambia en nada} el conjunto de funciones que la
+red puede representar: no es solo redundante en informaci\'on, es
+redundante en \emph{expresividad}.
+\item $Q_{k,3}^H=-T^3+3T\,Q_{k,2}^F-Q_{k,3}^F$, en cambio, necesita
+coeficientes \textbf{negativos} ($-1$ en $T^3$ y en $Q_{k,3}^F$) para
+reconstruirse a partir de las dem\'as: algo que una red con pesos
+$\geq0$ no puede hacer internamente. Ah\'i s\'i, darle $Q_{k,3}^H$
+como input propio le da acceso a combinaciones que de otra forma
+ser\'ian inalcanzables.
+\end{itemize}
+
+Entonces, con toda honestidad: \textbf{s\'i, se podr\'ia entrenar con
+doce inputs en vez de quince}, quitando $Q_{k,2}^H$ de cada uno de los
+tres sistemas, sin perder absolutamente nada de lo que el modelo puede
+representar. Verificamos, adem\'as, que esta redundancia no es solo
+te\'orica: se cumple a precisi\'on de m\'aquina con los \'angulos y
+pesos \emph{reales} del modelo entrenado
+($\theta=(0^\circ,50^\circ,130^\circ)$ y sus an\'alogos para los otros
+dos sistemas), no solo con el ejemplo gen\'erico de este cap\'itulo.
+
+¿Por qu\'e, entonces, se mantienen los quince? No porque as\'i se
+haya planeado desde el principio: la redundancia es, honestamente,
+una coincidencia de 2D que se descubri\'o despu\'es, no un dise\~no
+deliberado. La decisi\'on de \textbf{mantenerla}, tomada ahora, con
+esto ya sabido, es por uniformidad con la receta general: el bloque
+$H$ se construye exactamente igual que el bloque $F$ (con $\Cof\bm F$
+en vez de $\bm F$) para \emph{todo} $k$ y \emph{todo} $p$, sin casos
+especiales, y esa receta general es independiente de la dimensi\'on.
+En 3D, como vimos, $\Cof\bm C$ ya no es af\'in en $\bm C$
+(es cuadr\'atica), as\'i que la misma construcci\'on \textbf{no}
+colapsar\'ia: $Q_{k,2}^H$ ser\'ia, ah\'i, tan genuinamente nueva como
+$Q_{k,3}^H$ lo es aqu\'i. Reentrenar para quitar un t\'ermino que solo
+es redundante en el caso 2D concreto de este RVE tiene un costo real
+(rehacer verificaciones, tablas, ambos n\'ucleos ICNN e ICKAN) por una
+ganancia que es puramente est\'etica; as\'i que, con conocimiento
+completo de que es opcional, se opt\'o por no hacerlo.
+
+\begin{takeaway}
+$Q_{k,2}^H$ es prescindible \textbf{de verdad}: no solo redundante en
+informaci\'on, sino redundante en lo que la red puede aprender, algo
+demostrado y no solo observado. Se mantiene por una decisi\'on de
+uniformidad arquitect\'onica tomada con ese conocimiento, no porque
+aporte algo ni porque as\'i se dise\~n\'o originalmente. $Q_{k,3}^H$ es
+un caso distinto: gen\'uinamente necesario, porque reconstruirlo exige
+coeficientes negativos que la red mon\'otona no puede producir por su
+cuenta.
+\end{takeaway}
+
+\subsection{Resumen de este cap\'itulo}
+
+\begin{takeaway}
+\begin{itemize}
+\item El bloque $H$ se construye exactamente igual que el bloque $F$,
+pero usando $\Cof\bm C$ en vez de $\bm C$, motivado porque
+$\Cof\bm F$ porta informaci\'on geom\'etrica distinta de $\bm F$
+(Cap\'itulo~\ref{ch:cofF}).
+\item En 2D, $\Cof\bm C=T\bm I-\bm C$ ($T=\tr\bm C$) es una identidad
+exacta que, combinada con el balance, fuerza $Q_{k,2}^F=Q_{k,2}^H$
+\textbf{siempre}, una redundancia real, no aproximada, verificada
+tanto en general como con los n\'umeros reales del modelo entrenado.
+\item $Q_{k,3}^F$ y $Q_{k,3}^H$ ya no coinciden, pero est\'an
+relacionados por la f\'ormula exacta
+$Q_{k,3}^H=-T^3+3T\,Q_{k,2}^F-Q_{k,3}^F$: aqu\'i es donde el bloque
+$H$ finalmente aporta algo nuevo.
+\item Dado el signo de esos coeficientes, $Q_{k,2}^H$ no aporta
+\textbf{ninguna} expresividad a una ICNN mon\'otona (se podr\'ia
+entrenar con doce inputs sin perder nada), mientras que $Q_{k,3}^H$
+s\'i, gen\'uinamente. Se decidi\'o mantener los quince por uniformidad
+con la receta general (independiente de la dimensi\'on), no porque
+$Q_{k,2}^H$ aporte algo, y esa distinci\'on se dice as\'i, sin
+adornos, en el paper.
+\end{itemize}
+\end{takeaway}
+
+\bigskip
+\noindent\textbf{Antes de seguir:} repite la verificaci\'on num\'erica
+de este cap\'itulo con otra $\bm F$ de tu elecci\'on (por ejemplo el
+estiramiento $\mathrm{diag}(2,1)$ del Cap\'itulo~\ref{ch:F}) y confirma
+que $Q_{k,2}^F=Q_{k,2}^H$ exactamente, mientras que
+\eqref{eq:appB-QH3-formula} predice $Q_{k,3}^H$ correctamente a partir
+de $Q_{k,3}^F$. Cuando est\'es listo, seguimos con el Cap\'itulo 8, la
+condici\'on de crecimiento: por qu\'e $Q_{k,3}^F\geq\tfrac14|\bm F|^6$,
+y qu\'e tiene que ver Jensen con todo esto.
+
+\section{La condici\'on de crecimiento: por qu\'e $Q_{k,3}\geq\tfrac14|\bm F|^6$}
+\label{ch:growth}
+
+\subsection{Para qu\'e sirve esto}
+
+Ya vimos, en el Cap\'itulo~\ref{ch:lifting}, que la energ\'ia debe
+\textbf{explotar} cuando el material colapsa ($J\to0^+$): eso lo
+maneja el t\'ermino $-r\log J$. Pero la condici\'on de crecimiento
+(C6) pide algo m\'as: que la energ\'ia tambi\'en explote cuando el
+material se \textbf{estira sin l\'imite} ($|\bm F|\to\infty$). Como
+$\Phi_\theta$ es no decreciente en cada feature (Cap\'itulo~\ref{ch:qfqh}
+en adelante lo usa; lo formalizaremos del todo m\'as tarde), basta con
+que \textbf{alguna} de las quince features crezca sin l\'imite cuando
+$|\bm F|\to\infty$, con una tasa conocida. Ese es el papel de
+$Q_{k,3}^F,Q_{k,3}^H$: vamos a demostrar que crecen, como m\'inimo, tan
+r\'apido como $|\bm F|^6$.
+
+\subsection{El ingrediente: Jensen, aplicado exactamente donde $x^3$ s\'i es convexa}
+
+Recuerda la Figura~\ref{fig:appB-motivation} del Cap\'itulo~\ref{ch:lifting}:
+$h(x)=x^3$ no es convexa ni c\'oncava en todo $\R$: se curva hacia
+abajo para $x<0$ y hacia arriba para $x>0$. Pero nuestras cantidades
+$t_i:=\bm d_i\cdot\bm C\bm d_i=|\bm F\bm d_i|^2$ son \textbf{siempre}
+$\geq0$ (son longitudes al cuadrado). Restringida a $x\geq0$, $x^3$
+\textbf{s\'i} es convexa (segunda derivada $6x\geq0$ ah\'i), as\'i
+que, sin ninguna contradicci\'on con el Cap\'itulo~\ref{ch:lifting},
+podemos aplicarle la desigualdad de Jensen a nuestros $t_i$.
+
+Jensen, para una funci\'on convexa $\phi$ y pesos normalizados
+$\hat w_i\geq0$ con $\sum_i\hat w_i=1$, dice
+\begin{equation}
+ \sum_i\hat w_i\,\phi(x_i)\;\geq\;\phi\Big(\sum_i\hat w_i x_i\Big).
+ \label{eq:appB-jensen}
+\end{equation}
+(El promedio de la funci\'on es al menos la funci\'on del promedio,
+exactamente la definici\'on geom\'etrica de convexidad que usamos
+desde el Cap\'itulo~\ref{ch:lifting}: la cuerda queda por encima de la
+funci\'on, as\'i que el valor \emph{promedio} en la cuerda domina al
+valor de la funci\'on en el punto promedio.)
+
+Nuestros pesos $w_i$ no sonan a $1$, sino a $2$ (Cap\'itulo~\ref{ch:qfqh}:
+$\sum_iw_i=2$, tomando la traza de la condici\'on de balance). Los
+normalizamos: $\hat w_i:=w_i/2$, as\'i que $\sum_i\hat w_i=1$.
+
+\subsection{La demostraci\'on, en tres l\'ineas}
+
+Aplicando \eqref{eq:appB-jensen} con $\phi(x)=x^3$ y $x_i=t_i$:
+\[
+ \sum_i\hat w_it_i^3\geq\Big(\sum_i\hat w_it_i\Big)^3.
+\]
+Multiplicando ambos lados por $2$ y usando $\hat w_i=w_i/2$:
+\[
+ Q_{k,3}^F=\sum_iw_it_i^3=2\sum_i\hat w_it_i^3
+ \geq2\Big(\sum_i\hat w_it_i\Big)^3
+ =2\Big(\tfrac12\sum_iw_it_i\Big)^3
+ =2\Big(\tfrac{T}{2}\Big)^3=\tfrac{T^3}{4}
+\]
+(usamos $\sum_iw_it_i=T$, el colapso a $p=1$ del
+Cap\'itulo~\ref{ch:balance}). Y como $T=\tr\bm C=|\bm F|^2$
+(Cap\'itulo~\ref{ch:invariants}), $T^3=|\bm F|^6$, as\'i que
+\begin{equation}
+ Q_{k,3}^F\geq\tfrac14|\bm F|^6.
+ \label{eq:appB-growth-F}
+\end{equation}
+Tres l\'ineas, sin nada oculto: normalizar los pesos, aplicar Jensen,
+sustituir el colapso a $I_1$ que ya conoc\'iamos.
+
+\begin{ejemplo}[Verificado con los \'angulos reales del modelo]
+\label{ex:appB-growth}
+Usando el sistema real $\theta=(0^\circ,50^\circ,130^\circ)$,
+$w=(0.2959,0.8520,0.8520)$, y el corte
+$\bm F=\begin{pmatrix}1&0.6\\0&1\end{pmatrix}$ de siempre
+($|\bm F|^2=T=2.36$):
+\[
+ \sum_i\hat w_it_i^3=2.743,\qquad
+ \Big(\sum_i\hat w_it_i\Big)^3=1.643,
+\]
+Jensen se cumple ($2.743\geq1.643$), y
+\[
+ Q_{k,3}^F=5.486,\qquad \tfrac14|\bm F|^6=3.286,
+\]
+\textbf{la cota se cumple} ($5.486\geq3.286$), con margen: no es
+ajustada para esta $\bm F$ en particular.
+\end{ejemplo}
+
+\subsection{¿Es la cota ajustada alguna vez?}
+
+S\'i: exactamente cuando Jensen se cumple con igualdad, es decir,
+cuando todos los $t_i$ son iguales entre s\'i. Esto pasa, por ejemplo,
+si $\bm F=\sqrt{c}\,\bm I$ (un escalado is\'otropo puro, sin corte ni
+anisotrop\'ia): entonces $t_i=\bm d_i\cdot(c\bm I)\bm d_i=c|\bm d_i|^2=c$
+para \textbf{todas} las direcciones, sin importar el \'angulo.
+Verificando con $c=2$: $Q_{k,3}^F=16.0$ y $\tfrac14|\bm F|^6=16.0$,
+\textbf{exactamente iguales}, hasta el \'ultimo d\'igito.
+
+\begin{takeaway}
+La cota $Q_{k,3}^F\geq\tfrac14|\bm F|^6$ no es floja ni arbitraria:
+es \textbf{ajustada} (se alcanza con igualdad) exactamente cuando la
+deformaci\'on es un escalado is\'otropo puro, el caso en que no hay
+ninguna direcci\'on privilegiada, y por tanto ninguna p\'erdida de
+informaci\'on al promediar con Jensen.
+\end{takeaway}
+
+\subsection{Lo mismo para el bloque $H$}
+
+El argumento se repite palabra por palabra para $Q_{k,3}^H$, usando
+$s_i:=\bm d_i\cdot\Cof(\bm C)\bm d_i=|\Cof(\bm F)\bm d_i|^2\geq0$ (otra
+longitud al cuadrado, tambi\'en siempre no negativa) en vez de $t_i$.
+Lo \'unico que hace falta confirmar es que $\sum_iw_is_i$ tambi\'en
+valga $T$, y en 2D, s\'i:
+\[
+ \sum_iw_is_i=\tr\Big(\Cof(\bm C)\sum_iw_i\bm d_i\otimes\bm d_i\Big)
+ \overset{\text{balance}}{=}\tr\big(\Cof(\bm C)\big)=\tr\bm C=T
+\]
+(la \'ultima igualdad, $\tr(\Cof\bm C)=\tr\bm C$, es cierta para
+cualquier $\bm C$ sim\'etrica $2\times2$, verif\'icalo con la
+f\'ormula de $\Cof\bm C$ del Cap\'itulo~\ref{ch:cofF}). Exactamente el
+mismo c\'alculo de tres l\'ineas da
+\begin{equation}
+ Q_{k,3}^H\geq\tfrac14|\bm F|^6.
+ \label{eq:appB-growth-H}
+\end{equation}
+Verificado con nuestro ejemplo: $Q_{k,3}^H=5.378\geq3.286$.
+$\checkmark$
+
+\subsection{¿Y $p=2$?}
+
+El mismo truco, con $\phi(x)=x^2$ (convexa en \textbf{todo} $\R$, sin
+necesitar restringirse a $x\geq0$) da, por el c\'alculo id\'entico,
+$Q_{k,2}^F,Q_{k,2}^H\geq\tfrac14|\bm F|^4$: una cota de cuarto grado,
+m\'as d\'ebil que la de sexto grado de $p=3$. Por eso el paper apoya
+la condici\'on de crecimiento en $Q_{k,3}^F,Q_{k,3}^H$: es la cota
+m\'as fuerte disponible, y la que de verdad se necesita para dominar
+el resto de la energ\'ia cuando $|\bm F|\to\infty$.
+
+\subsection{Resumen de este cap\'itulo}
+
+\begin{takeaway}
+\begin{itemize}
+\item $t_i=|\bm F\bm d_i|^2\geq0$ siempre, as\'i que aunque $x^3$ no
+sea convexa en todo $\R$ (Cap\'itulo~\ref{ch:lifting}), s\'i lo es
+exactamente donde la necesitamos: en $x\geq0$.
+\item Jensen, con los pesos normalizados ($\sum\hat w_i=1$, de
+$\sum w_i=2$) y el colapso a $I_1=T=|\bm F|^2$ del balance, da
+$Q_{k,3}^F,Q_{k,3}^H\geq\tfrac14|\bm F|^6$ en tres l\'ineas.
+\item La cota es ajustada exactamente en el caso is\'otropo puro
+($\bm F=\sqrt{c}\,\bm I$), verificado con igualdad exacta.
+\item El mismo argumento con $x^2$ da una cota m\'as d\'ebil, de
+cuarto grado, para $p=2$: por eso es $p=3$ el que sostiene la
+condici\'on de crecimiento del paper.
+\end{itemize}
+\end{takeaway}
+
+\bigskip
+\noindent\textbf{Antes de seguir:} repite la Ejemplo~\ref{ex:appB-growth}
+con otra $\bm F$ de tu elecci\'on y confirma la cota; luego prueba con
+$\bm F=\sqrt{c}\,\bm I$ para un $c$ distinto y confirma que la cota se
+vuelve igualdad exacta. Cuando est\'es listo, seguimos con el
+Cap\'itulo 9: la otra mitad de la condici\'on de crecimiento, la que
+falta, la barrera volum\'etrica $-r\log J+\tfrac\beta2(J-1)^2$.
+
+\section{La barrera volum\'etrica: por qu\'e hace falta $-r\log J+\tfrac\beta2(J-1)^2$}
+\label{ch:volumetric}
+
+\subsection{Lo que el Cap\'itulo~\ref{ch:growth} todav\'ia no cubre}
+
+El Cap\'itulo~\ref{ch:growth} demostr\'o que la energ\'ia explota
+cuando el material se \textbf{estira} sin l\'imite ($|\bm F|\to\infty$).
+Pero la condici\'on de crecimiento (C6) pide algo m\'as, en la otra
+direcci\'on: la energ\'ia tambi\'en debe explotar cuando el material
+\textbf{colapsa}, es decir, cuando el volumen se aplasta a cero
+($J\to0^+$). Estirar y aplastar son extremos distintos, y ninguna de
+las quince features $Q_{k,p}^F,Q_{k,p}^H,I_1$ vistas hasta ahora hace
+ese trabajo: todas dependen de $\bm C=\bm F^T\bm F$, y una matriz
+$\bm F$ puede aplastarse ($J\to0$) sin que $|\bm F|$ dependa de eso
+en absoluto (piensa en $\bm F=\mathrm{diag}(a,1/a)$ con $a\to\infty$: $J=1$
+\textbf{siempre}, aunque $|\bm F|\to\infty$; o en
+$\bm F=\mathrm{diag}(\epsilon,1)$ con $\epsilon\to0^+$: aqu\'i $J\to0$ pero
+$|\bm F|$ ni se inmuta). Colapso y estiramiento son fen\'omenos
+independientes, y cada uno necesita su propio mecanismo en la
+f\'ormula~\eqref{eq:appB-master}. Este cap\'itulo cubre el que falta:
+los dos \'ultimos t\'erminos,
+\begin{equation}
+ h(J):=-r\log J+\frac\beta2(J-1)^2,
+ \label{eq:appB-volumetric-def}
+\end{equation}
+con los valores reales del modelo entrenado,
+$r=\BarrierCoefficient{}$ y $\beta=\QuadraticCoefficient{}$.
+
+\subsection{El primer t\'ermino: por qu\'e $-r\log J$ es una barrera de colapso}
+
+Con $r>0$, la funci\'on $-\log J$ tiene exactamente la forma que
+queremos: cuando $J\to0^+$, $\log J\to-\infty$, as\'i que
+$-r\log J\to+\infty$. Ninguna deformaci\'on que aplaste el material a
+volumen cero puede tener energ\'ia finita: la barrera lo proh\'ibe de
+ra\'iz, sin necesitar ninguna restricci\'on adicional en el
+optimizador ni en la red. Es, adem\'as, convexa en $J$: la segunda
+derivada es
+\[
+ \frac{d^2}{dJ^2}\big(-r\log J\big)=\frac{r}{J^2}>0
+ \qquad\text{para todo }J>0,
+\]
+as\'i que $-r\log J$ por s\'i sola ya contribuye a la polyconvexidad
+de $\Phi_\theta$ (Cap\'itulo~\ref{ch:lifting}: $J$ es uno de los tres
+bloques de Ball, y $-\log J$ es convexa en ese bloque).
+
+\begin{ejemplo}[Verificado con el $r$ real del modelo]
+\label{ex:appB-volumetric-collapse}
+Con $r=\BarrierCoefficient{}$:
+\[
+ J=0.5:\ -r\log J=0.1413,\qquad
+ J=0.1:\ -r\log J=0.4696,\qquad
+ J=0.01:\ -r\log J=0.9391,
+\]
+creciendo sin l\'imite a medida que $J\to0^+$, exactamente como se
+esperaba.
+\end{ejemplo}
+
+\subsection{Un hallazgo honesto: $-r\log J$ solo, \textbf{no} explota cuando $J\to\infty$}
+
+Aqu\'i hay que ser cuidadosos, y no dar nada por sentado solo porque
+``tiene forma de barrera''. Miremos qu\'e hace $-r\log J$ cuando
+$J\to\infty$ (el material se \textbf{expande} sin l\'imite, en vez de
+colapsar). Como $\log J\to+\infty$, tenemos
+$-r\log J\to-\infty$: el t\'ermino \textbf{decrece sin l\'imite}, no
+crece. Esto no es un error de signo ni una sorpresa a estas alturas:
+$-\log J$ es convexa, s\'i, pero convexa \textbf{no} significa
+creciente en todas direcciones (el mismo punto del
+Cap\'itulo~\ref{ch:icnn} sobre la diferencia entre ``convexa'' y
+``no-decreciente'', aplicado aqu\'i a un solo escalar). Una par\'abola
+$y=x^2$ tambi\'en es convexa y tambi\'en decrece a la izquierda del
+m\'inimo; $-\log J$ simplemente nunca llega a un m\'inimo dentro del
+rango $J>0$, as\'i que sigue decreciendo para siempre.
+
+\begin{ejemplo}[Verificado con el $r$ real del modelo]
+\label{ex:appB-volumetric-decreasing}
+Con $r=\BarrierCoefficient{}$, el t\'ermino $-r\log J$ solo:
+\[
+ J=1:\ 0,\qquad J=10:\ -0.4696,\qquad J=100:\ -0.9391,\qquad
+ J=1000:\ -1.4087,
+\]
+cada vez m\'as negativo, sin ning\'un indicio de detenerse.
+\end{ejemplo}
+
+Esto significa que, \textbf{si $-r\log J$ fuera el \'unico
+responsable del comportamiento en $J$ grande}, la condici\'on de
+crecimiento (C6) fallar\'ia: la energ\'ia bajar\'ia sin l\'imite en
+vez de subir. Aqu\'i es donde entra el segundo t\'ermino.
+
+\subsection{El segundo t\'ermino: por qu\'e hace falta $\tfrac\beta2(J-1)^2$}
+
+Con $\beta>0$, $\tfrac\beta2(J-1)^2$ es una par\'abola con m\'inimo en
+$J=1$ (deformaci\'on que no cambia el volumen), y crece sin l\'imite
+en \textbf{ambas} direcciones: $J\to0^+$ y $J\to\infty$. Tambi\'en es
+convexa en $J$ (segunda derivada constante, $\beta>0$), as\'i que no
+estropea la polyconvexidad. Sumado a $-r\log J$, es exactamente lo
+que falta para que $h(J)\to+\infty$ tambi\'en cuando $J\to\infty$: por
+grande que sea $r$ y por peque\~no que sea $\beta$, un t\'ermino
+cuadr\'atico siempre le gana a un logaritmo eventualmente, porque
+$J^2$ crece m\'as r\'apido que $\log J$ sin importar las constantes
+que los multipliquen.
+
+\subsection{¿Cu\'ando le gana el cuadr\'atico al logaritmo, con los n\'umeros reales?}
+
+Aqu\'i es donde conviene ser expl\'icitos, porque los n\'umeros reales
+de este modelo dan una respuesta que vale la pena mirar de cerca.
+Buscamos d\'onde $h(J)$ deja de decrecer y empieza a crecer, es decir,
+d\'onde $h'(J)=0$ para $J>1$:
+\[
+ h'(J)=-\frac{r}{J}+\beta(J-1)=0.
+\]
+Con $r=\BarrierCoefficient{}$ y $\beta=\QuadraticCoefficient{}$,
+resolviendo num\'ericamente:
+\begin{equation}
+ J^\ast\approx9550.
+ \label{eq:appB-volumetric-turning}
+\end{equation}
+Es decir: con los valores realmente aprendidos por este modelo, el
+t\'ermino cuadr\'atico no le gana al logaritmo hasta una dilataci\'on
+de \'area de casi diez mil veces. Para poner esto en perspectiva:
+ninguna trayectoria de este RVE, ni en entrenamiento ni en las pruebas
+del paper, se acerca remotamente a $J\sim10^3$, mucho menos a
+$J\sim10^4$. La conclusi\'on honesta es esta: el t\'ermino cuadr\'atico
+es \textbf{matem\'aticamente imprescindible} (sin \'el, (C6) falla en
+$J\to\infty$, sin excepci\'on), pero en la pr\'actica, para cualquier
+estado de deformaci\'on que este RVE realmente visita,
+\textbf{nunca llega a activarse}: todo el trabajo \'util de frenar el
+colapso en el rango operativo real lo hace $-r\log J$ solo.
+
+\begin{ejemplo}[Verificaci\'on del punto de cruce]
+\label{ex:appB-volumetric-crossover}
+Evaluando $h'(J)$ justo en $J^\ast=9550$:
+\[
+ h'(9550)=-\frac{\BarrierCoefficient{}}{9550}+\QuadraticCoefficient{}\times(9550-1)
+ \approx-1.65\times10^{-9}\approx0,
+\]
+confirmando, hasta la precisi\'on num\'erica, que este es en efecto el
+punto donde $h$ cambia de decreciente a creciente.
+\end{ejemplo}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{ch9_volumetric_claude.png}
+\caption{La barrera volum\'etrica real, con $r=\BarrierCoefficient{}$
+y $\beta=\QuadraticCoefficient{}$. Izquierda: cerca de $J=1$, $h(J)$
+(azul) y el t\'ermino $-r\log J$ solo (rojo) son visualmente
+indistinguibles, y ambos divergen cuando $J\to0^+$: la barrera de
+colapso funciona exactamente como se dise\~n\'o. Derecha: en escala
+logar\'itmica y para $J$ mucho mayor, el t\'ermino $-r\log J$ solo
+(rojo) decrece sin l\'imite, y $h(J)$ total (azul) lo sigue de cerca
+hasta que el t\'ermino cuadr\'atico solo (verde) finalmente lo alcanza
+y supera cerca de $J\approx9550$ (l\'inea vertical), el punto donde
+$h(J)$ por fin empieza a crecer.}
+\label{fig:appB-volumetric}
+\end{figure}
+
+\subsection{Resumen de este cap\'itulo}
+
+\begin{takeaway}
+\begin{itemize}
+\item La condici\'on de crecimiento (C6) necesita dos mecanismos
+independientes: coercividad en el estiramiento ($Q_{k,3}\geq\tfrac14|\bm F|^6$,
+Cap\'itulo~\ref{ch:growth}) y coercividad en el volumen (este
+cap\'itulo), porque $J$ y $|\bm F|$ pueden divergir por separado.
+\item $-r\log J$ es convexa en $J$ y proh\'ibe el colapso
+($J\to0^+\Rightarrow-r\log J\to+\infty$), pero, verificado
+num\'ericamente, \textbf{decrece sin l\'imite} cuando $J\to\infty$: por
+s\'i sola no basta para (C6).
+\item $\tfrac\beta2(J-1)^2$ es convexa, sim\'etrica alrededor de
+$J=1$, y crece sin l\'imite en ambas direcciones: es lo que garantiza
+$h(J)\to+\infty$ tambi\'en cuando $J\to\infty$, para cualquier
+$\beta>0$, sin importar cu\'an peque\~no.
+\item Con los valores reales entrenados, el cuadr\'atico no le gana al
+logaritmo hasta $J^\ast\approx9550$, verificado num\'ericamente
+($h'(J^\ast)\approx0$): matem\'aticamente necesario, pr\'acticamente
+inactivo en el rango real de este RVE.
+\end{itemize}
+\end{takeaway}
+
+\bigskip
+\noindent\textbf{Antes de seguir:} con $r=\BarrierCoefficient{}$ y
+$\beta=\QuadraticCoefficient{}$, eval\'ua $h(J)$ t\'u mismo en
+$J=0.5,\,2,\,100$ y confirma los signos; luego repite la
+b\'usqueda de $J^\ast$ resolviendo $h'(J)=0$ a mano (o con una
+calculadora) y confirma el valor de la Ecuaci\'on~\eqref{eq:appB-volumetric-turning}.
+Cuando est\'es listo, seguimos con el Cap\'itulo 10: la red
+$\Phi_\theta$ misma, qu\'e es un ICNN, y por qu\'e es convexa por
+construcci\'on, no por entrenamiento.
+
+\section{La red $\Phi_\theta$: qu\'e es un ICNN, y por qu\'e es convexa por construcci\'on}
+\label{ch:icnn}
+
+\subsection{¿Qu\'e problema nos falta resolver?}
+
+Tenemos, de los Cap\'itulos~\ref{ch:invariants}--\ref{ch:growth}, quince
+n\'umeros ($I_1$, doce $Q$'s, $J$, $J^2$) calculados a partir de $\bm F$,
+y sabemos que cada uno, por separado, es convexo en su propio bloque
+($\bm F$, $\Cof\bm F$, o $J$). Pero la energ\'ia final no es una lista de
+quince n\'umeros: es un solo escalar, $\Phi_\theta$ de esos quince
+n\'umeros. La pregunta de este cap\'itulo es muy concreta: ¿qu\'e
+tiene que cumplir la funci\'on $\Phi_\theta$ (una red neuronal) para que,
+al combinar las quince entradas convexas, el resultado \textbf{siga
+siendo convexo}? Esta no es una pregunta ret\'orica: hay muchas formas
+razonables de combinar quince n\'umeros en uno (sumarlos, promediarlos,
+multiplicarlos, meterlos a una red neuronal cualquiera) que
+\textbf{rompen} la convexidad. Vamos a construir, paso a paso, una que
+no la rompe.
+
+\subsection{Repaso rel\'ampago: qu\'e es una red neuronal}
+
+Una red neuronal (en su forma m\'as simple, un \emph{perceptr\'on
+multicapa}) transforma un vector de entrada en un escalar de salida
+aplicando, capa por capa, dos operaciones: una \textbf{combinaci\'on
+lineal} de pesos ($\bm W\bm x+\bm b$) y una \textbf{activaci\'on} no
+lineal aplicada a cada componente ($\sigma(\cdot)$). Con $L$ capas
+ocultas,
+\[
+ \bm h_1=\sigma(\bm W_1\bm x+\bm b_1),\qquad
+ \bm h_{\ell+1}=\sigma(\bm W_{\ell+1}\bm h_\ell+\bm b_{\ell+1}),\qquad
+ \Phi_\theta(\bm x)=\bm w_{\rm out}\cdot \bm h_L+b_{\rm out},
+\]
+donde $\theta$ denota, colectivamente, todos los pesos $\bm W_\ell$ y
+sesgos $\bm b_\ell$ (los n\'umeros que el entrenamiento ajusta). En una
+red neuronal \emph{normal}, estos pesos pueden ser cualquier n\'umero
+real, positivo o negativo, y no hay ninguna garant\'ia de que
+$\Phi_\theta$ sea convexa en $\bm x$: de hecho, para una red normal, casi
+nunca lo es. Un ICNN (\emph{input-convex neural network},
+Amos et al.~\cite{Amos2017}) es exactamente una red de esta forma, pero
+con dos restricciones adicionales, dise\~nadas para \textbf{garantizar}
+la convexidad sin importar qu\'e valores tomen los pesos durante el
+entrenamiento.
+
+\subsection{El truco de un solo escal\'on: pesos no-negativos $+$ activaci\'on convexa no-decreciente}
+
+Empecemos con el caso m\'as simple posible: una sola entrada $x$, una
+sola neurona oculta, sin capas intermedias: $\Phi_\theta(x)=\sigma(wx+b)$
+con $w\geq0$. Si $\sigma$ es convexa, ¿es $\Phi_\theta$ convexa en $x$?
+La respuesta es s\'i, y la raz\'on es la \textbf{regla de composici\'on
+escalar}:
+
+\begin{takeaway}[Regla de composici\'on escalar]
+Si $f:\R\to\R$ es convexa, y $g:\R\to\R$ es convexa \textbf{y
+no-decreciente}, entonces $g\circ f$ (es decir, $x\mapsto g(f(x))$) es
+convexa.
+\end{takeaway}
+
+Aplicado a nuestro caso: $f(x)=wx+b$ es af\'in (lineal m\'as constante),
+que siempre es convexa (de hecho, convexa \textbf{y} c\'oncava a la vez,
+por eso no importa el signo de $w$ para que $f$ misma sea convexa). Si
+adem\'as $\sigma$ es convexa y no-decreciente, la composici\'on
+$\sigma(wx+b)$ es convexa, para \emph{cualquier} $w$, incluso $w<0$, en
+este caso particular (porque $f$ af\'in ya es convexa sin importar el
+signo). El problema real aparece cuando $f$ misma \textbf{no} es
+af\'in sino ya convexa-no-lineal (como nuestras quince features): ah\'i
+s\'i importa el signo de $w$, como veremos en la Secci\'on~\ref{sec:appB-many-inputs}.
+
+\subsection{Por qu\'e ``no-decreciente'' no es un detalle menor}
+\label{sec:appB-monotone-matters}
+
+La condici\'on ``$g$ no-decreciente'' en la regla de composici\'on no es
+un tecnicismo que se pueda ignorar: sin ella, la regla \textbf{falla por
+completo}, incluso si $g$ sigue siendo convexa.
+
+\begin{ejemplo}[Convexa y decreciente: la composici\'on se rompe]
+\label{ex:appB-composition-fails}
+Tomemos $f(x)=x^2$ (convexa, la conocemos bien del Cap\'itulo~\ref{ch:lifting}).
+Comparemos dos opciones para $g$:
+\begin{itemize}
+\item $g_1(y)=e^y$: convexa ($g_1''(y)=e^y>0$) \textbf{y no-decreciente}
+($g_1'(y)=e^y>0$). La composici\'on es $g_1(f(x))=e^{x^2}$.
+\item $g_2(y)=e^{-y}$: tambi\'en convexa ($g_2''(y)=e^{-y}>0$), pero
+\textbf{decreciente} ($g_2'(y)=-e^{-y}<0$). La composici\'on es
+$g_2(f(x))=e^{-x^2}$.
+\end{itemize}
+La Figura~\ref{fig:appB-composition} muestra las tres funciones. $e^{x^2}$
+s\'i es convexa (una curva en forma de U, cada vez m\'as pronunciada).
+Pero $e^{-x^2}$ es una campana: sube desde los extremos hasta un m\'aximo
+en $x=0$, exactamente la forma \textbf{opuesta} a lo que necesitamos.
+$g_2$ es convexa, $f$ es convexa, y aun as\'i $g_2\circ f$ no es
+convexa en absoluto.
+\end{ejemplo}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{ch9_composition_claude.png}
+\caption{$f(x)=x^2$ (izquierda) es convexa. Compuesta con $g_1(y)=e^y$
+(centro, convexa \textbf{y} no-decreciente), el resultado sigue siendo
+convexo. Compuesta con $g_2(y)=e^{-y}$ (derecha, convexa pero
+\textbf{decreciente}), el resultado es una campana: no convexa en
+absoluto. La \'unica diferencia entre los dos casos es el signo de la
+derivada de $g$.}
+\label{fig:appB-composition}
+\end{figure}
+
+\begin{takeaway}
+La monoton\'ia de $g$ no es un requisito est\'etico ni una
+simplificaci\'on de la demostraci\'on: es la diferencia exacta entre
+``la composici\'on hereda la convexidad'' y ``la composici\'on puede
+ser lo opuesto de convexa''. Por eso un ICNN exige, expl\'icitamente,
+que la funci\'on que combina las entradas sea no-decreciente en cada una
+de ellas, no solo convexa.
+\end{takeaway}
+
+\subsection{La regla de composici\'on vectorial: quince entradas a la vez}
+\label{sec:appB-many-inputs}
+
+Nuestra situaci\'on real no es una sola entrada convexa: son quince
+($I_1,Q_{k,2}^F,Q_{k,3}^F,Q_{k,2}^H,Q_{k,3}^H,J,J^2$). La generalizaci\'on
+de la regla de composici\'on a varias entradas a la vez (Boyd \&
+Vandenberghe, \emph{Convex Optimization}, \S3.2.4) dice:
+
+\begin{takeaway}[Regla de composici\'on vectorial]
+Si cada $f_i:\R^n\to\R$ ($i=1,\dots,m$) es convexa, y
+$h:\R^m\to\R$ es convexa \textbf{y no-decreciente en cada uno de sus $m$
+argumentos por separado}, entonces $x\mapsto h(f_1(x),\dots,f_m(x))$ es
+convexa.
+\end{takeaway}
+
+Con $m=15$ (nuestras features) y $h=\Phi_\theta$, esto es exactamente lo
+que necesitamos: si $\Phi_\theta$ es convexa y no-decreciente
+\textbf{en cada una de las quince entradas}, entonces
+$\Phi_\theta(\bm z_{\rm pc}(\bm F,\Cof\bm F,J))$ es convexa en el
+argumento conjunto $(\bm F,\Cof\bm F,J)$, sin importar qu\'e tan
+complicada sea cada $z_m$ individualmente, siempre que cada una ya sea
+convexa en su propio bloque (que es exactamente lo que los
+Cap\'itulos~\ref{ch:invariants}--\ref{ch:growth} demostraron, feature por
+feature).
+
+¿C\'omo se garantiza que $\Phi_\theta$ (una red con varias capas) sea
+convexa y no-decreciente en las quince entradas \textbf{a la vez}, y no
+solo funci\'on por funci\'on? Con la misma receta de la
+Secci\'on~\ref{sec:appB-monotone-matters}, aplicada por inducci\'on,
+capa por capa: si cada preactivaci\'on de la primera capa es una
+combinaci\'on \textbf{af\'in con pesos no-negativos} de las entradas, y
+la activaci\'on es convexa y no-decreciente, cada neurona de la primera
+capa es convexa y no-decreciente en las quince entradas (por la misma
+regla escalar de antes, aplicada entrada por entrada). Si adem\'as la
+\emph{segunda} capa combina esas neuronas (ya convexas y no-decrecientes)
+con pesos \textbf{tambi\'en no-negativos}, y aplica otra activaci\'on
+convexa no-decreciente, la regla vectorial dice que la segunda capa
+\emph{tambi\'en} es convexa y no-decreciente en las entradas originales.
+Repitiendo esto capa por capa, toda la red, hasta la salida final, hereda
+ambas propiedades. Esta es la idea completa de un ICNN: no hay ning\'un
+paso m\'agico, es la misma regla de composici\'on aplicada una y otra
+vez.
+
+\subsection{Por qu\'e Softplus}
+
+La activaci\'on usada en este proyecto es \emph{Softplus},
+$\sigma(x)=\log(1+e^x)$. Verifiqu\'emosla contra los dos requisitos:
+\[
+ \sigma'(x)=\frac{e^x}{1+e^x}=\frac1{1+e^{-x}}\in(0,1),
+ \qquad
+ \sigma''(x)=\sigma'(x)\big(1-\sigma'(x)\big)>0 \quad\text{siempre.}
+\]
+$\sigma'(x)>0$ para todo $x$ significa \textbf{estrictamente
+creciente} (en particular, no-decreciente); $\sigma''(x)>0$ para todo
+$x$ significa \textbf{estrictamente convexa}. Softplus cumple ambos
+requisitos en todo $\R$, sin excepciones ni casos especiales, que es
+exactamente lo que la regla de composici\'on necesita.
+
+\subsection{Por qu\'e \emph{todos} los pesos, no solo los de la primera capa}
+
+El ICNN original de Amos et al.~\cite{Amos2017} solo exige pesos
+no-negativos en las conexiones \textbf{entre capas ocultas}
+(hidden-to-hidden), dejando libres los pesos que van directamente de la
+entrada a cada capa (input-to-hidden, en cada capa, no solo la primera).
+Esa versi\'on ya garantiza convexidad, pero \textbf{no} garantiza que la
+red sea no-decreciente en la entrada: una capa intermedia podr\'ia usar
+un peso negativo directo desde la entrada, y aunque el resultado seguir\'ia
+siendo convexo, podr\'ia \emph{disminuir} al aumentar alguna entrada.
+
+Nuestra construcci\'on necesita algo m\'as fuerte que solo convexidad:
+necesita que $\Phi_\theta$ sea no-decreciente en cada una de las quince
+entradas, porque eso es lo que la regla de composici\'on vectorial exige
+para que $\Phi_\theta(\bm z_{\rm pc})$ herede la convexidad de las
+features. Por eso este proyecto reparametriza \textbf{todas} las
+matrices de pesos, incluyendo las de entrada-a-capa-oculta en cada capa
+(no solo la primera), como
+\[
+ \bm W=\mathrm{softplus}(\bm W_{\rm crudo})+\varepsilon_0,\qquad
+ \varepsilon_0>0\text{ peque\~no},
+\]
+donde $\bm W_{\rm crudo}$ es el par\'ametro real que el entrenamiento
+ajusta (libre, cualquier n\'umero real), y $\bm W$ es el peso
+\textbf{efectivo} que realmente se usa en el forward pass. Como
+$\mathrm{softplus}(\cdot)\geq0$ siempre, $\bm W\geq\varepsilon_0>0$ sin
+importar qu\'e valor tenga $\bm W_{\rm crudo}$: el entrenamiento nunca
+puede violar la restricci\'on, porque la restricci\'on est\'a
+constru\'ida en la propia parametrizaci\'on, no verificada despu\'es.
+Esta es la diferencia entre esta red (\emph{mon\'otona}, en la
+terminolog\'ia del paper) y un ICNN cl\'asico.
+
+\begin{ejemplo}[Verificado con la red real entrenada]
+\label{ex:appB-icnn-weights}
+La red entrenada de este proyecto tiene anchos $(\IcnnWidths{})$
+(tres capas ocultas). Cargando el checkpoint real y calculando
+$\mathrm{softplus}(\bm W_{\rm crudo})$ para \textbf{cada} matriz de
+pesos (entrada-a-oculta en las tres capas, y oculta-a-oculta entre
+ellas), el peso efectivo m\'as peque\~no de toda la red es
+$1.8\times10^{-7}$, y el m\'as grande es $54.5$: todos, sin excepci\'on,
+estrictamente positivos. No es una coincidencia del entrenamiento: es
+una consecuencia matem\'atica de que todo peso efectivo se calcula como
+$\mathrm{softplus}(\text{algo})$, que nunca puede ser negativo.
+\end{ejemplo}
+
+\subsection{Uniendo todo: casi tenemos la Proposici\'on de polyconvexidad}
+
+Repasemos qu\'e hemos acumulado, cap\'itulo a cap\'itulo:
+\begin{itemize}
+\item Cap\'itulos~\ref{ch:invariants}--\ref{ch:growth}: cada una de las
+quince features es convexa en su propio bloque ($\bm F$, $\Cof\bm F$, o
+$J$).
+\item Este cap\'itulo: $\Phi_\theta$ es convexa y no-decreciente en cada
+una de las quince entradas, por construcci\'on (pesos efectivos
+$\geq0$ en \textbf{todas} las capas, activaci\'on Softplus convexa y
+creciente).
+\end{itemize}
+Por la regla de composici\'on vectorial de la
+Secci\'on~\ref{sec:appB-many-inputs}, estas dos piezas juntas ya dicen
+que $\Phi_\theta(\bm z_{\rm pc}(\bm F,\Cof\bm F,J))$ es convexa en el
+argumento conjunto $(\bm F,\Cof\bm F,J)$. Sumar el t\'ermino
+constante $-\Phi_\theta(\bm z_{\rm pc}(\bm I))$ no cambia la convexidad
+(sumar una constante nunca lo hace), y los t\'erminos vol\'umetricos
+$-r\log J$, $\tfrac\beta2(J-1)^2$ son convexos en $J$ por c\'alculo
+directo. Una suma de funciones convexas en $(\bm F,\Cof\bm F,J)$ es
+convexa en $(\bm F,\Cof\bm F,J)$: eso es, palabra por palabra, la
+Proposici\'on de polyconvexidad del paper. No queda ning\'un paso
+oculto ni ning\'un salto de fe: cada pieza se demostr\'o por separado,
+en su propio cap\'itulo, y aqu\'i es donde todas se juntan.
+
+\subsection{Resumen de este cap\'itulo}
+
+\begin{takeaway}
+\begin{itemize}
+\item Una red normal no tiene ninguna garant\'ia de ser convexa. Un ICNN
+la tiene, por dos restricciones expl\'icitas: pesos no-negativos y
+activaci\'on convexa no-decreciente.
+\item La regla de composici\'on (escalar o vectorial) exige convexidad
+\textbf{y} monoton\'ia de la funci\'on externa; sin la monoton\'ia, la
+regla falla por completo (Ejemplo~\ref{ex:appB-composition-fails}), no
+parcialmente.
+\item Softplus, $\log(1+e^x)$, es estrictamente convexa y estrictamente
+creciente en todo $\R$, sin casos especiales.
+\item Este proyecto usa pesos efectivos $\mathrm{softplus}(\bm W_{\rm
+crudo})+\varepsilon_0>0$ en \textbf{todas} las capas (no solo entre
+capas ocultas, como el ICNN cl\'asico), porque necesita monoton\'ia en
+la entrada completa, no solo convexidad; verificado con la red real
+entrenada (Ejemplo~\ref{ex:appB-icnn-weights}).
+\item Con las quince features convexas en su bloque (Cap\'itulos
+anteriores) y $\Phi_\theta$ convexa y no-decreciente en ellas (este
+cap\'itulo), la regla de composici\'on vectorial da, casi directamente,
+la polyconvexidad de la energ\'ia completa.
+\end{itemize}
+\end{takeaway}
+
+\bigskip
+\noindent\textbf{Antes de seguir:} con l\'apiz y papel, verifica que
+$\sigma(x)=x^2$ (convexa, pero \textbf{no} no-decreciente en todo $\R$,
+solo para $x\geq0$) rompe la regla de composici\'on igual que
+$g_2(y)=e^{-y}$ del Ejemplo~\ref{ex:appB-composition-fails}: calcula
+$\sigma(f(x))$ para $f(x)=-x$ (af\'in, convexa) y confirma que el
+resultado no es convexo. Cuando est\'es listo, seguimos con el
+Cap\'itulo 11: por qu\'e la energ\'ia vale exactamente cero, y el
+esfuerzo tambi\'en, en el estado de referencia (las
+Proposiciones~1 y~2 del paper, explicadas desde cero).
+
+\section{La tensi\'on cero en la referencia: por qu\'e $\bm\sigma(\bm0)=\bm0$ exactamente}
+\label{ch:zero-stress}
+
+\subsection{¿Qu\'e falta demostrar, exactamente?}
+
+En el estado de referencia, $\bm F=\bm I$ (sin deformar), dos cosas
+deber\'ian ser cero: la energ\'ia, $W_{\rm pc}(\bm I)=0$, y el
+esfuerzo, $\bm\sigma(\bm0)=\bm0$. La primera es trivial, y ya la vimos
+de pasada: como $\bm z_{\rm pc}(\bm F)=\bm z_{\rm pc}(\bm I)$ cuando
+$\bm F=\bm I$, los dos primeros t\'erminos de la energ\'ia
+\eqref{eq:appB-master} se cancelan exactamente por ser id\'enticos
+($\Phi_\theta(\bm z)-\Phi_\theta(\bm z)=0$, para \emph{cualquier} red
+$\Phi_\theta$, entrenada como sea), y $J=1$ hace que $\log J=0$ y
+$(J-1)^2=0$. No hace falta ninguna propiedad especial de $\Phi_\theta$
+para esto: es \'algebra pura.
+
+El esfuerzo es harina de otro costal. $\bm\sigma=\partial
+W_{\rm pc}/\partial\bm\varepsilon$ es una \textbf{derivada}, y que una
+funci\'on valga cero en un punto no dice nada sobre si su derivada
+tambi\'en vale cero ah\'i (piensa en $f(x)=x^3$: $f(0)=0$, pero
+$f'(x)=3x^2$ tampoco es id\'enticamente cero cerca de $0$... aunque en
+este caso s\'i se anula justo en $x=0$; el punto es que no es
+autom\'atico). Necesitamos que el gradiente de $\Phi_\theta$ en la
+referencia quede \textbf{exactamente cancelado} por el gradiente del
+t\'ermino de barrera $-r\log J$. Ese es el trabajo real de este
+cap\'itulo.
+
+\subsection{Un hecho que ya conocemos: el Lema del Cap\'itulo~\ref{ch:cofF}}
+
+Vamos a reusar, sin repetir la demostraci\'on, el hecho algebraico del
+Cap\'itulo~\ref{ch:cofF}: para cualquier vector unitario $\bm d$,
+\begin{equation}
+ \Cof(\bm d\otimes\bm d)=\bm I-\bm d\otimes\bm d.
+ \label{eq:appB-lemma-recall}
+\end{equation}
+Este \'unico hecho, combinado con la condici\'on de balance
+$\sum_iw_{ki}\bm d_{ki}\otimes\bm d_{ki}=\bm I$ del
+Cap\'itulo~\ref{ch:balance}, es todo lo que necesitamos para el resto
+de este cap\'itulo.
+
+\subsection{Cada una de las quince features tiene un gradiente isotr\'opico en la referencia}
+\label{sec:appB-prop1}
+
+\begin{takeaway}[Lo que vamos a demostrar]
+En $\bm C=\bm I$, el gradiente de \textbf{cada una} de las quince
+features respecto a $\bm C$ es un m\'ultiplo positivo de la identidad,
+$dz_m/dC|_{\bm C=\bm I}=c_m\bm I$, con un coeficiente $c_m$ distinto
+para cada tipo de feature, pero \textbf{siempre} en la direcci\'on
+isotr\'opica $\bm I$, sin importar qu\'e tan anisotr\'opica sea la
+feature lejos de la referencia.
+\end{takeaway}
+
+Tomando la traza de la condici\'on de balance y usando $|\bm d_{ki}|=1$,
+$\sum_iw_{ki}=2$ para todo sistema $k$ (verif\'icalo con los pesos
+reales del Cap\'itulo~\ref{ch:balance}:
+$0.2959+0.8520+0.8520=2.0000$). Con esto, cuatro casos:
+
+\begin{itemize}
+\item \textbf{$I_1$.} Trivialmente, $dI_1/dC=\bm I$ para cualquier
+$\bm C$, en particular en $\bm C=\bm I$. Coeficiente $c=1$.
+
+\item \textbf{$Q_{k,p}^F$.} Por la regla del producto,
+\[
+ \frac{dQ_{k,p}^F}{dC}=\sum_ip\,w_{ki}(\bm d_{ki}\cdot\bm C\bm d_{ki})^{p-1}\,\bm d_{ki}\otimes\bm d_{ki}.
+\]
+En $\bm C=\bm I$, cada factor $\bm d_{ki}\cdot\bm I\bm d_{ki}=|\bm d_{ki}|^2=1$,
+as\'i que la potencia $(p-1)$ desaparece (elevar $1$ a cualquier
+potencia sigue siendo $1$) y solo sobrevive la suma de balance:
+\[
+ \left.\frac{dQ_{k,p}^F}{dC}\right|_{\bm C=\bm I}=p\sum_iw_{ki}\,\bm d_{ki}\otimes\bm d_{ki}=p\,\bm I.
+\]
+Coeficiente $c=p$ (es decir, $2$ para $Q_{k,2}^F$, $3$ para $Q_{k,3}^F$).
+
+\item \textbf{$Q_{k,p}^H$.} Necesita un paso extra antes del mismo
+truco: $\bm d\cdot\Cof(\bm C)\bm d$ es \emph{lineal} en $\bm C$ (no
+solo en la referencia, sino para \textbf{cualquier} $\bm C$), porque
+$\bm d\cdot\Cof(\bm C)\bm d=\Cof(\bm C):(\bm d\otimes\bm d)=\bm C:\Cof(\bm d\otimes\bm d)$
+(el cofactor es autoadjunto respecto al producto de Frobenius en
+$2\times2$), con gradiente \textbf{constante}
+$\Cof(\bm d\otimes\bm d)=\bm I-\bm d\otimes\bm d$, exactamente
+\eqref{eq:appB-lemma-recall}. Diferenciando,
+\[
+ \frac{dQ_{k,p}^H}{dC}=\sum_ip\,w_{ki}\big(\bm d_{ki}\cdot\Cof(\bm C)\bm d_{ki}\big)^{p-1}\big(\bm I-\bm d_{ki}\otimes\bm d_{ki}\big).
+\]
+En $\bm C=\bm I$, $\Cof(\bm I)=\bm I$, as\'i que
+$\bm d_{ki}\cdot\Cof(\bm I)\bm d_{ki}=1$ y la potencia $(p-1)$ vuelve a
+desaparecer, dejando
+\[
+ \left.\frac{dQ_{k,p}^H}{dC}\right|_{\bm C=\bm I}
+ =p\Big[\Big(\textstyle\sum_iw_{ki}\Big)\bm I-\sum_iw_{ki}\bm d_{ki}\otimes\bm d_{ki}\Big]
+ =p(2\bm I-\bm I)=p\,\bm I,
+\]
+usando $\sum_iw_{ki}=2$ y el balance una segunda vez. Mismo
+coeficiente $c=p$ que el bloque $F$.
+
+\item \textbf{$J,J^2$.} La identidad est\'andar del determinante da
+\[
+ \frac{dJ}{dC}=\frac1{2J}\Cof(\bm C),\quad
+ \left.\frac{dJ}{dC}\right|_{\bm C=\bm I}=\frac12\bm I;
+ \qquad
+ \frac{dJ^2}{dC}=2J\frac{dJ}{dC}=\Cof(\bm C),\quad
+ \left.\frac{dJ^2}{dC}\right|_{\bm C=\bm I}=\bm I.
+\]
+Coeficientes $c=1/2$ y $c=1$ respectivamente.
+\end{itemize}
+
+\begin{table}[h]
+\centering
+\caption{Coeficiente $c_m$ de cada feature (Cap\'itulo~\ref{ch:zero-stress}):
+$dz_m/dC|_{\bm C=\bm I}=c_m\bm I$.}
+\label{tab:appB-coefficients}
+\begin{tabular}{lccccc}
+\toprule
+Feature & $I_1$ & $Q_{k,2}^F,Q_{k,2}^H$ & $Q_{k,3}^F,Q_{k,3}^H$ & $J$ & $J^2$\\
+\midrule
+$c_m$ & $1$ & $2$ & $3$ & $1/2$ & $1$\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Verificado con la red real entrenada}
+
+\begin{ejemplo}[Los quince gradientes, calculados con el modelo real]
+\label{ex:appB-fifteen-gradients}
+Evaluando las quince features y sus gradientes en el estado de
+referencia con el checkpoint real (autodiferenciaci\'on, no una
+f\'ormula reescrita a mano), cada gradiente resulta de la forma
+$(X,X,\sim\!0)$ en las coordenadas $(E_{11},E_{22},\gamma_{12})$: la
+componente de cortante es, en todos los casos, menor a
+$3\times10^{-15}$ (ruido de m\'aquina, no un valor real). Adem\'as, la
+proporci\'on entre los valores $X$ de features distintas reproduce
+\textbf{exactamente} la Tabla~\ref{tab:appB-coefficients}: si $I_1$ dio
+$X=4.0$, cada $Q_{k,2}$ dio $X=8.0$ (raz\'on $2$), cada $Q_{k,3}$ dio
+$X=12.0$ (raz\'on $3$), $J$ dio $X=2.0$ (raz\'on $1/2$), y $J^2$ dio
+$X=4.0$ (raz\'on $1$, igual que $I_1$). Esto no es aproximado: las
+quince proporciones coinciden con la tabla hasta el \'ultimo d\'igito
+reportado.
+\end{ejemplo}
+
+\subsection{De quince gradientes a uno solo: la regla de la cadena}
+
+Por la regla de la cadena, el gradiente de $\Phi_\theta$ (que depende
+de $\bm C$ solo a trav\'es de las quince features) es una combinaci\'on
+de los quince gradientes que acabamos de calcular:
+\[
+ \left.\frac{d\Phi_\theta}{dC}\right|_{\bm C=\bm I}
+ =\sum_m\left.\frac{\partial\Phi_\theta}{\partial z_m}\right|_{\bm z(\bm I)}
+ \left.\frac{dz_m}{dC}\right|_{\bm C=\bm I}
+ =\Big(\sum_mc_m\left.\frac{\partial\Phi_\theta}{\partial z_m}\right|_{\bm z(\bm I)}\Big)\bm I=:\lambda\bm I.
+\]
+Como cada $dz_m/dC|_{\bm C=\bm I}$ es un m\'ultiplo de $\bm I$ (lo que
+acabamos de demostrar), la suma \textbf{tambi\'en} es un m\'ultiplo de
+$\bm I$, sin importar los coeficientes $\partial\Phi_\theta/\partial z_m$
+que dependan del entrenamiento: la direcci\'on isotr\'opica no se
+pierde al combinar. Y como el Cap\'itulo~\ref{ch:icnn} demostr\'o que
+$\Phi_\theta$ es no-decreciente en cada entrada
+($\partial\Phi_\theta/\partial z_m\geq0$ siempre, por construcci\'on
+del ICNN mon\'otono) y cada $c_m>0$ (Tabla~\ref{tab:appB-coefficients}),
+$\lambda$ es una combinaci\'on no-negativa de t\'erminos no-negativos:
+$\lambda\geq0$ \textbf{autom\'aticamente}, para cualquier $\theta$, sin
+excepci\'on ni verificaci\'on posterior.
+
+\subsection{El t\'ermino de barrera apunta en la misma direcci\'on}
+
+Como $\log J=\tfrac12\log\det\bm C$,
+\[
+ \frac{d(\log J)}{dC}=\frac1{2\det\bm C}\Cof(\bm C),
+ \qquad
+ \left.\frac{d(\log J)}{dC}\right|_{\bm C=\bm I}=\frac12\bm I.
+\]
+Tambi\'en isotr\'opica, por la misma raz\'on de siempre: en la
+referencia, $\Cof(\bm I)=\bm I$.
+
+\subsection{El escalar $r$: dise\~nado para cancelar exactamente}
+
+Convirtiendo de $\bm C$ a $\bm\varepsilon$ (con $\bm C=\bm I+2\bm E$,
+que duplica el gradiente) y usando la coordenada de ingenier\'ia
+$\bm\varepsilon=(E_{11},E_{22},\gamma_{12})$, ambos gradientes de la
+Secci\'on anterior se convierten en vectores de la forma
+$(\ast,\ast,0)^T$ con las dos primeras entradas iguales: la entrada de
+cortante se anula porque es la entrada fuera de la diagonal de una
+matriz isotr\'opica, y una matriz isotr\'opica no tiene componente
+fuera de la diagonal. El paper define
+\[
+ r:=\frac12\left(\frac{\partial\Phi_\theta}{\partial E_{11}}+\frac{\partial\Phi_\theta}{\partial E_{22}}\right)\bigg|_{\bm\varepsilon=\bm0},
+\]
+es decir, $r$ es \emph{exactamente} el n\'umero que hace que
+$r\,(1,1,0)^T$ coincida con el propio gradiente de $\Phi_\theta$ en la
+referencia. Sumando los tres t\'erminos de la energ\'ia
+\eqref{eq:appB-master} en $\bm\varepsilon=\bm0$:
+\[
+ \bm\sigma(\bm0)=\underbrace{(\ldots)^T}_{\text{de }\Phi_\theta}
+ -r\underbrace{(1,1,0)^T}_{\text{de }-r\log J}
+ +\underbrace{\beta(J-1)\nabla J|_{J=1}}_{=\,\bm0,\text{ ya que }J=1}
+ =\bm0,
+\]
+porque, por construcci\'on de $r$, el primer t\'ermino y el segundo son
+id\'enticos.
+
+\begin{takeaway}
+Todo el argumento depende de un solo hecho, repetido quince veces: cada
+feature tiene un gradiente isotr\'opico en la referencia, gracias a la
+condici\'on de balance. Sin el balance, el gradiente de $\Phi_\theta$
+ser\'ia, en general, un vector \textbf{anisotr\'opico} de tres
+componentes independientes, y ning\'un escalar \'unico $r\,(1,1,0)^T$
+podr\'ia cancelarlo exactamente: se necesitar\'ian tres n\'umeros
+libres, no uno. La condici\'on de balance es precisamente lo que reduce
+el problema de ``cancelar un vector arbitrario'' a ``cancelar un
+m\'ultiplo de una direcci\'on fija'', que un solo escalar s\'i puede
+resolver.
+\end{takeaway}
+
+\subsection{Verificado con la red real: el resultado final}
+
+\begin{ejemplo}[$\bm\sigma(\bm0)$, calculado end-to-end con el modelo entrenado]
+\label{ex:appB-zero-stress-verified}
+Para el modelo certificado de este proyecto, $\lambda=r=\BarrierCoefficient$
+(el mismo n\'umero calculado de dos formas distintas: como la
+combinaci\'on de los quince $\partial\Phi_\theta/\partial z_m$, y como
+el promedio de las dos derivadas normales de $\Phi_\theta$ en la
+referencia). Evaluando el esfuerzo completo del modelo entrenado,
+pasando por el pipeline real de autodiferenciaci\'on (no una f\'ormula
+manual), en $\bm\varepsilon=\bm0$:
+\[
+ \bm\sigma(\bm0)=(0,\,0,\,0)^T\ \text{exactamente},
+\]
+sin redondeo, sin aproximaci\'on: los tres componentes son literalmente
+$0.0$ en aritm\'etica de doble precisi\'on. No es una casualidad num\'erica:
+es la consecuencia directa de que $r$ se construye, en el propio
+c\'odigo del modelo, para ser exactamente ese n\'umero de cancelaci\'on,
+no un valor aproximado ajustado por el entrenamiento.
+\end{ejemplo}
+
+\subsection{Resumen de este cap\'itulo}
+
+\begin{takeaway}
+\begin{itemize}
+\item La energ\'ia en la referencia es cero por \'algebra pura
+($\Phi_\theta(\bm z)-\Phi_\theta(\bm z)=0$); el esfuerzo en la
+referencia \textbf{no} es autom\'atico, y requiere que quince
+gradientes distintos apunten en la misma direcci\'on.
+\item Cada una de las quince features tiene, en la referencia, un
+gradiente que es un m\'ultiplo positivo de $\bm I$: verificado
+algebraicamente (cuatro casos) y num\'ericamente (quince de quince,
+con las proporciones exactas de la Tabla~\ref{tab:appB-coefficients}).
+\item Por la regla de la cadena, el gradiente de $\Phi_\theta$ tambi\'en
+es isotr\'opico, con un coeficiente $\lambda\geq0$ garantizado por
+construcci\'on (ICNN mon\'otono $+$ coeficientes $c_m>0$), no por
+entrenamiento.
+\item Un solo escalar $r$ basta para cancelar el gradiente completo,
+\textbf{porque} ese gradiente es isotr\'opico; sin la condici\'on de
+balance, har\'ian falta tres n\'umeros libres, no uno.
+\item Verificado end-to-end con el modelo real: $\bm\sigma(\bm0)=\bm0$
+exactamente, no aproximadamente.
+\end{itemize}
+\end{takeaway}
+
+\bigskip
+\noindent\textbf{Antes de seguir:} con la f\'ormula del Ejemplo~\ref{ex:appB-fifteen-gradients}
+en mente, predice qu\'e proporci\'on esperar\'ias para una
+hipot\'etica feature nueva con coeficiente $c=4$; luego confirma que
+ninguna de las quince features actuales tiene ese coeficiente (revisa
+la Tabla~\ref{tab:appB-coefficients}). Cuando est\'es listo, seguimos
+con el Cap\'itulo 12: el segundo n\'ucleo convexo, ICKAN, y por qu\'e
+las mismas demostraciones de este ap\'endice se trasladan a \'el sin
+cambiar una sola l\'inea.
+
+\section{El segundo n\'ucleo convexo: ICKAN}
+\label{ch:ickan}
+
+\subsection{¿Por qu\'e un segundo n\'ucleo, si ya funciona el primero?}
+
+Todo lo demostrado en los Cap\'itulos~\ref{ch:icnn}
+y~\ref{ch:zero-stress} depende de \textbf{una sola propiedad} de
+$\Phi_\theta$: que sea convexa y no-decreciente en cada una de las
+quince entradas. Nunca usamos nada espec\'ifico de \emph{c\'omo} un
+ICNN logra eso (pesos $\mathrm{softplus}$, activaci\'on Softplus). Esto
+sugiere una pregunta natural: si construimos una red \textbf{totalmente
+distinta}, que logre la misma propiedad por un mecanismo diferente,
+¿se trasladan las demostraciones sin cambios? Este cap\'itulo responde
+que s\'i, con una red basada en \emph{splines} en vez de pesos:
+ICKAN (\emph{input-convex Kolmogorov--Arnold network},
+Thakolkaran et al.~\cite{Thakolkaran2025}).
+
+\subsection{Qu\'e es una red Kolmogorov--Arnold (KAN)}
+
+Una red neuronal normal (Cap\'itulo~\ref{ch:icnn}) tiene pesos
+\textbf{n\'umeros} en cada conexi\'on, y aplica una activaci\'on
+\textbf{fija} (igual para toda la red) despu\'es de sumar. Una KAN
+invierte la idea: cada conexi\'on (``borde'') tiene su propia
+\textbf{funci\'on aprendida} $\phi_{ij}(x)$ (una curva spline, no un
+solo n\'umero), y la capa simplemente \textbf{suma} las salidas de esas
+funciones:
+\[
+ h_j=\sum_i\phi_{ij}(x_i).
+\]
+No hay ``pesos'' en el sentido cl\'asico: toda la flexibilidad de la
+red vive en la forma de cada curva $\phi_{ij}$, representada como una
+curva B-spline con un conjunto de \textbf{puntos de control}
+$c_0,c_1,\dots,c_n$ que el entrenamiento ajusta.
+
+\subsection{C\'omo se fuerza una curva a ser convexa y no-decreciente: dos sumas acumuladas}
+
+Igual que un ICNN reparametriza cada peso como
+$\mathrm{softplus}(\text{crudo})$ para garantizar que sea $\geq0$, la
+implementaci\'on de referencia de ICKAN reparametriza los puntos de
+control de \textbf{cada} curva con dos sumas acumuladas de cantidades
+no-negativas, en vez de dejarlos libres:
+\[
+ s_i=\mathrm{ReLU}(a_i)\geq0,\qquad
+ d_i=\sum_{l\leq i}s_l\quad(d_0=0),\qquad
+ c_i=c_0+\sum_{l\leq i}d_l,
+\]
+donde $a_1,a_2,\dots$ son los par\'ametros libres que el entrenamiento
+ajusta (cualquier n\'umero real), y $c_0$ tambi\'en es libre. Fij\'emonos
+en qu\'e implica esto para los propios puntos de control $c_i$:
+\begin{itemize}
+\item Las \textbf{primeras diferencias}, $c_{i+1}-c_i=d_{i+1}\geq0$
+(porque cada $d_i$ es una suma de t\'erminos $\mathrm{ReLU}$,
+autom\'aticamente $\geq0$): los puntos de control nunca decrecen. Una
+propiedad cl\'asica de las curvas B-spline (la ``propiedad de
+disminuci\'on de variaci\'on'') dice que si los puntos de control no
+decrecen, la curva tampoco decrece: esto da \textbf{no-decreciente}.
+\item Las \textbf{segundas diferencias},
+$(c_{i+2}-c_{i+1})-(c_{i+1}-c_i)=d_{i+2}-d_{i+1}=s_{i+2}\geq0$: los
+puntos de control forman un pol\'igono \textbf{convexo} (cada
+incremento es mayor o igual que el anterior). Esto da
+\textbf{convexidad} de la curva, por la misma raz\'on geom\'etrica que
+un pol\'igono convexo describe una curva convexa.
+\end{itemize}
+Dos sumas acumuladas de cantidades no-negativas, y las dos propiedades
+que necesit\'abamos (convexa, no-decreciente) quedan garantizadas para
+\textbf{cualquier} valor de los par\'ametros libres $a_i$, exactamente
+el mismo esp\'iritu que $\mathrm{softplus}(\text{crudo})\geq0$ del
+Cap\'itulo~\ref{ch:icnn}, aplicado a puntos de control en vez de a
+pesos.
+
+\begin{ejemplo}[Un borde real, verificado con la red ICKAN entrenada]
+\label{ex:appB-ickan-edge}
+Tomando un borde real de la red ICKAN entrenada de este proyecto (la
+conexi\'on de la primera entrada a la primera neurona oculta), sus
+nueve puntos de control reparametrizados son
+\[
+ (0.0262,\,0.0262,\,0.0728,\,0.1834,\,0.3115,\,0.4396,\,0.5677,\,0.6958,\,0.8239).
+\]
+Las primeras diferencias son todas $\geq0$ (m\'inima: $0$, exactamente);
+las segundas diferencias tambi\'en son todas $\geq0$ hasta ruido de
+m\'aquina ($-5\times10^{-12}$, indistinguible de cero). Evaluando la
+curva completa en $400$ puntos de su dominio, la pendiente local
+$\phi(x_{i+1})-\phi(x_i)$ nunca es negativa (Figura~\ref{fig:appB-ickan-edge}):
+esta curva espec\'ifica es, verificablemente, no-decreciente y convexa
+en todo su rango, no solo en los puntos de control.
+\end{ejemplo}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=.92\linewidth]{ch11_ickan_edge_claude.png}
+\caption{Izquierda: un borde real de la red ICKAN entrenada (curva
+azul), con sus puntos de control reparametrizados superpuestos (rojo);
+n\'otese que los puntos de control forman, ellos mismos, un pol\'igono
+convexo. Derecha: la pendiente local de la curva evaluada, siempre
+$\geq0$: la curva nunca decrece, en ning\'un punto de su dominio.}
+\label{fig:appB-ickan-edge}
+\end{figure}
+
+\subsection{De un borde a toda la red: la misma regla de composici\'on}
+
+Con cada borde $\phi_{ij}$ individualmente convexo y no-decreciente en
+su \'unica entrada $x_i$, ¿qu\'e hace falta para que la \textbf{suma}
+$h_j=\sum_i\phi_{ij}(x_i)$ (una capa completa) tambi\'en sea convexa y
+no-decreciente en el vector completo $\bm x$? Esto es, de hecho, m\'as
+simple que la regla de composici\'on del Cap\'itulo~\ref{ch:icnn}: una
+suma de funciones convexas es convexa (sin necesitar ninguna condici\'on
+extra, a diferencia de la composici\'on), y una suma de funciones
+no-decrecientes es no-decreciente. Apilando capas (con las
+transformaciones af\'in \textbf{fijas} en la identidad entre capas, y
+sin funci\'on base no convexa adicional, tal como lo configura la
+implementaci\'on de referencia), la misma propiedad se preserva capa
+tras capa, exactamente como en el Cap\'itulo~\ref{ch:icnn}, pero por
+suma en vez de por composici\'on con una activaci\'on externa.
+
+\begin{takeaway}
+Un ICNN y un ICKAN llegan al mismo destino (convexo y no-decreciente en
+cada entrada) por caminos completamente distintos: uno reparametriza
+\textbf{pesos} con una suma no-negativa (softplus) y compone a
+trav\'es de una activaci\'on fija; el otro reparametriza \textbf{puntos
+de control} con dos sumas acumuladas no-negativas y combina por suma
+directa de curvas aprendidas. Ninguna demostraci\'on de este ap\'endice
+(Cap\'itulos~\ref{ch:icnn}--\ref{ch:zero-stress}) usa el mecanismo
+espec\'ifico de un ICNN: solo usan que $\Phi_\theta$ es convexa y
+no-decreciente en las quince entradas. Por eso se trasladan a ICKAN sin
+cambiar una sola l\'inea de argumento, solo cambiando qu\'e red juega
+el papel de $\Phi_\theta$.
+\end{takeaway}
+
+\subsection{Resumen de este cap\'itulo}
+
+\begin{takeaway}
+\begin{itemize}
+\item Una KAN reemplaza pesos num\'ericos por curvas aprendidas
+(splines) en cada conexi\'on; la capa suma las salidas de esas curvas
+en vez de sumar productos peso-por-entrada.
+\item Reparametrizar los puntos de control de cada curva con
+\textbf{dos} sumas acumuladas de cantidades $\mathrm{ReLU}(\cdot)\geq0$
+fuerza, simult\'aneamente, primeras diferencias $\geq0$
+(no-decreciente) y segundas diferencias $\geq0$ (convexa), para
+cualquier valor de los par\'ametros libres.
+\item Verificado con un borde real de la red entrenada: puntos de
+control no-decrecientes y convexos, y la curva evaluada en $400$
+puntos confirma pendiente local siempre $\geq0$.
+\item Una suma de funciones convexas y no-decrecientes es convexa y
+no-decreciente (m\'as simple que la regla de composici\'on del
+Cap\'itulo~\ref{ch:icnn}), as\'i que la propiedad se preserva capa tras
+capa.
+\item Ninguna demostraci\'on de los Cap\'itulos~\ref{ch:icnn}--\ref{ch:zero-stress}
+depende del mecanismo espec\'ifico del ICNN: todas se trasladan a
+ICKAN verbatim, porque solo usan ``convexa y no-decreciente en cada
+entrada'', una propiedad que ambas redes tienen, por caminos distintos.
+\end{itemize}
+\end{takeaway}
+
+\bigskip
+\noindent\textbf{Antes de seguir:} con los puntos de control del
+Ejemplo~\ref{ex:appB-ickan-edge}, calcula t\'u mismo las primeras y
+segundas diferencias (resta consecutiva) y confirma los valores
+reportados. Cuando est\'es listo, seguimos con el Cap\'itulo 13: los
+resultados num\'ericos del paper, explicados uno por uno.
+
+\begin{thebibliography}{99}
+
+\bibitem{Thakolkaran2025}
+P. Thakolkaran, Y. Guo, S. Saini, M. Peirlinck, B. Alheit, and S. Kumar.
+Can KAN CANs? Input-convex Kolmogorov--Arnold networks (KANs) as
+hyperelastic constitutive artificial neural networks (CANs).
+\emph{Computer Methods in Applied Mechanics and Engineering}, 443:118089, 2025.
+
+\bibitem{Amos2017}
+B. Amos, L. Xu, and J.~Z. Kolter. Input convex neural networks. In
+\emph{Proceedings of the 34th International Conference on Machine Learning}, 2017.
+
+\bibitem{Spencer1971}
+A.~J.~M. Spencer. Theory of invariants. In: A.~C. Eringen (ed.),
+\emph{Continuum Physics, Volume I: Mathematics}, pp.~239--353. Academic
+Press, New York, 1971.
+
+\bibitem{Spencer1984}
+A.~J.~M. Spencer. Constitutive theory for strongly anisotropic solids.
+In: A.~J.~M. Spencer (ed.), \emph{Continuum Theory of the Mechanics of
+Fibre-Reinforced Composites}, CISM Courses and Lectures No.~282,
+pp.~1--32. Springer-Verlag, Vienna, 1984.
+
+\bibitem{Boehler1987}
+J.~P. Boehler. Introduction to the invariant formulation of anisotropic
+constitutive equations. In: J.~P. Boehler (ed.), \emph{Applications of
+Tensor Functions in Solid Mechanics}, CISM Courses and Lectures No.~292,
+pp.~13--30. Springer-Verlag, Vienna, 1987.
+
+\bibitem{SchroderNeff2003}
+J. Schr\"oder and P. Neff. Invariant formulation of hyperelastic
+transverse isotropy based on polyconvex free energy functions.
+\emph{International Journal of Solids and Structures}, 40(2):401--445,
+2003.
+
+\bibitem{Gasser2006}
+T.~C. Gasser, R.~W. Ogden, and G.~A. Holzapfel. Hyperelastic modelling of
+arterial layers with distributed collagen fibre orientations.
+\emph{Journal of the Royal Society Interface}, 3(6):15--35, 2006.
+
+\bibitem{BazantOh1986}
+Z.~P. Ba\v{z}ant and B.~H. Oh. Efficient numerical integration on the
+surface of a sphere. \emph{ZAMM: Journal of Applied Mathematics and
+Mechanics}, 66(1):37--49, 1986.
+
+\end{thebibliography}
 
 \end{document}

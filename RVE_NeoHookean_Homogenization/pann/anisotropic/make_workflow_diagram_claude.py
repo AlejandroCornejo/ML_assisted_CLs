@@ -141,7 +141,7 @@ def main() -> None:
     eq_text(ax, c4[0], c4[1] + 1.15,
             r"$\bm u_f\approx \bm u_f^{\rm aff}(\bm\varepsilon)+\mathbf V\,\bm q+\bar{\mathbf V}\,\mathcal N(\bm q)$",
             fontsize=8.8)
-    thumb = SCRATCH_DISPLACEMENT_THUMB if SCRATCH_DISPLACEMENT_THUMB.exists() else HERE / "rve_geometry_claude.png"
+    thumb = SCRATCH_DISPLACEMENT_THUMB if SCRATCH_DISPLACEMENT_THUMB.exists() else HERE / "displacement_thumb_claude.png"
     embed_image(ax, (c4[0], c4[1] - 0.55), thumb, zoom=0.145)
 
     # --- Box 5: hyper-reduced homogenization ---

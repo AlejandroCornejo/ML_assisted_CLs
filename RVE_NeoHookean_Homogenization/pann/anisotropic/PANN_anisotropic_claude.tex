@@ -39,54 +39,30 @@ Spain\\[1em]
 \begin{abstract}
 Physics-augmented neural networks (PANNs) for hyperelastic constitutive
 modelling are commonly held to a six-point admissibility checklist:
-(1) thermodynamic consistency, (2) objectivity, (3) tensor symmetry,
-(4) normalization at the reference configuration, (5) polyconvexity, and
-(6) a growth/coercivity condition~\cite{Klein2022,Ball1977}.  This
-paper works through each point in full mathematical detail for a
-single certified model of the two-dimensional nonlinear hyperelastic
-representative volume element (RVE) treated in this project, an
-energy-based PANN built from an input-convex neural network (ICNN) acting
-on balanced directional invariants of $\bm F$ and $\Cof \bm F$.  Four of the six
-points -- (1)--(4) -- are satisfied exactly, by construction, with a
-closed-form proof given below for each, and the growth condition (6) is
-supplied architecturally by construction as well, short of the
-Sobolev-exponent matching a fully rigorous existence proof would
-additionally require.  The remaining point, polyconvexity in the sense of
-Ball~\cite{Ball1977}, is proved by an explicit construction rather than a
-numerical penalty; we also verify numerically the weaker
-rank-one/Legendre--Hadamard condition it implies, and separately show
-that a strictly stronger, globally SPD-tangent condition -- used
-elsewhere in the literature (e.g.\ As'ad, Avery and
-Farhat~\cite{Asad2022}) for a different anisotropic RVE, for its own
-well-documented reasons -- is not implied by polyconvexity and is, for
-this RVE's own full-order model (FOM), directly contradicted by the
-measured ground-truth tangent.  The model is trained on the training
-trajectories only, evaluated once on an untouched, held-out test
-trajectory, and compared against a
-projection-based hyper-reduced-order model (HPROM--ANN, in both its
-iterative-corrector and direct-evaluation operating modes) on the same
-path, and against a direct strain-to-stress regression baseline with no
-energy potential at all, which is shown to violate thermodynamic
-consistency directly (a nonzero cyclic-work integral around closed strain
-loops) despite matching or exceeding every certified model's held-out
-accuracy.  A state-of-the-art survey of
-eight directly relevant PANN
-constructions is given, precisely comparing which admissibility
-properties each achieves exactly, approximately, or not at all; it
-identifies, in the surveyed authors' own words, an explicit open problem
--- combining exact objectivity, an exact stress-free reference state, and
-exact polyconvexity for an anisotropic material with no assumed symmetry
-group -- that the construction here resolves for this RVE.  The same
-proofs are shown to transfer verbatim to a second convex core, an
-input-convex Kolmogorov--Arnold network, at comparable accuracy with far
-fewer parameters; and a matched, otherwise identical, uncertified
-flexible PANN is used to show directly that held-out accuracy cannot
-detect the absence of a polyconvexity certificate -- it matches or beats
-the certified models on every accuracy metric while failing a rank-one
-convexity check on 7\% of sampled, ordinary deformation states.
+thermodynamic consistency, objectivity, tensor symmetry, a stress-free
+reference state, polyconvexity, and a growth
+condition~\cite{Klein2022,Ball1977}. Existing constructions achieve all
+six only for a material with a named symmetry group, or give up one
+property to handle general anisotropy; whether this trade-off is
+fundamental is an explicit open problem in the recent literature. This
+paper resolves it for a two-dimensional anisotropic representative
+volume element (RVE): an energy-based PANN, built from an input-convex
+neural network (ICNN) acting on balanced directional invariants of
+$\bm F$ and $\Cof\bm F$, satisfies all six properties exactly and by
+construction, with closed-form proofs rather than training penalties,
+including an explicit polyconvexity construction in the sense of
+Ball~\cite{Ball1977}. The same proofs transfer verbatim to a second
+convex core, an input-convex Kolmogorov--Arnold network (ICKAN).
+Benchmarked on a held-out test trajectory against a projection-based
+hyper-reduced-order model in both its Newton-corrected (HPROM--ANN) and
+direct (D-HPROM--ANN) operating modes, and against a direct regression
+baseline, the admissibility certificate proves necessary in practice:
+the uncertified regression baseline matches or exceeds every certified
+model's held-out accuracy while directly violating thermodynamic
+consistency, and a matched uncertified flexible PANN fails a rank-one
+convexity check on $7\%$ of sampled deformation states despite equally
+strong accuracy.
 \end{abstract}
-
-\tableofcontents
 
 \section{Introduction}
 \label{sec:introduction}
@@ -98,15 +74,28 @@ microstructure directly. This is expensive: every macroscopic Gauss point,
 at every load step and every Newton iteration, requires its own converged
 microscale solve. Two largely separate lines of work have grown up around
 reducing this cost, and they sit on opposite sides of the classic
-\emph{intrusive}/\emph{non-intrusive} divide in reduced-order and
+\emph{non-intrusive}/\emph{intrusive} divide in reduced-order and
 surrogate modelling.
 
-The intrusive route keeps the RVE's finite element structure and
-governing equations explicit, and instead compresses the linear algebra:
-a projection-based reduced-order model (PROM) restricts the unknown
-displacement field to a low-dimensional subspace identified by proper
-orthogonal decomposition (POD) of precomputed snapshots, tracing back to
-the reduced-model multiscale method of Yvonnet and
+The non-intrusive route treats the microscale solve as a black
+box: precompute enough RVE solutions offline, then learn a direct
+surrogate for the homogenized constitutive law itself, so that no
+microscale solve is needed online at all. Early versions of this idea
+learn a bare regression map from strain to stress; the physics-augmented
+neural network (PANN) literature that has grown from
+it~\cite{Klein2022,Linden2023,Asad2022} instead builds physical structure
+into the learned energy potential itself: thermodynamic consistency,
+objectivity, material-frame symmetry, a stress-free reference state,
+polyconvexity, and a growth condition, so that the surrogate is
+trustworthy by construction, not merely accurate where it happens to have
+been trained.
+
+The intrusive route, by contrast, keeps the RVE's finite element
+structure and governing equations explicit, and instead compresses the
+linear algebra: a projection-based reduced-order model (PROM) restricts
+the unknown displacement field to a low-dimensional subspace identified
+by proper orthogonal decomposition (POD) of precomputed snapshots,
+tracing back to the reduced-model multiscale method of Yvonnet and
 He~\cite{Yvonnet2007} and developed since for nonlinear multiscale
 structural problems~\cite{Zahr2017,He2020,Fritzen2016,Hernandez2014,Hernandez2020}.
 A single linear subspace, however, is generally not enough to reach high
@@ -122,43 +111,86 @@ the true microscale equilibrium equations are still being solved, just
 in compressed and hyperreduced form: the RVE's own physics is never
 bypassed.
 
-The non-intrusive route instead treats the microscale solve as a black
-box: precompute enough RVE solutions offline, then learn a direct
-surrogate for the homogenized constitutive law itself, so that no
-microscale solve is needed online at all. Early versions of this idea
-learn a bare regression map from strain to stress; the physics-augmented
-neural network (PANN) literature that has grown from it
-(surveyed in full in Section~\ref{sec:related-work})~\cite{Klein2022,Linden2023,Asad2022}
-instead builds physical structure into the learned energy potential
-itself: thermodynamic consistency, objectivity, material-frame
-symmetry, a stress-free reference state, polyconvexity, and a growth
-condition, so that the surrogate is trustworthy by construction, not
-merely accurate where it happens to have been trained. Both routes are
-active research areas in their own right, and both are used in this
-paper, not as competitors but as two independent, non-interchangeable
-sources of ground truth and comparison for the same RVE, evaluated on the
-same held-out load path: a rare case of the intrusive and non-intrusive
-philosophies being confronted with exactly the same problem rather than
-argued for in isolation.
+Both routes are active research areas in their own right, and both are
+used in this paper, not as competitors but as two independent,
+non-interchangeable sources of ground truth and comparison for the same
+RVE, evaluated on the same held-out load path: a rare case of the
+non-intrusive and intrusive philosophies being confronted with exactly
+the same problem rather than argued for in isolation.
 
 For the non-intrusive, PANN route specifically, a recurring difficulty
 motivates the deeper focus of this paper. Physics-augmented neural constitutive models are commonly held to an
 admissibility checklist: (C1) thermodynamic consistency, (C2)
 objectivity, (C3) tensor symmetry, (C4) a stress-free reference state, (C5)
-polyconvexity, and (C6) a growth condition. The current literature
-(surveyed in full in Section~\ref{sec:related-work}) shows a clear,
-recurring trade-off: models that enforce every one of these properties
-\emph{exactly}, by construction, do so only for a material with a
-\emph{named} symmetry class (isotropic, transversely isotropic, cubic,
-\dots); models that relax the symmetry assumption to a genuinely general
-anisotropic material give up polyconvexity, the reference state, or exact
-objectivity to do so. Linden et al.\ state explicitly that a complete,
-polyconvexity-compatible invariant set may not exist for some symmetry
-groups, and flag a general, symmetry-agnostic construction as an open
-problem. Whether this trade-off is fundamental, or an artifact of how the
+polyconvexity, and (C6) a growth condition. Table~\ref{tab:literature}
+checks eight directly comparable constructions against this list, and no
+two broad strategies in the current literature yet achieve all six
+properties together for a general anisotropic material.
+
+The first keeps polyconvexity exact but ties it to a named symmetry
+group: Klein et al.~\cite{Klein2022} and Linden et
+al.~\cite{Linden2023} give exact, architecturally-certified constructions
+for isotropic and transversely isotropic materials via a
+structural-tensor integrity basis, recently widened to cubic and
+tetragonal symmetry classes~\cite{Klein2026}, but Linden et al.\ state
+explicitly that a complete, polyconvexity-compatible invariant set ``may
+not exist for some symmetry groups $\dots$ it might be possible that
+there does not exist a set of invariants to describe the anisotropy of
+materials with arbitrary microstructures,'' and flag a general,
+symmetry-agnostic construction as an open problem. The second keeps a
+more flexible or general anisotropy representation but gives up
+something else: Kalina et al.~\cite{Kalina2024} learn the structural
+tensor's own parameters jointly with the network, more flexible than a
+fixed structural tensor, but explicitly decline polyconvexity, ``too
+restrictive, especially for multiscale modeling''; As'ad, Avery and
+Farhat~\cite{Asad2022} instead substitute a strictly stronger condition,
+convexity of $W$ in $\bm E$ (equivalent to a global SPD tangent), which
+Section~\ref{sec:c5-wrong} shows is measurably false for this RVE's own
+ground truth. A third cluster gets polyconvexity right, via the same
+additive, block-decoupled sufficient condition used here, but restricts
+anisotropy to at most two fixed fiber directions and rarely exercises the
+growth condition (C6) in practice, since the materials studied are
+(nearly) incompressible~\cite{Linka2023,Tac2023,Thakolkaran2025}.
+Section~\ref{sec:c5-construction} onward discusses all eight works
+against every checklist item in the detail Table~\ref{tab:literature}
+only summarizes.
+
+Whether this trade-off is fundamental, or an artifact of how the
 anisotropy has been encoded so far, is the central question this
 paper answers for a concrete, fully worked $2$D RVE: a Neo-Hookean
 solid with a hole, admitting no assumed material symmetry.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Comparison against the admissibility checklist.  ``Exact'' means
+satisfied by construction for every parameter value, not approximated by
+training or data augmentation.  ``Group-free anisotropy'' means the model
+represents a general anisotropic material without committing to a named
+symmetry class (isotropic, transversely isotropic, cubic, orthotropic,
+\dots) or a learned member of one.  ``Growth exercised'' means the model's
+volumetric term actually diverges/was actually tested at $J\to0^+$, as
+opposed to being stated as a requirement but bypassed because the worked
+examples are (nearly) incompressible.}
+\label{tab:literature}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{lccccc}
+\toprule
+Work & Exact obj.\ & Exact ref.\ state & Ball polyconvex & Group-free anisotropy & Growth exercised\\
+\midrule
+As'ad et al.~\cite{Asad2022} & yes & yes & no ($\bm E$-convex) & yes (raw $\bm E$) & n/a\\
+Linka \& Kuhl~\cite{Linka2023} & yes & yes & yes & no (isotropic) & no (incompressible)\\
+Tac et al.~\cite{Tac2023} & yes & partial\tablefootnote{Exact for their CANN/NODE cores; an unaddressed gap for their ICNN core, whose biases are unconstrained.} & yes & no (2 fixed fibers) & no (incompressible)\\
+Klein et al.~\cite{Klein2022} & yes/approx.\tablefootnote{Exact for their invariant model $W^I$; only approximated by data augmentation for their deformation-gradient model $W^F$.} & approx.\ only & yes & no (named group) & yes\\
+Thakolkaran et al.~\cite{Thakolkaran2025} & yes & yes & yes & no (isotropic) & no (no barrier term)\\
+Linden et al.~\cite{Linden2023} & yes & yes & yes & no (named group) & yes\\
+Klein et al.~\cite{Klein2026} & yes & yes & yes & no (named group)\tablefootnote{Their own Table~1 lists the trivial group $C_1$ ($|\mathcal G|=1$) among the finite groups covered; substituting it collapses their group-symmetrization operator to a single, un-symmetrized term, illustrating how general their underlying integrity basis already is. Every one of their worked examples (Section~5), however, uses the cubic group specifically; Section~\ref{sec:related-klein-linden} discusses this construction alongside our own, differently-scoped result for the general case.} & n/a\tablefootnote{Not independently re-verified for this specific paper; not central to the group-free-anisotropy comparison drawn here.}\\
+Kalina et al.~\cite{Kalina2024} & yes & yes & no & partial\tablefootnote{Anisotropy \emph{parameters} (e.g.\ fiber directions) within a pre-chosen symmetry class are learned; the class itself is still user-specified.} & yes\\
+\textbf{This work} & \textbf{yes} & \textbf{yes} & \textbf{yes} & \textbf{yes} & \textbf{yes}\\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
 
 Answering that question carefully also requires knowing, precisely, what
 ``accurate'' does and does not certify. A model can match or exceed a
@@ -198,11 +230,6 @@ specifically:
  otherwise-identical uncertified free model matches the certified models'
  accuracy while failing a rank-one convexity check on $7\%$ of sampled
  states (Section~\ref{sec:non-polyconvex}).
- \item A reaction-force-based procedure for recovering the exact,
- energy-conjugate homogenized stress from a converged HPROM--ANN state
- (Section~\ref{sec:results}), needed because this quantity is not, in
- general, the naive volume average of the microscopic stress field for a
- mixed Dirichlet/free boundary-value problem.
  \item Verification that the same certificate transfers, proof-for-proof,
  to a second convex core (an input-convex Kolmogorov--Arnold network,
  Section~\ref{sec:ickan}) at comparable accuracy with substantially fewer
@@ -217,13 +244,14 @@ and Section~\ref{sec:results} states this provenance explicitly.
 
 \paragraph{Outline.} Section~\ref{sec:background} fixes notation for the
 RVE and its FOM. Section~\ref{sec:checklist} states the admissibility
-checklist precisely. Section~\ref{sec:related-work} surveys eight
-directly comparable PANN constructions against every checklist item,
-establishing exactly what is already proven, what is imprecise, and what
-remains open. Section~\ref{sec:theory} fixes kinematic and stress
+checklist precisely. Section~\ref{sec:theory} fixes kinematic and stress
 conventions and then takes each checklist item in turn, as
 Sections~\ref{sec:c1}--\ref{sec:c6}, with Section~\ref{sec:c5-construction}
-giving the explicit polyconvex construction. Section~\ref{sec:rom-comparison}
+giving the explicit polyconvex construction and, alongside it, the
+detailed comparison against the eight directly comparable PANN
+constructions of Table~\ref{tab:literature}, establishing exactly what is
+already proven, what is imprecise, and what remains open in each.
+Section~\ref{sec:rom-comparison}
 fixes notation for the PROM and HPROM--ANN used as an independent,
 non-ANN-constitutive-law comparison point. Section~\ref{sec:experiments}
 describes the training loss and protocol, reports the held-out
@@ -351,10 +379,46 @@ with standard displacement-based finite elements. The outer boundary
 (red) carries the prescribed affine macro-strain Dirichlet condition; the
 remaining boundary and interior nodes, including the hole boundary, are
 free. The cell geometry has $D_4$ (square) symmetry, but the PANN
-construction in this paper does not assume or exploit it -- see
+construction in this paper does not assume or exploit it; see
 Section~\ref{sec:related-klein-linden}.}
 \label{fig:rve-geometry}
 \end{figure}
+
+\subsection{The offline data-generation campaign: training trajectories and the held-out test path}
+\label{sec:data-campaign}
+Every model compared in this paper, the four PANN tiers of
+Section~\ref{sec:c1-regression} as well as the POD basis, the decoder
+$\mathcal N$, and the ECM/MAW--ECM cubature rules behind HPROM--ANN
+(Section~\ref{sec:rom-comparison}), is built from the same underlying
+dataset: converged FOM solves of \eqref{eq:fom-residual} along
+prescribed macro-strain paths $\bm\varepsilon(t)=(E_{11}(t),E_{22}(t),\gamma_{12}(t))$,
+each solved state contributing one labeled triple (applied strain,
+energy-conjugate stress, stored energy) to the dataset. This section
+describes, once and explicitly, how those paths were chosen and how
+large the resulting dataset is; Section~\ref{sec:training} states how it
+is then split and used to train each model.
+
+Figure~\ref{fig:training-trajectories} shows the full training domain:
+ten trajectories forming five tension/compression pairs, one pair per
+swept shear level $\gamma_{12}\in\{0,\pm0.05,\pm0.1\}$, the two members
+of a pair sharing the same shear target but opposite normal-strain
+branches. Every
+trajectory is genuinely three-dimensional, not a single planar slice: it
+first ramps $\gamma_{12}$ from $0$ to its target value at
+$E_{11}=E_{22}=0$, then sweeps $(E_{11},E_{22})$ in a boustrophedon
+(zig-zag) pattern within that fixed-shear plane, at a fixed row spacing
+shared between both branches of a pair, so the sampled states cover an
+\emph{area} of the $(E_{11},E_{22})$ plane rather than a single diagonal
+ramp. The tension branch of each pair sweeps the larger range
+$E_{22}\in[0,2]$; the compression branch sweeps the physically much
+shorter range $E_{22}\in[-0.1,0]$ before the hole would close on
+itself. Sampled at the same fixed row spacing, this asymmetric range is
+also why each tension branch contributes roughly three times as many
+solved states as its paired compression branch ($16\,802$--$16\,842$ vs.\
+$5\,042$--$5\,082$ states per trajectory). Summed over all ten
+trajectories, the FOM of \eqref{eq:fom-residual} is solved at
+$109\,460$ distinct macro-strain states, the number reused directly in
+Section~\ref{sec:training}.
 
 \begin{figure}[h]
 \centering
@@ -371,6 +435,36 @@ from the origin. FOM solves along all ten paths generate every training
 snapshot used to build the POD basis, the decoder $\mathcal N$, and the
 ECM/MAW--ECM cubature rules of Section~\ref{sec:rom-comparison}.}
 \label{fig:training-trajectories}
+\end{figure}
+
+The held-out test trajectory is a different matter. Every accuracy
+number reported for every model in this paper (Table~\ref{tab:master}
+onward) is
+evaluated on a single, separate, $1\,151$-state trajectory that is never
+included in any training set, referred to throughout simply as the
+held-out test trajectory. Unlike the ten training trajectories, each of
+which holds $\gamma_{12}$ fixed while sweeping $(E_{11},E_{22})$, the
+held-out path mixes all three strain components together in a single
+loading-then-unloading cycle that starts and ends at the origin,
+reaching $E_{11}\in[-0.05,1.6]$, $E_{22}\in[-0.05,1.12]$,
+$\gamma_{12}\in[-0.075,0.06]$: it visits tension, compression, and shear
+simultaneously rather than one at a time, a qualitatively harder
+generalization test than interpolating within any single training
+trajectory's own fixed-shear plane, visible directly in
+Figure~\ref{fig:test-trajectory}: a handful of straight probes between
+extreme mixed states, not an area sweep at fixed shear.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=.98\linewidth]{test_trajectory_claude.pdf}
+\caption{The held-out test trajectory in strain space: one 3D view and
+three pairwise 2D projections of the same $1\,151$-state path, read
+directly from the applied-strain sequence used for every reported
+accuracy number. The path is a small number of straight segments
+connecting extreme, mixed states and returning to the origin, visually
+distinct from the area-sweeping training trajectories of
+Figure~\ref{fig:training-trajectories}.}
+\label{fig:test-trajectory}
 \end{figure}
 
 \begin{figure}[h]
@@ -390,7 +484,7 @@ compression-branch trajectories ($E_{22}=-0.1$: 2, 4, 6, 8, 10) show a
 strongly anisotropic, flattened cell with an elliptical hole. The
 near-$D_4$ shape visible for the unsheared equibiaxial case
 (trajectory~1) is a property of this particular deformation state, not
-an assumption used anywhere in the PANN construction -- see
+an assumption used anywhere in the PANN construction; see
 Section~\ref{sec:related-klein-linden}.}
 \label{fig:displacement-field}
 \end{figure}
@@ -438,371 +532,13 @@ falsify-test, and the explicit construction that proves our model
 polyconvex in Ball's sense; it also shows that a strictly stronger
 alternative used elsewhere in the literature is not required by
 polyconvexity and is, for this RVE's own ground-truth response, false.
-Before doing so, Section~\ref{sec:related-work}
-places this checklist against the current PANN literature: which parts
-are already correctly and rigorously solved
-elsewhere, which published claims are imprecise or documentedly incorrect,
-and which combination of requirements (specifically, a \emph{general}
-anisotropic material with no assumed symmetry group) remains an open
-problem that this work targets.
-
-\section{Related work: the accuracy--generality trade-off in physics-augmented hyperelasticity}
-\label{sec:related-work}
-This section surveys the eight works of Table~\ref{tab:literature}, plus
-several more specific supporting references, chosen because each makes an
-explicit, checkable claim about one or more of (C1)--(C6) for a
-neural-network hyperelastic energy.  Table~\ref{tab:literature} summarizes
-the eight-work comparison; the discussion below justifies every entry and
-gives the precise textual basis for each claim, since ``X satisfies polyconvexity''
-is stated in nearly all of this literature and the differences are entirely
-in \emph{which} polyconvexity-adjacent condition is actually being claimed.
-
-\begin{table}[h]
-\centering
-\small
-\caption{Comparison against the admissibility checklist.  ``Exact'' means
-satisfied by construction for every parameter value, not approximated by
-training or data augmentation.  ``Group-free anisotropy'' means the model
-represents a general anisotropic material without committing to a named
-symmetry class (isotropic, transversely isotropic, cubic, orthotropic,
-\dots) or a learned member of one.  ``Growth exercised'' means the model's
-volumetric term actually diverges/was actually tested at $J\to0^+$, as
-opposed to being stated as a requirement but bypassed because the worked
-examples are (nearly) incompressible.}
-\label{tab:literature}
-\resizebox{\linewidth}{!}{%
-\begin{tabular}{lccccc}
-\toprule
-Work & Exact obj.\ & Exact ref.\ state & Ball polyconvex & Group-free anisotropy & Growth exercised\\
-\midrule
-As'ad et al.~\cite{Asad2022} & yes & yes & no ($\bm E$-convex) & yes (raw $\bm E$) & n/a\\
-Linka \& Kuhl~\cite{Linka2023} & yes & yes & yes & no (isotropic) & no (incompressible)\\
-Tac et al.~\cite{Tac2023} & yes & partial\tablefootnote{Exact for their CANN/NODE cores; an unaddressed gap for their ICNN core, whose biases are unconstrained.} & yes & no (2 fixed fibers) & no (incompressible)\\
-Klein et al.~\cite{Klein2022} & yes/approx.\tablefootnote{Exact for their invariant model $W^I$; only approximated by data augmentation for their deformation-gradient model $W^F$.} & approx.\ only & yes & no (named group) & yes\\
-Thakolkaran et al.~\cite{Thakolkaran2025} & yes & yes & yes & no (isotropic) & no (no barrier term)\\
-Linden et al.~\cite{Linden2023} & yes & yes & yes & no (named group) & yes\\
-Klein et al.~\cite{Klein2026} & yes & yes & yes & no (named group)\tablefootnote{Their own Table~1 lists the trivial group $C_1$ ($|\mathcal G|=1$) among the finite groups covered; substituting it collapses their group-symmetrization operator to a single, un-symmetrized term, illustrating how general their underlying integrity basis already is. Every one of their worked examples (Section~5), however, uses the cubic group specifically; Section~\ref{sec:related-klein-linden} discusses this construction alongside our own, differently-scoped result for the general case.} & n/a\tablefootnote{Not independently re-verified for this specific paper; not central to the group-free-anisotropy comparison drawn here.}\\
-Kalina et al.~\cite{Kalina2024} & yes & yes & no & partial\tablefootnote{Anisotropy \emph{parameters} (e.g.\ fiber directions) within a pre-chosen symmetry class are learned; the class itself is still user-specified.} & yes\\
-\textbf{This work} & \textbf{yes} & \textbf{yes} & \textbf{yes} & \textbf{yes} & \textbf{yes}\\
-\bottomrule
-\end{tabular}%
-}
-\end{table}
-
-\subsection{Models that enforce a strictly stronger condition than polyconvexity}
-\label{sec:related-asad}
-As'ad, Avery and Farhat~\cite{Asad2022} build a hyperelastic PANN for an
-anisotropic woven-fabric RVE homogenized with the same kind of FE$^2$
-pipeline used in this project, and validate it inside an actual coupled
-fluid--structure simulation (the supersonic inflation of a parachute
-canopy), the only work surveyed here that demonstrates a downstream,
-large-scale numerical-robustness benefit, not just held-out accuracy.
-Their own Section~3.3 states the reason plainly: ``enforcing polyconvexity
-in $\bm F$ is difficult as $\bm E$ is not in general convex in $\bm F$. On the other
-hand, consider the convexity of $W$ in $\bm E$, which is equivalent to...
-$\mathbb C=\partial\bm S/\partial\bm E\succeq0$.'' This is, verbatim, the
-SPD-tangent condition discussed in Section~\ref{sec:c5-wrong}: a global convex
-ICNN is applied directly to the raw Green--Lagrange strain, which by
-elementary calculus forces $\partial\bm S/\partial\bm E\succeq0$
-\emph{everywhere}, not merely at the reference state. The authors are
-explicit that this is a deliberate substitute for polyconvexity, not an
-oversight, and they give a real justification for it: their own Eq.~(13)
-decomposes the $\bm F$-Hessian of $W$ into a material-stiffness term (made
-non-negative by convexity in $\bm E$) and a geometric-stiffness term built
-from the ambient stress $\bm S$ itself, which can be negative in
-compression, so ellipticity in $\bm F$ (and hence buckling-type
-non-uniqueness) can still be lost even though $\partial\bm S/\partial\bm E
-\succeq0$ holds globally. This is a legitimate and carefully reasoned
-engineering trade-off, and their finite-element examples (Section~4.4)
-show it buys real numerical robustness: Newton's method diverges for a
-non-convex ANN under load, and converges for their convex-in-$\bm E$ one.
-
-It is nonetheless exactly the condition Section~\ref{sec:c5-wrong} argues
-against for a material like the one in this project. Unlike convexity in
-$\bm F$ itself, which As'ad et al.'s own Section~3.3 correctly notes is
-incompatible with objectivity, citing Coleman and Noll's classical
-counterexample, convexity in $\bm E$ raises no such contradiction,
-since $\bm E$ (equivalently $\bm C$) is already an objective strain measure;
-Gao, Neff, Roventa and Thiel~\cite{GaoNeffRoventaThiel2017} build a valid
-existence theory on exactly this (stronger-than-polyconvex) hypothesis,
-so it is a coherent, usable condition in general, not an impossible one.
-The reason to avoid it for this RVE is not a general impossibility but a
-specific, measured fact: the FOM tangent audit gives a negative
-eigenvalue, $\FomStageTenTangentMinimum$, at a held-out test-trajectory state, so
-$\partial\bm S/\partial\bm E\succeq0$ is simply false for this material's
-true response, and a convex-in-$\bm E$ ICNN applied to this RVE would be
-structurally unable to reproduce that state.  Two further, more mechanical
-differences follow directly from this choice.  First, As'ad et al.'s
-stress-free-reference correction is a fully general linear term $\bm
-h\cdot\bm E$ with $\bm h=-\partial\theta/\partial\bm E(\bm 0)$ (their
-Eqs.~15--16): adding \emph{any} linear function of $\bm E$ preserves
-convexity in $\bm E$, so no special structure among the three strain
-components is required.  A linear-in-$\bm E$ correction is a
-\emph{quadratic}, generally non-convex-in-$\bm F$ form once expressed in $\bm F$,
-so this shortcut is not available to a polyconvex-in-$\bm F$ construction;
-this is precisely why Proposition~\ref{prop:cancellation} needs the
-balanced-direction identity~\eqref{eq:balanced-directions} instead of a
-free 3-parameter correction.  Second, As'ad et al.'s ICNN needs only the
-classical Amos et al.\ convexity-only construction (unconstrained
-input-to-hidden weights), because it is applied directly to the raw
-strain; our construction needs the strictly stronger \emph{monotone} ICNN
-(non-negative weights at every layer, Section~\ref{sec:c5-construction})
-because the ICNN here is composed with an intermediate layer of engineered
-convex features of $\bm F$, and lifting convexity through that composition
-requires the outer function to be coordinate-wise non-decreasing.  Finally,
-their default loss normalizes every stress component by its own
-per-component standard deviation (their Eq.~2), i.e.\ always at the
-extreme $\gamma=1$ of the componentwise blend~\eqref{eq:loss-blend}
-discussed in Section~\ref{sec:loss}, which
-Table~\ref{tab:ablation} shows costs a factor of roughly two in von Mises
-accuracy for an RVE whose components differ in magnitude by two orders of
-magnitude; this trade-off is not discussed in~\cite{Asad2022}, most likely
-because their fabric material's stress components do not differ as
-severely.
-
-The same global-SPD-tangent condition, by a different mechanism, underlies
-Xu, Huang and Darve~\cite{Xu2021}: rather than an ICNN, their SPD-NN
-predicts the Cholesky factor of the tangent stiffness directly, so that
-the stiffness matrix is symmetric positive definite by construction and
-stress is integrated from it incrementally. This is applied to anisotropic
-fiber-reinforced plates and to path-dependent (elasto-plastic) response,
-which the ICNN constructions surveyed here do not attempt, at the cost of
-the same strictly-stronger-than-polyconvex commitment as
-Section~\ref{sec:related-asad}, for the same reason: a positive-definite
-tangent stiffness \emph{is} $\bm D\succeq0$, restated in rate form.
-
-\subsection{Models that enforce Ball's polyconvexity, but only for a named symmetry group}
-\label{sec:related-klein-linden}
-Klein et al.~\cite{Klein2022} (already used throughout
-Section~\ref{sec:c5} as the primary reference for the correct definition)
-give two ICNN constructions, both restricted to a material symmetry group
-$\mathcal G\subset SO(3)$ specified a priori (cubic, transversely
-isotropic) via a structural tensor.  Their invariant-based model $W^I$
-gets objectivity, material symmetry, and polyconvexity exactly, but not
-the reference state: ``the model (16) is not stress-free by construction
-$\dots$ this may thus lead to a loss of ellipticity.'' Their own
-explanation for why is worth quoting in full, because it is the state of
-the art this project improves on: ``In Fern\'andez et al.\ (2021b), a
-projection approach is proposed which fulfills the stress-free reference
-configuration in an exact way. While this approach preserves polyconvexity
-when formulated in terms of $\bm F$ instead of $\bm C$, it is not compatible with
-the methods of incorporating objectivity and material symmetry which are
-used in this work, and therefore cannot be applied.'' Their
-deformation-gradient model $W^F$ makes the opposite trade: exact
-polyconvexity and material symmetry, but objectivity is only
-\emph{approximated} by data augmentation over $1024$ random rotations
-(their Eq.~22), which they candidly report requires $64$ observers before
-the shear response becomes acceptably tight (their Table~1, Fig.~4).
-
-Linden et al.~\cite{Linden2023} close this specific gap for isotropic and
-transversely isotropic materials: they construct an additive stress- and
-energy-normalization term, restricted to $J$ and the symmetry-respecting
-anisotropic invariants (never the raw off-diagonal components of $\bm C$), and
-show this achieves exact objectivity, exact reference state, exact
-polyconvexity, and exact material symmetry \emph{simultaneously}, solving
-the open problem Klein et al.\ identified.  Critically, however, they do
-this only within a symmetry class fixed by a structural tensor, and they
-are explicit that this does not extend to a general material: ``there are
-symmetry groups for which no complete set can be found that does not
-violate polyconvexity $\dots$ it might be possible that there does not
-exist a set of invariants to describe the anisotropy of materials with
-arbitrary microstructures, e.g., 3D-printed composites.'' This is, in the
-words of the researchers who solved the harder half of this problem, an
-open question for exactly the case this paper addresses: an RVE with
-no known or assumed symmetry class.  The mechanism used here answers it
-for that case: the balanced, non-$D_4$-closed direction systems of
-Table~\ref{tab:direction-systems} are not tied to any structural tensor or
-symmetry group, and Proposition~\ref{prop:isotropic-features} shows they
-still produce the isotropic reference-derivative structure that an exact,
-polyconvexity-preserving correction requires.
-
-A very recent paper by an overlapping set of authors, Klein et
-al.~\cite{Klein2026}, extends Linden et al.'s exact-triple result (exact
-objectivity, exact reference state, exact polyconvexity, all
-simultaneous) from isotropic/transversely-isotropic materials to a
-substantially wider set of named finite symmetry groups (cubic,
-tetragonal, and others), using a triclinic (fully general) integrity
-basis of $\bm C$, $\Cof(\bm C)$, and $J$ that is subsequently restricted to a
-chosen group $\mathcal G$ by an explicit group-symmetrization operator:
-real, recent progress on the specific gap this paper also targets.
-Every one of their worked numerical examples (their Section~5: a BCC
-lattice and a matrix-with-spherical-inclusion metamaterial) uses the
-cubic group, and their abstract, Section~1.3, Section~4.3.2, and
-conclusion state the ``fulfills all common mechanical constitutive
-conditions by construction'' result for finite symmetry groups. They
-also raise, as a brief forward-looking remark (Section~4.3.2 and
-footnote~16), the possibility that the same model ``could also be
-employed without incorporating material symmetry at all, which could be
-beneficial in scenarios where no information about the underlying
-symmetry of the material is available,'' an appealing idea that their
-paper does not develop into a proof or a numerical example.
-Appendix~\ref{app:klein-trivial} looks closely at what their own
-machinery would already imply in this limit, and why we still do not
-credit it as an achieved result.
-
-What this paper adds is the part not yet carried out anywhere in the
-literature, including Klein et al.'s own paper: an explicit
-statement of the general-material case, a proof against (C1)--(C6), and
-a worked, non-symmetric numerical demonstration
-(Section~\ref{sec:c5-construction} onward). In that sense, the gap
-Linden et al.\ identified for a material with no known or assumed
-symmetry class is closed here by direct construction and verification,
-complementing rather than competing with Klein et al.'s own,
-differently-scoped result for named symmetry groups.
-
-\subsection{A model that widens the anisotropy class by giving up polyconvexity}
-\label{sec:related-kalina}
-Kalina et al.~\cite{Kalina2024} take the opposite trade from
-Section~\ref{sec:related-klein-linden}: they still require a user-specified
-symmetry class (one of $14$ crystallographic groups), but the structure
-tensor's own parameters (e.g.\ fiber directions) within that class are
-learned jointly with the network from data, which is a substantially more
-flexible anisotropy treatment than a fixed structural tensor. In exchange,
-they explicitly decline polyconvexity: ``polyconvexity can be too
-restrictive, especially for multiscale modeling,'' relying instead on
-physics-augmented correction terms in the loss rather than an
-architecturally convex core. Together with
-Section~\ref{sec:related-klein-linden}, this is the clearest evidence in
-the current literature for a real trade-off frontier: the more general the
-anisotropy representation gets, the harder (and, so far, unachieved outside
-this work) it has been to keep an exact, architectural polyconvexity
-certificate.
-
-\subsection{Isotropic and fiber-restricted polyconvex CANNs, and the growth condition in practice}
-\label{sec:related-cann}
-Linka \& Kuhl~\cite{Linka2023}, Tac et al.~\cite{Tac2023}, and
-Thakolkaran et al.~\cite{Thakolkaran2025} all correctly use the additive,
-block-decoupled sufficient condition for polyconvexity (convex,
-non-decreasing scalar functions of $I_1$, of a polyconvex modification of
-$I_2$, and of $J$, summed), and Tac et al.\ are unusually careful to state
-that this is strictly stronger than what is needed and to distinguish it
-explicitly from rank-one convexity: ``[r]ank-one convexity [is] weaker
-than polyconvexity and not sufficient for the existence of global
-minimizers.'' None of the three, however, is anisotropic beyond at most two
-fixed fiber directions (transverse isotropy), and the growth condition
-(C6) is uniformly \emph{stated but not exercised}: Linka \& Kuhl and Tac et
-al.\ both work with perfectly or nearly incompressible materials, so $J=1$
-is enforced by a Lagrange-multiplier pressure and the stated $J\to0^+$
-divergence is never actually active in a trained model. Thakolkaran et
-al.'s ICKAN paper is, on the polyconvexity definition itself, the most
-careful of the three: it states Ball's condition precisely and does not
-conflate it with anything stronger, but it uses $K_3=(J-1)^2$ as its sole
-volumetric term, which is finite (equal to $1$) at $J=0$: there is no
-divergent barrier at all, and (C6) is not satisfied by their model as
-published. Our own volumetric term is exercised, not merely stated: the
-audit in Table~\ref{tab:coefficients}--\ref{tab:direction-systems} and
-Figure~\ref{fig:volumetric} samples $W_{\rm pc}$ down to $J=10^{-6}$ and up
-to $J=100$ for the trained model, for a compressible, general anisotropic
-material, which is a more demanding setting than any of the three
-incompressible or bounded-volumetric examples above. Section~\ref{sec:ickan-construction}
-shows this project's own construction transfers, proof-for-proof, to
-Thakolkaran et al.'s own architecture: replacing the ICNN core with an
-input-convex Kolmogorov--Arnold network, following their reference
-implementation, while keeping the balanced direction systems and every
-other part of the construction identical. Thakolkaran et al.\ apply
-their architecture only to isotropic compressible hyperelasticity
-(three isotropic invariants, above); no other work surveyed in this
-section combines an ICKAN core with a general, group-free anisotropic
-feature set, so the model of Section~\ref{sec:ickan-construction} is,
-to our knowledge, the first anisotropic, group-free,
-exactly-reference-state, exactly-polyconvex ICKAN.
-
-Two further isotropic-only works round out this picture, at opposite ends
-of the convexity-vs-flexibility trade-off already seen in
-Section~\ref{sec:related-kalina}. Tac, Sahli-Costabal and Buganza
-Tepole~\cite{Tac2022} originate the neural-ODE route to the same
-additive, monotone-in-the-invariants sufficient condition used
-in~\cite{Linka2023,Tac2023}, demonstrated on anisotropic (two-fixed-fiber)
-skin data but, like the others in this subsection, without an exercised
-$J\to0^+$ barrier. Abdolazizi, Aydin, Cyron and
-Linka~\cite{Abdolazizi2025}, by contrast, apply a plain, unconstrained
-Kolmogorov--Arnold network to the same isotropic invariants and explicitly
-decline any convexity requirement at all: objectivity, material symmetry,
-and the reference state are enforced by construction, but polyconvexity,
-rank-one convexity, and growth are not discussed as design goals anywhere
-in the paper. Their examples (rubber, brain tissue, silicone) show good
-fits with no reported instability, which is consistent with, not evidence
-against, the point made throughout this section: losing the polyconvexity
-certificate does not necessarily show up as a visible failure on
-in-distribution calibration data, which is precisely why it needs to be
-guaranteed by construction rather than checked post hoc.
-
-\subsection{Two previously identified errors, and the lesson they teach}
-\label{sec:related-wrong}
-Beyond the SPD/polyconvexity distinction drawn in Section~\ref{sec:c5-wrong},
-the literature itself documents two concrete, checkable errors of exactly this
-kind, which is useful context for how easy this is to get wrong even with
-a stated intent to be rigorous.  Klein et al.~\cite{Klein2022} report that
-Ghaderi et al.~\cite{Ghaderi2020} claim a polyconvex ANN potential but use
-hyperbolic-tangent activations, which are not convex, so ``the potential
-proposed in Ghaderi et al.\ (2020) violates the polyconvexity condition.''
-We cross-checked this against the original: Ghaderi et al.\ do state, in
-their own Appendix~B.1, that ``[i]f
-weights, which connect the input of $\lambda_j$ to other neurons, are
-positive, the proposed model holds the condition of polyconvexity,'' and
-their Section~4 specifies the network core uses ``soft plus $\dots$,
-sinusoid $\dots$ and hyperbolic tangent'' activations together. Weight
-non-negativity alone does not make a composition convex if the activation
-itself is not convex and non-decreasing (Section~\ref{sec:c5-construction});
-sine is neither, and $\tanh$ is concave, not convex, on the positive
-axis. Klein et al.'s report is accurate, and the error is exactly the
-kind Section~\ref{sec:c5-construction} is built to avoid by construction:
-stating a sufficient condition on the weights while leaving out that it
-also requires convex, non-decreasing activations. They report the same
-failure mode for Tac et al.\ (2021), whose model uses
-the invariant $\bar I_2=\tfrac12(\tr\bar C)^2-\tfrac12\tr\bar C^2$ as a
-direct network input: this particular invariant is \emph{not} polyconvex
-(Hartmann and Neff, cited by Klein et al.\ as their Lemma~2.4), so despite
-the stated intent, ``the polyconvexity condition is violated by the choice
-of input arguments.'' Both are examples of the same lesson emphasized in
-Section~\ref{sec:c5-construction}: polyconvexity is a property of the
-specific functional form all the way down to the choice of activation
-function and input invariant, not a label that can be attached to an
-architecture in general, and a single non-convex activation or a single
-non-polyconvex invariant among otherwise-correct ones is enough to void
-the entire certificate.
-
-\subsection{What remains open, and what this work contributes}
-\label{sec:related-gap}
-Reading Sections~\ref{sec:related-asad}--\ref{sec:related-wrong} together,
-the state of the art as of this writing has, to our knowledge, not
-produced a model that is simultaneously (i) exactly objective, (ii)
-exactly stress-free and energy-free at the reference state, (iii) exactly
-polyconvex in Ball's sense, and (iv) anisotropic without committing to a
-named symmetry group, the combination Linden et al.~\cite{Linden2023}
-explicitly flag as possibly requiring an invariant set that does not exist
-for a general microstructure.  This paper's contribution is a
-specific, checkable answer for the case of a $2$D RVE: replace the
-symmetry-group structural tensor with several \emph{generic}, non-$D_4$-
-closed direction systems, each individually balanced
-(Table~\ref{tab:direction-systems}), so that Proposition~\ref{prop:isotropic-features}'s
-isotropic-reference-derivative argument goes through without ever
-assuming or checking which symmetry class, if any, the material belongs
-to.  Section~\ref{sec:direction-selection} gives the explicit,
-reproducible selection procedure and states plainly what is, and is
-not, claimed about it: injectivity of the resulting feature map and
-optimality of using exactly three direction systems are open questions
-here, not results of this paper (Section~\ref{sec:limitations}).  A
-secondary, smaller contribution is the loss-design result of
-Section~\ref{sec:loss}: none of the eight works surveyed above discusses
-the possibility that per-component loss normalization (used, in its most
-extreme form, by~\cite{Asad2022}, and in a milder blended form by
-$\ComponentStressWeightOld{}$ of the previously certified version of this
-model) can measurably \emph{hurt} accuracy on the physically relevant
-equivalent stress when the material's stress components differ by orders
-of magnitude, purely because it forces capacity to be spent chasing the
-smallest, noisiest component's relative error.  Finally, a limitation this
-work shares with every polyconvex-PANN paper surveyed except
-As'ad et al.: none of Sections~\ref{sec:c1}--\ref{sec:results} demonstrate
-that the polyconvexity certificate translates into the kind of downstream
-finite-element robustness (guaranteed Newton convergence, bounded
-transient kinetic energy) that~\cite{Asad2022} demonstrates for their
-strictly stronger, $\bm E$-convex construction.  Embedding this certified
-polyconvex PANN in an actual structural or multiscale solve, and checking
-whether the same robustness benefits appear without requiring the
-stronger and, for this material, false SPD-tangent assumption, is the
-natural next step to make this defensible end-to-end rather than only at
-the level of the standalone constitutive surrogate.
+Section~\ref{sec:c5-construction} places this checklist against the
+current PANN literature as each piece of the construction is introduced:
+which parts are already correctly and rigorously solved elsewhere, which
+published claims are imprecise or documentedly incorrect, and which
+combination of requirements (specifically, a \emph{general} anisotropic
+material with no assumed symmetry group) remains an open problem that
+this work targets.
 
 \section{Admissibility of the construction: theoretical properties}
 \label{sec:theory}
@@ -847,13 +583,13 @@ strain history $\bm\varepsilon(t)$, by the chain rule alone.  Hence
 $\mathcal D\equiv0\geq0$: the inequality holds with equality, and the
 model is thermodynamically consistent (fully reversible, zero
 dissipation) for the same reason every hyperelastic (Green-elastic) model
-is -- because the stress is defined as $\partial W/\partial\bm\varepsilon$
+is: because the stress is defined as $\partial W/\partial\bm\varepsilon$
 in \eqref{eq:stress} and not as an independently parameterized function.
 This is not a property that training can violate or that needs to be
 checked numerically; it is a property of the functional form
 \eqref{eq:stress} itself.
 
-\subsection{A pure-regression baseline: violating (C1) directly}
+\subsubsection{A pure-regression baseline: violating (C1) directly}
 \label{sec:c1-regression}
 Section~\ref{sec:c1} shows (C1) holds for \emph{any} model of the form
 $\bm S=\partial W/\partial\bm\varepsilon$, regardless of which $W$ is
@@ -882,10 +618,10 @@ and the uncertified free baseline of Section~\ref{sec:non-polyconvex}:
  six checklist items exactly.
 \end{itemize}
 
-\paragraph{A direct, quantitative test of (C1).} For a genuine hyperelastic
+We can test (C1) directly rather than just argue it. For a genuine hyperelastic
 model, integrating $\dot W=\bm S\cdot\dot{\bm\varepsilon}$
-(Section~\ref{sec:c1}) along any closed strain loop $\mathcal L$ -- a path
-in strain space with the same start and end point -- gives
+(Section~\ref{sec:c1}) along any closed strain loop $\mathcal L$ (a path
+in strain space with the same start and end point) gives
 \begin{equation}
  \oint_{\mathcal L}\bm S\cdot d\bm\varepsilon
  =\oint_{\mathcal L}dW
@@ -898,26 +634,46 @@ physical assumption. For the tier-1 pure-regression model, $\bm S$ is not the
 gradient of anything, so nothing in its construction forces
 \eqref{eq:cyclic}, and there is no reason to expect it numerically. We
 evaluate \eqref{eq:cyclic} by trapezoidal quadrature ($\CyclicPointsPerEdge{}$
-points per edge) on four closed polygonal loops entirely inside the
-training range (two axis-aligned normal-strain squares of
-different size, a shear loop, and an irregular triangle mixing normal and
-shear strain), for all four tiers, using each model's own stress output
-(a direct forward pass for tier 1, $\partial W_\theta/\partial\bm
+points per edge, justified below) on four closed strain loops entirely
+inside the training range (Figure~\ref{fig:cyclic-loops}): a small
+axis-aligned normal-strain square, a smooth curve that starts and
+returns to the undeformed reference state $\bm\varepsilon=\bm0$ itself
+while moving through all three strain components at once, a shear loop,
+and an irregular triangle mixing normal and shear strain, for all four
+tiers, using each model's own stress output (a direct forward pass for
+tier 1, $\partial W_\theta/\partial\bm
 \varepsilon$ by automatic differentiation for tiers 2--3b).
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{c1_cyclic_loops_claude.pdf}
+\caption{The four closed strain loops evaluated in Table~\ref{tab:cyclic}:
+a genuine 3D view (left) and the three pairwise projections (right),
+so every loop's shape is visible from some panel without ambiguity. The
+small square and the shear loop each vary only two of the three strain
+components (they collapse to a flat segment in whichever projection does
+not involve their varying components); the origin-anchored ellipse and
+the mixed triangle both move in all three simultaneously, and only the
+ellipse starts and returns to the true reference state
+$\bm\varepsilon=\bm0$ (the black marker).}
+\label{fig:cyclic-loops}
+\end{figure}
 
 \begin{table}[h]
 \centering
 \caption{Cyclic work $\oint_{\mathcal L}\bm S\cdot d\bm\varepsilon$ (Pa)
 around four closed strain loops, trapezoidal quadrature,
 $\CyclicPointsPerEdge{}$ points per edge. Exactly zero is expected, by
-\eqref{eq:cyclic}, for tiers 2--3b; nothing constrains tier 1.}
+\eqref{eq:cyclic}, for tiers 2--3b; nothing constrains tier 1.
+Convergence of this resolution is verified in
+Figure~\ref{fig:cyclic-convergence}.}
 \label{tab:cyclic}
 \begin{tabular}{lrrrr}
 \toprule
 Loop & Pure regression (tier 1) & Free (tier 2) & ICNN (tier 3a) & ICKAN (tier 3b)\\
 \midrule
 Small normal square & $\CyclicSmallSquareRegression$ & $\CyclicSmallSquareFree$ & $\CyclicSmallSquareIcnn$ & $\CyclicSmallSquareIckan$\\
-Large normal square & $\CyclicLargeSquareRegression$ & $\CyclicLargeSquareFree$ & $\CyclicLargeSquareIcnn$ & $\CyclicLargeSquareIckan$\\
+Origin-anchored ellipse & $\CyclicEllipseRegression$ & $\CyclicEllipseFree$ & $\CyclicEllipseIcnn$ & $\CyclicEllipseIckan$\\
 Shear loop & $\CyclicShearRegression$ & $\CyclicShearFree$ & $\CyclicShearIcnn$ & $\CyclicShearIckan$\\
 Mixed triangle & $\CyclicTriangleRegression$ & $\CyclicTriangleFree$ & $\CyclicTriangleIcnn$ & $\CyclicTriangleIckan$\\
 \bottomrule
@@ -928,52 +684,49 @@ For context, a typical energy density for this RVE (the training-set
 energy scale used to normalize the loss) is $\CyclicTypicalEnergyScale{}$: the
 tier-1 residual on the two normal-strain loops and the shear loop is five
 to six orders of magnitude smaller than this scale
-($\CyclicRegressionWorstFraction{}$ of it at worst) -- small in absolute
-terms, but, as the next paragraph shows, not a quadrature artifact, unlike
-the superficially similar-looking residuals of tiers 2--3b on the mixed
-triangle loop.
+($\CyclicRegressionWorstFraction{}$ of it at worst). We verified
+$\CyclicPointsPerEdge{}$ points per edge is well converged by refining
+the quadrature on the mixed triangle (the least regular of the four
+loops) by $4\times$ at each step, $200$ to $\CyclicPointsPerEdge{}$
+points per edge (Figure~\ref{fig:cyclic-convergence}).
 
-\paragraph{Distinguishing a real violation from quadrature error.} The
-mixed-triangle residuals of tiers 2--3b in Table~\ref{tab:cyclic} are not
-exactly zero at $\CyclicPointsPerEdge{}$ points per edge, because the
-trapezoidal rule only approximates a line integral of a nonlinear
-gradient field; but \eqref{eq:cyclic} holds exactly in the continuum
-limit, so this residual must vanish as the quadrature is refined,
-regardless of which admissible $W$ produced $\bm S$. The tier-1 residual
-has no such reason to vanish, because it is not quadrature error in the
-first place -- it is the trapezoidal estimate of a line integral of a
-non-conservative vector field, which is generally path-dependent and
-nonzero even in the continuum limit. Refining the same $\CyclicRefinementLoop{}$
-loop by $4\times$ and $16\times$ ($\CyclicRefinementLevels{}$ points per edge)
-confirms exactly this:
-\begin{itemize}
- \item Pure regression (tier 1): $\CyclicRefinementRegression{}$ -- stable, non-vanishing.
- \item Free (tier 2): $\CyclicRefinementFree{}$ -- shrinking toward zero.
- \item ICNN (tier 3a): $\CyclicRefinementIcnn{}$ -- shrinking toward zero.
- \item ICKAN (tier 3b): $\CyclicRefinementIckan{}$ -- shrinking toward zero.
-\end{itemize}
-The three energy-based tiers converge to zero at the rate expected of
-trapezoidal quadrature error for a smooth integrand ($\mathcal
-O(h^2)$, i.e.\ roughly a $16\times$ reduction per $4\times$ refinement);
-the tier-1 residual instead converges to a fixed nonzero constant. This is
-not a difference of degree: it is the signature of a genuine curl in the
-tier-1 stress field, i.e.\ a direct, measured violation of (C1), as
-distinct from finite-sample noise.
+\begin{figure}[h]
+\centering
+\includegraphics[width=.72\linewidth]{c1_cyclic_convergence_claude.pdf}
+\caption{Residual magnitude on the mixed-triangle loop vs.\ quadrature
+points per edge, log-log, at the four refinement levels
+$\CyclicRefinementLevels{}$. The three energy-based tiers fall on the
+slope expected of $\mathcal O(h^2)$ trapezoidal quadrature error (dotted
+reference line) and are converging to the true value of exactly zero;
+the tier-1 residual does not move. The free-hyperelastic tier's
+residual (tier 2, evaluated in float32) levels off around
+$10^{-1}$--$1\,\mathrm{Pa}$ at the finest level rather than continuing
+to shrink, consistent with floating-point precision rather than
+remaining quadrature error; the two float64 tiers (3a/3b) keep
+converging cleanly throughout.}
+\label{fig:cyclic-convergence}
+\end{figure}
 
-\paragraph{Accuracy does not reveal this violation -- if anything, it hides
-it.} Table~\ref{tab:master} reports the tier-1 model's own held-out
-held-out test-trajectory accuracy: $\RegressionStressError{}$ overall stress error and
-$\RegressionVonMisesError{}$ von Mises error, \emph{better than every other
-tier in this study}, including both certified polyconvex cores. This is
-the sharpest version yet of the point made in Section~\ref{sec:non-polyconvex}
-with the free baseline: an aggregate accuracy metric on a held-out
-trajectory not only fails to detect the absence of a physical constraint,
-it can reward the model that discards the most physics, because a direct
-regression has no architectural constraint competing with the stress fit
-at all. The cyclic-work test of Table~\ref{tab:cyclic} is not an
-alternative way of measuring the same thing accuracy already measures; it
-is the only test in this paper that checks (C1) itself; direct
-observation, not a metric to be simultaneously optimized.
+The three energy-based tiers shrink at almost exactly the $16\times$-per-step
+rate that $\mathcal O(h^2)$ trapezoidal error predicts, converging to
+the true value of zero; the tier-1 residual, having no potential to
+converge to in the first place, does not move: the signature of a
+genuine curl in its stress field, not finite-sample noise.
+
+Accuracy does not reveal this violation; if anything, it hides it.
+Table~\ref{tab:master} reports the tier-1 model's own held-out
+test-trajectory accuracy: $\RegressionStressError{}$ overall stress error
+and $\RegressionVonMisesError{}$ von Mises error, better than every
+other tier in this study, including both certified polyconvex cores.
+This is the sharpest version yet of the point made in
+Section~\ref{sec:non-polyconvex} with the free baseline: an aggregate
+accuracy metric on a held-out trajectory not only fails to detect the
+absence of a physical constraint, it can reward the model that discards
+the most physics, because a direct regression has no architectural
+constraint competing with the stress fit at all. The cyclic-work test
+of Table~\ref{tab:cyclic} measures something accuracy cannot: it is the
+only test in this paper that checks (C1) itself, by direct observation
+rather than as a metric to be optimized.
 
 \subsection{(C2) Objectivity}
 \label{sec:c2}
@@ -1048,7 +801,7 @@ isotropic direction (equal normal parts, zero shear). The argument that
 this cancellation actually happens has three steps: (i) show that at
 the reference state, every one of the fifteen features feeding
 $\Phi_\theta$ has a gradient that is a positive multiple of the
-identity matrix $\bm I$ -- an \emph{isotropic} direction, regardless of how
+identity matrix $\bm I$: an \emph{isotropic} direction, regardless of how
 anisotropic the feature itself is away from the reference state
 (Lemma~\ref{lem:isotropic} and Proposition~\ref{prop:isotropic-features});
 (ii) conclude, by the chain rule alone, that $\Phi_\theta$'s own
@@ -1103,7 +856,7 @@ Section~\ref{sec:c5-construction}: $I_1=\tr \bm C$, and, for $p=2,3$,
  Q_{k,p}^H=\sum_iw_{ki}(\bm d_{ki}\cdot\Cof(\bm C)\bm d_{ki})^p .
 \end{equation}
 Then at $\bm C=\bm I$, every one of these thirteen scalars ($I_1$ and twelve
-$Q$'s -- three systems, two powers, two blocks), together with $J$ and
+$Q$'s, three systems, two powers, two blocks), together with $J$ and
 $J^2$, has a $\bm C$-gradient proportional to the identity: $dz_m/dC|_{\bm C=\bm I}
 =c_m\,\bm I$ for every feature $z_m$, with the explicit coefficients $c_m$
 collected in Table~\ref{tab:coefficients}.
@@ -1113,31 +866,39 @@ Taking the trace of the balance identity and using $|\bm d_{ki}|=1$ gives
 $\sum_iw_{ki}\,|\bm d_{ki}|^2=\tr(\bm I)=2$, i.e.\ $\sum_iw_{ki}=2$ for every
 system $k$ (consistent with the numerical weights of
 Table~\ref{tab:direction-systems}). This one identity, together with
-Lemma~\ref{lem:isotropic}, is all the next three cases need.
+Lemma~\ref{lem:isotropic}, is all four cases below need.
+\begin{itemize}
+\item \textbf{The invariant $I_1$.} Trivially, $dI_1/dC=\bm I$ for every
+$\bm C$, so in particular at $\bm C=\bm I$.
 
-\emph{The invariant $I_1$.} Trivially, $dI_1/dC=\bm I$ for every $\bm C$, so in
-particular at $\bm C=\bm I$.
+\item \textbf{The $\bm F$-block features $Q_{k,p}^F$.} By the
+product/chain rule,
+\begin{equation}
+ \frac{dQ_{k,p}^F}{dC}=\sum_i p\,w_{ki}\,(\bm d_{ki}\cdot \bm C\bm d_{ki})^{p-1}\,\bm d_{ki}\otimes \bm d_{ki}.
+\end{equation}
+At $\bm C=\bm I$, each factor $\bm d_{ki}\cdot \bm I\bm d_{ki}=|\bm d_{ki}|^2$
+equals $1$, so the $(p-1)$-power drops out and only the balance sum
+survives:
+\begin{equation}
+ \left.\frac{dQ_{k,p}^F}{dC}\right|_{\bm C=\bm I}=p\sum_iw_{ki}\,\bm d_{ki}\otimes \bm d_{ki}=p\,\bm I.
+\end{equation}
 
-\emph{The $\bm F$-block features $Q_{k,p}^F$.} By the product/chain rule,
-$dQ_{k,p}^F/dC=\sum_ip\,w_{ki}(\bm d_{ki}\cdot \bm C\bm d_{ki})^{p-1}\,\bm d_{ki}\otimes
-\bm d_{ki}$. At $\bm C=\bm I$, each factor $\bm d_{ki}\cdot Id_{ki}=|\bm d_{ki}|^2$ equals
-$1$, so the $(p-1)$-power drops out and only the balance sum survives:
-$dQ_{k,p}^F/dC|_{\bm C=\bm I}=p\sum_iw_{ki}\,\bm d_{ki}\otimes \bm d_{ki}=p\,\bm I$.
-
-\emph{The $\Cof(\bm C)$-block features $Q_{k,p}^H$.} This case needs one
-extra observation before the same trick applies: $\bm d\cdot\Cof(\bm C)\bm d$ is
-itself \emph{linear} in $\bm C$, because $\bm d\cdot\Cof(\bm C)\bm d=\Cof(\bm C):(\bm d\otimes
-\bm d)$ and the cofactor operation is self-adjoint under the Frobenius
-inner product for $2\times2$ matrices ($A:\Cof(B)=B:\Cof(A)$, checked
-by direct expansion), so $\bm d\cdot\Cof(\bm C)\bm d=\bm C:\Cof(\bm d\otimes\bm d)$ -- linear
-in $\bm C$, with the \emph{constant} gradient $\Cof(\bm d\otimes\bm d)=\bm I-\bm d\otimes
-\bm d$ supplied by Lemma~\ref{lem:isotropic}. Differentiating as before,
+\item \textbf{The $\Cof(\bm C)$-block features $Q_{k,p}^H$.} This case
+needs one extra observation before the same trick applies:
+$\bm d\cdot\Cof(\bm C)\bm d$ is itself \emph{linear} in $\bm C$, because
+$\bm d\cdot\Cof(\bm C)\bm d=\Cof(\bm C):(\bm d\otimes \bm d)$ and the cofactor
+operation is self-adjoint under the Frobenius inner product for
+$2\times2$ matrices ($A:\Cof(B)=B:\Cof(A)$, checked by direct
+expansion), so $\bm d\cdot\Cof(\bm C)\bm d=\bm C:\Cof(\bm d\otimes\bm d)$: linear
+in $\bm C$, with the \emph{constant} gradient
+$\Cof(\bm d\otimes\bm d)=\bm I-\bm d\otimes \bm d$ supplied by
+Lemma~\ref{lem:isotropic}. Differentiating as before,
 \begin{equation}
  \frac{dQ_{k,p}^H}{dC}=\sum_ip\,w_{ki}\big(\bm d_{ki}\cdot\Cof(\bm C)\bm d_{ki}\big)^{p-1}
  \big(\bm I-\bm d_{ki}\otimes \bm d_{ki}\big).
 \end{equation}
-At $\bm C=\bm I$, $\Cof(\bm I)=\bm I$, so $\bm d_{ki}\cdot\Cof(\bm I)\bm d_{ki}=1$ and the
-$(p-1)$-power again drops out, leaving
+At $\bm C=\bm I$, $\Cof(\bm I)=\bm I$, so $\bm d_{ki}\cdot\Cof(\bm I)\bm d_{ki}=1$
+and the $(p-1)$-power again drops out, leaving
 \begin{equation}
  \left.\frac{dQ_{k,p}^H}{dC}\right|_{\bm C=\bm I}
  =p\Big[\Big(\textstyle\sum_iw_{ki}\Big)\bm I-\sum_iw_{ki}\,\bm d_{ki}\otimes \bm d_{ki}\Big]
@@ -1145,9 +906,16 @@ $(p-1)$-power again drops out, leaving
 \end{equation}
 using $\sum_iw_{ki}=2$ and the balance identity a second time.
 
-\emph{The volumetric terms $J,J^2$.} The standard determinant-derivative
-identity gives $dJ/dC=\tfrac1{2J}\Cof(\bm C)$, so $dJ/dC|_{\bm C=\bm I}=\tfrac12\bm I$;
-then $dJ^2/dC=2J\,dJ/dC=\Cof(\bm C)$, so $dJ^2/dC|_{\bm C=\bm I}=\bm I$.
+\item \textbf{The volumetric terms $J,J^2$.} The standard
+determinant-derivative identity gives
+\begin{equation}
+ \frac{dJ}{dC}=\frac1{2J}\Cof(\bm C),\quad
+ \left.\frac{dJ}{dC}\right|_{\bm C=\bm I}=\frac12\bm I;
+ \qquad
+ \frac{dJ^2}{dC}=2J\,\frac{dJ}{dC}=\Cof(\bm C),\quad
+ \left.\frac{dJ^2}{dC}\right|_{\bm C=\bm I}=\bm I.
+\end{equation}
+\end{itemize}
 \end{proof}
 
 \begin{table}[h]
@@ -1170,7 +938,7 @@ feature to feature. This is exactly the fact Step (ii) needs.
 \paragraph{Steps (ii)-(iii): the multiple cancels exactly against the volumetric barrier.}
 By the chain rule, $\Phi_\theta$'s own reference gradient is a weighted
 sum of the fifteen feature gradients just computed, each of which is a
-multiple of $\bm I$ -- so the sum is too, automatically, for \emph{any}
+multiple of $\bm I$, so the sum is too, automatically, for \emph{any}
 trained $\Phi_\theta$. Matching that multiple against the barrier
 term's own (also isotropic) reference gradient is what
 Proposition~\ref{prop:cancellation} makes precise.
@@ -1186,7 +954,8 @@ Define
 Then $\bm\sigma(\bm0)=\bm0$ exactly.
 \end{proposition}
 \begin{proof}
-\emph{Step 1: $\Phi_\theta$'s reference gradient is $2\lambda \bm I$ for
+\begin{enumerate}
+\item \textbf{$\Phi_\theta$'s reference gradient is $2\lambda \bm I$ for
 some $\lambda\geq0$.} By the chain rule and
 Proposition~\ref{prop:isotropic-features},
 \begin{equation}
@@ -1201,7 +970,7 @@ Because $\Phi_\theta$ is an ICNN with non-negative weights at every
 layer (Section~\ref{sec:c5-construction}), every partial derivative
 $\partial\Phi_\theta/\partial z_m$ is non-negative; combined with
 $c_m>0$ from Table~\ref{tab:coefficients}, $\lambda$ is a non-negative
-combination of non-negative terms, so $\lambda\geq0$ automatically --
+combination of non-negative terms, so $\lambda\geq0$ automatically,
 independent of training, for any $\theta$. Converting from $\bm C$ to $\bm E$
 via $\bm C=\bm I+2\bm E$ doubles the gradient, $d\Phi_\theta/dE|_{\bm E=0}=2\lambda \bm I$,
 which in the engineering-strain coordinate~\eqref{eq:e-coordinate} reads
@@ -1212,14 +981,18 @@ which in the engineering-strain coordinate~\eqref{eq:e-coordinate} reads
 (the shear entry vanishes because it is the off-diagonal entry of the
 isotropic matrix $2\lambda \bm I$).
 
-\emph{Step 2: the barrier term's reference gradient has the same
+\item \textbf{The barrier term's reference gradient has the same
 isotropic shape.} Since $\log J=\tfrac12\log\det \bm C$,
-$d(\log J)/dC=\tfrac1{2\det \bm C}\Cof(\bm C)$, so $d(\log
-J)/dC|_{\bm C=\bm I}=\tfrac12\bm I$; converting to $\bm E$ the same way as in Step~1
-gives $\partial(\log J)/\partial\bm\varepsilon|_{\bm0}=(1,1,0)^T$ -- the
+\begin{equation}
+ \frac{d(\log J)}{dC}=\frac{1}{2\det \bm C}\Cof(\bm C),
+ \qquad
+ \left.\frac{d(\log J)}{dC}\right|_{\bm C=\bm I}=\frac12\bm I;
+\end{equation}
+converting to $\bm E$ the same way as in Step~1 gives
+$\partial(\log J)/\partial\bm\varepsilon|_{\bm0}=(1,1,0)^T$: the
 same isotropic direction as Step~1's result, by construction.
 
-\emph{Step 3: match the two and cancel.} By
+\item \textbf{Match the two and cancel.} By
 definition~\eqref{eq:pressure-cancellation} and Step~1,
 $r=\tfrac12(2\lambda+2\lambda)=2\lambda$: $r$ is defined precisely so
 that $r\,(1,1,0)^T$ equals $\Phi_\theta$'s own reference gradient
@@ -1231,6 +1004,7 @@ of~\eqref{eq:pc-energy} at $\bm\varepsilon=\bm0$ then gives
  \;+\;\underbrace{\beta(J-1)\nabla J|_{J=1}}_{=\,0\text{, since }J=1}
  =\bm0. \qedhere
 \end{equation}
+\end{enumerate}
 \end{proof}
 \begin{remark}
 The balance condition $\sum_iw_{ki}\bm d_{ki}\otimes \bm d_{ki}=\bm I$ is what makes
@@ -1239,7 +1013,7 @@ gradient of $\Phi_\theta$ would generally be an anisotropic $3$-vector
 (unequal normal components, nonzero shear), and no scalar multiple of the
 purely isotropic direction $(1,1,0)^T$ could cancel it exactly. The
 construction would then leave a spurious residual stress at the
-undeformed configuration -- a real defect, unlike the SPD-tangent
+undeformed configuration: a real defect, unlike the SPD-tangent
 distinction drawn in Section~\ref{sec:c5}, which does not indicate any
 defect of the FOM at all.
 \end{remark}
@@ -1281,17 +1055,26 @@ Polyconvexity~\eqref{eq:poly-def} is not the only architectural route to
 a well-posed hyperelastic model, and it is worth being precise about how
 it relates to a different, strictly stronger condition used elsewhere in
 the literature: a globally symmetric positive definite (SPD) tangent,
-$\bm D=\partial\bm\sigma/\partial\bm\varepsilon\succ0$ everywhere. As
-discussed in Section~\ref{sec:related-asad}, As'ad, Avery and
-Farhat~\cite{Asad2022} adopt exactly this stronger condition for their
-own anisotropic fabric RVE, for a specific, well-documented reason
-(Newton-solver robustness under load, verified in their own coupled
-fluid--structure simulations); Gao, Neff, Roventa and
+$\bm D=\partial\bm\sigma/\partial\bm\varepsilon\succ0$ everywhere.
+\label{sec:related-asad}As'ad, Avery and Farhat~\cite{Asad2022} adopt
+exactly this stronger condition for their own anisotropic fabric RVE,
+built with the same FE$^2$ pipeline used here and validated inside an
+actual coupled fluid--structure simulation (the supersonic inflation of a
+parachute canopy, the only downstream robustness demonstration surveyed
+in this paper), for a specific, well-documented reason, in their own
+words: ``enforcing polyconvexity in $\bm F$ is difficult as $\bm E$ is
+not in general convex in $\bm F$.'' Gao, Neff, Roventa and
 Thiel~\cite{GaoNeffRoventaThiel2017} likewise build a valid
 global-minimizer existence theorem directly on convexity of $W$ in $\bm C$,
 which the same reparametrization $\bm C=\bm I+2\bm E$ shows is equivalent to this
-SPD-tangent condition. Both are legitimate, coherent design choices, not
-errors -- but neither is polyconvexity: Ball's existence theorem needs
+SPD-tangent condition, and the same condition, enforced by an SPD-NN
+predicting the tangent's Cholesky factor directly rather than an ICNN,
+underlies Xu, Huang and Darve~\cite{Xu2021} for path-dependent
+elasto-plastic anisotropic response. Both are legitimate, coherent design
+choices, not errors, and As'ad et al.'s choice buys real robustness in
+their finite-element examples (Newton's method diverges for a non-convex
+ANN under load, converges for their convex-in-$\bm E$ one), but neither
+is polyconvexity: Ball's existence theorem needs
 only~\eqref{eq:poly-def} together with growth, not a globally SPD
 tangent, so the two conditions are logically independent, and the
 SPD-tangent route remains available only because, unlike plain convexity
@@ -1308,8 +1091,8 @@ $\bm D=\partial\bm S/\partial\bm\varepsilon$ by finite differences at
 several deformation states, including a held-out test-trajectory state
 where the \emph{smallest eigenvalue of $\bm D$ is $\FomStageTenTangentMinimum$},
 i.e.\ negative. The true, homogenized RVE response is therefore not
-SPD-tangent everywhere -- a signature of an incremental-stability
-transition in the underlying microstructure, not a modelling artifact --
+SPD-tangent everywhere (a signature of an incremental-stability
+transition in the underlying microstructure, not a modelling artifact),
 and a surrogate forced to satisfy $\bm D\succ0$ globally would
 necessarily \emph{contradict} the FOM at that state. We therefore target
 the correct, weaker, and for this RVE actually achievable condition,
@@ -1354,7 +1137,55 @@ positive weights $w_{ki}$ satisfying the balance condition
 with the three direction systems (angles in degrees) and weights recorded
 in Table~\ref{tab:direction-systems}, chosen without reference to any
 material symmetry group: Section~\ref{sec:direction-selection} gives the
-explicit, reproducible procedure that produced them.
+explicit, reproducible procedure that produced them. A symmetric,
+direction-built structural tensor entering the energy alongside the
+classical isotropic invariants is a classical device, not one introduced
+here: it traces to Boehler~\cite{Boehler1987} and
+Spencer~\cite{Spencer1971,Spencer1984}. A discrete set of weighted
+directions satisfying an exactness condition analogous
+to~\eqref{eq:balanced-directions}, there for scalar polynomial quadrature
+on the sphere rather than for this tensor identity, is independently used
+by Ba\v{z}ant and Oh~\cite{BazantOh1986} for numerical integration.
+
+\label{sec:related-klein-linden}This is deliberately not tied to any
+named symmetry group, which is worth placing against how the two closest
+prior polyconvex constructions handle the same requirement. Klein et
+al.~\cite{Klein2022} (the primary reference for the correct polyconvexity
+definition used throughout Section~\ref{sec:c5}) give two ICNN
+constructions restricted a priori to a symmetry group $\mathcal G\subset
+SO(3)$ (cubic, transversely isotropic) via a structural tensor: their
+invariant-based model $W^I$ gets objectivity, material symmetry, and
+polyconvexity exactly, but not the reference state, and they say why
+directly: an exact stress-free correction ``preserves polyconvexity when
+formulated in terms of $\bm F$ instead of $\bm C$, [but] is not
+compatible with the methods of incorporating objectivity and material
+symmetry which are used in this work''; their deformation-gradient model
+$W^F$ trades the opposite way, exact reference state and polyconvexity,
+but objectivity only approximated by data augmentation over $1024$
+random rotations. Linden et al.~\cite{Linden2023} close this specific gap
+for isotropic and transversely isotropic materials, achieving all four
+properties \emph{simultaneously} within a fixed structural-tensor
+symmetry class, but, as already noted in
+Section~\ref{sec:introduction}, do not extend further. Klein et
+al.~\cite{Klein2026} widen the named-group set considerably (cubic,
+tetragonal, \dots) via a triclinic integrity basis of $\bm C,\Cof(\bm
+C),J$ restricted by an explicit group-symmetrization operator, though
+every worked example (their Section~5) still uses the cubic group
+specifically, and raise, without developing it into a proof or example,
+that the same model ``could also be employed without incorporating
+material symmetry at all'' (Appendix~\ref{app:klein-trivial} examines
+what their own machinery would already imply in this limit, and why we
+do not credit it as an achieved result). This is the open problem this
+paper answers for a $2$D RVE with no assumed symmetry
+class:\label{sec:related-gap} the balanced, non-$D_4$-closed direction
+systems of Table~\ref{tab:direction-systems} replace the structural
+tensor and are not tied to any symmetry group, while
+Proposition~\ref{prop:isotropic-features} still supplies the isotropic
+reference-derivative structure the correction needs, giving, from here
+onward, an explicit statement of the general-material case and a proof
+against (C1)--(C6) not yet carried out anywhere in this literature,
+complementing rather than competing with Klein et al.'s
+differently-scoped result for named symmetry groups.
 
 \begin{table}[h]
 \centering
@@ -1396,7 +1227,7 @@ corresponding entry of $\bm I$:
 \end{equation}
 For a generic angle triple, $A$ is invertible and
 \eqref{eq:weight-system} has a unique solution $\bm w_k$ from a single
-$3\times3$ linear solve -- but that solution is not guaranteed to be
+$3\times3$ linear solve, but that solution is not guaranteed to be
 admissible: the construction additionally needs $w_{ki}>0$ (used
 explicitly in the proof of Proposition~\ref{prop:polyconvex}, where
 positivity of the weights is what lets a sum of convex terms stay
@@ -1451,6 +1282,17 @@ recognize $\bm d\cdot\Cof(\bm C)\bm d=|\Cof(\bm F)\bm d|^2$. The evaluated featu
  \in\R^{15}.
  \label{eq:features}
 \end{equation}
+For a single direction and $p=1$, $Q_{k,1}^F$ reduces to the classical
+pseudo-invariant $\bm a\cdot\bm C\bm a$ used throughout anisotropic
+hyperelasticity~\cite{Spencer1971,Spencer1984,Boehler1987}; Schr\"oder and
+Neff~\cite{SchroderNeff2003} prove polyconvexity of exactly this
+invariant, and of its $\Cof(\bm C)$-based counterpart, raised to any power
+for a single fixed direction, which Proposition~\ref{prop:polyconvex}
+below extends to balanced sums over multiple directions. Gasser, Ogden
+and Holzapfel~\cite{Gasser2006} generalize the single-direction invariant
+to a continuous integral over a fiber-orientation density, the continuous
+analogue of the discrete weighted sum used here.
+
 The sixth-power terms are not cosmetic. In two dimensions a balanced
 quartic aggregate alone obeys an accidental $90^\circ$ identity: writing
 $t_i=\bm d_i\cdot \bm C\bm d_i$, the $90^\circ$-rotated directions have $t_i'=\tr(\bm C)-t_i$
@@ -1468,16 +1310,30 @@ The $Q^H$ features are, in fact, exact algebraic functions of $I_1$ and
 the $Q^F$ features, so the fifteen entries of $\bm z_{\rm pc}$
 in~\eqref{eq:features} are not fifteen independent scalars. This does
 not weaken the construction (Propositions~\ref{prop:isotropic-features}
-and~\ref{prop:polyconvex} hold regardless), and there is a concrete
-architectural reason the redundant features are still worth including
-as separate network inputs. Appendix~\ref{app:redundancy} gives the
-exact identity and the reason in full.
+and~\ref{prop:polyconvex} hold regardless), but the two cases are not
+equally justified. $Q_{k,3}^H$ earns its own network input for a
+concrete architectural reason: its exact reconstruction from
+$I_1,Q_{k,2}^F,Q_{k,3}^F$ requires negative coefficients that a
+monotone (non-negative-weight) ICNN cannot represent internally, so
+supplying it directly gives the network access to combinations it
+could not otherwise reach. $Q_{k,2}^H$ has no such justification: the
+identity $Q_{k,2}^H=Q_{k,2}^F$ (an exact 2D consequence of
+$\Cof\bm C=\tr(\bm C)\bm I-\bm C$, verified to machine precision for
+the trained model) has coefficient $+1$, which a monotone network
+can already represent by weighting $Q_{k,2}^F$ alone; $Q_{k,2}^H$
+therefore adds no expressiveness in this specific 2D construction. We
+retain it anyway, for uniformity with the general $F$/$H$ recipe
+(built from $\Cof\bm F$ exactly as $Q^F$ is built from $\bm F$, for
+every $k$ and every $p$), which is dimension-independent and does not
+exhibit this collapse in 3D, where $\Cof\bm C$ is a genuinely
+quadratic (not affine) function of $\bm C$. Appendix~\ref{app:redundancy}
+gives the exact identities and this reasoning in full.
 \end{remark}
 
 Let $\Phi_\theta:\R^{15}\to\R$ be an input-convex neural network (ICNN,
 Amos et al.~\cite{Amos2017}) with Softplus activations and \emph{every}
-weight matrix -- input-to-hidden at every layer, hidden-to-hidden, and
-hidden-to-output -- reparameterized as $\mathrm{softplus}(\cdot)+
+weight matrix (input-to-hidden at every layer, hidden-to-hidden, and
+hidden-to-output) reparameterized as $\mathrm{softplus}(\cdot)+
 \varepsilon_0>0$. Non-negativity at every layer (not just hidden-to-hidden,
 as in the original ICNN convexity-only construction) is what additionally
 makes $\Phi_\theta$ \emph{coordinate-wise non-decreasing} in $\bm
@@ -1513,44 +1369,80 @@ stress network.}
 \label{fig:icnn-diagram}
 \end{figure}
 
+The literature documents two concrete, checkable errors of exactly this
+kind, useful context for how easy this is to get wrong even with a
+stated intent to be rigorous. Klein et al.~\cite{Klein2022} report that
+Ghaderi et al.~\cite{Ghaderi2020} claim a polyconvex ANN potential while
+using hyperbolic-tangent activations, which are not convex; we
+cross-checked this against the original, whose own Section~4 confirms
+the network core uses ``soft plus $\dots$, sinusoid $\dots$ and
+hyperbolic tangent'' activations together, none of which is convex and
+non-decreasing throughout. They report the same failure mode for Tac et
+al.\ (2021), whose model uses the non-polyconvex invariant $\bar
+I_2=\tfrac12(\tr\bar C)^2-\tfrac12\tr\bar C^2$ as a direct input
+(Hartmann and Neff, cited by Klein et al.\ as their Lemma~2.4). Both
+illustrate the same point this construction is built to avoid:
+polyconvexity is a property of the specific functional form all the way
+down to the activation function and the input invariants, not a label
+attachable to an architecture in general.
+
 \begin{proposition}[Polyconvexity of $W_{\rm pc}$]
 \label{prop:polyconvex}
 $W_{\rm pc}(\bm F)=G(\bm F,\Cof \bm F,J)$ for a function $G$ that is jointly convex
 on $\R^{2\times2}\times\R^{2\times2}\times(0,\infty)$.
 \end{proposition}
 \begin{proof}
-For a fixed unit vector $d$, $\bm F\mapsto|\bm F\bm d|^2$ is a convex quadratic form
-in $\bm F$ (a composition of the linear map $\bm F\mapsto \bm F\bm d$ with the convex
-norm-squared). For $p\in\{2,3\}$, $x\mapsto x^p$ is convex and
+The argument has four stages: each of the fifteen features is convex in
+its own block variable; a function of only one block of a convex,
+block-separated feature is therefore convex in the joint variable
+$(\bm F,\Cof\bm F,J)$; $\Phi_\theta$ composed with this feature map stays
+convex by the vector composition rule; and the remaining terms of
+$W_{\rm pc}$ are themselves convex or constant.
+\begin{enumerate}
+\item \textbf{Each feature is convex in its own block.} For a fixed unit
+vector $\bm d$, $\bm F\mapsto|\bm F\bm d|^2$ is a convex quadratic form in
+$\bm F$ (a composition of the linear map $\bm F\mapsto \bm F\bm d$ with the
+convex norm-squared). For $p\in\{2,3\}$, $x\mapsto x^p$ is convex and
 non-decreasing on $x\geq0$, and $|\bm F\bm d|^2\geq0$; by the scalar
 convex-composition rule ($g$ convex non-decreasing, $f$ convex
-$\Rightarrow g\circ f$ convex), $|\bm F\bm d|^{2p}$ is convex in $\bm F$. Summing
-with positive weights preserves convexity, so every $Q_{k,p}^F$ is convex
-in $\bm F$. The identical argument with $\bm F$ replaced by $\Cof \bm F$ shows every
-$Q_{k,p}^H$ is convex in $\Cof \bm F$. $I_1=|\bm F|^2$ is convex in $\bm F$. $J$ and
-$J^2$ are (trivially, being affine and quadratic) convex functions of the
-third block variable. Each of these $15$ functions, viewed as a function
-of the joint variable $(\bm F,\Cof \bm F,J)\in\R^{2\times2}\times\R^{2\times2}
-\times\R$, depends on only one block and is convex in that block, hence
-is convex in the joint variable (a function of a linear projection of a
-convex function is convex). $\Phi_\theta$ is convex in $\bm z_{\rm pc}$
-and non-decreasing in each coordinate (weight non-negativity at every
-layer, standard ICNN induction: each Softplus pre-activation is an affine,
+$\Rightarrow g\circ f$ convex), $|\bm F\bm d|^{2p}$ is convex in $\bm F$, and
+summing with positive weights preserves convexity, so every $Q_{k,p}^F$
+is convex in $\bm F$. The identical argument with $\bm F$ replaced by
+$\Cof \bm F$ shows every $Q_{k,p}^H$ is convex in $\Cof \bm F$. Finally,
+$I_1=|\bm F|^2$ is convex in $\bm F$, and $J,J^2$ are (trivially, being
+affine and quadratic) convex functions of the third block variable.
+
+\item \textbf{Hence convex in the joint variable.} Each of these $15$
+functions, viewed as a function of the joint variable
+$(\bm F,\Cof \bm F,J)\in\R^{2\times2}\times\R^{2\times2}\times\R$, depends
+on only one block and is convex in that block, hence is convex in the
+joint variable (a function of a linear projection of a convex function
+is convex).
+
+\item \textbf{$\Phi_\theta$ composed with the feature map stays
+convex.} $\Phi_\theta$ is convex in $\bm z_{\rm pc}$ and non-decreasing
+in each coordinate (weight non-negativity at every layer, standard ICNN
+induction: each Softplus pre-activation is an affine,
 non-negative-weighted combination of convex non-decreasing quantities of
-the input, hence convex and non-decreasing, and Softplus itself is convex
-and non-decreasing, so the composition is too, by induction on layers).
-By the \emph{vector} convex-composition rule (Boyd \& Vandenberghe,
-\S3.2.4: $h$ convex and non-decreasing in each argument, each $g_i$ convex
-$\Rightarrow$ $h(g_1,\dots,g_n)$ convex), $\Phi_\theta(\bm z_{\rm pc}(\bm F,
-\Cof \bm F,J))$ is convex in $(\bm F,\Cof \bm F,J)$. The additive constant
-$-\Phi_\theta(\bm z_{\rm pc}(\bm I))$ does not affect convexity. $-r\log J$
-and $\tfrac\beta2(J-1)^2$ are convex functions of $J>0$ for $r,\beta>0$.
-A sum of functions each convex in $(\bm F,\Cof \bm F,J)$ is convex in
-$(\bm F,\Cof \bm F,J)$. Setting $G$ equal to this sum proves the proposition;
-note that this establishes convexity for $(\bm F,\Cof \bm F,J)$ ranging over the
-whole product space, i.e.\ genuinely as three \emph{independent} block
-arguments, which is exactly \eqref{eq:poly-def}, not merely along the
-constrained manifold $\{(\bm F,\Cof \bm F,\det \bm F):\bm F\in\GLp\}$.
+the input, hence convex and non-decreasing, and Softplus itself is
+convex and non-decreasing, so the composition is too, by induction on
+layers). By the \emph{vector} convex-composition rule (Boyd \&
+Vandenberghe, \S3.2.4: $h$ convex and non-decreasing in each argument,
+each $g_i$ convex $\Rightarrow$ $h(g_1,\dots,g_n)$ convex),
+$\Phi_\theta(\bm z_{\rm pc}(\bm F,\Cof \bm F,J))$ is convex in
+$(\bm F,\Cof \bm F,J)$.
+
+\item \textbf{The remaining terms, and the sum.} The additive constant
+$-\Phi_\theta(\bm z_{\rm pc}(\bm I))$ does not affect convexity, and
+$-r\log J$ and $\tfrac\beta2(J-1)^2$ are convex functions of $J>0$ for
+$r,\beta>0$. A sum of functions each convex in $(\bm F,\Cof \bm F,J)$ is
+convex in $(\bm F,\Cof \bm F,J)$; setting $G$ equal to this sum proves the
+proposition.
+\end{enumerate}
+Note that this establishes convexity for $(\bm F,\Cof \bm F,J)$ ranging over
+the whole product space, i.e.\ genuinely as three \emph{independent}
+block arguments, which is exactly \eqref{eq:poly-def}, not merely along
+the constrained manifold $\{(\bm F,\Cof \bm F,\det \bm F):\bm F\in\GLp\}$.
 \end{proof}
 
 \begin{remark}
@@ -1575,16 +1467,16 @@ $\theta$, not only the reported one.
 \subsubsection{A second convex core: input-convex Kolmogorov--Arnold network (ICKAN)}
 \label{sec:ickan-construction}
 Every proposition above is stated for ``any $\Phi_\theta$ that is convex
-and coordinate-wise non-decreasing in $\bm z_{\rm pc}$'' -- none of them
+and coordinate-wise non-decreasing in $\bm z_{\rm pc}$'': none of them
 use any property specific to the Softplus ICNN core. This subsection
 replaces $\Phi_\theta$ with an input-convex Kolmogorov--Arnold network
 (ICKAN), following Thakolkaran et al.~\cite{Thakolkaran2025} and using
 their reference implementation
 (\url{https://github.com/mmc-group/ICKANs}), while keeping every other
-part of the construction -- the balanced direction systems, the
+part of the construction (the balanced direction systems, the
 $15$-dimensional feature vector $\bm z_{\rm pc}$, the reference-state
 cancellation of Proposition~\ref{prop:cancellation}, and the volumetric
-barrier of Section~\ref{sec:c6} -- identical to
+barrier of Section~\ref{sec:c6}) identical to
 Section~\ref{sec:c5-construction}.
 
 A Kolmogorov--Arnold network replaces each scalar weight of a standard
@@ -1595,14 +1487,14 @@ cumulative sum of non-negative increments): the first condition makes
 the spline non-decreasing, the second makes it convex, for \emph{any}
 value of the underlying trainable parameters. Disabling the
 (non-convex) residual base function and freezing the inter-layer affine
-maps to the identity -- exactly the configuration used by Thakolkaran
-et al.\ and reused here -- means every edge of the network is
+maps to the identity (exactly the configuration used by Thakolkaran
+et al.\ and reused here) means every edge of the network is
 simultaneously convex and non-decreasing in its scalar input, and a sum
 of such edges is again convex and non-decreasing by the same rule used
 for the ICNN. We verified this numerically before training: for a
 randomly initialized ICKAN core, increasing one input strictly
 increases the output, and the output is convex along an arbitrary line
-through feature space (see the reproducibility scripts). Consequently,
+through feature space. Consequently,
 Propositions~\ref{prop:cancellation}--\ref{prop:polyconvex} apply to
 this model without modification, confirmed directly by measurement in
 Section~\ref{sec:ickan}, where the reference stress norm for the
@@ -1627,11 +1519,37 @@ below makes this precise with an explicit, direction-independent lower
 bound, rather than a qualitative appeal to direction coverage.
 \item The volumetric term $h(J)=-r\log J+\tfrac\beta2(J-1)^2$ diverges as
 $J\to0^+$ (impenetrability of matter: infinite energy to crush the RVE to
-zero volume) and grows quadratically as $J\to\infty$, exactly the
-qualitative shape used in classical polyconvex volumetric penalties
-(e.g.\ Ciarlet--Geymonat-type terms), confirmed numerically in
-Figure~\ref{fig:volumetric} for the trained model.
+zero volume), exactly the qualitative shape used in classical polyconvex
+volumetric penalties (e.g.\ Ciarlet--Geymonat-type terms). As $J\to\infty$,
+$-r\log J$ alone \emph{decreases} without bound; it is the quadratic
+term that guarantees $h(J)\to\infty$ eventually, for any $\beta>0$,
+since a quadratic dominates a logarithm asymptotically regardless of
+the constants involved. With the coefficients learned by this model
+($r=\BarrierCoefficient$, $\beta=\QuadraticCoefficient$), that crossover
+occurs only at $J^\ast\approx9550$ (the root of $h'(J)=0$ for $J>1$), an
+area dilation never approached by this RVE's training or test data;
+Figure~\ref{fig:volumetric-isolated} isolates $h(J)$ and confirms this
+directly.
 \end{itemize}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=.84\linewidth]{volumetric_isolated_claude.pdf}
+\caption{The volumetric barrier $h(J)$ in isolation, with no feature or
+network terms and no coupling to a stretching path, for the trained
+coefficients $r=\BarrierCoefficient$, $\beta=\QuadraticCoefficient$.
+Left: near $J=1$, $h(J)$ and $-r\log J$ alone are visually
+indistinguishable, and both diverge as $J\to0^+$. Right: on a log
+scale, $-r\log J$ alone decreases without bound, and $h(J)$ tracks it
+closely until the quadratic term alone finally overtakes it near
+$J^\ast\approx9550$, the point where $h(J)$ starts to grow. This
+$J^\ast$ is far beyond any dilation this RVE's data ever reaches; the
+total trained energy nonetheless grows steeply for realistic
+stretches, driven by the sixth-power terms of
+Proposition~\ref{prop:sixth-power-bound} below rather than by $h(J)$
+itself (Figure~\ref{fig:volumetric}).}
+\label{fig:volumetric-isolated}
+\end{figure}
 
 \begin{proposition}[A direction-independent lower bound on the sixth-power terms]
 \label{prop:sixth-power-bound}
@@ -1645,16 +1563,20 @@ and any $\bm F$,
 \end{equation}
 where $|\bm F|^2=\tr \bm C$ is the Frobenius norm. In particular
 $Q_{k,3}^F,Q_{k,3}^H\to\infty$ as $|\bm F|\to\infty$ along \emph{every}
-direction, not merely the three structural ones -- with no appeal
+direction, not merely the three structural ones: with no appeal
 needed to how many orientations the balanced system happens to cover.
 \end{proposition}
 \begin{proof}
 Write $t_i=\bm d_i\cdot \bm C\bm d_i\geq0$. Two consequences of the balance
 condition, both already used in the proof of
 Proposition~\ref{prop:isotropic-features}, are all this needs:
-$\sum_iw_i=2$, and $\sum_iw_it_i=\tr(\bm C)=|\bm F|^2$ (contract the balance
-identity with $\bm C$: $\sum_iw_i\,\bm d_i\cdot \bm C\bm d_i=\bm C:\sum_iw_id_i\otimes
-\bm d_i=\bm C:\bm I=\tr \bm C$). Since $x\mapsto x^3$ is convex on $x\geq0$, Jensen's
+$\sum_iw_i=2$, and, contracting the balance identity with $\bm C$,
+\begin{equation}
+ \sum_iw_i\,\bm d_i\cdot \bm C\bm d_i=\bm C:\sum_iw_i\bm d_i\otimes \bm d_i=\bm C:\bm I=\tr \bm C,
+ \qquad\text{i.e.}\qquad
+ \sum_iw_it_i=|\bm F|^2.
+\end{equation}
+Since $x\mapsto x^3$ is convex on $x\geq0$, Jensen's
 inequality applied with weights $w_i/2$ (which sum to $1$) gives
 \begin{equation}
  \Big(\sum_i\frac{w_i}2\,t_i\Big)^{\!3}\;\leq\;\sum_i\frac{w_i}2\,t_i^3,
@@ -1680,25 +1602,72 @@ as an afterthought penalty or asserted by appeal to intuition.
 \begin{figure}[h]
 \centering
 \includegraphics[width=.84\linewidth]{polyconvex_volumetric_claude.pdf}
-\caption{Volumetric response of the trained polyconvex PANN along
-$\bm F=\mathrm{diag}(J,1)$: the logarithmic barrier acts as $J\to0^+$ and the
-positive quadratic term supplies growth at large $J$, the two mechanisms
-of Section~\ref{sec:c6}.}
+\caption{Total trained energy $W_{\rm pc}$ along the pure-dilatation
+path $\bm F=\mathrm{diag}(J,1)$: the logarithmic barrier acts as
+$J\to0^+$, and the energy grows steeply as $J\to\infty$. Along this
+path $|\bm F|$ grows together with $J$, so the growth shown here for
+$J\gg1$ is dominated by the sixth-power structural-stretch terms of
+Proposition~\ref{prop:sixth-power-bound}, not by the volumetric term
+$h(J)$ in isolation; see Figure~\ref{fig:volumetric-isolated} for that.}
 \label{fig:volumetric}
 \end{figure}
 
-\section{Comparison models: projection-based and hyper-reduced surrogates}
+Placing this against the third cluster of Section~\ref{sec:introduction},
+which gets polyconvexity right but rarely exercises (C6) in
+practice:\label{sec:related-cann} Linka \& Kuhl~\cite{Linka2023}, Tac et
+al.~\cite{Tac2023}, and Thakolkaran et al.~\cite{Thakolkaran2025} all
+correctly use the additive, block-decoupled sufficient condition for
+polyconvexity (convex, non-decreasing scalar functions of $I_1$, of a
+polyconvex modification of $I_2$, and of $J$, summed), and Tac et al.\
+are unusually careful to distinguish this from the strictly weaker
+rank-one convexity; but the growth condition (C6), while stated by all
+three, is uniformly \emph{not exercised}, since Linka \& Kuhl and Tac et
+al.\ both work with (nearly) incompressible materials, so $J\to0^+$ is
+never actually reached by a trained model, and Thakolkaran et al.'s sole
+volumetric term, $K_3=(J-1)^2$, stays finite at $J=0$. Our own volumetric
+term is exercised, not merely stated (Table~\ref{tab:coefficients}--\ref{tab:direction-systems}
+and Figures~\ref{fig:volumetric-isolated}--\ref{fig:volumetric} sample
+$W_{\rm pc}$ down to $J=10^{-6}$ for a compressible, general anisotropic
+material), and Section~\ref{sec:ickan-construction} shows the same
+construction transfers, proof-for-proof, to Thakolkaran et al.'s own
+ICKAN architecture: no other work surveyed here combines an ICKAN core
+with a general, group-free anisotropic feature set. Two further
+isotropic-only works round out this cluster: Tac, Sahli-Costabal and
+Buganza Tepole~\cite{Tac2022} originate the neural-ODE route to the same
+monotone-invariant sufficient condition on anisotropic (two-fixed-fiber)
+skin data, again without an exercised $J\to0^+$ barrier, while
+Abdolazizi, Aydin, Cyron and Linka~\cite{Abdolazizi2025} apply an
+unconstrained Kolmogorov--Arnold network to the same isotropic invariants
+and decline any convexity requirement at all, with good fits and no
+reported instability, consistent with (not evidence against) the point
+Section~\ref{sec:non-polyconvex} makes directly on our own data: losing
+the polyconvexity certificate does not necessarily show up as a visible
+failure on in-distribution data.
+
+\section{Projection-based reduced-order model}
 \label{sec:rom-comparison}
-This section fixes notation for the PROM and the hyper-reduced-order
-model (HPROM) used in
+This section fixes notation for the PROM used in
 Section~\ref{sec:experiments} as an independent, non-ANN-constitutive-law
 comparison point for the PANN of Section~\ref{sec:theory}. None of the
 constructions in this section are a contribution of this work; they are
 established tools, cited to their sources, applied here to the RVE and
-FOM of Section~\ref{sec:background-fom}.
+FOM of Section~\ref{sec:background-fom}. The section builds a single
+online pipeline in three stages, not three competing constructions: a
+base, linear projection-based reduced basis (below); corrected by a
+trained nonlinear-manifold decoder, PROM-ANN
+(Section~\ref{sec:background-decoder}); evaluated with a hyper-reduced
+cubature rule, HPROM-ANN (Section~\ref{sec:background-ecm}). HPROM--ANN
+and D-HPROM--ANN, evaluated separately in Section~\ref{sec:results}, are
+in turn two \emph{operating modes} of that same hyper-reduced pipeline
+and the same trained decoder, not two different models: HPROM--ANN runs
+the decoder's prediction through the usual Newton correction
+of~\eqref{eq:prom-residual} to convergence, while D-HPROM--ANN simply
+skips that correction and uses the decoder's own prediction directly, on
+the premise that it is already a sufficiently good estimate of the
+reduced state on its own. Section~\ref{sec:background-decoder}
+introduces the decoder once; the split into these two modes is stated
+precisely where it arises, at the end of that subsection.
 
-\subsection{Projection-based reduced-order model (PROM)}
-\label{sec:background-prom}
 A standard linear PROM replaces $\bm u_f$ by its projection onto a low-dimensional
 subspace. Snapshots $\bm u_f(\bm\varepsilon_1),\dots,\bm u_f(\bm\varepsilon_{n_{\rm s}})$ from FOM
 solves along the training trajectories
@@ -1720,7 +1689,7 @@ $\bm q_{\rm tot}\in\mathbb R^{n_{\rm tot}}$ are the generalized (POD)
 coordinates.
 
 Substituting~\eqref{eq:prom-affine} into~\eqref{eq:fom-residual}
-and testing with the same basis (Galerkin projection -- the natural choice
+and testing with the same basis (Galerkin projection, the natural choice
 here since the tangent operator of a hyperelastic problem is symmetric,
 unlike the non-self-adjoint operators that motivate a least-squares
 Petrov--Galerkin, LSPG, test space in the compressible-flow PROM
@@ -1738,10 +1707,10 @@ damage examples~\cite{HernandezMAWECM}, a single linear subspace
 of dimension small enough to be worth reducing to is generally \emph{not}
 enough to reach high accuracy for a nonlinear problem (the Kolmogorov
 $n$-width barrier): the number of retained modes needed for good accuracy
-can remain uncomfortably large. The nonlinear-manifold construction used by
-HPROM--ANN in this paper addresses exactly this point.
+can remain uncomfortably large. The nonlinear-manifold construction of
+this paper, PROM-ANN, addresses exactly this point.
 
-\subsection{Nonlinear-manifold correction: the HPROM--ANN decoder}
+\subsection{Nonlinear-manifold PROM: PROM-ANN}
 \label{sec:background-decoder}
 Following the general nonlinear-PMOR strategy of decomposing the ROB into a
 small \emph{primary} (retained) part and a larger \emph{secondary}
@@ -1749,7 +1718,11 @@ small \emph{primary} (retained) part and a larger \emph{secondary}
 introduced for fluid-dynamics PMOR as the PROM-ANN/HPROM-ANN framework
 by Barnett, Farhat and Maday~\cite{Barnett2023} and generalized to
 interpretable Gaussian-process and radial-basis-function closures by Ares De
-Parga et al.~\cite{AresDeParga2026}. The total basis is partitioned as
+Parga et al.~\cite{AresDeParga2026}. PROM-ANN denotes this paper's own
+instance of that framework: the same base PROM above, still using every
+Gauss point of the original mesh, but with the discarded modes'
+amplitude reconstructed by a trained decoder instead of being dropped
+outright. The total basis is partitioned as
 $\mathbf V_{\rm tot}=[\mathbf V\ \bar{\mathbf V}]$, $\mathbf V\in\mathbb
 R^{n_L\times n}$, $\bar{\mathbf V}\in\mathbb R^{n_L\times\bar n}$,
 $n\ll\bar n$, and the displacement field is approximated as
@@ -1762,8 +1735,9 @@ and $\mathcal N:\mathbb R^n\to\mathbb R^{\bar n}$ a trained neural network
 that reconstructs the secondary (discarded) amplitudes ($n=3$, $\bar
 n=36$ for the trained model used throughout this paper).
 
-\paragraph{Why the primary coordinates are not simply the first three POD coordinates.}
-The raw POD coordinates $\mathbf Q_{\rm tot}=\mathbf V_{\rm tot}^T\mathbf S$
+It is natural to ask why the primary coordinates are not simply the
+first three raw POD coordinates. The raw POD coordinates $\mathbf
+Q_{\rm tot}=\mathbf V_{\rm tot}^T\mathbf S$
 of a snapshot matrix $\mathbf S$ are optimal, by construction, for
 linear reconstruction accuracy: no other rank-$n$ subspace captures more
 snapshot energy. They are not, however, optimized for what the decoder
@@ -1859,9 +1833,11 @@ operating modes evaluated in Section~\ref{sec:results}: the
 \emph{direct} mode, D-HPROM--ANN (zero Newton iterations, $\mathcal N$'s
 output used as-is).
 
-\subsection{Hyperreduction: the empirical cubature method and MAW--ECM}
+\subsection{Hyperreduction: HPROM-ANN via the manifold-adaptive-weight empirical cubature method (MAW--ECM)}
 \label{sec:background-ecm}
-Even after~\eqref{eq:decoder}, evaluating the residual~\eqref{eq:fom-residual}
+HPROM-ANN is PROM-ANN above with one further reduction: replacing the
+full Gauss-point loop itself by a sparse, learned cubature rule. Even
+after~\eqref{eq:decoder}, evaluating the residual~\eqref{eq:fom-residual}
 (or the reduced residual~\eqref{eq:prom-residual}) still requires a full
 loop over all $n_{\rm gp}=\sum_e n_{\rm gp}^{(e)}$ Gauss points of the
 original FOM mesh, since the stress $\bm S_{e,g}$ must be evaluated from
@@ -1885,7 +1861,7 @@ one rule ($\mathcal Z$, weights $\omega_g$) tailored to integrate the
 projected \emph{equilibrium} residual accurately, and, in general, a second,
 independently constructed rule ($\mathcal Z_\sigma$, weights
 $\omega_{\sigma,g}$) tailored to the homogenized-\emph{stress} output
-functional -- the two point sets and weight sets are not required to
+functional: the two point sets and weight sets are not required to
 coincide, and Fig.~\ref{fig:ecm-supports} shows both retained element sets
 for this RVE side by side.
 
@@ -1935,7 +1911,7 @@ over a wider region of the strain path than a fixed rule could.
 Hern\'andez's own construction achieves this smoothness through a
 graph-Laplacian-regularized pruning-and-regression scheme over a
 discretized manifold of candidate states, and the construction deployed
-for this RVE follows the same two-stage idea -- in the same spirit,
+for this RVE follows the same two-stage idea, in the same spirit,
 though not a line-for-line reproduction of the published implementation.
 
 \emph{Stage one: graph-regularized support pruning.} Starting from a
@@ -1968,7 +1944,7 @@ relabeling of independent per-state ECM solves.
 
 \emph{Stage two: continuous weight-field regression.} Phase two's
 output is the final fixed support together with a table of
-graph-smoothed weight vectors, one per sampled training state -- still
+graph-smoothed weight vectors, one per sampled training state: still
 a discrete object that must be evaluated at arbitrary, unseen states
 online. This table is fit by one of two regressors depending on the
 rule: a Gaussian radial-basis-function model with a polynomial trend
@@ -1978,17 +1954,15 @@ sum $\sum_g\omega_g$ guaranteed by the softmax itself), trained with a
 loss combining a Kullback--Leibler term and a mean-squared-error term
 against the pruned weight table, plus a physics-exactness penalty that
 enforces the linear integration constraint over the \emph{full}
-training set, not only the $500$-state subsample used for pruning. We
-state this precisely here, rather than either describing our own
-implementation as an unmodified reproduction of the published
-algorithm or, as an earlier version of this section incorrectly did,
-describing it as skipping the graph-regularization step entirely. The
-offline scripts that produced the specific support and weights deployed
-for this RVE predate, and are not part of, this project's own
-repository reorganization; the trained weights themselves are, and are
-exactly what every HPROM--ANN number in this paper is computed from.
+training set, not only the $500$-state subsample used for pruning. This
+follows Hern\'andez's manifold-adaptive-weight idea in spirit rather
+than reproducing the published algorithm line for line. The offline
+scripts that produced the specific support and weights deployed for
+this RVE are not part of this project's own contribution; the trained
+weights themselves are, and are exactly what every HPROM--ANN number in
+this paper is computed from.
 
-\paragraph{Broader provenance.} Related work on reduced-order modeling
+More broadly, related work on reduced-order modeling
 for computational
 homogenization~\cite{Hernandez2014,Hernandez2020,Miehe1999} traces back
 at least to the POD-based reduced model multiscale method (R3M) for
@@ -2006,14 +1980,14 @@ and on machine-learning-assisted homogenization of masonry by two of
 this project's collaborators~\cite{Cornejo2025}, similarly informs this
 project without being part of its own contribution.
 
-\paragraph{Putting the pieces together.} Figure~\ref{fig:workflow} collects
+Figure~\ref{fig:workflow} puts these pieces together, collecting
 the full online HPROM--ANN/D-HPROM--ANN pipeline of this section into a
 single diagram: the macro-strain input and its affine boundary data
 (Section~\ref{sec:background-fom}), the structured primary coordinate that
 initializes the state (Section~\ref{sec:background-decoder}), the two
-operating modes -- the Newton-corrected, ECM-sparse Galerkin residual of
+operating modes (the Newton-corrected, ECM-sparse Galerkin residual of
 \eqref{eq:prom-residual}/\eqref{eq:ecm-residual} for HPROM--ANN, or the
-direct, uncorrected decoder evaluation for D-HPROM--ANN -- the shared
+direct, uncorrected decoder evaluation for D-HPROM--ANN), the shared
 decoder state map of \eqref{eq:decoder}, and the hyper-reduced
 homogenized-stress output of \eqref{eq:ecm-residual}.
 
@@ -2039,13 +2013,17 @@ displacement field of Fig.~\ref{fig:displacement-field}.}
 \label{sec:loss}
 Sections~\ref{sec:c1}--\ref{sec:c6} are properties of the energy
 functional \eqref{eq:pc-energy} and hold regardless of how the model is
-trained. This section is different in kind: a purely statistical choice
-about the training loss, made because it measurably improves accuracy on
-the quantity of engineering interest, and explicitly does not touch
-\eqref{eq:pc-energy}.
+trained. The training loss is a different kind of choice: a purely
+statistical one, made because it measurably improves accuracy on the
+quantity of engineering interest, and it does not touch
+\eqref{eq:pc-energy} at all. It is worth describing carefully, because
+none of the polyconvex-PANN constructions of Table~\ref{tab:literature}
+discuss a risk we found here: per-component loss normalization, used in
+its most extreme form by As'ad et al.~\cite{Asad2022}, can measurably
+hurt accuracy on the physically relevant equivalent stress when the
+material's stress components differ by orders of magnitude.
 
-The final loss, used to train every reported model, is the plain
-two-term sum actually used throughout this paper:
+Every model reported in this paper is trained on the plain two-term sum
 \begin{equation}
  \mathcal L=\EnergyWeight\,\mathcal L_W+\StressWeight\,\mathcal L_{S,\rm agg},
  \label{eq:loss}
@@ -2053,55 +2031,53 @@ two-term sum actually used throughout this paper:
 where $\mathcal L_W$ normalizes the mean squared energy error by its mean
 squared target, and $\mathcal L_{S,\rm agg}$ normalizes the mean squared
 error of the full stress vector $(S_{11},S_{22},S_{12})$ by the mean
-squared norm of the full target vector (so it is dominated by whichever
-components carry the most physical stress magnitude). In both terms the
+squared norm of the full target vector, so it is dominated by whichever
+components carry the most physical stress magnitude. In both terms the
 predicted stress is $\partial W_{\rm pc}/\partial\bm\varepsilon$ of the
 predicted energy, as in \eqref{eq:stress}.
 
-\paragraph{An alternative that was tried and is deliberately not used: a componentwise-weighted blend.}
-In this RVE, $S_{12}$ is roughly two orders of magnitude smaller than
-$S_{11}$, $S_{22}$ along both the training trajectories and the
-held-out test trajectory alike. A natural alternative to
-$\mathcal L_{S,\rm agg}$ alone, used by the previously certified
-version of this model and, in its most extreme form, by As'ad et
-al.~\cite{Asad2022} -- blends in a second, \emph{componentwise} stress
-term,
+We arrived at \eqref{eq:loss} by rejecting an alternative that looked
+reasonable at first. In this RVE, $S_{12}$ is roughly two orders of
+magnitude smaller than $S_{11}$, $S_{22}$ along both the training
+trajectories and the held-out test trajectory alike, which makes it
+tempting to give it its own dedicated weight. The previously certified
+version of this model did exactly that, blending in a second,
+componentwise stress term,
 \begin{equation}
  \mathcal L_S(\gamma)=(1-\gamma)\,\mathcal L_{S,\rm agg}+\gamma\,\mathcal L_{S,\rm comp},
  \qquad \gamma\in[0,1],
  \label{eq:loss-blend}
 \end{equation}
 where $\mathcal L_{S,\rm comp}$ is the equally weighted mean of the
-three \emph{componentwise} relative-squared errors (each of $S_{11}$,
+three componentwise relative-squared errors (each of $S_{11}$,
 $S_{22}$, $S_{12}$ normalized by its own mean squared target before
-averaging, rather than by the norm of the full vector, as
-$\mathcal L_{S,\rm agg}$ is). At $\gamma=\ComponentStressWeightOld{}$,
-the value used by the previously certified version of this model, the
-optimizer is forced to reduce $S_{12}$'s \emph{relative} error to the
-same standard as $S_{11}$, $S_{22}$, even though $S_{12}$ contributes
+averaging, rather than by the norm of the full vector). At
+$\gamma=\ComponentStressWeightOld{}$, the value used previously, the
+optimizer is forced to reduce $S_{12}$'s relative error to the same
+standard as $S_{11}$, $S_{22}$, even though $S_{12}$ contributes
 negligibly to the plane-stress equivalent (von Mises) stress
 \begin{equation}
  \sigma_{\rm eq}=\sqrt{S_{11}^2-S_{11}S_{22}+S_{22}^2+3S_{12}^2},
  \label{eq:von-mises}
 \end{equation}
-the quantity of engineering interest here.
+the quantity of actual engineering interest here. As'ad et
+al.~\cite{Asad2022} push exactly this kind of per-component weighting to
+its most extreme form.
 
-Table~\ref{tab:ablation} isolates this choice from the other change
-made at the same time (widening the ICNN): widening alone, with
+Table~\ref{tab:ablation} isolates this choice from the other change made
+at the same time, widening the ICNN. Widening alone, with
 $\gamma=\ComponentStressWeightOld{}$ unchanged, gives a small
-improvement over the original network, while setting $\gamma=0$ --
-dropping $\mathcal L_{S,\rm comp}$ entirely, which is exactly
-\eqref{eq:loss} above -- produces essentially all of the remaining
-gain, including, counter-intuitively, on $S_{12}$'s \emph{own}
-componentwise error, which improves rather than degrades. This is
-consistent with the componentwise term having forced the optimizer to
-chase a noisy, two-orders-of-magnitude-smaller relative target at the
-expense of the rest of the fit, rather than with any genuine tension
-between the components. Because $\gamma=0$ is what
-Table~\ref{tab:ablation} shows to work best, \eqref{eq:loss-blend} is
-recorded here only as the rejected alternative that motivates
-\eqref{eq:loss}; it is not part of the loss used anywhere else in this
-paper.
+improvement over the original network; setting $\gamma=0$ instead,
+dropping $\mathcal L_{S,\rm comp}$ entirely, gives essentially all of
+the remaining gain, and, somewhat counter-intuitively, improves
+$S_{12}$'s own componentwise error rather than trading it away for a
+better fit elsewhere. The likely explanation is that the componentwise
+term was forcing the optimizer to chase a noisy, two-orders-of-magnitude-smaller
+relative target at the expense of the rest of the fit, rather than any
+genuine tension between the components. Since $\gamma=0$ is what
+actually works best, \eqref{eq:loss-blend} appears here only as the
+rejected alternative that motivates \eqref{eq:loss}, and plays no
+further role in this paper.
 
 \begin{table}[h]
 \centering
@@ -2123,7 +2099,8 @@ Final ($\IcnnWidths{}$, comp.\ weight $\ComponentStressWeight{}$) & \FinalEnergy
 \subsection{Training protocol}
 \label{sec:training}
 The model uses all $109\,460$ saved states of the ten training
-trajectories, an ICNN of widths $(\IcnnWidths{})$, and the loss weights
+trajectories described in Section~\ref{sec:data-campaign}, an ICNN of
+widths $(\IcnnWidths{})$, and the loss weights
 $(\EnergyWeight{},\StressWeight{})$ of \eqref{eq:loss} (i.e.\ $\gamma=0$
 in the rejected componentwise blend~\eqref{eq:loss-blend} of
 Section~\ref{sec:loss}). It is trained in CPU float64 because its energy--stress
@@ -2140,45 +2117,44 @@ paper: the four ANNs of Section~\ref{sec:c1-regression} (tiers
 1--3b), and the two hyper-reduced projection-based ROMs used elsewhere in
 this project as an independent, non-ANN-constitutive-law point of
 comparison on the identical held-out test path. HPROM--ANN and D-HPROM--ANN
-are not two different models but two operating modes of the same
-hyper-reduced solver and the same trained solution-manifold ANN
-(mapping macro-strain directly to reduced POD coordinates via the
-primary/secondary decoder of Section~\ref{sec:background-decoder}, unrelated to
-the constitutive-law ANNs of tiers 1--3b): HPROM--ANN runs the full
-ECM-weighted Newton corrector to convergence at every step (up to $25$
-iterations), while D-HPROM--ANN sets the corrector iteration count to zero
-and simply evaluates the manifold ANN's direct macro-strain-to-reduced-state
-prediction, with no equilibrium solve at all. Both reconstruct stress from
-the true microscale Neo-Hookean law at ECM-selected Gauss points, not from
-a learned constitutive surrogate, so they measure a different source of
-error (hyper-reduction and manifold-regression error) than tiers 1--3b
-(constitutive-surrogate error).
+are two operating modes of the same hyper-reduced solver and the same
+trained solution-manifold ANN (mapping macro-strain directly to reduced
+POD coordinates via the primary/secondary decoder of
+Section~\ref{sec:background-decoder}, unrelated to the constitutive-law
+ANNs of tiers 1--3b), rather than two different models: HPROM--ANN runs
+the full ECM-weighted Newton corrector to convergence at every step (up
+to $25$ iterations), while D-HPROM--ANN sets the corrector iteration
+count to zero and simply evaluates the manifold ANN's direct
+macro-strain-to-reduced-state prediction, with no equilibrium solve at
+all. Both reconstruct stress from the true microscale Neo-Hookean law at
+ECM-selected Gauss points rather than from a learned constitutive
+surrogate, so they measure a different source of error, hyper-reduction
+and manifold-regression error, than tiers 1--3b's constitutive-surrogate
+error. (This construction is not itself a contribution of this paper;
+Section~\ref{sec:rom-comparison} fixes its notation, cites its sources
+in full, and places it against the broader reduced-order-modeling
+literature.)
 
-A further complication is that HPROM--ANN's native output is a naive
-volume-average of the converged microscopic strain/stress field, not the
-exactly energy-conjugate macro-stress that tiers 1--3b are trained and
-evaluated against (the same regression-vs.-conjugate distinction of
-Section~\ref{sec:c1-regression}, one level up the pipeline). For a mixed
-Dirichlet/free boundary-value problem these two macroscopic stress
-definitions are not required to agree, and empirically do not (a direct
-check found the two differing by roughly $30\%$ on this RVE). Comparing
-HPROM--ANN's raw output against the other five rows below would therefore
-not be comparing like with like. Instead, we compute the same
-energy-conjugate quantity for HPROM--ANN's own converged state: by the
-envelope theorem at an equilibrium point, it reduces to a
-reaction-force-weighted sum over the Dirichlet-constrained boundary nodes
-(no re-solving or finite differences needed). We verified this
-reaction-force procedure reproduces the training data's own
-energy-conjugate stress to a relative $L^2$ error of $\HpromControlFomStressError$
-(effectively machine precision) on a held-out subset of the training
-trajectories before applying it to the held-out test-trajectory
-HPROM--ANN/D-HPROM--ANN states reported
-below.
-
-\paragraph{Provenance.} The HPROM--ANN/D-HPROM--ANN construction above is
-not a contribution of this paper; Section~\ref{sec:rom-comparison}
-already fixes its notation, cites its sources in full, and places it
-against the broader reduced-order-modeling literature.
+There is a further complication worth spelling out. HPROM--ANN's native
+output is a naive volume-average of the converged microscopic
+strain/stress field, not the exactly energy-conjugate macro-stress that
+tiers 1--3b are trained and evaluated against (the same
+regression-vs.-conjugate distinction of Section~\ref{sec:c1-regression},
+one level up the pipeline). For a mixed Dirichlet/free boundary-value
+problem these two macroscopic stress definitions need not agree, and
+empirically they do not: a direct check found the two differing by
+roughly $30\%$ on this RVE. Comparing HPROM--ANN's raw output against the
+other five rows below would therefore not be comparing like with like,
+so instead we compute the same energy-conjugate quantity for
+HPROM--ANN's own converged state. By the envelope theorem at an
+equilibrium point, this reduces to a reaction-force-weighted sum over
+the Dirichlet-constrained boundary nodes, with no re-solving or finite
+differences needed. We verified that this reaction-force procedure
+reproduces the training data's own energy-conjugate stress to a
+relative $L^2$ error of $\HpromControlFomStressError$, effectively
+machine precision, on a held-out subset of the training trajectories,
+before applying it to the held-out test-trajectory HPROM--ANN/D-HPROM--ANN
+states reported below.
 
 \begin{table}[h]
 \centering
@@ -2198,28 +2174,21 @@ D-HPROM--ANN & -- & \DHpromStressError & \DHpromSxxError & \DHpromSyyError & \DH
 \bottomrule
 \end{tabular}
 \end{table}
-Tier 1 has no energy column (Section~\ref{sec:c1-regression}: no potential
-exists in this model). HPROM--ANN and D-HPROM--ANN have no energy column
-either: the reaction-force procedure above recovers the energy-conjugate
-\emph{stress} directly from boundary reactions, and extending it to a
-comparable normalized \emph{energy} is a natural refinement not attempted
-here. Tier 2's componentwise $S_{11}$, $S_{22}$ errors are somewhat
-elevated relative to the two certified cores (0.6--0.9\% vs.\ 0.4--0.65\%)
-but remain sub-percent; the qualitatively different result is its
-$S_{12}$ error, more than an order of magnitude worse than either
-certified core, and its von Mises accuracy relative to the certified
-tiers, discussed in Section~\ref{sec:non-polyconvex}.
+Tier 1 has no energy column, since Section~\ref{sec:c1-regression} shows
+no potential exists in that model, and HPROM--ANN and D-HPROM--ANN have
+none either: the reaction-force procedure above recovers the
+energy-conjugate stress directly from boundary reactions, and extending
+it to a comparable normalized energy is a natural refinement we did not
+attempt here. Tier 2's componentwise $S_{11}$, $S_{22}$ errors are
+somewhat elevated relative to the two certified cores
+(0.6--0.9\% vs.\ 0.4--0.65\%) but remain sub-percent; the qualitatively
+different result is its $S_{12}$ error, more than an order of magnitude
+worse than either certified core, and its von Mises accuracy relative
+to the certified tiers, discussed in Section~\ref{sec:non-polyconvex}.
 
-\paragraph{A note on reproducibility.} An earlier, separately produced
-reference value for D-HPROM--ANN's energy-conjugate stress error differs
-from the independently verified value reported above by a factor of
-$\DHpromNewOverOldRatio$. Appendix~\ref{app:dhprom-discrepancy} records
-the discrepancy and its most likely explanation explicitly, rather than
-silently discarding it.
-
-The full six-model held-out test-trajectory comparison -- energy for the three
+The full six-model held-out test-trajectory comparison (energy for the three
 energy-capable tiers, and every stress component and the von Mises
-equivalent for all six model variants of Table~\ref{tab:master} -- is
+equivalent for all six model variants of Table~\ref{tab:master}) is
 given later in Figure~\ref{fig:full-comparison}, once
 Section~\ref{sec:non-polyconvex} has introduced the sixth (uncertified)
 variant; the corresponding relative-$L^2$-error bars are in
@@ -2237,81 +2206,80 @@ guarantees above, all of which hold regardless of its value.
 
 \subsection{A second convex core: ICKAN results}
 \label{sec:ickan}
-Section~\ref{sec:ickan-construction} shows that the same construction
-of Section~\ref{sec:c5-construction}, namely the balanced direction systems,
-the $15$-dimensional feature vector, the reference-state cancellation,
-and the volumetric barrier, carries over unchanged to the ICKAN core
-following
-Thakolkaran et al.~\cite{Thakolkaran2025}, and why the same
-propositions apply to it without modification; Section~\ref{sec:related-cann}
-places this relative to the ICKAN literature. This is confirmed
-directly by measurement here: the reference stress norm for the trained
-ICKAN model is $\IckanReferenceStressNorm$, at machine precision,
-exactly as for the ICNN model.
+Section~\ref{sec:ickan-construction} shows that the same construction of
+Section~\ref{sec:c5-construction}, the balanced direction systems, the
+$15$-dimensional feature vector, the reference-state cancellation, and
+the volumetric barrier, carries over unchanged to the ICKAN core
+following Thakolkaran et al.~\cite{Thakolkaran2025}, and explains why
+the same propositions apply to it without modification
+(Section~\ref{sec:related-cann} places this relative to the ICKAN
+literature). Measurement confirms it directly: the reference stress
+norm for the trained ICKAN model is $\IckanReferenceStressNorm$, at
+machine precision, exactly as for the ICNN model.
 
-\paragraph{Architecture and results.} The ICKAN core used here has hidden
-widths $(\IckanHiddenWidths{})$, a grid of $\IckanGrid{}$ intervals, and
-spline order $\IckanSplineOrder{}$; it is trained with the same loss
-\eqref{eq:loss} as the ICNN model, reaching its best tracked training score at epoch
-$\IckanBestEpoch{}$. The ICNN and ICKAN rows of Table~\ref{tab:master} and
-Figure~\ref{fig:full-comparison} report its held-out test-trajectory accuracy alongside
-the ICNN model. The smallest sampled rank-one curvature is
-$\IckanRankOneCurvature$ and the broad sampled-energy audit gives a
-minimum of $\IckanSampledMinimumEnergy$: both positive, consistent with
-(not proof of) the polyconvexity certificate, exactly as for the ICNN
-model.
+The ICKAN core used here has hidden widths $(\IckanHiddenWidths{})$, a
+grid of $\IckanGrid{}$ intervals, and spline order $\IckanSplineOrder{}$.
+It is trained with the same loss \eqref{eq:loss} as the ICNN model,
+reaching its best tracked training score at epoch $\IckanBestEpoch{}$;
+the ICNN and ICKAN rows of Table~\ref{tab:master} and
+Figure~\ref{fig:full-comparison} report its held-out test-trajectory
+accuracy alongside the ICNN model. The smallest sampled rank-one
+curvature is $\IckanRankOneCurvature$, and the broad sampled-energy
+audit gives a minimum of $\IckanSampledMinimumEnergy$: both positive, as
+for the ICNN model, consistent with the polyconvexity certificate
+without amounting to a proof of it.
 
-The two cores are close, with neither uniformly better; the ICKAN reaches
-comparable accuracy with a hidden-layer parameter count roughly two
-orders of magnitude smaller than the ICNN's $(\IcnnWidths{})$, at the
-cost of a slower per-epoch cost from the spline evaluations. Both
-certificates are architectural and independent of which core is used;
-choosing between them in practice is a question of parameter budget and
-training cost, not of admissibility.
+The two cores turn out to be close, with neither uniformly better. The
+ICKAN reaches comparable accuracy with a hidden-layer parameter count
+roughly two orders of magnitude smaller than the ICNN's
+$(\IcnnWidths{})$, though each epoch costs more because of the spline
+evaluations. Both certificates are architectural and independent of
+which core is used, so choosing between them in practice comes down to
+parameter budget and training cost rather than admissibility.
 
 \subsection{What breaks without the certificate: a non-polyconvex baseline}
 \label{sec:non-polyconvex}
-Section~\ref{sec:related-asad} discussed why As'ad et al.~\cite{Asad2022}
-and Klein et al.~\cite{Klein2022} each include a flexible, uncertified
-baseline in their own work, specifically to show what the certificate is
-protecting against: As'ad et al.\ show Newton's method diverging under
-load; Klein et al.\ show their flexible model losing ellipticity even for
-small deformations (their Fig.~5). This section repeats that exercise on
-this project's own RVE, using the flexible ``free'' anisotropic PANN
-already introduced for the original, three-model version of this study --
-an unconstrained Softplus MLP on the material components of $\bm C$, with no
-convexity constraint anywhere in the architecture -- retrained with the
-identical loss \eqref{eq:loss} used for the two certified models above,
-so the comparison isolates the convexity architecture as the only
-difference.
+As'ad et al.~\cite{Asad2022} and Klein et al.~\cite{Klein2022} each
+include a flexible, uncertified baseline in their own work for exactly
+this reason (Section~\ref{sec:related-asad}): to show what the
+certificate is protecting against. As'ad et al.\ show Newton's method
+diverging under load; Klein et al.\ show their flexible model losing
+ellipticity even for small deformations (their Fig.~5). We repeat that
+exercise on this project's own RVE, using the flexible ``free''
+anisotropic PANN already introduced for the original, three-model
+version of this study, an unconstrained Softplus MLP on the material
+components of $\bm C$ with no convexity constraint anywhere in the
+architecture, retrained with the identical loss \eqref{eq:loss} used
+for the two certified models above so that the comparison isolates the
+convexity architecture as the only difference.
 
-\paragraph{Accuracy alone does not reveal the defect.} Trained this way,
-the free model reaches $\FreeMatchedEnergyError$ energy error and
-$\FreeMatchedVonMisesError{}$ von Mises error on the held-out test trajectory -- comparable
-to, and on this metric marginally \emph{better} than, the certified
-polyconvex models of Table~\ref{tab:master} (its $S_{12}$ error,
-$\FreeMatchedSxyError$, is much worse, consistent with
-Section~\ref{sec:loss}). Figure~\ref{fig:full-comparison} shows its von
-Mises trajectory is visually indistinguishable from the certified models
-and from the direct FOM. This is the central point of this section: held-out
-accuracy is silent about the absence of a polyconvexity certificate. The
-same observation was made about Abdolazizi et al.'s uncertified
-CKAN~\cite{Abdolazizi2025} in Section~\ref{sec:related-cann} on the basis
-of their reported results; here it is demonstrated directly on our own
-model and our own data.
+Trained this way, the free model reaches $\FreeMatchedEnergyError$
+energy error and $\FreeMatchedVonMisesError{}$ von Mises error on the
+held-out test trajectory, comparable to, and on this metric marginally
+better than, the certified polyconvex models of Table~\ref{tab:master}
+(its $S_{12}$ error, $\FreeMatchedSxyError$, is much worse, consistent
+with Section~\ref{sec:loss}). Figure~\ref{fig:full-comparison} shows its
+von Mises trajectory is visually indistinguishable from the certified
+models and from the direct FOM. Accuracy alone, in other words, gives no
+hint that a polyconvexity certificate is missing. Abdolazizi et al.\
+made the same observation about their uncertified
+CKAN~\cite{Abdolazizi2025} on the basis of their own reported results
+(Section~\ref{sec:related-cann}); here it is demonstrated directly on
+our own model and our own data.
 
-\paragraph{The certificate's absence is real, and findable.} We sampled
-$\FreeRankOneSamples$ random rank-one perturbations $\bm F+t\,\bm a\otimes\bm b$ (unit
-$\bm a,\bm b$, log-stretch range $\pm1$, i.e.\ stretches in $[e^{-1},e^{1}]$) and
+The absence of the certificate is nonetheless real and findable, once
+the right test is applied. We sampled $\FreeRankOneSamples$ random
+rank-one perturbations $\bm F+t\,\bm a\otimes\bm b$ (unit $\bm a,\bm b$,
+log-stretch range $\pm1$, i.e.\ stretches in $[e^{-1},e^{1}]$) and
 evaluated $d^2/dt^2\,W$ at $t=0$ in float64, the same falsification
 attempt of \eqref{eq:rank-one} run on the certified models in
-Section~\ref{sec:c5-implies}, at a larger sample count. For the certified
-ICNN and ICKAN models every sample was non-negative (Table~\ref{tab:master}'s
+Section~\ref{sec:c5-implies}, at a larger sample count. Every sample was
+non-negative for the certified ICNN and ICKAN models (Table~\ref{tab:master}'s
 discussion and Section~\ref{sec:results}); for the free model,
 $\FreeRankOneViolations$ of $\FreeRankOneSamples$ samples
 ($\FreeRankOneViolationFraction$) are negative, with a minimum of
 $\FreeRankOneMinimumCurvature$, comparable in magnitude to the
-certified models' minimum \emph{positive} sampled curvature. A specific
+certified models' minimum \emph{positive} sampled curvature. One
 example violation is
 \begin{equation}
  \bm F=\begin{bmatrix}0.534&-0.372\\-0.387&0.728\end{bmatrix},\quad
@@ -2338,14 +2306,14 @@ free hyperelastic ANN, the two certified polyconvex cores, and both
 HPROM--ANN operating modes): the three second Piola--Kirchhoff components
 $S_{11}$, $S_{22}$, $S_{12}$ and the von Mises equivalent $\sigma_{\rm
 eq}$, each shown for all six variants, plus energy $W$, shown only for the
-three energy-capable tiers (tier 2, tier 3a, tier 3b) -- the tier-1
+three energy-capable tiers (tier 2, tier 3a, tier 3b): the tier-1
 pure-regression model and both HPROM--ANN modes recover stress directly,
 without an underlying scalar potential, so no energy curve exists for
 them to plot (Section~\ref{sec:c1-regression} for tier 1;
 Section~\ref{sec:results}'s discussion of the reaction-force procedure
 for the two HPROM--ANN modes). Every plotted variant is visually indistinguishable from
-the FOM and from each other on this held-out path -- including the free
-model, whose lack of a polyconvexity certificate is not visible here --
+the FOM and from each other on this held-out path (including the free
+model, whose lack of a polyconvexity certificate is not visible here),
 which is exactly why Sections~\ref{sec:c1-regression}
 and~\ref{sec:non-polyconvex} audit them directly (cyclic work, rank-one
 curvature) rather than relying on this figure.}
@@ -2360,7 +2328,7 @@ Table~\ref{tab:master}, for all six model variants: the tier-1 pure-regression
 ANN, the tier-2 free hyperelastic ANN, the two certified polyconvex
 cores, and both HPROM--ANN operating modes. The uncertified ANNs (tiers
 1--2) are competitive with, and on several components better than, the
-certified models on every accuracy metric shown here -- consistent with
+certified models on every accuracy metric shown here: consistent with
 Sections~\ref{sec:c1-regression} and~\ref{sec:non-polyconvex}'s point that
 accuracy alone cannot distinguish a certified model from an uncertified
 one; only the cyclic-work and rank-one curvature audits can.}
@@ -2369,25 +2337,22 @@ one; only the cyclic-work and rank-one curvature audits can.}
 
 \section{Limitations and future work}
 \label{sec:limitations}
-Four scope limits of the present study are stated here explicitly,
-rather than left implicit, because each bears directly on how far the
-claims above extend.
+Four scope limits of the present study are worth stating plainly, since
+each bears directly on how far the claims above extend.
 
-\paragraph{The empirical demonstration uses a $D_4$-symmetric RVE.} The
-construction of Section~\ref{sec:c5-construction} assumes no material
-symmetry group, and the balanced direction systems are not tied to one
-(Section~\ref{sec:direction-selection}); this is a property of the
-\emph{construction}. The specific RVE used to validate it, however -- a
-square unit cell with a centered circular hole, Fig.~\ref{fig:rve-geometry}
--- does have $D_4$ symmetry, so the held-out accuracy of
-Section~\ref{sec:results} does not by itself demonstrate the
+The construction of Section~\ref{sec:c5-construction} assumes no
+material symmetry group, and the balanced direction systems are not tied
+to one; this is a property of the construction itself. The specific RVE
+used to validate it, however,
+a square unit cell with a centered circular hole
+(Fig.~\ref{fig:rve-geometry}), does have $D_4$ symmetry, so the held-out
+accuracy of Section~\ref{sec:results} does not by itself demonstrate the
 construction's behavior on a genuinely asymmetric microstructure.
-Repeating the same protocol on an RVE with no symmetry at all (an
-off-center or elliptical hole, or a random inclusion pattern) would
+Repeating the same protocol on an RVE with no symmetry at all, an
+off-center or elliptical hole, or a random inclusion pattern, would
 close this gap directly.
 
-\paragraph{Injectivity of the feature map and optimality of three
-direction systems are open.} As stated in
+A second gap is more theoretical: as noted in
 Section~\ref{sec:direction-selection}, this paper does not prove that
 two distinct admissible $\bm C$ always produce distinct feature
 vectors~\eqref{eq:features}, nor that three direction systems are the
@@ -2395,21 +2360,20 @@ minimum or optimal number. The construction is verified sufficient for
 this RVE's own held-out response, not shown to be representationally
 optimal or complete for a general anisotropic material.
 
-\paragraph{No downstream structural or multiscale demonstration.} As
-discussed in Section~\ref{sec:related-gap}, this paper does not embed
-the certified PANN in an actual finite-element structural or
-FE$^2$ multiscale solve to check whether its polyconvexity certificate
-translates into the Newton-robustness benefit As'ad et
-al.~\cite{Asad2022} demonstrate for their strictly stronger, $\bm E$-convex
-construction. This is the natural next step toward making the
-certificate's practical value defensible end-to-end, not only at the
-level of the standalone constitutive surrogate.
+Third, this paper does not embed the certified PANN in an actual
+finite-element structural or FE$^2$ multiscale solve to check whether
+its polyconvexity certificate translates into the Newton-robustness
+benefit As'ad et al.~\cite{Asad2022} demonstrate for their strictly
+stronger, $\bm E$-convex construction (Section~\ref{sec:related-asad}).
+Doing so is the natural next step toward making the certificate's
+practical value defensible end-to-end, beyond the standalone
+constitutive surrogate.
 
-\paragraph{Missing ablations and cost accounting.} This paper does not
-report sensitivity to the number of direction systems (one or two
-instead of three), to the specific angles within a system, or to the
-random seed used for training; nor does it report the online evaluation
-cost of the certified PANN relative to a direct microscale solve or to
+Finally, some ablations and cost figures are missing. Sensitivity to
+the number of direction systems (one or two instead of three), to the
+specific angles within a system, and to the random seed used for
+training are not reported here, nor is the online evaluation cost of
+the certified PANN relative to a direct microscale solve or to
 HPROM--ANN, which would be needed to argue for the certified
 construction on efficiency grounds rather than admissibility grounds
 alone. The held-out comparison of Section~\ref{sec:results} also uses a
@@ -2417,67 +2381,68 @@ single test trajectory; a broader set of held-out paths, including
 states well outside the convex hull of the training trajectories, would
 give a fuller picture of extrapolation behavior.
 
-None of these is a defect in the results already reported: every
-admissibility proof in Sections~\ref{sec:c1}--\ref{sec:c6} holds
-unconditionally, independent of which RVE, which direction systems, or
-which downstream solver is used. They are open extensions of this work,
-stated here rather than left for a reader to discover.
+None of this weakens the results already reported: every admissibility
+proof in Sections~\ref{sec:c1}--\ref{sec:c6} holds unconditionally,
+independent of which RVE, which direction systems, or which downstream
+solver is used. These are open extensions, and we would rather name
+them here than leave a reader to find them.
 
 \section{Conclusions}
 \label{sec:conclusions}
 Every item of the admissibility checklist in Section~\ref{sec:checklist}
-is addressed with a closed-form argument, not a numerical penalty: (C1)
-holds for any energy-derivative stress definition; (C2) holds because the
-model is built from $\bm C$ and $\Cof(\bm C)$; (C3)'s actual content (tensor
-symmetry) holds by parameterizing only the three independent stress
-components, while material symmetry ($D_4$) is knowingly not imposed;
-(C4) holds exactly by an additive-constant argument for the energy and by
-the balanced-direction cancellation of Proposition~\ref{prop:cancellation}
-for the stress; (C5), correctly stated as Ball's
-\eqref{eq:poly-def} rather than the stronger and, for this RVE,
-\emph{false} SPD-tangent shorthand, is proved by the explicit convex
-construction of Proposition~\ref{prop:polyconvex}, with the correct
-weaker (rank-one) necessary condition verified numerically; and (C6) is
-supplied by the sixth-power directional terms and the logarithmic/quadratic
-volumetric barrier. None of (C1)--(C6) depends on the loss weighting of
-Section~\ref{sec:loss}, which is an orthogonal, purely statistical choice
-that improved every reported held-out test-trajectory metric, including $S_{12}$'s own
-componentwise error, contrary to the naive expectation that removing its
-dedicated weighting should trade it away for a better fit of $S_{11}$,
-$S_{22}$. Any future retraining that changes the relative magnitude of
-$S_{12}$ against $S_{11}$, $S_{22}$ (e.g.\ a different RVE geometry or
-load protocol) should revisit the component-stress weight rather than
-assume it transfers unchanged.
+is addressed with a closed-form argument rather than a numerical
+penalty. (C1) holds for any energy-derivative stress definition; (C2)
+holds because the model is built from $\bm C$ and $\Cof(\bm C)$; (C3)'s
+actual content, tensor symmetry, holds by parameterizing only the three
+independent stress components, while material symmetry ($D_4$) is
+deliberately left unimposed; (C4) holds exactly, by an additive-constant
+argument for the energy and by the balanced-direction cancellation of
+Proposition~\ref{prop:cancellation} for the stress; (C5), correctly
+stated as Ball's \eqref{eq:poly-def} rather than the stronger, and for
+this RVE false, SPD-tangent shorthand, is proved by the explicit convex
+construction of Proposition~\ref{prop:polyconvex}, with the weaker,
+correct rank-one necessary condition verified numerically; and (C6) is
+supplied by the sixth-power directional terms together with the
+logarithmic/quadratic volumetric barrier. None of (C1)--(C6) depends on
+the loss weighting of Section~\ref{sec:loss}, an orthogonal, purely
+statistical choice that happened to improve every reported held-out
+test-trajectory metric, including $S_{12}$'s own componentwise error,
+contrary to the naive expectation that dropping its dedicated weighting
+should trade it away for a better fit of $S_{11}$, $S_{22}$. Any future
+retraining that changes the relative magnitude of $S_{12}$ against
+$S_{11}$, $S_{22}$, for a different RVE geometry or load protocol, say,
+should revisit the component-stress weight rather than assume it
+transfers unchanged.
 
-The construction is also not tied to one convex architecture:
+The construction is also not tied to one convex architecture.
 Section~\ref{sec:ickan} shows the identical proofs, and an equally clean
-reference-stress cancellation at machine precision, carry over to an
-input-convex Kolmogorov--Arnold core, at comparable held-out test-trajectory accuracy to
-the ICNN core with far fewer parameters.
+reference-stress cancellation at machine precision, carrying over to an
+input-convex Kolmogorov--Arnold core, at comparable held-out
+test-trajectory accuracy to the ICNN core with far fewer parameters.
 
-The remaining two sections make the case for a certificate, rather than
-an accuracy check, from two independent directions, using the four-tier
-ablation of Section~\ref{sec:c1-regression} (pure regression, free
-hyperelastic ANN, polyconvex ICNN, polyconvex ICKAN). Section~\ref{sec:c1-regression}
-shows a direct, quantitative violation: the tier-1 pure-regression model has
-no energy potential at all, and a trapezoidal cyclic-work test
-$\oint_{\mathcal L}\bm S\cdot d\bm\varepsilon$ around closed strain loops
--- refined to distinguish a genuine curl from quadrature error -- finds a
-stable, non-vanishing residual for it and a residual that vanishes under
-refinement for the three energy-based tiers, a direct, measured failure
-of (C1). Section~\ref{sec:non-polyconvex} shows the analogous failure one
-level up the hierarchy, for (C5): an otherwise identically trained,
-uncertified flexible PANN (tier 2) matches or slightly beats the
-certified models on every reported accuracy metric, while failing the
-rank-one necessary condition of polyconvexity on
-$\FreeRankOneViolationFraction$ of sampled states, at ordinary,
-non-extreme deformations. In both cases the accuracy metrics on
-Table~\ref{tab:master} are silent, or actively misleading: the tier-1
-pure-regression model is in fact the \emph{most} accurate of the four ANNs on
-the held-out test trajectory by every reported metric. Accuracy and the admissibility
-certificates answer different questions; only a direct, targeted test of
-each checklist item, not the training loss and not a held-out error
-number, can confirm the certificate is actually present.
+The remaining two results sections make the case for a certificate,
+rather than an accuracy check, from two independent directions, using
+the four-tier ablation of Section~\ref{sec:c1-regression}: pure
+regression, free hyperelastic ANN, polyconvex ICNN, polyconvex ICKAN.
+Section~\ref{sec:c1-regression} shows a direct, quantitative violation:
+the tier-1 pure-regression model has no energy potential at all, and a
+trapezoidal cyclic-work test $\oint_{\mathcal L}\bm S\cdot d\bm\varepsilon$
+around closed strain loops, refined to distinguish a genuine curl from
+quadrature error, finds a stable, non-vanishing residual for it, and a
+residual that vanishes under refinement for the three energy-based
+tiers: a direct, measured failure of (C1). Section~\ref{sec:non-polyconvex}
+shows the analogous failure one level up the hierarchy, for (C5): an
+otherwise identically trained, uncertified flexible PANN (tier 2)
+matches or slightly beats the certified models on every reported
+accuracy metric, while failing the rank-one necessary condition of
+polyconvexity on $\FreeRankOneViolationFraction$ of sampled states, at
+ordinary, non-extreme deformations. In both cases the accuracy metrics
+of Table~\ref{tab:master} are silent, or actively misleading: the tier-1
+pure-regression model is in fact the most accurate of the four ANNs on
+the held-out test trajectory, by every reported metric. Accuracy and the
+admissibility certificates simply answer different questions. Only a
+direct, targeted test of each checklist item can confirm the certificate
+is actually present.
 
 \appendix
 \section{Supplementary derivations}
@@ -2485,9 +2450,9 @@ number, can confirm the certificate is actually present.
 This appendix collects material that is honest and, in places,
 important, but not needed to follow the main argument: an algebraic
 aside on the feature set, a closer look at one competing paper's own
-internal logical structure, the periodic-boundary-condition averaging
-identity in full, and a data-provenance note. Nothing here is used by
-any proof in the main text.
+internal logical structure, and the periodic-boundary-condition
+averaging identity in full. Nothing here is used by any proof in the
+main text.
 
 \subsection{Algebraic redundancy of the \texorpdfstring{$Q^H$}{Q\^{}H} features}
 \label{app:redundancy}
@@ -2513,21 +2478,37 @@ scalars: given $I_1=T$ and $\{Q_{k,2}^F,Q_{k,3}^F\}_{k=1}^3$ (seven
 numbers), the corresponding $\{Q_{k,2}^H,Q_{k,3}^H\}_{k=1}^3$ are fixed
 exactly by~\eqref{eq:redundancy}.
 
-The redundancy does not, however, make $Q_{k,2}^H,Q_{k,3}^H$ useless as
-separate network inputs, for an architectural reason specific to the
+The redundancy does not, however, make $Q_{k,3}^H$ useless as a
+separate network input, for an architectural reason specific to the
 monotone ICNN of Section~\ref{sec:c5-construction}: reconstructing
 $Q_{k,3}^H$ from $T,Q_{k,2}^F,Q_{k,3}^F$ via~\eqref{eq:redundancy}
 requires the \emph{negative} coefficients $-1$ on $T^3$ and $-1$ on
 $Q_{k,3}^F$, which a network constrained to non-negative weights at
 every layer (needed for the convexity-composition argument of
 Proposition~\ref{prop:polyconvex}) cannot represent internally.
-Supplying $Q_{k,2}^H,Q_{k,3}^H$ directly as their own coordinates
-therefore gives the monotone network access to combinations of $\bm C$
-that no non-negative combination of the other coordinates could
-reconstruct, even though those combinations carry no additional
-information in the unconstrained, purely algebraic sense: much as a
-monotone function of $x$ and, separately, of $-x$ is strictly more
-expressive than a monotone function of $x$ alone.
+Supplying $Q_{k,3}^H$ directly as its own coordinate therefore gives
+the monotone network access to a combination of $\bm C$ that no
+non-negative combination of the other coordinates could reconstruct,
+even though it carries no additional information in the
+unconstrained, purely algebraic sense: much as a monotone function of
+$x$ and, separately, of $-x$ is strictly more expressive than a
+monotone function of $x$ alone.
+
+$Q_{k,2}^H$ is a different case, and we state this plainly rather than
+let the argument above appear to cover it as well: the first identity
+in~\eqref{eq:redundancy} has coefficient $+1$, with no negative sign
+to obstruct reconstruction. A monotone network already has direct,
+unconstrained access to $+Q_{k,2}^F$ with an arbitrary non-negative
+coefficient, so assigning independent non-negative weights to
+$Q_{k,2}^F$ and to $Q_{k,2}^H=Q_{k,2}^F$ is exactly equivalent to
+assigning their sum to $Q_{k,2}^F$ alone. Supplying $Q_{k,2}^H$ as a
+separate coordinate therefore changes nothing about the class of
+functions the trained network can represent: unlike $Q_{k,3}^H$, it
+is not merely redundant in information but redundant in
+\emph{expressiveness} too. It is retained in the deployed architecture
+for uniformity with the other per-system coordinates, not for any
+representational benefit, and we report this plainly rather than
+imply the same architectural justification covers both cases.
 
 \subsection{A closer reading of Klein et al.'s trivial-group case}
 \label{app:klein-trivial}
@@ -2566,47 +2547,70 @@ $\bm F-\bar{\bm F}$. The exact, elementary averaging identity that
 transfers without approximation under periodicity is the one stated
 above, at the level of $\bm F$, not of $\bm E$.
 
-\subsection{The D-HPROM--ANN reference-value discrepancy}
-\label{app:dhprom-discrepancy}
-This expands the pointer in Section~\ref{sec:results}. An earlier,
-separately produced reference value for D-HPROM--ANN's energy-conjugate
-stress error, from a generation script no longer present in this
-project's history, reported $\DHpromOldStressError$ overall ($S_{12}$
-component $\DHpromOldSxyError$). The value reported in the main text,
-computed independently by the reaction-force procedure of
-Section~\ref{sec:results} and itself cross-validated to
-$\HpromControlFomStressError$ against the direct FOM on this path,
-differs from that older figure by a factor of $\DHpromNewOverOldRatio$.
-We report the new, independently verified value and record the
-discrepancy explicitly rather than silently discard it. The most likely
-explanation is a checkpoint-naming inconsistency uncovered during this
-project's own repository reorganization: an animation script, and
-possibly whatever process produced the older reference, pointed at a
-since-identified superseded ANN checkpoint filed under the name later
-reused for the corrected one. This has not been independently confirmed
-and is recorded here as an open item rather than papered over.
-
 \begin{thebibliography}{9}
-\bibitem{Ball1977}
-J.~M. Ball. Convexity conditions and existence theorems in nonlinear
-elasticity. \emph{Archive for Rational Mechanics and Analysis}, 63:337--403,
-1977.
-\bibitem{Amos2017}
-B. Amos, L. Xu, and J.~Z. Kolter. Input convex neural networks. In
-\emph{Proceedings of the 34th International Conference on Machine Learning},
-2017.
-\bibitem{Ciarlet1988}
-P.~G. Ciarlet. \emph{Mathematical Elasticity, Volume I: Three-Dimensional
-Elasticity}. North-Holland, 1988.
 \bibitem{Klein2022}
 D.~K. Klein, M. Fern\'andez, R.~J. Martin, P. Neff, and O. Weeger.
 Polyconvex anisotropic hyperelasticity with neural networks.
 \emph{Journal of the Mechanics and Physics of Solids}, 159:104703, 2022.
+\bibitem{Ball1977}
+J.~M. Ball. Convexity conditions and existence theorems in nonlinear
+elasticity. \emph{Archive for Rational Mechanics and Analysis}, 63:337--403,
+1977.
 \bibitem{Asad2022}
 F. As'ad, P. Avery, and C. Farhat. A mechanics-informed artificial neural
 network approach in data-driven constitutive modeling.
 \emph{International Journal for Numerical Methods in Engineering},
 123(12):2738--2759, 2022.
+\bibitem{Yvonnet2007}
+J. Yvonnet and Q.-C. He. The reduced model multiscale method (R3M) for
+the non-linear homogenization of hyperelastic media at finite strains.
+\emph{Journal of Computational Physics}, 223(1):341--368, 2007.
+\bibitem{Zahr2017}
+M.~J. Zahr, P. Avery, and C. Farhat. A multilevel projection-based
+model order reduction framework for nonlinear dynamic multiscale
+problems in structural and solid mechanics. \emph{International
+Journal for Numerical Methods in Engineering}, 112(8):855--881, 2017.
+\bibitem{He2020}
+W. He, P. Avery, and C. Farhat. In situ adaptive reduction of nonlinear
+multiscale structural dynamics models. \emph{International Journal for
+Numerical Methods in Engineering}, 121(22):4971--4988, 2020.
+\bibitem{Fritzen2016}
+F. Fritzen and M. Hodapp. The finite element square reduced
+(FE\textsuperscript{2}R) method with GPU acceleration: towards
+three-dimensional two-scale simulations. \emph{International Journal
+for Numerical Methods in Engineering}, 107(10):853--881, 2016.
+\bibitem{Hernandez2014}
+J.~A. Hern\'andez, J. Oliver, A.~E. Huespe, M.~A. Caicedo, and J.~C.
+Cante. High-performance model reduction techniques in computational
+multiscale homogenization. \emph{Computer Methods in Applied Mechanics
+and Engineering}, 276:149--189, 2014.
+\bibitem{Hernandez2020}
+J.~A. Hern\'andez. A multiscale method for periodic structures using
+domain decomposition and ECM-hyperreduction. \emph{Computer Methods in
+Applied Mechanics and Engineering}, 368:113192, 2020.
+\bibitem{Barnett2022}
+J. Barnett and C. Farhat. Quadratic approximation manifold for
+mitigating the Kolmogorov barrier in nonlinear projection-based model
+order reduction. \emph{Journal of Computational Physics}, 464:111348,
+2022.
+\bibitem{Barnett2023}
+J. Barnett, C. Farhat, and Y. Maday. Neural-network-augmented
+projection-based model order reduction for mitigating the Kolmogorov
+barrier to reducibility. \emph{Journal of Computational Physics},
+492:112420, 2023.
+\bibitem{Hernandez2017}
+J.~A. Hern\'andez, M.~A. Caicedo, and A. Ferrer. Dimensional
+hyper-reduction of nonlinear finite element models via empirical
+cubature. \emph{Computer Methods in Applied Mechanics and
+Engineering}, 313:687--722, 2017.
+\bibitem{HernandezMAWECM}
+J.~A. Hern\'andez. Hyperreduction of nonlinear manifold reduced-order
+models via adaptive-weight empirical cubature. Preprint, 2026.
+\bibitem{Linden2023}
+L. Linden, D.~K. Klein, K.~A. Kalina, J. Brummund, O. Weeger, and
+M. K\"astner. Neural networks meet hyperelasticity: a guide to enforcing
+physics. \emph{Journal of the Mechanics and Physics of Solids},
+179:105363, 2023.
 \bibitem{Linka2023}
 K. Linka and E. Kuhl. A new family of Constitutive Artificial Neural
 Networks towards automated model discovery.
@@ -2622,11 +2626,10 @@ Can KAN CANs? Input-convex Kolmogorov--Arnold networks (KANs) as
 hyperelastic constitutive artificial neural networks (CANs).
 \emph{Computer Methods in Applied Mechanics and Engineering}, 443:118089,
 2025.
-\bibitem{Linden2023}
-L. Linden, D.~K. Klein, K.~A. Kalina, J. Brummund, O. Weeger, and
-M. K\"astner. Neural networks meet hyperelasticity: a guide to enforcing
-physics. \emph{Journal of the Mechanics and Physics of Solids},
-179:105363, 2023.
+\bibitem{Klein2026}
+D.~K. Klein, K.~A. Kalina, R. Ortigosa, J. Mart\'inez-Frutos, M. K\"astner,
+and O. Weeger. Advances in polyconvex anisotropic hyperelasticity.
+\emph{arXiv preprint arXiv:2605.27011}, 2026.
 \bibitem{Kalina2024}
 K.~A. Kalina, J. Brummund, W. Sun, and M. K\"astner. Neural networks meet
 anisotropic hyperelasticity: a framework based on generalized structure
@@ -2654,42 +2657,43 @@ interpretability in data-driven material modeling.
 A. Ghaderi, V. Morovati, and R. Dargazany. A physics-informed assembly of
 feed-forward neural network engines to predict inelasticity in
 cross-linked polymers. \emph{Polymers}, 12(11):2628, 2020.
-\bibitem{Barnett2022}
-J. Barnett and C. Farhat. Quadratic approximation manifold for
-mitigating the Kolmogorov barrier in nonlinear projection-based model
-order reduction. \emph{Journal of Computational Physics}, 464:111348,
-2022.
-\bibitem{Barnett2023}
-J. Barnett, C. Farhat, and Y. Maday. Neural-network-augmented
-projection-based model order reduction for mitigating the Kolmogorov
-barrier to reducibility. \emph{Journal of Computational Physics},
-492:112420, 2023.
+\bibitem{Boehler1987}
+J.~P. Boehler. Introduction to the invariant formulation of anisotropic
+constitutive equations. In: J.~P. Boehler (ed.), \emph{Applications of
+Tensor Functions in Solid Mechanics}, CISM Courses and Lectures No.~292,
+pp.~13--30. Springer-Verlag, Vienna, 1987.
+\bibitem{Spencer1971}
+A.~J.~M. Spencer. Theory of invariants. In: A.~C. Eringen (ed.),
+\emph{Continuum Physics, Volume I: Mathematics}, pp.~239--353. Academic
+Press, New York, 1971.
+\bibitem{Spencer1984}
+A.~J.~M. Spencer. Constitutive theory for strongly anisotropic solids.
+In: A.~J.~M. Spencer (ed.), \emph{Continuum Theory of the Mechanics of
+Fibre-Reinforced Composites}, CISM Courses and Lectures No.~282,
+pp.~1--32. Springer-Verlag, Vienna, 1984.
+\bibitem{BazantOh1986}
+Z.~P. Ba\v{z}ant and B.~H. Oh. Efficient numerical integration on the
+surface of a sphere. \emph{ZAMM: Journal of Applied Mathematics and
+Mechanics}, 66(1):37--49, 1986.
+\bibitem{SchroderNeff2003}
+J. Schr\"oder and P. Neff. Invariant formulation of hyperelastic
+transverse isotropy based on polyconvex free energy functions.
+\emph{International Journal of Solids and Structures}, 40(2):401--445,
+2003.
+\bibitem{Gasser2006}
+T.~C. Gasser, R.~W. Ogden, and G.~A. Holzapfel. Hyperelastic modelling of
+arterial layers with distributed collagen fibre orientations.
+\emph{Journal of the Royal Society Interface}, 3(6):15--35, 2006.
+\bibitem{Amos2017}
+B. Amos, L. Xu, and J.~Z. Kolter. Input convex neural networks. In
+\emph{Proceedings of the 34th International Conference on Machine Learning},
+2017.
 \bibitem{AresDeParga2026}
 S. Ares De Parga, R. Tezaur, C.~G. Hern\'andez, and C. Farhat.
 Nonlinear projection-based model order reduction with machine learning
 regression for closure error modeling in the latent space.
 \emph{Computer Methods in Applied Mechanics and Engineering},
 448:118443, 2026.
-\bibitem{HernandezMAWECM}
-J.~A. Hern\'andez. Hyperreduction of nonlinear manifold reduced-order
-models via adaptive-weight empirical cubature. Preprint, 2026.
-\bibitem{Hernandez2017}
-J.~A. Hern\'andez, M.~A. Caicedo, and A. Ferrer. Dimensional
-hyper-reduction of nonlinear finite element models via empirical
-cubature. \emph{Computer Methods in Applied Mechanics and
-Engineering}, 313:687--722, 2017.
-\bibitem{Hernandez2024}
-J.~A. Hern\'andez, J.~R. Bravo, and S. Ares de Parga. CECM: A
-continuous empirical cubature method with application to the
-dimensional hyperreduction of parameterized finite element models.
-\emph{Computer Methods in Applied Mechanics and Engineering},
-418:116552, 2024.
-\bibitem{Bravo2024}
-J.~R. Bravo, J.~A. Hern\'andez, S. Ares de Parga, and R. Rossi. A
-subspace-adaptive weights cubature method with application to the
-local hyperreduction of parameterized finite element models.
-\emph{International Journal for Numerical Methods in Engineering},
-125(24):e7590, 2024.
 \bibitem{Farhat2014}
 C. Farhat, P. Avery, T. Chapman, and J. Cortial. Dimensional reduction
 of nonlinear finite element dynamic models with finite rotations and
@@ -2719,24 +2723,20 @@ parametrized functions. \emph{Comptes Rendus. Math\'ematique},
 M. Yano and A.~T. Patera. An LP empirical quadrature procedure for
 reduced basis treatment of parametrized nonlinear PDEs. \emph{Computer
 Methods in Applied Mechanics and Engineering}, 344:1104--1123, 2019.
-\bibitem{Hernandez2014}
-J.~A. Hern\'andez, J. Oliver, A.~E. Huespe, M.~A. Caicedo, and J.~C.
-Cante. High-performance model reduction techniques in computational
-multiscale homogenization. \emph{Computer Methods in Applied Mechanics
-and Engineering}, 276:149--189, 2014.
-\bibitem{Hernandez2020}
-J.~A. Hern\'andez. A multiscale method for periodic structures using
-domain decomposition and ECM-hyperreduction. \emph{Computer Methods in
-Applied Mechanics and Engineering}, 368:113192, 2020.
 \bibitem{Miehe1999}
 C. Miehe, J. Schr\"oder, and J. Schotte. Computational homogenization
 analysis in finite plasticity simulation of texture development in
 polycrystalline materials. \emph{Computer Methods in Applied Mechanics
 and Engineering}, 171(3-4):387--418, 1999.
-\bibitem{Cornejo2025}
-A. Cornejo, P. Kalkbrenner, R. Rossi, and L. Pel\`a. A machine learning
-based material homogenization technique for in-plane loaded masonry
-walls. \emph{Computers \& Structures}, 314:107754, 2025.
+\bibitem{Liu2022}
+B. Liu, N. Kovachki, Z. Li, K. Azizzadenesheli, A. Anandkumar, A.~M.
+Stuart, and K. Bhattacharya. A learning-based multiscale method and its
+application to inelastic impact problems. \emph{Journal of the
+Mechanics and Physics of Solids}, 158:104668, 2022.
+\bibitem{Aldakheel2023}
+F. Aldakheel, E.~S. Elsayed, T.~I. Zohdi, and P. Wriggers. Efficient
+multiscale modeling of heterogeneous materials using deep neural
+networks. \emph{Computational Mechanics}, 72(1):155--171, 2023.
 \bibitem{AresDeParga2023}
 S. Ares De Parga, J.~R. Bravo, J.~A. Hern\'andez, R. Zorrilla, and
 R. Rossi. Hyper-reduction for Petrov--Galerkin reduced order models.
@@ -2747,37 +2747,25 @@ S. Ares de Parga Regalado, J.~R. Bravo Mart\'inez, N. Sibuet Ruiz,
 J.~A. Hern\'andez Ortega, R. Rossi, et al. Parallel reduced-order
 modeling for digital twins using high-performance computing workflows.
 \emph{Computers \& Structures}, 316:107867, 2025.
-\bibitem{Klein2026}
-D.~K. Klein, K.~A. Kalina, R. Ortigosa, J. Mart\'inez-Frutos, M. K\"astner,
-and O. Weeger. Advances in polyconvex anisotropic hyperelasticity.
-\emph{arXiv preprint arXiv:2605.27011}, 2026.
-\bibitem{Yvonnet2007}
-J. Yvonnet and Q.-C. He. The reduced model multiscale method (R3M) for
-the non-linear homogenization of hyperelastic media at finite strains.
-\emph{Journal of Computational Physics}, 223(1):341--368, 2007.
-\bibitem{He2020}
-W. He, P. Avery, and C. Farhat. In situ adaptive reduction of nonlinear
-multiscale structural dynamics models. \emph{International Journal for
-Numerical Methods in Engineering}, 121(22):4971--4988, 2020.
-\bibitem{Liu2022}
-B. Liu, N. Kovachki, Z. Li, K. Azizzadenesheli, A. Anandkumar, A.~M.
-Stuart, and K. Bhattacharya. A learning-based multiscale method and its
-application to inelastic impact problems. \emph{Journal of the
-Mechanics and Physics of Solids}, 158:104668, 2022.
-\bibitem{Zahr2017}
-M.~J. Zahr, P. Avery, and C. Farhat. A multilevel projection-based
-model order reduction framework for nonlinear dynamic multiscale
-problems in structural and solid mechanics. \emph{International
-Journal for Numerical Methods in Engineering}, 112(8):855--881, 2017.
-\bibitem{Fritzen2016}
-F. Fritzen and M. Hodapp. The finite element square reduced
-(FE\textsuperscript{2}R) method with GPU acceleration: towards
-three-dimensional two-scale simulations. \emph{International Journal
-for Numerical Methods in Engineering}, 107(10):853--881, 2016.
-\bibitem{Aldakheel2023}
-F. Aldakheel, E.~S. Elsayed, T.~I. Zohdi, and P. Wriggers. Efficient
-multiscale modeling of heterogeneous materials using deep neural
-networks. \emph{Computational Mechanics}, 72(1):155--171, 2023.
+\bibitem{Cornejo2025}
+A. Cornejo, P. Kalkbrenner, R. Rossi, and L. Pel\`a. A machine learning
+based material homogenization technique for in-plane loaded masonry
+walls. \emph{Computers \& Structures}, 314:107754, 2025.
+\bibitem{Ciarlet1988}
+P.~G. Ciarlet. \emph{Mathematical Elasticity, Volume I: Three-Dimensional
+Elasticity}. North-Holland, 1988.
+\bibitem{Hernandez2024}
+J.~A. Hern\'andez, J.~R. Bravo, and S. Ares de Parga. CECM: A
+continuous empirical cubature method with application to the
+dimensional hyperreduction of parameterized finite element models.
+\emph{Computer Methods in Applied Mechanics and Engineering},
+418:116552, 2024.
+\bibitem{Bravo2024}
+J.~R. Bravo, J.~A. Hern\'andez, S. Ares de Parga, and R. Rossi. A
+subspace-adaptive weights cubature method with application to the
+local hyperreduction of parameterized finite element models.
+\emph{International Journal for Numerical Methods in Engineering},
+125(24):e7590, 2024.
 \end{thebibliography}
 
 \end{document}

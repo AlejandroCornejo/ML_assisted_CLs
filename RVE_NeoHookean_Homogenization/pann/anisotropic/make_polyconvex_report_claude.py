@@ -132,7 +132,7 @@ def main() -> None:
         loops = c1_result["cyclic_work_per_model_per_loop"]
         loop_key_to_macro = {
             "small_normal_square": "SmallSquare",
-            "large_normal_square": "LargeSquare",
+            "origin_ellipse": "Ellipse",
             "shear_loop": "Shear",
             "mixed_triangle": "Triangle",
         }
