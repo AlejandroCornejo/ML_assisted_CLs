@@ -170,7 +170,8 @@ def consistent_edge_force(coords: np.ndarray, right_nodes: list[int], direction=
 
 
 def run_newton(which: str, nx: int = 10, ny: int = 10, verbose: bool = True, diagnose: bool = False,
-               use_line_search: bool = False):
+               use_line_search: bool = False, save_npz: bool = True, force_continue: bool = False,
+               name_suffix: str = ""):
     mp, coords, tris, left_nodes, right_nodes = build_model_part(nx, ny)
     n_dof, eq_map, ta = fom.SetUpDofEquationIdsAndDisplacementAdaptor(mp)
 
@@ -193,6 +194,8 @@ def run_newton(which: str, nx: int = 10, ny: int = 10, verbose: bool = True, dia
     u = np.zeros(n_dof)
     step_log = []
     residual_histories = {}
+    u_step1 = None
+    converged_step1 = False
     for step in range(1, N_STEPS + 1):
         load_factor = TOTAL_FORCE_FINAL * step / N_STEPS
         f_ext = f_unit_eq * load_factor
@@ -249,6 +252,10 @@ def run_newton(which: str, nx: int = 10, ny: int = 10, verbose: bool = True, dia
 
         residual_histories[step] = np.array(res_history)
 
+        if step == 1:
+            u_step1 = u.copy()
+            converged_step1 = converged
+
         if not converged and diagnose:
             _rank_one_check(assembler, which)
 
@@ -256,13 +263,16 @@ def run_newton(which: str, nx: int = 10, ny: int = 10, verbose: bool = True, dia
         if verbose:
             tag = "OK" if converged else "**DID NOT CONVERGE**"
             print(f"  [{which}] step {step:2d}  load={load_factor:.3e}  iters={n_iter:2d}  {tag}")
-        if not converged:
+        if not converged and not force_continue:
             break
 
     fom.SetDisplacementFromEquationVector(u, eq_map, ta)
     e_voigt, s_voigt = assembler.ComputeStrainStressOnly(u)
-    e_flat = e_voigt.reshape(-1, 3)
-    s_flat = s_voigt.reshape(-1, 3)
+    # ComputeStrainStressOnly writes into the assembler's own reusable buffers and
+    # returns views into them, not copies -- the later step-1 call below would
+    # otherwise silently overwrite this "final state" data before it is saved.
+    e_flat = e_voigt.reshape(-1, 3).copy()
+    s_flat = s_voigt.reshape(-1, 3).copy()
 
     assembler.Assemble(u)  # repopulate assembler._F at the reported (final/stalled) state
     rank_one_samples = _rank_one_check(assembler, which) if diagnose else np.zeros(0)
@@ -275,9 +285,18 @@ def run_newton(which: str, nx: int = 10, ny: int = 10, verbose: bool = True, dia
 
     fully_converged = all(s["converged"] for s in step_log) and len(step_log) == N_STEPS
 
+    # Step-1 (5% of final load) snapshot, captured for every model regardless of
+    # whether the run continued past it -- lets non-converged models (which stop
+    # here) be compared, at the same load level, against the converged reference.
+    e_voigt_1, s_voigt_1 = assembler.ComputeStrainStressOnly(u_step1)
+    e_flat_1 = e_voigt_1.reshape(-1, 3).copy()
+    s_flat_1 = s_voigt_1.reshape(-1, 3).copy()
+    u_nodal_step1 = np.stack([u_step1[eq_map[:, 0]], u_step1[eq_map[:, 1]]], axis=1)
+    tip_uy_step1 = u_step1[eq_map[right_nodes, 1]]
+
     if save_npz:
         np.savez(
-            f"cook_results_{which}_claude.npz",
+            f"cook_results_{which}{name_suffix}_claude.npz",
             coords=coords, tris=tris, u_nodal=u_nodal,
             e_gp=e_flat, s_gp=s_flat,
             iters_per_step=np.array([s["iters"] for s in step_log]),
@@ -287,6 +306,11 @@ def run_newton(which: str, nx: int = 10, ny: int = 10, verbose: bool = True, dia
             residual_history_last=residual_histories.get(step_log[-1]["step"], np.zeros(0)),
             rank_one_samples=rank_one_samples,
             fully_converged=fully_converged,
+            u_nodal_step1=u_nodal_step1,
+            tip_uy_step1=tip_uy_step1,
+            e_gp_step1=e_flat_1,
+            s_gp_step1=s_flat_1,
+            converged_step1=converged_step1,
         )
 
     return {
@@ -303,9 +327,9 @@ def run_newton(which: str, nx: int = 10, ny: int = 10, verbose: bool = True, dia
 
 if __name__ == "__main__":
     results = {}
-    for which in ("certified", "free", "ickan"):
+    for which in ("certified", "free", "ickan", "regression"):
         print(f"=== {which} ===")
-        results[which] = run_newton(which, diagnose=True)
+        results[which] = run_newton(which, nx=16, ny=16, diagnose=True, use_line_search=True, save_npz=True)
         print()
 
     print("=== summary ===")
