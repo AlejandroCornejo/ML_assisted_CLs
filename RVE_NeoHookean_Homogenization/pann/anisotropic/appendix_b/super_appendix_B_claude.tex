@@ -138,7 +138,11 @@ Cap. & Qu\'e demuestra, desde cero\\
 10 & Qu\'e es un ICNN; la regla de composici\'on convexa-y-no-decreciente; por qu\'e todos los pesos deben ser $\geq0$; casi toda la Proposici\'on de polyconvexidad.\\
 11 & Por qu\'e $\bm\sigma(\bm0)=\bm0$ exactamente: los quince gradientes isotr\'opicos, el escalar $r$, verificado end-to-end con la red real.\\
 12 & ICKAN: splines en vez de pesos; puntos de control con dos sumas acumuladas; por qu\'e todas las demostraciones se trasladan sin cambios.\\
-13+ & (en construcci\'on) Los resultados num\'ericos del paper.\\
+13 & Un FE$^2$ genuino en Cook: por qu\'e D-HPROM--ANN y HPROM--ANN se
+atascaban aunque fueran precisos, y c\'omo se resolvi\'o; convexidad
+rank-one sin necesitar energ\'ia.\\
+14+ & (en construcci\'on) El resto de los resultados num\'ericos del
+paper, en orden.\\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -3044,6 +3048,306 @@ Ejemplo~\ref{ex:appB-ickan-edge}, calcula t\'u mismo las primeras y
 segundas diferencias (resta consecutiva) y confirma los valores
 reportados. Cuando est\'es listo, seguimos con el Cap\'itulo 13: los
 resultados num\'ericos del paper, explicados uno por uno.
+
+\section{Cook con un FE$^2$ de verdad: por qu\'e el ROM se atascaba, y c\'omo se resolvi\'o}
+\label{ch:cook-fe2}
+
+Este cap\'itulo empieza la promesa del mapa de cap\'itulos: los
+resultados num\'ericos del paper, explicados uno por uno. En vez de
+seguir el orden exacto del paper, empezamos por el m\'as reciente y, la
+verdad, el m\'as confuso de resolver: por qu\'e dos maneras de aproximar
+la misma respuesta del RVE, entrenadas con los mismos datos, se
+comportan de forma completamente distinta dentro de un problema
+estructural real, cuando en la comparaci\'on directa (Secci\'on 6.3 del
+paper, la ``trayectoria de prueba'' held-out) son casi indistinguibles.
+
+\subsection{Tres formas de responder la misma pregunta}
+\label{sec:appB-three-ways}
+
+Todo este proyecto responde, de tres maneras distintas, la misma
+pregunta: dada una deformaci\'on macrosc\'opica $\bm\varepsilon$,
+¿cu\'al es el esfuerzo homogeneizado $\bm S(\bm\varepsilon)$ que produce
+el RVE?
+
+\begin{itemize}
+\item \textbf{FOM} (\emph{full-order model}): resolver de verdad la
+malla completa del RVE, $990$ elementos, imponiendo $\bm\varepsilon$
+como condici\'on de frontera y resolviendo el equilibrio con
+Newton--Raphson. Es la respuesta exacta (hasta el error de discretizaci\'on
+de la malla), y tambi\'en la m\'as cara: una sola consulta, en la
+m\'aquina de este proyecto, cuesta entre $0.4$ y $1.2$ segundos.
+\item \textbf{PANN} (los cuatro niveles de los Cap\'itulos~\ref{ch:icnn}
+en adelante): una red neuronal entrenada directamente sobre
+$\bm\varepsilon\mapsto\bm S$, usando miles de soluciones del FOM como
+datos de entrenamiento. Una vez entrenada, evaluarla es casi gratis: ni
+malla ni Newton, solo un forward pass.
+\item \textbf{PROM/HPROM} (D-HPROM--ANN y HPROM--ANN): un punto medio
+entre los dos anteriores. No se entrena $\bm\varepsilon\mapsto\bm S$
+directamente; se entrena un decodificador que reconstruye el
+\textbf{estado interno reducido} del RVE (un vector $\bm q$ de solo $3$
+n\'umeros, en vez de los miles de grados de libertad de la malla
+completa), y \emph{despu\'es} se recalcula el esfuerzo evaluando la ley
+de Neo--Hookean real, la misma del FOM, en unos pocos puntos de Gauss
+seleccionados. D-HPROM--ANN usa la predicci\'on del decodificador
+directamente; HPROM--ANN, adem\'as, la corrige con un Newton interno,
+m\'as caro pero m\'as fiel.
+\end{itemize}
+
+\begin{takeaway}
+La diferencia clave: PANN aprende la \textbf{respuesta completa}
+($\bm\varepsilon\mapsto\bm S$ de un solo salto); PROM/HPROM aprende un
+\textbf{atajo dentro del mismo modelo f\'isico}, y sigue evaluando la
+ley real del material en el camino. Por eso PROM/HPROM es m\'as caro que
+PANN (todav\'ia hace algo del trabajo del FOM en cada consulta) pero
+much\'isimo m\'as barato que el FOM completo.
+\end{takeaway}
+
+Para ubicarlo con n\'umeros concretos: en el problema de Cook a
+resoluci\'on $n_x=8$ (el que usa este cap\'itulo), la malla
+macrosc\'opica tiene $128$ elementos y $384$ puntos de Gauss. Si
+quisi\'eramos, de verdad, un FE$^2$ sin ning\'un atajo, en
+\textbf{cada uno} de esos $384$ puntos, y en \textbf{cada} iteraci\'on
+de Newton del problema macrosc\'opico, resolver\'iamos el RVE completo
+de $990$ elementos desde cero. Con el costo medido arriba, y suponiendo
+(de forma conservadora, por analog\'ia con lo que de verdad se observa
+abajo) tres iteraciones de Newton por paso de carga y $20$ pasos, m\'as
+seis evaluaciones extra por punto para la tangente por diferencias
+finitas (el FOM no tiene, en este proyecto, una tangente anal\'itica
+lista para usar), eso son del orden de
+$384\times20\times3\times7\approx1.6\times10^5$ resoluciones del FOM
+completo: del orden de $31$ horas de c\'omputo, solo para esta malla, ni
+la m\'as fina que usa el paper. Ese es exactamente el costo que
+D-HPROM--ANN y HPROM--ANN evitan, sin dejar de resolver algo real en
+cada punto.
+
+\subsection{La pregunta que no ten\'ia sentido}
+
+En la trayectoria de prueba held-out (Secci\'on 6.3 del paper),
+D-HPROM--ANN y HPROM--ANN predicen el esfuerzo con un error relativo de
+apenas $0.17$--$0.20\%$: tan bueno como el de los n\'ucleos certificados
+(ICNN, ICKAN), o incluso mejor. La intuici\'on razonable, entonces, es
+que si son igual de precisos ah\'i, deber\'ian comportarse igual de bien
+dentro de Cook. Y no fue lo que pas\'o: al conectarlos como material
+real del problema de Cook, con la precisi\'on est\'andar de $32$ bits
+(float32, la misma que usa el resto del proyecto), \textbf{ambos se
+atascaban en cada uno de los $20$ pasos de carga}, sin converger nunca
+--- de manera parecida a como, en el problema de Cook original
+(Secci\'on 6.6 del paper), se atascan los modelos sin certificado (el
+regresivo puro y el hiperel\'astico libre): ni diverg\'ian, pero tampoco
+avanzaban.
+
+Esto s\'i que no cuadraba. Los modelos sin certificado fallan por una
+raz\'on que ya conocemos de cap\'itulos anteriores: no hay garant\'ia de
+convexidad rank-one, as\'i que Newton puede, en principio, encontrarse
+con un estado localmente mal condicionado. Pero D-HPROM--ANN y
+HPROM--ANN no aprenden una energ\'ia sin certificar: en cada punto de
+Gauss reconstruido, eval\'uan la ley de Neo--Hookean \textbf{real}, la
+misma del FOM, que s\'i es polyconvexa por construcci\'on cl\'asica. No
+deber\'ia haber, en principio, ning\'un mecanismo parecido al de los
+Cap\'itulos anteriores para que esto fallara.
+
+\subsection{Cuatro sospechosos, revisados uno por uno}
+\label{sec:appB-four-suspects}
+
+Antes de aceptar cualquier explicaci\'on, se revisaron cuatro candidatas
+concretas, en este orden, cada una descartada con una prueba directa
+antes de pasar a la siguiente:
+
+\begin{enumerate}
+\item \textbf{¿Es la tangente?} D-HPROM--ANN y HPROM--ANN necesitan una
+tangente consistente (no aprendida, derivada a mano v\'ia la regla de la
+cadena y, para HPROM--ANN, el teorema de la funci\'on impl\'icita) para
+poder usarse dentro de un Newton estructural. Se prob\'o tambi\'en con
+una tangente por diferencias finitas, m\'as lenta pero sin ninguna
+posibilidad de un error de deducci\'on. El resultado: exactamente el
+mismo atascamiento con ambas tangentes. Descartado: no es un error en la
+tangente.
+\item \textbf{¿Se pierde la elipticidad local?} En el estado final
+atascado, ¿la matriz tangente reducida $\mathbf K_r$ (la que usa el
+Newton interno para dar su paso) tiene alg\'un valor propio negativo?
+No: todos son positivos, y la matriz est\'a razonablemente bien
+condicionada. Descartado.
+\item \textbf{¿Falla la convexidad rank-one en el estado final?} Se
+repite, por primera vez para estos dos modelos, el mismo experimento del
+Cap\'itulo de convexidad: $20$ direcciones aleatorias de rango uno, en
+cada uno de los $384$ puntos de Gauss, evaluadas en el estado final (el
+atascado). Resultado: cero violaciones. Descartado, aparentemente.
+\item \textbf{¿Y si el problema est\'a en el camino, no en el destino?}
+Aqu\'i es donde qued\'o, por un momento, una duda genuina: revisar solo
+el \emph{mejor} estado de cada paso (el de menor residuo) podr\'ia estar
+escondiendo un problema que s\'olo aparece en alg\'un punto intermedio
+del propio Newton, nunca reportado porque no es el mejor. Se repiti\'o
+el mismo experimento de convexidad, esta vez en \textbf{cada} iteraci\'on
+de una trayectoria completa de Newton, no solo en la mejor. Resultado:
+cero violaciones, otra vez, en las $15$ iteraciones completas.
+\end{enumerate}
+
+\begin{takeaway}
+Cuatro sospechosos razonables, cuatro veces descartados con una prueba
+directa, no con un argumento de plausibilidad. Esto es exactamente lo
+que hace falta antes de aceptar cualquier explicaci\'on: si alguna de
+las cuatro pruebas hubiera fallado, esa habr\'ia sido la respuesta. Como
+las cuatro se descartaron, hac\'ia falta seguir buscando.
+\end{takeaway}
+
+\subsection{El verdadero culpable: la resta que se come los d\'igitos}
+\label{sec:appB-cancellation}
+
+Ambos modelos reconstruyen el estado secundario del RVE (la parte del
+estado interno que el decodificador aprende, m\'as all\'a de los $3$
+n\'umeros primarios) con una f\'ormula de la forma
+\[
+ \bm q_s = \mathcal N(\bm q) - \mathcal N(\bm 0) - \bm J_{\mathcal
+ N}(\bm 0)\,\bm q,
+\]
+es decir: la salida cruda del decodificador $\mathcal N$, \textbf{menos}
+su propio valor en $\bm q=\bm0$, \textbf{menos} su propia aproximaci\'on
+lineal (su jacobiano en $\bm q=\bm0$, multiplicado por $\bm q$). La
+raz\'on de dise\~no es razonable: la parte \emph{lineal} de la
+reconstrucci\'on ya la carga otro t\'ermino del modelo (la base
+$\mathbf V\bm q$), as\'i que $\mathcal N$ solo necesita aportar lo que
+sea genuinamente \textbf{no lineal}. El problema aparece cuando $\bm q$
+es peque\~no, exactamente lo que pasa en Cook.
+
+\begin{ejemplo}[Una resta que destruye la informaci\'on, con n\'umeros ilustrativos]
+Supongamos, de forma puramente ilustrativa (no son los n\'umeros reales
+de la red entrenada, pero muestran el mecanismo exacto), que para un
+cierto $\bm q$ peque\~no,
+\[
+ \mathcal N(\bm q) = 1.0000123,\qquad \mathcal N(\bm0)+\bm J_{\mathcal
+ N}(\bm 0)\bm q = 1.0000098.
+\]
+La resta correcta es $\bm q_s=0.0000025$: un n\'umero peque\~no,
+pero perfectamente v\'alido, la parte no lineal genuina que el modelo
+necesita. El problema es que un n\'umero de $32$ bits (float32) guarda
+solo, aproximadamente, $7$ cifras decimales significativas. Los dos
+n\'umeros de arriba, \textbf{antes} de restar, ya usaron esas $7$ cifras
+para representar el ``$1.000\ldots$'': la informaci\'on que distingue
+$0000123$ de $0000098$ vive justo en el l\'imite de lo que el formato
+puede guardar con confianza. Si el redondeo de float32 afecta, aunque
+sea levemente, alguna de las \'ultimas cifras de cualquiera de los dos
+n\'umeros grandes, el resultado de la resta, que depende \textbf{por
+completo} de esas \'ultimas cifras, puede cambiar en un $10\%$, un
+$50\%$, o m\'as, de su valor correcto. Con $64$ bits (float64, m\'as del
+doble de cifras significativas) el mismo redondeo existe, pero muy por
+debajo de las cifras que de verdad importan para la resta: el resultado
+es esencialmente exacto.
+\end{ejemplo}
+
+Las deformaciones que de verdad visita Cook son pequ\~nas
+($|\bm\varepsilon|\sim10^{-3}$--$10^{-2}$, un panel que se dobla pero no
+se estira violentamente), as\'i que el $\bm q$ correspondiente tambi\'en
+es peque\~no, y la resta de arriba cae exactamente en el r\'egimen del
+ejemplo: dos n\'umeros grandes y casi iguales, cuya diferencia peque\~na
+es justamente lo \'unico que le importa al modelo. En las verificaciones
+originales del decodificador (Cap\'itulo~\ref{ch:ickan} y anteriores),
+las deformaciones usadas para comprobar la precisi\'on eran, en su
+mayor\'ia, moderadas o grandes: ah\'i $\bm q$ no es peque\~no, la resta
+no es delicada, y float32 funciona perfectamente. El problema estaba
+escondido, no porque el m\'etodo estuviera mal derivado, sino porque
+nunca se hab\'ia puesto a prueba, con este mecanismo espec\'ifico, en el
+r\'egimen de deformaciones peque\~nas que Cook s\'i visita.
+
+\begin{takeaway}
+No es un error de l\'ogica ni de f\'ormula: la f\'ormula de reconstrucci\'on
+es correcta, y la tangente consistente que se deriv\'o para ella
+tambi\'en. Es un requisito de precisi\'on aritm\'etica que solo se
+manifiesta en un r\'egimen de deformaci\'on espec\'ifico (peque\~na), no
+visitado por las verificaciones que se hab\'ian hecho hasta ese momento.
+\end{takeaway}
+
+\subsection{La soluci\'on, y por qu\'e no cambia nada del modelo}
+
+La prueba decisiva: reconstruir, con el mismo modelo entrenado (los
+mismos pesos, la misma base, absolutamente nada reentrenado), toda la
+aritm\'etica en l\'inea (\emph{online}) en $64$ bits en vez de $32$.
+Resultado: D-HPROM--ANN y HPROM--ANN convergen, ambos, en exactamente
+tres iteraciones de Newton, en cada uno de los $20$ pasos de carga ---
+lo mismo que logran los n\'ucleos certificados, y una confirmaci\'on,
+por primera vez de forma gen\'uinamente multiescala (resolviendo algo
+real en cada punto de Gauss, no solo evaluando una red ya entrenada),
+de que la ruta PROM/HPROM es tan robusta frente a Newton como la ruta
+certificada.
+
+Vale la pena remarcar qu\'e \textbf{no} cambi\'o: ni los pesos de la
+red, ni la base reducida, ni el decodificador, ni ninguna elecci\'on de
+modelado. Lo \'unico que cambi\'o es en qu\'e formato num\'erico se hace
+la aritm\'etica de la reconstrucci\'on, exactamente como cambiar de
+calculadora de $7$ d\'igitos a una de $15$ no cambia la operaci\'on que
+se est\'a calculando, solo cu\'antas cifras sobreviven en el camino.
+
+\subsection{Un bono: revisando la convexidad rank-one sin necesitar energ\'ia}
+
+La Tabla 8 del paper (el chequeo de convexidad rank-one en los estados
+reales que visita Cook) no pod\'ia revisar el modelo de regresi\'on pura
+(tier 1): ese modelo no tiene ninguna energ\'ia de la cual calcular la
+segunda derivada. Result\'o que D-HPROM--ANN y HPROM--ANN tienen
+exactamente el mismo problema: reconstruyen esfuerzo directamente, sin
+pasar por una energ\'ia.
+
+La soluci\'on aprovecha algo especial de la perturbaci\'on de rango uno
+que ya usa el chequeo: si $\bm F(t)=\bm F_0+t\,\bm a\otimes\bm b$ (con
+$\bm a,\bm b$ vectores unitarios), entonces
+$\bm C(t)=\bm F(t)^T\bm F(t)$ es \textbf{exactamente} cuadr\'atica en
+$t$ (no hay t\'erminos de orden superior, es un polinomio de grado $2$,
+punto). Eso significa que la primera y la segunda derivada de la
+deformaci\'on de Green--Lagrange $\bm E(t)$ en $t=0$ son f\'ormulas
+cerradas, calculables sin ning\'un l\'imite ni diferencia finita:
+$\dot{\bm E}=\tfrac12(\bm F_0^T\bm A+\bm A^T\bm F_0)$ y
+$\ddot{\bm E}=\bm A^T\bm A$ (con $\bm A:=\bm a\otimes\bm b$). Aplicando
+la regla de la cadena dos veces a $\bm S(\bm E(t))\cdot\dot{\bm E}(t)$
+se obtiene
+\[
+ \left.\frac{d^2}{dt^2}\right|_{t=0}\!\!\big(\text{trabajo a lo largo del camino}\big)=\dot{\bm E}\cdot\mathbb C_0\cdot\dot{\bm E}+\bm S_0\cdot\ddot{\bm E},
+\]
+que solo necesita el esfuerzo $\bm S_0$ y la tangente $\mathbb C_0$ en
+el estado base: exactamente lo que \textbf{todo} modelo de este
+proyecto ya sabe devolver, con o sin energ\'ia. Verificada contra el
+m\'etodo original (diferencias finitas sobre la energ\'ia real, para
+los modelos que s\'i la tienen), esta f\'ormula coincide a precisi\'on
+de m\'aquina. Con ella, por primera vez, se pudo revisar rank-one para
+los seis modelos del proyecto a la vez: certificado y ICKAN, cero
+violaciones (como siempre); regresi\'on, libre, D-HPROM--ANN y
+HPROM--ANN, entre $7\%$ y $30\%$ de violaciones en una muestra sint\'etica
+amplia, pero cero violaciones en los estados reales que Cook visita ---
+la misma conclusi\'on honesta de siempre: una tasa de violaci\'on global
+es una propiedad real del modelo, pero que no aparezca en un problema
+espec\'ifico no lo certifica en general, solo descarta ese mecanismo
+para ese problema en particular.
+
+\subsection{Resumen de este cap\'itulo}
+
+\begin{takeaway}
+\begin{itemize}
+\item PANN, PROM/HPROM y FOM responden la misma pregunta con tres
+costos y tres niveles de ``atajo'' distintos; PROM/HPROM sigue
+evaluando la ley real del material, PANN no.
+\item Precisi\'on igual de buena en la trayectoria held-out no implica
+robustez igual dentro de un Newton estructural: son preguntas distintas,
+y hace falta probar la segunda directamente, no inferirla de la primera.
+\item Cuatro sospechosos (tangente, elipticidad local, rank-one en el
+estado final, rank-one en toda la trayectoria) se descartaron uno por
+uno con pruebas directas antes de encontrar la causa real.
+\item La causa real: una resta de reconstrucci\'on ($\mathcal N(\bm q)$
+menos su propia aproximaci\'on lineal en $\bm q=\bm0$) que, para el
+$\bm q$ peque\~no que Cook produce, resta dos n\'umeros casi iguales y
+pierde casi toda su precisi\'on en float32. No visitado por las
+verificaciones anteriores, hechas a deformaciones m\'as grandes.
+\item La soluci\'on (hacer esa aritm\'etica en float64) no cambia
+ning\'un peso ni ninguna elecci\'on de modelado: solo cu\'antas cifras
+sobreviven la resta.
+\item Bono: una f\'ormula de curvatura rank-one que solo necesita
+esfuerzo y tangente, no energ\'ia, extiende el chequeo a los tres
+modelos que antes no se pod\'ian revisar as\'i.
+\end{itemize}
+\end{takeaway}
+
+\bigskip
+\noindent\textbf{Antes de seguir:} con el ejemplo num\'erico de la
+Secci\'on~\ref{sec:appB-cancellation}, repite la resta guardando cada
+n\'umero a solo $5$ cifras decimales en vez de $7$, y compara qu\'e tan
+distinto sale $\bm q_s$. Cuando est\'es listo, seguimos con el resto de
+los resultados num\'ericos del paper, en orden.
 
 \begin{thebibliography}{99}
 
