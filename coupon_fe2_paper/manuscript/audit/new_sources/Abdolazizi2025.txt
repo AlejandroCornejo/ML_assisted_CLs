@@ -1,0 +1,1946 @@
+                                                        J. Mech. Phys. Solids 203 (2025) 106212
+
+
+                                                        Contents lists available at ScienceDirect
+
+
+                                  Journal of the Mechanics and Physics of Solids
+                                                journal homepage: www.elsevier.com/locate/jmps
+
+
+
+
+Constitutive Kolmogorov–Arnold Networks (CKANs): Combining
+accuracy and interpretability in data-driven material modeling
+Kian P. Abdolazizi a , Roland C. Aydin a,b , Christian J. Cyron a,b                                        ,∗,
+
+Kevin Linka a ,∗
+a Institute for Continuum and Material Mechanics, Hamburg University of Technology, Eißendorfer Straße 42, 21073 Hamburg, Germany
+b Institute of Material Systems Modeling, Helmholtz-Zentrum Hereon, Max–Planck-Straße 1, 21502 Geesthacht, Germany
+
+
+
+
+ARTICLE               INFO                            ABSTRACT
+
+Keywords:                                             Hybrid constitutive modeling integrates two complementary approaches for describing and pre-
+Kolmogorov–Arnold Networks                            dicting a material’s mechanical behavior: purely data-driven black-box methods and physically
+Data-driven mechanics                                 constrained, theory-based models. While black-box methods offer high accuracy, they often
+Physics-informed machine learning
+                                                      lack interpretability and extrapolability. Conversely, physics-based models provide theoretical
+Constitutive Artificial Neural Networks
+                                                      insight and generalizability but may not capture complex behaviors with the same accuracy.
+Soft materials
+Symbolic regression
+                                                      Traditionally, hybrid modeling has required a trade-off between these aspects. In this paper,
+Interpretable machine learning                        we show how recent advances in symbolic machine learning — specifically Kolmogorov–Arnold
+                                                      Networks (KANs) — help to overcome this limitation. We introduce Constitutive Kolmogorov–
+                                                      Arnold Networks (CKANs) as a new class of hybrid constitutive models. By incorporating a
+                                                      post-processing symbolification step, CKANs combine the predictive accuracy of data-driven
+                                                      models with the interpretability and extrapolation capabilities of symbolic expressions, bridging
+                                                      the gap between machine learning and physical modeling.
+
+
+
+
+1. Introduction
+
+    To describe the mechanical behavior of a material — specifically, the relationship between mechanical stress and strain — a
+constitutive model is required. Developing constitutive models that are accurate, predictive, and interpretable remains a persistent
+challenge. Historically, these models have primarily consisted of manually derived symbolic expressions that define functions or
+functionals mapping stress to strain, or vice versa (Treloar, 1944a; Rivlin and Saunders, 1951; Ogden, 1972; Fung, 1981; Holzapfel
+et al., 2000; Ehret and Itskov, 2007). However, this approach has three significant shortcomings. First, manually deriving symbolic
+expressions is both complex and time-consuming. Second, the limited complexity of manually tractable expressions often fails to
+capture the intricate behavior of materials. Third, while these symbolic expressions can describe known materials, they generally
+struggle to predict the behavior of new materials.
+    To overcome these shortcomings of traditional constitutive modeling, data-driven methods have attracted increasing attention
+over the last decade. The distance-minimizing method (Kirchdoerfer and Ortiz, 2016; Carrara et al., 2020), black-box neural
+networks (Ghaboussi et al., 1991; Hashash et al., 2004) or methods based on spline interpolations (Sussman and Bathe, 2009; Latorre
+and Montáns, 2013, 2014; Crespo et al., 2017; Dal et al., 2023; Wiesheier et al., 2024) were suggested. They overcome the need
+for manual derivation of symbolic equations. However, such purely data-driven approaches have great difficulties in extrapolating
+beyond known material data or predicting the behavior of new materials. Moreover, they are typically not directly interpretable.
+
+
+  ∗ Corresponding authors.
+     E-mail addresses: christian.cyron@hereon.de (C.J. Cyron), kevin.linka@tuhh.de (K. Linka).
+
+https://doi.org/10.1016/j.jmps.2025.106212
+Received 27 February 2025; Received in revised form 7 May 2025; Accepted 21 May 2025
+Available online 11 June 2025
+0022-5096/© 2025 The Authors.           Published by Elsevier Ltd.                   This is an open access article under the CC BY license
+(http://creativecommons.org/licenses/by/4.0/).
+K.P. Abdolazizi et al.                                                                             Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+Fig. 1. Constitutive Kolmogorov-Arnold Networks (CKANs). Given experimental stretch 𝜆 and stress 𝑃 data and potentially also non-mechanical data 𝒇 (such
+as microstructural imaging data or information on materials processing), a CKAN learns the strain energy function 𝛹 of a hyperelastic material. It inherently
+satisfies essential mathematical or physical requirements, such as objectivity, symmetry properties, or thermodynamic consistency. Its activation functions are
+univariate (partially monotonic) splines adapting during training. Combined with sparsification techniques, this leads to an accurate and efficient model. Finally,
+the activation functions are symbolized, yielding an interpretable and compact symbolic expression for the strain energy function 𝛹 .
+
+
+
+
+This lack of interpretability limits the applicability in particular in safety-critical areas where it is crucial to understand the precise
+nature of an applied model and to prove also certain bounds within which its output will remain under certain conditions to prevent
+situations where a model failure could cause major damage (Goldberg et al., 2024).
+    Therefore, hybrid constitutive models were recently introduced to bridge the gap between theory-based symbolic models and
+data-driven approaches (Fuhg et al., 2024a). These models often embed domain knowledge into machine learning (ML) frameworks
+using physics-based loss functions or hard constraints. Examples include Physics-Augmented Neural Networks (PANNs), which
+integrate hyperelastic constraints into neural architectures (Linden et al., 2023), neural ordinary differential equations that enforce
+physical plausibility (Taç et al., 2023), and models explicitly designed to ensure polyconvexity (As’ad et al., 2022). Constitutive
+Artificial Neural Networks (CANNs) further expand the scope of data-driven constitutive modeling by incorporating mechanical and
+non-mechanical inputs (Linka et al., 2021; Abdolazizi et al., 2023). Hybrid constitutive models offer several key advantages. First,
+like all data-driven models, they eliminate the need for manual model derivation. Second, their flexible architectures allow them
+to accurately capture highly complex material behavior, given sufficient data is available. Third, integrating theoretical principles
+improves extrapolation capabilities significantly compared to classical black-box models. Fourth, certain hybrid models, such as
+CANNs (Linka et al., 2022), can leverage non-mechanical data — such as microstructural imaging or processing parameters — to
+predict the behavior of novel materials. Despite these strengths, hybrid constitutive models still face a critical limitation. Although
+embedding physical knowledge makes them more transparent than purely data-driven black-box models, they often retain large,
+uninterpretable parts, such as deep neural networks. This residual opacity remains a significant drawback, especially in high-stakes
+fields such as biomedical and aerospace engineering, where reliability and traceability are crucial (Goldberg et al., 2024).
+    To address this challenge, a complementary trend has focused on interpretable data-driven modeling, aiming to derive
+constitutive laws directly from experimental data. One approach combines large libraries of physics-inspired building blocks
+with sparse regression to identify relevant terms efficiently (Flaschel et al., 2021). Furthermore, advances in sparsification and
+symbolic regression have been crucial for developing interpretable and efficient models. Recent contributions have established
+comprehensive frameworks for sparsification in data-driven mechanics (Brunton et al., 2016; Fuhg et al., 2024c). Another strategy
+employs specialized neural networks that embed fundamental constitutive structures (Linka and Kuhl, 2023; Holthusen et al.,
+2024; Pierre et al., 2023; McCulloch et al., 2024; Holthusen et al., 2025), enabling the automatic selection of dominant terms.
+Additionally, symbolic regression, particularly through genetic programming, has gained traction for generating concise, human-
+readable equations (Wang et al., 2019; Abdusalamov et al., 2023). While these methods enhance model interpretability, they come
+with drawbacks. Limited expressiveness can hinder their ability to capture complex material behavior, while high computational
+costs and sensitivity to data quality pose significant challenges.
+    This paper aims to merge the strengths of hybrid constitutive models, such as Constitutive Artificial Neural Networks (CANNs),
+with the benefits of interpretable symbolic data-driven methods. To achieve this, we employ Kolmogorov–Arnold Networks (KANs),
+which bridge the gap between purely data-driven approaches and symbolic interpretation by enabling the extraction of interpretable
+features, modular structures, and closed-form expressions (Liu et al., 2024b). KANs leverage the Kolmogorov–Arnold representation
+theorem, which states that any continuous multivariate function can be represented as a composition of univariate functions and
+addition. This property makes KANs universal approximators with inherently interpretable architectures. Recent applications of
+KANs include physics-informed learning of partial differential equations (Wang et al., 2024; Shukla et al., 2024; Howard et al.,
+2024) and surrogate modeling in multiscale simulations (Le Clézio et al., 2024). Because KANs provide functionally simple yet
+expressive representations of complex nonlinear relationships (Liu et al., 2024a), they are particularly well-suited for discovering
+
+                                                                                2
+K.P. Abdolazizi et al.                                                                                    Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+constitutive laws. Building on this foundation, we introduce a novel framework that merges the symbolic capabilities of KANs with
+the flexibility of CANNs, addressing the longstanding trade-off between interpretability and performance.
+   In this paper, we introduce Constitutive Kolmogorov–Arnold Networks (CKANs), a novel approach to data-driven constitutive
+modeling that leverages Kolmogorov–Arnold Networks (KANs) within a hybrid modeling framework. By systematically incorporating
+physically inspired constraints and pruning strategies, our method attains high predictive accuracy while generating transparent,
+symbolic constitutive laws. The overall workflow of the CKAN framework is illustrated in Fig. 1. This paper is organized as follows:
+Section 2 introduces the necessary background from continuum mechanics. In Section 3, we present the theoretical foundations
+of the CKAN framework, while Section 4 details the sparsification and symbolification process necessary for deriving compact
+and interpretable symbolic expressions. We then demonstrate the effectiveness of our methodology through various numerical
+experiments and real-world data in Section 5. Finally, Section 6 summarizes the main findings and suggests possible future directions.
+To reduce the complexity of the discussion herein, we focus in this paper on isotropic hyperelastic materials. However, the ideas
+developed herein can easily be transferred to much broader classes of materials.
+
+2. Continuum mechanics
+
+2.1. Kinematics
+
+   Herein, we rely on the general framework of nonlinear continuum mechanics as outlined, for example, in Holzapfel (2000). We
+consider a continuum body composed of material points 𝐗 in the undeformed reference configuration. During a motion, the material
+points are mapped at time 𝑡 to the current position 𝐱(𝐗, 𝑡) in the deformed current configuration. To quantify the deformation of
+the material in the body, one often uses the so-called deformation gradient 𝐅 and its spectral decomposition:
+
+              𝜕𝐱   ∑
+                   3
+        𝐅=       =   𝜆 𝒏 ⊗ 𝑵𝛼.                                                                                                                                       (1)
+              𝜕𝐗 𝛼=1 𝛼 𝛼
+
+Here 𝜆𝛼 > 0 are the principal stretches of the material, and 𝑵 𝛼 and 𝒏𝛼 are the corresponding principal stretch directions in the
+reference and current configuration. The larger 𝜆𝛼 , the more the material is stretched in the corresponding principal stretch direction.
+The Jacobian (determinant) 𝐽 = det(𝐅) = 𝜆1 𝜆2 𝜆3 characterizes local volume changes. For incompressible materials 𝐽 = 1. Based on
+the deformation gradient, one can define the so-called right Cauchy–Green deformation tensor 𝐂 with its cofactor cof(𝐂):
+
+                         ∑
+                         3                                                      ∑
+                                                                                3
+        𝐂 = 𝐅T 𝐅 =             𝜆2𝛼 𝑵 𝛼 ⊗ 𝑵 𝛼 ,      cof(𝐂) = det(𝐂)𝐂−T =              𝜈𝛼2 𝑵 𝛼 ⊗ 𝑵 𝛼 ,                                                                (2)
+                         𝛼=1                                                    𝛼=1
+
+For an undeformed body, the deformation gradient and right Cauchy–Green deformation tensor are equal to the identity tensor 𝐈;
+𝜈𝛼 = 𝐽 ∕𝜆𝛼 is the local stretch of the area orthogonal to the 𝛼-direction and can be computed as
+
+        𝜈1 = 𝜆2 𝜆3 ,      𝜈 2 = 𝜆1 𝜆3 ,    𝜈 3 = 𝜆1 𝜆2 .                                                                                                             (3)
+
+The principal invariants of 𝐂, in terms of the principal stretches, are
+
+        𝐼1 = tr(𝐂) = 𝜆21 + 𝜆22 + 𝜆23 ,           𝐼2 = tr(cof 𝐂) = 𝜈12 + 𝜈22 + 𝜈32 = 𝜆22 𝜆23 + 𝜆21 𝜆23 + 𝜆21 𝜆22 ,    𝐼3 = det 𝐂 = 𝐽 2 = 𝜆21 𝜆22 𝜆23 .                (4)
+
+To describe the behavior of rubber-like materials, it was found that using other sets of kinematic variables can help to bridge the
+gap between the kinematics on the micro- and macro-scale. For instance, the modified invariants
+           √                                √
+                                √                            √
+              𝜆21 + 𝜆22 + 𝜆23     𝐼1
+                                               2
+                                            3 𝜈 +𝜈 +𝜈
+                                               1
+                                                     2
+                                                     2
+                                                         2
+                                                         3   3 𝐼2
+      𝜄1 =                    =      , 𝜄2 =                =      ,                                                             (5)
+                    3             3                 3           3
+can be interpreted as representing the rubber network’s average stretch and tube contraction, respectively (Dal et al., 2023; Kearsley,
+1989; Arruda and Boyce, 1993).
+    Each of the three sets of kinematic variables introduced above, i.e., {𝜆1 , 𝜆2 , 𝜆3 }, {𝐼1 , 𝐼2 , 𝐼3 }, and {𝜄1 , 𝜄2 , 𝐼3 }, provides a sufficient
+functional basis to completely characterize the strain energy function of an isotropic hyperelastic material. However, depending on
+which functional basis one uses, the functions required to describe a specific material behavior may take on a relatively complex or
+rather simple form. This is illustrated in Fig. 2 by considering three specific deformation modes of a thin incompressible material
+sample, namely, uniaxial tension, equibiaxial tension, and pure shear (see Fig. A.14 for details). Using {𝜆1 , 𝜆2 , 𝜆3 } as a functional
+basis, equibiaxial tension and pure shear can be expressed as linear functions, whereas uniaxial tension and simple shear require
+more complex functional forms. By contrast, using {𝐼1 , 𝐼2 , 𝐼3 }, pure and simple shear can be represented by linear functions, whereas
+uniaxial and equibiaxial tension require more complex functional forms. Note that various tensor basis formulations have been
+explored to enhance neural network representations in isotropic hyperelasticity. For further details, we refer the reader to Fuhg
+et al. (2024b).
+    This article is devoted to the automated derivation of simple and yet accurate symbolic expressions to characterize the mechanical
+behavior of materials. Apparently, it is worth examining how the results of the framework developed herein depend on the functional
+basis chosen ({𝜆1 , 𝜆2 , 𝜆3 }, {𝐼1 , 𝐼2 , 𝐼3 } or {𝜄1 , 𝜄2 , 𝐼3 }). This comparison thus forms an integral part of the discussion below.
+
+                                                                                       3
+K.P. Abdolazizi et al.                                                                                 Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+Fig. 2. Representation of special planar modes of deformation of a thin incompressible membrane using three different functional bases: the complexity of
+the functional forms required to represent uniaxial tension, equibiaxial tension, and pure or simple shear vastly differs depending on whether one relies on
+representing them in terms of (a) principal stretches {𝜆1 , 𝜆2 }, (b) principal invariants {𝐼1 , 𝐼2 }, (c) modified invariants {𝜄1 , 𝜄2 }. The markers indicate identical
+deformation states. Notably, not all deformation states shown in sub figure (a) fall within the range depicted in the sub figure (b), resulting in fewer visible
+markers in (b).
+
+
+
+
+2.2. Isotropic hyperelasticity
+
+  The primary objective of this work is to illustrate how Kolmogorov–Arnold Networks can be applied to hybrid constitutive
+modeling of materials. For clarity, we focus on isotropic hyperelastic materials, exhibiting the same properties in all directions.
+
+Strain energy function and stress. Hyperelasticity postulates the existence of a strain energy function 𝛹 = 𝛹 (𝐅). The constitutive
+equation for the first Piola–Kirchhoff stress 𝐏 of a hyperelastic material directly follows from the second law of thermodynamics
+generally as (Truesdell, 1984)
+           𝜕𝛹 (𝐅)
+        𝐏=        .                                                                                                                                                  (6)
+             𝜕𝐅
+Objectivity of the strain energy function is inherently ensured by using the reduced formulation (Ogden, 1997)
+
+        𝛹 = 𝛹 (𝐅) = 𝛹 (𝐂),                                                                                                                                           (7)
+
+which is based on 𝐂 and can thus be shown to be observer-independent (objective). The (symmetric) so-called second Piola–Kirchhoff
+stress tensors 𝐒 is related to the first Piola–Kirchhoff stress tensor 𝐏 and the strain energy through (Holzapfel, 2000):
+                                𝜕𝛹 (𝐂)
+        𝐏 = 𝐅𝐒,          𝐒=2           .                                                                                                                             (8)
+                                 𝜕𝐂
+
+Functional bases. The strain energy function of an isotropic hyperelastic material must be a scalar-valued isotropic tensor function
+of 𝐂 (Truesdell, 1984). The principal invariants 𝐼𝑖 , the principal stretches 𝜆𝑖 , and the modified invariants 𝜄𝑖 form so-called functional
+bases, in terms of which all scalar-valued isotropic tensor functions of 𝐂 can be expressed (Truesdell, 1984). Thus, the strain energy
+function can be written as:
+
+        𝛹 = 𝛹 (𝐼1 , 𝐼2 , 𝐼3 ) = 𝛹 (𝜆1 , 𝜆2 , 𝜆3 ) = 𝛹 (𝜄1 , 𝜄2 , 𝐼3 ).                                                                                               (9)
+
+   The appropriate functional form of 𝛹 for a specific material generally depends on material features, such as the composition,
+microstructure, or processing parameters. This information may be expressed in terms of some feature vector 𝒇 , leading to
+            (               )   (                )   (                )
+      𝛹 = 𝛹 𝐼1 , 𝐼2 , 𝐼3 , 𝒇 = 𝛹 𝜆1 , 𝜆2 , 𝜆3 , 𝒇 = 𝛹 𝜄1 , 𝜄2 , 𝐼3 , 𝒇 .                                                   (10)
+
+Incompressibility. Many important materials can be regarded as incompressible so that 𝐽 = 1. In this case, one has only two
+independent deformation variables, that is, ({𝜆1 , 𝜆2 }, {𝐼1 , 𝐼2 } or {𝜄1 , 𝜄2 }), while the respective third one is determined via the
+incompressibility constraint 𝐽 = 𝐼3 = 1 and thus 𝜆3 = (𝜆1 𝜆2 )−1 . For incompressible isotropic hyperelastic materials, the strain
+energy functions can be postulated as
+                               𝑝                                                                  𝑝
+        𝛹 = 𝛹̂ (𝐼1 , 𝐼2 , 𝒇 ) − (𝐼3 − 1) = 𝛹̂ (𝜆1 , 𝜆2 , 𝜆3 , 𝒇 ) − 𝑝(𝐽 − 1) = 𝛹̂ (𝜄1 , 𝜄2 , 𝒇 ) − (𝐼3 − 1),                        (11)
+                               2                                                                  2
+where 𝑝 denotes the hydrostatic pressure in the material determined from the boundary conditions. For the remainder of this work,
+the overset hat (⋅)  ̂ explicitly denotes strain energy functions for the incompressible case. In Eq. (11), we use the same symbol 𝑝
+for the Lagrange multiplier ensuring incompressibility for all three different functional bases. However, the value that results for 𝑝
+differs for these three cases, even if the same boundary value problem is considered, see Appendix A.2.
+
+                                                                                   4
+K.P. Abdolazizi et al.                                                                                              Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+Separable principal stretch-based strain energy functions. Since the properties of isotropic materials do not depend on direction,
+principal stretch-based strain energy functions 𝛹 (𝜆1 , 𝜆2 , 𝜆3 , 𝒇 ) must be symmetric with respect to the principal stretches. However, the
+space of all symmetric functions is vast, making it challenging to design suitable candidate functions. This complexity is significantly
+reduced by adopting a separable form, which is symmetric by definition and has proven effective in practice (Xu et al., 2015):
+
+                                       ∑
+                                       3                      ∑
+                                                              3
+        𝛹 = 𝛹 (𝜆1 , 𝜆2 , 𝜆3 , 𝒇 ) =          𝜔1 (𝜆𝛼 , 𝒇 ) +         𝜔−1 (𝜈𝛼 , 𝒇 ) + 𝛺(𝜆1 𝜆2 𝜆3 , 𝒇 ),                                                                         (12)
+                                       𝛼=1                    𝛼=1
+
+where 𝜔1 , 𝜔−1 , and 𝛺 are univariate strain energy functions related to the changes in line, area, and volume elements, respectively.
+For incompressible materials, this simplifies further to:
+
+                                                       ∑
+                                                       3                        ∑
+                                                                                3
+        𝛹 = 𝛹̂ (𝜆1 , 𝜆2 , 𝜆3 , 𝒇 ) − 𝑝(𝐽 − 1) =              𝜔̂ 1 (𝜆𝛼 , 𝒇 ) +         𝜔̂ −1 (𝜆−1
+                                                                                              𝛼 , 𝒇 ) − 𝑝(𝐽 − 1).                                                             (13)
+                                                       𝛼=1                      𝛼=1
+
+Often, even 𝜔̂ −1 is discarded, reducing the strain energy function to a sum of a single scalar function 𝜔̂ 1 evaluated at the three
+principal stretches 𝜆𝛼 . This additive separability of the strain energy function is known as the Valanis–Landel hypothesis (Valanis
+and Landel, 1967), and has been widely adopted (Ogden, 1972; Heinrich and Kaliske, 1997; Shariff, 2000; Attard and Hunt, 2004).
+   While the CKAN framework also supports non-separable strain energy functions, these require explicit symmetrization by
+averaging the strain energy function over all permutations of the principal stretches. Since this increases computational cost and
+typically compromises interpretability, the non-separable approach is not considered here.
+
+Mixed invariant- and principal stretch-based strain energy functions. In view of (4), the principal invariants can be expressed as
+quadratic functions of the principal stretches, while the squared principal stretches are the roots of the characteristic polynomial of
+𝐂, which is expressed in terms of the principal invariants (Itskov, 2015). Consequently, any strain energy function based on principal
+invariants can, in principle, be equivalently expressed in terms of principal stretches, and vice versa (Ehret and Stracuzzi, 2022).
+One may thus represent the strain energy in terms of {𝜆1 , 𝜆2 , 𝜆3 }, {𝐼1 , 𝐼2 , 𝐼3 }, or {𝜄1 , 𝜄2 , 𝐼3 }. However, these reformulations often result
+in more complex expressions and may introduce numerical instabilities (Xu et al., 2015). To mitigate these issues, it can be helpful
+to adopt a fourth, mixed functional basis {𝜆1 , 𝜆2 , 𝜆3 , 𝐼1 , 𝐼2 , 𝐼3 }. Using this basis, one often assumes an additive decomposition of the
+strain energy function (Kaliske and Heinrich, 1999; Xiang et al., 2018; Davidson and Goulbourne, 2013):
+
+        𝛹 (𝐼1 , 𝐼2 , 𝐼3 , 𝜆1 , 𝜆2 , 𝜆3 , 𝒇 ) = 𝛹𝐼 (𝐼1 , 𝐼2 , 𝐼3 , 𝒇 ) + 𝛹𝜆 (𝜆1 , 𝜆2 , 𝜆3 , 𝒇 ).                                                                               (14)
+
+While the first three functional bases we introduced are irreducible, the mixed fourth basis introduced in the context of (14) is
+reducible (Itskov, 2015), meaning it contains more elements than strictly necessary to span the space of interest.
+
+
+3. Constitutive-Kolmogorov–Arnold Networks (CKANs)
+
+   This section summarizes the fundamentals of Kolmogorov–Arnold Networks (KANs) and introduces the Constitutive Kolmogorov–
+Arnold Network (CKAN) framework for interpretable and predictive material modeling. Standard types of neural networks, like
+feedforward neural networks (FFNNs), recurrent neural networks (RNNs), convolutional neural networks (CNNs), and others, are
+powerful approximators. However, their black-box nature limits interpretability and complicates adherence to physical constraints.
+KANs address these challenges by leveraging the Kolmogorov–Arnold representation theorem and representing the strain energy
+function using B-spline curves with learnable control points of local B-spline basis functions. This low-dimensional parameterization
+enables efficient training and direct incorporation of physical prior knowledge (Liu et al., 2024a,b).
+
+
+3.1. Kolmogorov–Arnold Networks (KANs)
+
+   Kolmogorov–Arnold Networks (KANs) (Liu et al., 2024a,b) draw inspiration from the Kolmogorov–Arnold representation theorem
+(KART), which states that any continuous multivariate function 𝑓 ∶ [0, 1]𝑛 → R can be represented as a finite composition of
+univariate continuous functions and addition operations:
+                                                          ( 𝑛               )
+                                              ∑
+                                              2𝑛+1         ∑
+      𝑓 (𝒙0 ) = 𝑓 (𝑥0,1 , 𝑥0,2 , … , 𝑥0,𝑛 ) =      𝜙1,1,𝑗     𝜙0,𝑗,𝑖 (𝑥0,𝑖 ) ,                                            (15)
+                                                    𝑗=1               𝑖=1
+
+where the 𝑥0,1 are the elements of the vector 𝒙0 , and the 𝜙0,𝑗,𝑖 ∶ [0, 1] → R and 𝜙1,1,𝑗 ∶ R → R are univariate continuous functions.
+Eq. (15) can be understood as a neural network with 𝑛 input nodes, a middle layer with 2𝑛 + 1 nodes, and a single output node. The
+functions 𝜙0,𝑗,𝑖 connect the input nodes to the nodes in the middle layer, and the functions 𝜙1,𝑗,𝑖 connect the nodes in the middle layer
+to the output nodes, with a summation performed at each node over all incoming inputs. Interpreting Eq. (15) as a neural network
+directly leads to the concept of KANs. Generally, a KAN may consist of 𝐿 layers, each containing 𝑛𝑙 nodes with 𝑙 = 0, … , 𝐿 − 1. Its
+topology can thus be characterized by the vector
+
+         = [𝑛0 , 𝑛1 , … , 𝑛𝐿−1 ].                                                                                                                                            (16)
+
+                                                                                                5
+K.P. Abdolazizi et al.                                                                            Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+Fig. 3. Comparison of a Kolmogorov–Arnold Network (KAN) and a feedforward neural network (FFNN). A KAN (a) can be interpreted as an FFNN (b) where
+the weights are no longer constants but nonlinear functions, typically spline functions of higher order, and where, as a consequence, the intra-neural (typically
+nonlinear) activation function 𝜎 is no longer needed. In an FFNN, the weights 𝑤𝑙,𝑗,𝑖 are adjusted during training to learn a specific input–output relation. In a
+KAN, however, it is the functions 𝜙𝑙,𝑗,𝑖 , not the weights, that are adjusted. Orange nodes represent input and output nodes.
+
+
+
+
+The output of layer 𝑙 is denoted by the vector 𝒙𝑙 . Specifically, the element 𝑥𝑙,𝑖 is the output of node 𝑖 in layer 𝑙 and, after passing
+through the function 𝜙𝑙,𝑗,𝑖 , becomes an input for node 𝑗 in layer 𝑙 + 1. The output of node 𝑗 in layer 𝑙 + 1 is the sum of all its inputs
+from layer 𝑙, that is:
+                    𝑛𝑙
+                    ∑
+        𝑥𝑙+1,𝑗 =          𝜙𝑙,𝑗,𝑖 (𝑥𝑙,𝑖 ),      𝑗 = 1, 2, … , 𝑛𝑙+1 .                                                                                         (17)
+                    𝑖=1
+
+In the context of KANs, the functions 𝜙𝑙,𝑗,𝑖 are usually referred to as activation functions. For the ease of notation, one can arrange
+them in a matrix 𝜱𝑙 so that
+
+               ⎡ 𝜙𝑙,1,1 (⋅)             𝜙𝑙,1,2 (⋅)     …            𝜙𝑙,1,𝑛𝑙 (⋅) ⎤
+               ⎢ 𝜙 (⋅)                  𝜙𝑙,2,2 (⋅)     …            𝜙𝑙,2,𝑛𝑙 (⋅) ⎥⎥
+        𝒙𝑙+1 = ⎢    𝑙,2,1
+                                                                                     𝒙,                                                                     (18)
+               ⎢      ⋮                       ⋮        ⋱                  ⋮        ⎥ 𝑙
+               ⎢𝜙                                                                  ⎥
+               ⎣ 𝑙,𝑛𝑙+1 ,1 (⋅) 𝜙𝑙,𝑛𝑙+1 ,2 (⋅) … 𝜙𝑙,𝑛𝑙+1 ,𝑛𝑙 (⋅)⎦
+               ⏟⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏟⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏟
+                                               𝜱𝑙 ∶=
+
+Generally, a KAN with 𝐿 layers then maps its input 𝒙0 to its output 𝒙𝐿 via
+
+        𝒙𝐿 = KAN(𝒙0 ) = (𝜱𝐿−1 ◦ 𝜱𝐿−2 ◦ ⋯ ◦ 𝜱1 ◦ 𝜱0 ) (𝒙0 ).                                                                                                 (19)
+
+Fig. 3 compares the architecture of a KAN with that of a feedforward neural network (FFNN) with the same topology. They both
+consist of layers of neurons, where each neuron in one layer generally provides input to each neuron in the subsequent layer.
+However, while in the FFNN this input is simply multiplied by a scalar weight 𝑤𝑙,𝑗,𝑖 , in the KAN, it passes through a function 𝜙𝑙,𝑗,𝑖 .
+This gives KANs the ability to approximate nonlinear relationships, eliminating the need for the intra-neural activation function 𝜎
+required in FFNNs. The FFNN and KAN share a similar training process in which the 𝑤𝑙,𝑗,𝑖 and 𝜙𝑙,𝑗,𝑖 , respectively, are adjusted so
+that, after training, the FFNN and KAN can capture a certain input–output relation. A scalar weight 𝑤𝑙,𝑗,𝑖 can be interpreted as a
+constant function, whereas in KANs the 𝜙𝑙,𝑗,𝑖 are usually chosen as spline functions of higher order. In this sense, a KAN can be
+interpreted as an FFNN whose weights are no longer constant scalars (spline functions of order zero) but spline functions of higher
+order. This added flexibility allows KANs to directly approximate nonlinear relationships between layers, rendering the intra-neural
+nonlinear activation functions 𝜎 unnecessary and effectively replacing them with the identity function. Formally, the input–output
+relation of a KAN is given by Eq. (19), while for an FFNN with 𝐿 layers, it is described by the following equation:
+
+        𝒙𝐿 = FFNN(𝒙0 ) = (𝜎 ◦ 𝑾 𝐿−1 ◦ 𝜎 ◦𝑾 𝐿−2 ◦ ⋯ ◦ 𝜎 ◦ 𝑾 1 ◦ 𝜎 ◦ 𝑾 0 ) (𝒙0 ),                                                                             (20)
+
+where the matrices 𝑾 𝑙 assemble the scalar weights 𝑤𝑙,𝑗,𝑖 , analogous to how the matrices 𝜱𝑙 in KANs assemble the functions 𝜙𝑙,𝑗,𝑖 .
+
+                                                                                          6
+K.P. Abdolazizi et al.                                                                             Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+Fig. 4. Schematic overview of the Constitutive Kolmogorov–Arnold Network (CKAN) framework: The right Cauchy Green deformation tensor 𝐂 and the feature
+vector 𝒇 are input to the CKAN. Depending on the chosen functional basis  (principal stretches, principal invariants, modified invariants, mixed basis) and the
+feature vector, the strain energy function 𝛹 KAN is represented by a KAN. For example, in a principal invariant-based CKAN, one of the KANs from Fig. 5 can be
+substituted in the box KAN . The correction terms 𝛹 𝜎 and 𝛹 𝜀 ensure the normalization of the stress and strain energy function in the undeformed configuration
+(𝐂 = 𝐈), yielding the total strain energy function 𝛹 CKAN . The correction terms depend on 𝛹 KAN and its derivatives with respect to the elements of the functional
+basis 𝜕𝛹 KAN ∕𝜕 , evaluated in the undeformed configuration. They iteratively adapt during training. Finally, the stress 𝐒 is obtained as the gradient of 𝛹 CKAN
+with respect to 𝐂.
+
+
+
+
+3.2. Constitutive modeling with KANs
+
+    In this work, we aim to learn the strain energy function of an isotropic hyperelastic material from experimental data. To do
+so, we have developed Constitutive Kolmogorov–Arnold Networks (CKANs), a machine learning architecture designed to model the
+constitutive behavior of hyperelastic materials. Fig. 4 provides a schematic overview of the CKAN architecture.
+    The first design choice in constructing CKANS is selecting an appropriate functional basis  to describe the deformation state
+as input. In this paper, we compare the four functional bases introduced in Section 2: {𝜆1 , 𝜆2 , 𝜆3 }, {𝐼1 , 𝐼2 , 𝐼3 }, {𝜄1 , 𝜄2 , 𝐼3 }, and
+{𝜆1 , 𝜆2 , 𝜆3 , 𝐼1 , 𝐼2 , 𝐼3 }. Additionally, we include any supplementary material features, denoted by vector 𝒇 into the input space. For
+instance, 𝒇 may contain information about the material’s processing conditions or microstructure, or about certain properties that
+are not measured in classical strain-stress tests, such as the material’s hardness. The CKAN’s output should be an approximation
+of the material’s stress response derived from the strain energy function 𝛹 CKAN , which fully characterizes the material’s nonlinear
+hyperelasticity. This strain energy function is defined by:
+
+        𝛹 CKAN ( , 𝒇 ) ∶= 𝛹 KAN ( , 𝒇 ) + 𝛹 𝜎 (𝐽 , 𝒇 ) + 𝛹 𝜀 (𝒇 ).                                                                                         (21)
+
+The strain energy contribution 𝛹 KAN is represented by a KAN and captures the material’s basic constitutive behavior. To ensure that
+both stress and strain energy vanish in the undeformed reference configuration, the correction terms 𝛹 𝜎 and 𝛹 𝜀 are introduced. These
+terms are not modeled by a KAN; rather, they depend on 𝛹 KAN and its derivatives with respect to the elements of the functional
+basis, evaluated in the undeformed state, see Fig. 4. Details on each contribution to the total strain energy function 𝛹 CKAN are
+provided below.
+    The CKAN framework with its resulting total strain energy function 𝛹 CKAN inherently ensures thermodynamic consistency,
+objectivity, material symmetry, symmetry of the second Piola–Kirchhoff stress tensor, as well as zero stress and zero strain energy
+in the undeformed state. Although beyond the scope of this work, CKANs can easily be extended to anisotropic materials by
+introducing strain invariants formulated in terms of structure tensors (Kalina et al., 2025; Linka et al., 2021; Boehler, 1987; Zhang
+and Rychlewski, 1990).
+
+Training of CKANs. As mentioned above, only the contribution 𝛹 KAN is represented by a KAN. Consequently, the only trainable
+parameters of the total strain energy function 𝛹 CKAN are the control points of the univariate spline activation functions associated
+with 𝛹 KAN . Thus, training the CKAN is reduced to optimizing these control points. In practice, direct measurements of the strain
+energy are usually unavailable. Instead, only stress data corresponding to specific tested strain states are accessible. Consequently,
+the loss function for training the CKAN cannot be based on a direct comparison between 𝛹 CKAN and experimentally measured strain
+energies. Instead, it must rely on comparing their derivatives—i.e., the stresses. This requires differentiating 𝛹 CKAN , yielding the
+stress tensors via (8), see Fig. 4. Detailed expressions for these stress tensors, corresponding to the different functional bases, are
+provided in Appendix A.1. Since all mathematical operations in a CKAN are fully differentiable, the equations from Appendix A.1
+can be applied directly using automatic differentiation. The computed stresses are then compared with the stress values obtained
+experimentally. Training is performed by minimizing the loss function data , which is defined in Appendix E.1.
+
+Basic strain energy represented by KAN. The basic constitutive behavior of the material is captured by the strain energy contribution
+𝛹 KAN represented by a KAN of arbitrary width and depth. The KAN takes as input the elements of the functional basis  and
+the feature vector 𝒇 . For example, Fig. 5 shows two possible KAN architectures, both of which use the principal invariants as the
+functional basis. A strain energy function that relies on principal stretches as its functional basis requires a more intricate architecture
+to ensure that 𝛹 KAN remains symmetric with respect to its arguments. This architecture is built upon the separable ansatz (12) and
+(13). Further details are provided in Appendix C. The only parameters optimized during training are the control points of the spline
+activation functions in the KAN representing 𝛹 KAN .
+
+                                                                                7
+K.P. Abdolazizi et al.                                                                           Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+Fig. 5. Examples of Kolmogorov–Arnold Networks (KANs) representing the strain energy function 𝛹 KAN , where the functional basis  = {𝐼1 , 𝐼2 , 𝐼3 } was chosen
+and reduced to the setting of an incompressible material so that 𝐼3 is no longer required as an explicit part of the input. Depending on the complexity of the
+constitutive behavior of the material of interest, the number of layers and neurons per layer can be adjusted.
+
+
+
+
+Normalization of stress. It can be expected that 𝛹 KAN will approximate stresses with reasonable quality. Minor inaccuracies are
+generally acceptable for most practical applications. However, there is one important exception: at zero strain, the stresses should
+be exactly zero to avoid numerical problems in computer simulations using CKAN-based strain energy functions. Therefore, from a
+practical point of view, it is advantageous to add a correction term 𝛹 𝜎 to 𝛹 KAN to ensure that the stress at zero strain is also zero
+within numerical precision. One can determine 𝛹 𝜎 by computing the stress resulting from 𝛹 KAN at zero strain and constructing a
+potential 𝛹 𝜎 such that the stresses resulting from its first derivatives exactly cancel those resulting from 𝛹 KAN at zero strain, cf. Dal
+et al. (2023) and Linden et al. (2023). Appendix D demonstrates that 𝛹 𝜎 generally takes the form
+
+        𝛹 𝜎 (𝐽 , 𝒇 ) ∶= −𝛯(𝒇 ) (𝐽 − 1).                                                                                                                    (22)
+Notably, 𝛹 𝜎 (𝐽 , 𝒇 ) is zero in the undeformed state, where 𝐽 = 1. Furthermore, Appendix D provides equations for computing 𝛯
+depending on the chosen functional basis. However, it is important to note that 𝛯 depends on the derivative of 𝛹 KAN with respect
+to the functional basis, evaluated in the reference configuration. Consequently, 𝛯 continuously adapts during training as 𝛹 KAN
+evolves and is not computed in a post-processing step, but an integral part of the network architecture, cf. Fig. 4. For isotropic
+incompressible materials, the stress normalization condition is satisfied through the hydrostatic pressure 𝑝 and its associated stress
+contribution, allowing 𝛹 𝜎 to be set to zero.
+
+Normalization of strain energy. Since training the KAN relies on minimizing the difference between the model’s stresses and the
+experimentally observed values, and since stresses are related to the first derivatives of 𝛹 KAN , 𝛹 KAN may differ from the actual
+strain energy function by an arbitrary constant after training. By definition, 𝛹 𝜎 vanishes in the undeformed configuration. Thus,
+applying 𝛹 𝜎 ensures only zero stresses in the undeformed configuration, not zero strain energy. Therefore, one must evaluate 𝛹 KAN
+at zero strain and subtract this constant 𝛹 𝜀 from 𝛹 KAN to ensure zero strain energy in the undeformed state, i.e.,
+
+        𝛹 𝜀 (𝒇 ) ∶= −𝛹 KAN |𝐂=𝐈 .                                                                                                                          (23)
+
+Implementation. The CKAN framework is based on the KAN implementation by Liu et al. (2024b), as modified by Polo-Molina et al.
+(2024), who replaced the original B-spline activation functions with cubic Hermite splines and imposed constraints on the control
+points to enforce partial monotonicity. In this context, partial monotonicity allows the user to specify, for each input individually,
+whether the KAN’s output should be monotonic (either non-decreasing or non-increasing) or remain unrestricted with respect to
+that input. Additionally, the cubic Hermite spline is linearly extrapolated outside its domain, using slopes at the left and right ends
+that match the spline’s slopes at the corresponding endpoints. This approach ensures that the spline remains monotonic not only
+within its original domain, but throughout R (Polo-Molina et al., 2024). This modification was adopted in the CKAN framework.
+For example, enforcing non-decreasing monotonicity of the strain energy function with respect to the strain inputs can improve
+robustness and extrapolation. Further technical details on the implementation are provided in Appendix E.
+
+4. Symbolic constitutive modeling
+
+   Deriving an interpretable symbolic constitutive model requires two additional steps. First, during training, the dense CKAN must
+be sparsified by iteratively removing redundant activation functions. This resuls in a more compact network that reduces overfitting
+
+                                                                              8
+K.P. Abdolazizi et al.                                                               Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+and enhances generalizability. Second, the remaining activation functions must be expressed in symbolic form through symbolic
+regression.
+
+4.1. Sparsification
+
+    As depicted in Fig. 5, KAN layers with varying widths can be stacked arbitrarily. In practice, the optimal topology  of the
+CKAN for a given dataset is often unknown unless the dataset is derived from a known symbolic expression, such as a predefined
+strain energy function. To address this issue, we propose starting with a large CKAN and using sparsity regularization during
+training to automatically determine its optimal topology. In standard FFNNs, 𝐿1 regularization is applied to weights to promote
+sparsity (Abdolazizi et al., 2023; McCulloch et al., 2024). In analogy, we regularize the 𝐿1 norm of activation functions 𝜙𝑙,𝑗,𝑖 . Passing
+an input batch of 𝑛𝑠 samples to a KAN results in 𝑛𝑠 inputs 𝑥𝑠𝑙,𝑖 to each activation function 𝜙𝑙,𝑗,𝑖 . Following Liu et al. (2024b), the 𝐿1
+norm of an activation function 𝜙𝑙,𝑗,𝑖 is then the average magnitude over these 𝑛𝑠 samples:
+                            𝑛𝑠
+                         1 ∑|               |
+        |𝜙𝑙,𝑗,𝑖 |1 ∶=           |𝜙 (𝑥𝑠 )| .                                                                                                    (24)
+                         𝑛𝑠 𝑠=1 | 𝑙,𝑗,𝑖 𝑙,𝑖 |
+Based on the 𝐿1 norm of a single activation function, the 𝐿1 norm of a KAN layer Φ𝑙 with 𝑛in inputs and 𝑛out outputs is given by:
+                      𝑛in 𝑛out
+                      ∑   ∑
+        |Φ𝑙 |1 ∶=                |𝜙𝑙,𝑗,𝑖 |1 .                                                                                                  (25)
+                      𝑖=1 𝑗=1
+
+Based on the findings that 𝐿1 regularization alone is insufficient for sparsification, Liu et al. (2024b) introduced the entropy 𝑆 of a
+KAN layer Φ𝑙 as:
+                 𝑛in 𝑛out              (            )
+                 ∑   ∑ |𝜙𝑙,𝑗,𝑖 |1        |𝜙𝑙,𝑗,𝑖 |1
+      𝑆(Φ𝑙 ) = −                  log2                .                                                                            (26)
+                 𝑖=1 𝑗=1
+                          |Φ𝑙 |1          |Φ𝑙 |1
+
+Then, the total loss function used for training the network is the sum of the data loss data (characterizing the difference between
+network output and training data) and the regularization loss
+                         ( 𝐿−1                         )
+                             ∑               ∑
+                                             𝐿−1
+      total = data + 𝛬 𝜇1      |Φ𝑙 |1 + 𝜇2     𝑆(Φ𝑙 ) ,                                                                        (27)
+                                           𝑙=0                𝑙=0
+
+where the parameters 𝜇1 and 𝜇2 are usually set to 𝜇1 = 𝜇2 = 1, and the hyperparameter 𝛬 controls the overall regularization
+magnitude.
+    Evaluating the importance of edges using the 𝐿1 norm of an activation function may be limiting, as it considers only local
+information. The most recent MultKAN paper (Liu et al., 2024a) addresses this limitation by introducing attribution scores for
+edges and nodes. These scores are computed iteratively, propagating importance backward from the output layer to the input
+layer. Although we have successfully obtained sparse and highly accurate CKANs using only 𝐿1 and entropy regularization, we
+anticipate that incorporating these attribution scores into our framework in future research will further improve the interpretability
+and performance of CKANs.
+
+4.2. Pruning
+
+   After training with the sparsification regularization (27), the network may be pruned on the node level. Following Liu et al.
+(2024b), pruning of node (𝑙, 𝑖) is based on its incoming and outgoing scores 𝐼𝑙,𝑖 and 𝑂𝑙,𝑖 , respectively, defined by:
+
+        𝐼𝑙,𝑖 = max{|𝜙𝑙−1,𝑖,𝑘 |1 },               𝑂𝑙,𝑖 = max{|𝜙𝑙,𝑗,𝑖 |1 }.                                                                      (28)
+                  𝑘                                       𝑗
+
+If either 𝐼𝑙,𝑖 or 𝑂𝑙,𝑖 is below a certain threshold hyperparameter 𝜃, the corresponding node (𝑙, 𝑖) is pruned. However, in our application,
+pruning was not beneficial, as it often removed nodes that had minimal impact on the absolute value of the strain energy function
+but substantially affected its derivatives, which are critical for accurate stress predictions. Additionally, pruning introduces the
+additional hyperparameter 𝜃. Therefore, we relied entirely on sparsification regularization. If a spline-based activation function
+was best approximated by the zero function during symbolification, then the spline function was replaced by the zero function. The
+symbolification process is described in the following section. Nonetheless, exploring alternative pruning strategies in future research
+— such as those based on the non-local attribution scores proposed in Liu et al. (2024a) — could be valuable.
+
+4.3. Symbolification
+
+   In principle, a user could manually inspect the spline activation functions 𝜙𝑙,𝑗,𝑖 and attempt to identify a symbolic counterpart.
+However, for large CKAN architectures, automatic identification is generally more practical. To determine a suitable symbolic
+replacement, the fitting performance of symbolic univariate candidate functions 𝑓𝑙,𝑗,𝑖 from a predefined function library  is
+evaluated for a given 𝜙𝑙,𝑗,𝑖 (Liu et al., 2024b). This function library includes common elementary functions such as the zero function,
+monomials, and the exponential function, e.g.,  = {0, 𝑥, 𝑥2 , … , ln(𝑥), exp(𝑥), cos(𝑥), …}. If the user has prior knowledge and expects
+a specific symbolic function, it can also be included in .
+
+                                                                            9
+K.P. Abdolazizi et al.                                                                             Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+     Even if the graphs of the activation function 𝜙𝑙,𝑗,𝑖 and a candidate function 𝑓𝑙,𝑗,𝑖 appear similar, directly replacing 𝜙𝑙,𝑗,𝑖 with
+𝑓𝑙,𝑗,𝑖 rarely yields a good fit. Rather, shifting and scaling the input and output are additionally required. Thus, identifying a
+suitable symbolic expression translates to finding a suitable candidate function 𝑓𝑙,𝑗,𝑖 ∈  and corresponding affine parameters —
+𝑎𝑙,𝑗,𝑖 , 𝑏𝑙,𝑗,𝑖 , 𝑐𝑙,𝑗,𝑖 , 𝑑𝑙,𝑗,𝑖 ∈ R — such that (Liu et al., 2024b)
+
+        𝜙𝑙,𝑗,𝑖 (𝑥𝑙,𝑖 ) ≈ 𝑦𝑙,𝑗,𝑖 (𝑥𝑙,𝑖 ) ∶= 𝑐𝑙,𝑗,𝑖 𝑓𝑙,𝑗,𝑖 (𝑎𝑙,𝑗,𝑖 𝑥𝑙,𝑖 + 𝑏𝑙,𝑗,𝑖 ) + 𝑑𝑙,𝑗,𝑖 .                                                                  (29)
+
+To solve this optimization problem, we first evaluate the activation function 𝜙𝑙,𝑗,𝑖 at 𝑛𝑠 sample points 𝑥𝑠𝑙,𝑖 to obtain 𝜙𝑠𝑙,𝑗,𝑖 = 𝜙𝑙,𝑗,𝑖 (𝑥𝑠𝑙,𝑖 ).
+                                                             𝑛𝑠
+The sampling range from which the tuples {(𝑥𝑠𝑙,𝑖 , 𝜙𝑠𝑙,𝑗,𝑖 )}𝑠=1 are drawn, as well as the spacing between these tuples, is crucial for
+accurately identifying the symbolic function 𝑓𝑙,𝑗,𝑖 and the associated affine parameters. Details of the sampling strategy are discussed
+in Appendix E.3. After sampling, the affine parameters are determined for each 𝑓𝑙,𝑗,𝑖 ∈ , by minimizing the loss function
+                     𝑛𝑠
+                        ( 𝑠            𝑠 )2        𝑛𝑠
+                                                      ( ′𝑠            ′   𝑠 )2
+                 1 ∑ 𝜙𝑙,𝑗,𝑖 − 𝑦𝑙,𝑗,𝑖 (𝑥𝑙,𝑖 )   1 ∑ 𝜙 𝑙,𝑗,𝑖 − 𝑦𝑙,𝑗,𝑖 (𝑥𝑙,𝑖 )
+       affine =                             +                                 ,                                                           (30)
+                 𝑛𝑠 𝑠=1       𝜙𝑠𝑙,𝑗,𝑖          𝑛𝑠 𝑠=1           𝜙′ 𝑠𝑙,𝑗,𝑖
+
+where we propose the second term to incorporate information on the derivative
+
+        𝑦′𝑙,𝑗,𝑖 (𝑥𝑠𝑙,𝑖 ) = 𝑎𝑙,𝑗,𝑖 𝑐𝑙,𝑗,𝑖 𝑓𝑙,𝑗,𝑖
+                                          ′
+                                                (𝑎𝑙,𝑗,𝑖 𝑥𝑠𝑙,𝑖 + 𝑏𝑙,𝑗,𝑖 ),                                                                                    (31)
+                                          ′
+which can be computed analytically since 𝑓𝑙,𝑗,𝑖           is available in symbolic form.              The derivatives 𝜙′ 𝑠𝑙,𝑗,𝑖
+                                                                                                                  can be computed either
+numerically or analytically using established formulas for spline derivatives. The goodness of the fit of all 𝑓𝑙,𝑗,𝑖 ∈  and the
+corresponding affine parameters is ranked according to a suitable performance metric, such as the loss af f ine , and the best is selected
+as the symbolic counterpart of 𝜙𝑠𝑙,𝑗,𝑖 .
+    In the original KAN papers (Liu et al., 2024a,b), this fitting process is performed through an initial iterative grid search over 𝑎𝑙,𝑗,𝑖
+and 𝑏𝑙,𝑗,𝑖 , followed by linear regression to determine 𝑐𝑙,𝑗,𝑖 and 𝑑𝑙,𝑗,𝑖 . In contrast, we optimized these parameters simultaneously using
+the BFGS-B optimizer. In our examples, this approach resulted in a more accurate fit of the symbolized activation functions and
+significantly increased computational speed, particularly when working with an extensive function library and a large number of
+extracted sample points 𝑛𝑠 . Moreover, this method enables application of individual box constraints to the affine parameters, thereby
+enhancing flexibility and control in the optimization process. For instance, the monotonicity of the spline activation functions can
+be maintained in the symbolic counterpart by selecting candidate functions 𝑓𝑙,𝑗,𝑖 from a function library containing only monotonic
+functions and by restricting 𝑎𝑙,𝑗,𝑖 , 𝑐𝑙,𝑗,𝑖 ∈ R≥0 . As a result, the monotonicity of the strain energy function with respect to its inputs is
+also inherited by its symbolic counterpart, given that a KAN consists of a composition of univariate functions and positively weighted
+sums, cf. (17).
+    Symbolifying spline-based activation functions involves a trade-off between interpretability and approximation accuracy. To
+improve their suitability for symbolification, regularization can encourage smoother, more interpretable spline shapes. In this work,
+we enforced monotonicity (Polo-Molina et al., 2024), which prevents unwanted oscillations and thus enhances the robustness of
+the symbolic approximation. Moreover, the KAN implementation we use (Liu et al., 2024b) provides an extra regularization option
+that penalizes large differences between neighboring control points, further promoting smoothness. Although we did not use this
+regularization in the current study, it may aid symbolification in other cases. In all numerical examples in the present study, however,
+the symbolic strain energy functions retained high accuracy. This suggests that, at least for the materials and deformation regimes
+considered here, the symbolification step yields symbolic models that are both expressive and physically meaningful.
+
+5. Numerical examples
+
+    In this section, we assess the performance and capabilities of the proposed Constitutive Kolmogorov–Arnold Networks (CKANs)
+using four experimental datasets. First, we examine Treloar’s (Treloar, 1944b) and Kawabata’s (Kawabata et al., 1981) experimental
+data for rubber materials, which are widely regarded as benchmark datasets in hyperelasticity. Next, we study human brain (cortex)
+tissue data (Budday et al., 2017b), which exhibits complex nonlinear behavior and tension-compression asymmetry. Finally, we use
+data from Ecoflex silicone polymers with varying Shore hardness values (Liao et al., 2020) to demonstrate how CKANs cannot only
+describe but also predict the mechanical properties of materials.
+    To train a CKAN, we minimize the difference between the predicted stress and the stress determined from experiments conducted
+under homogeneous deformation and quasi-static loading conditions. In such settings, the first Piola–Kirchhoff stress can be
+computed from the externally applied forces and the specimen’s cross-sectional area. In this study, we focus on the deformation
+modes of biaxial tension and simple shear. While Appendix A.1 outlines the general stress formulations for various functional bases,
+the detailed expressions for biaxial tension and simple shear under homogeneous deformation — necessary for reproducing the
+numerical examples — are given in Appendix A.2. In all examples, we assume incompressibility, a common assumption for rubber
+and brain tissue. The hydrostatic pressure 𝑝 is determined from the assumption of plane stress, which is justified by the loading
+conditions and the specimens’ shapes in the experiments.
+    For simplicity, this section and the related appendices only report 𝛹̂ KAN , as the normalization terms of the strain energy 𝛹 𝜎 and
+𝛹 𝜀 directly follow from (22) and (23), respectively. For an isotropic incompressible material, the stress-free reference configuration
+is guaranteed by the stress contribution of the hydrostatic pressure 𝑝. For brevity, we drop the feature vector 𝒇 from the notation
+where it is not explicitly needed.
+    In Appendix B, we report the hyperparameters and optimizers of the (sub-)CKANs used in this section.
+
+                                                                                              10
+K.P. Abdolazizi et al.                                                                          Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+Fig. 6. Comparison of the descriptive performance on Treloar’s data: Mean squared error (MSE) and coefficient of determination (𝑅2 ) of each functional basis
+for fitting the stress component 𝑃11 .
+
+
+
+
+5.1. Multi-axial loading of vulcanized rubber: Treloar’s and Kawabata’s experiments
+
+    The performance of constitutive models for rubber-like materials is often evaluated using the classical experimental dataset on
+vulcanized rubber reported by Treloar (Treloar, 1944b). Several studies have used this prototypical dataset of a highly nonlinear,
+elastic, and incompressible material to assess and rank the validity of material models (Steinmann et al., 2012; Marckmann and
+Verron, 2006). Treloar’s dataset includes uniaxial tension, equibiaxial tension, and pure shear experiments. While many material
+models in the literature fit a single deformation mode well, most struggle to capture all three deformation modes simultaneously.
+    Kawabata et al. (1981) conducted a series of general biaxial experiments on vulcanized rubber. In these tests, the stretch 𝜆1 in
+one direction was fixed at various values while the stretch 𝜆2 in the orthogonal planar direction was varied. During the experiments,
+the nominal stresses 𝑃11 (𝜆1 , 𝜆2 ) and 𝑃22 (𝜆1 , 𝜆2 ) in the first and second directions, respectively, were recorded. Due to the material’s
+incompressibility, any kinematically admissible deformation is fully characterized by two independent variables, such as 𝜆1 and 𝜆2
+or 𝐼1 and 𝐼2 . Thus, Kawabata’s dataset fully characterizes the material behavior under any multi-axial deformation mode within the
+prescribed stretch range. Indeed, the results of uniaxial, equibiaxial, and pure shear tests can in principle be extracted also from the
+general biaxial test data, as shown in Fig. 8.
+    As reported in Marckmann and Verron (2006), Treloar and Kawabata et al. used vulcanized rubber with the same chemical
+composition; only slight deviations were observed in the experimental data (Amores et al., 2020). Therefore, the materials can
+be considered as identical. Consequently, if a model trained on Treloar’s data accurately predicts Kawabata’s data, it demonstrates
+genuine generalization. Thus, following Marckmann and Verron (2006), Amores et al. (2020) and Khiêm and Itskov (2016), we
+trained the CKAN architecture using Treloar’s dataset alone and derived a symbolic strain energy function. Note that during training,
+the CKAN was only provided with data for 𝑃11 , not 𝑃22 . We subsequently evaluated the discovered strain energy function for
+generalization performance on Kawabata’s dataset, predicting both 𝑃11 and 𝑃22 . We considered the four distinct functional bases
+for the strain energy function introduced above: the principle stretches {𝜆1 , 𝜆2 , 𝜆3 }, the principal invariants {𝐼1 , 𝐼2 , 𝐼3 }, the modified
+invariants {𝜄1 , 𝜄2 , 𝐼3 }, and a mixed set of principal stretches and principal invariants {𝜆1 , 𝜆2 , 𝜆3 , 𝐼1 , 𝐼2 , 𝐼3 }. For each functional basis,
+we trained the CKAN, derived symbolic expressions for the strain energy function (see Table 1), and assessed the models’ training
+(fitting) performance on Treloar’s data and their validation (prediction) performance on Kawabata’s data.
+
+CKAN performance comparison across four functional bases. For each of the four functional bases, the trained CKAN exhibited high
+descriptive accuracy on Treloar’s dataset, all achieving 𝑅2 ≥ 0.996, Fig. 6. However, their ability to generalize beyond the training
+data differed substantially when tested on Kawabata’s biaxial data. Fig. 7 shows the mean normalized mean squared error1 (MNMSE)
+on Kawabata’s dataset and demonstrates that the CKAN using the mixed functional basis outperformed the others. Fig. 8(a) shows the
+fitting results of the mixed functional basis on Treloar’s data, and Figs. 8(c)–8(f) show the generalization performance on Kawabata’s
+data. The CKAN using the principal-stretch basis performed nearly as well as the one using the mixed basis. The modified invariant
+basis ranked third, while the principal invariant basis exhibited the weakest generalization. These findings align with previous studies
+that found for vulcanized rubber, reliance on only 𝐼1 and 𝐼2 may be insufficient to generalize from Treloar’s data to Kawabata’s
+multi-axial data (Dal et al., 2023; Marckmann and Verron, 2006).
+
+Details on the mixed basis. The mixed basis enabled top performance (average 𝑅2 = 0.999 on Treloar’s data). Its symbolic strain
+energy function (Table 1a) resembles an Ogden-type term alongside a quadratic dependence on 𝐼2 . However, the larger network
+architecture prolongs training because separate sub-networks handle the contributions from 𝐼1 , 𝐼2 and from 𝜆𝛼 , 𝜆−1
+                                                                                                                  𝛼 . Despite this
+computational cost, the mixed approach excels in both descriptive and generalization performance (Figs. 8(a),8(c)–8(f)).
+
+
+  1 First, the normalized mean squared errors (NMSE) for each stretch level 𝜆 are separately computed, then these NMSE are averaged for each functional
+                                                                               1
+basis and stress component in the small and large stretch regime individually.
+
+
+                                                                             11
+K.P. Abdolazizi et al.                                                                                                   Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+Fig. 7. Comparison of the generalization performance on Kawabata’s data: Mean normalized mean squared error (MNMSE) of each functional basis for predicting
+the stress components 𝑃11 and 𝑃22 in the small and large stretch regimes of Kawabata’s data.
+
+
+    Table 1
+    Symbolic strain energy functions and material parameters for vulcanized rubber discovered by the (a) mixed principal invariant- and principal stretch-based
+    (b) principal stretch-based, (c) modified invariant-based, and (d) principal invariant-based CKAN framework trained on Treloar’s data (Treloar, 1944b).
+     (a) Mixed principal invariant- and principal stretch-based
+                                                             ∑3                                                                          (        )32 (         )10
+      Strain energy function    𝛹̂ KAN = 𝛹̂ 𝐼KAN (𝐼1 , 𝐼2 ) + 𝛼=1 𝜔̂ KAN
+                                                                     1
+                                                                         (𝜆𝛼 ),    𝛹̂ 𝐼KAN (𝐼1 , 𝐼2 ) = 𝑎(𝑏 𝐼2 + 1)2 ,   𝜔̂ KAN
+                                                                                                                            1
+                                                                                                                                (𝜆𝛼 ) = 𝑐 𝑑 𝜆𝛼 + 1 + 𝑒 𝑓 𝜆𝛼 + 1
+                                       𝑎 [MPa]                  𝑏 [–]                   𝑐 [MPa]                      𝑑 [–]                 𝑒 [MPa]                  𝑓 [–]
+      Material parameters
+                                       2.8333                   7.6034 ⋅ 10−4           4.9633 ⋅ 10−3                0.0315                2.3312                   0.0219
+
+
+
+     (b) Principal stretch-based
+                                             ∑3                 ∑3
+      Strain energy function         𝛹̂ KAN = 𝛼=1 𝜔̂ KAN
+                                                     1
+                                                         (𝜆𝛼 ) + 𝛼=1 𝜔̂ KAN
+                                                                        −1
+                                                                            (𝜆−1
+                                                                              𝛼 ),     𝜔̂ KAN
+                                                                                          1
+                                                                                              (𝜆𝛼 ) = 𝑎 (𝑏 𝜆𝛼 + 1)30 + 𝑐 (𝑑 𝜆𝛼 + 1)5 ,    𝜔̂ KAN
+                                                                                                                                             −1
+                                                                                                                                                 (𝜆−1          −1
+                                                                                                                                                   𝛼 ) = 𝑒 (𝑓 𝜆𝛼 + 1)
+                                                                                                                                                                      15
+
+
+                                       𝑎 [MPa]                  𝑏 [–]                   𝑐 [MPa]                      𝑑 [–]                 𝑒 [MPa]                  𝑓 [–]
+      Material parameters
+                                       0.0006                   0.0441                  1.1489                       0.0736                0.3981                   0.0067
+
+
+
+     (c) Modified invariant-based
+                                                          (        )2       (                  )
+      Strain energy function         𝛹̂ KAN (𝜄1 , 𝜄2 ) = 𝑎 𝑏 𝜄2 + 1 − 𝑐 atan 𝑑(−𝑒 𝜄1 − 1)3 + 𝑓
+                                       𝑎 [MPa]                  𝑏 [MPa]                 𝑐 [MPa]                      𝑑 [MPa]               𝑒 [–]                    𝑓 [–]
+      Material parameters
+                                       2.1873                   0.0868                  1024.9                       1.3653                0.4019                   65.423
+
+
+
+     (d) Principal invariant-based
+                                                          (               )3
+      Strain energy function         𝛹̂ KAN (𝐼1 , 𝐼2 ) = 𝑎 𝑏 𝐼1 + 𝑐 𝐼2 + 1 + 𝑑 exp(𝑒 𝐼1 )
+                                       𝑎 [MPa]                  𝑏 [–]                   𝑐 [–]                        𝑑 [MPa]               𝑒 [–]
+      Material parameters
+                                       468.37                   1.1034 ⋅ 10−4           2.2632 ⋅ 10−6                0.0362                0.0774
+
+
+
+
+Details on the principal stretch basis. The purely principal stretch-based CKAN also demonstrated strong generalization, narrowly
+trailing the mixed basis in generalization performance on Kawabata’s data (see Appendix, Fig. F.1). Training time is similar to that
+of the mixed basis approach (due to the multiple evaluations of 𝜔̂ KAN1
+                                                                          and 𝜔̂ KAN
+                                                                                 −1
+                                                                                     ). The recovered symbolic expression (Table 1b)
+shows a close resemblance to the Ogden model (Ogden, 1972).
+
+Details on the modified invariant basis. The CKAN relying on the modified invariants achieved a descriptive performance comparable
+to the other bases on Treloar’s data (cf. Appendix, Fig. F.2). However, it fell short of the mixed basis and the principal stretch-based
+formulations in generalization performance. The resulting symbolic function (Table 1c) better distinguishes between uniaxial tension
+and pure shear and thus outperforms the principal invariant basis when extrapolating to Kawabata’s biaxial scenario.
+
+Details on the principal invariant basis. While the CKAN with the principal invariant-based formulation an 𝑅2 = 0.996 on Treloar’s
+data (cf. Appendix, Fig. F.3), it yielded the largest MNMSE on Kawabata’s dataset (Fig. 7). These results align with previous findings
+that the principal invariants 𝐼1 and 𝐼2 alone may not adequately capture multi-axial deformation in vulcanized rubber. On a positive
+note, the simpler network architecture (with only one sub-network) reduces training time. The final symbolic expression (Table 1d)
+incorporates polynomial terms in 𝐼1 and 𝐼2 , and an exponential term in 𝐼1 .
+
+                                                                                             12
+K.P. Abdolazizi et al.                                                                             Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+Fig. 8. Training and validation results for vulcanized rubber. (a) Fitting performance on Treloar’s data (Treloar, 1944b). (b) Architecture of the final CKAN after
+training; unconnected nodes indicate pruned activation functions. (c)–(f) Generalization performance of the mixed principal invariant- and principal stretch-based
+CKAN on the biaxial dataset by Kawabata et al. (1981), after the CKAN was trained on Treloar’s data only. The solid lines represent the model response. The
+dots represent the experimental data.
+
+
+
+
+                                                                                13
+K.P. Abdolazizi et al.                                                                            Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+Fig. 9. Descriptive performance of CKAN based on principal stretches for human brain (cortex) tissue (Budday et al., 2017a): (a) Performance of CKAN
+simultaneously fitted to uniaxial tension, compression, and simple shear data. (b) Resulting strain energy functions and material parameters. (c) Architecture of
+the final CKAN after training; unconnected nodes indicate pruned activation functions.
+
+
+
+
+    Although all formulations fit Treloar’s data well, their generalization to Kawabata’s biaxial results varied considerably. The
+mixed basis and the principal stretch-based CKANs had the best generalization performance. The modified invariant basis offered a
+balanced compromise between generalization performance and computational simplicity. In contrast, the principal invariant basis,
+though fastest to train, was least effective in predicting multi-axial deformations. Ultimately, the optimal functional basis must be
+selected for each material individually, considering both the relevant deformation regime and available computational resources.
+In this regard, CKANs are a powerful and flexible tool.
+
+5.2. Human brain tissue
+
+    To demonstrate how the CKAN framework can handle complex biological tissues with limited experimental data and still produce
+interpretable strain energy functions, we consider human brain tissue experiments from Budday et al. (2017a). Specifically, we
+examine the homogeneous deformation modes of uniaxial tension (UT), uniaxial compression (UC), and simple shear (SS). These
+datasets were obtained from cubic samples of the cortex region, excised from ten different human brains. For UT and UC, the
+experimental measurements consist of the in-plane stretches and corresponding nominal stresses. Simple shear data comprise the
+amount of shear 𝛾 and nominal shear stress. All tests were performed within the elastic regime, but the dataset remains sparse,
+covering only a limited range of deformations. Unlike the more extensive rubber datasets discussed in Section 5.1, the primary
+focus here is on how effectively the identified strain energy functions describe each observed deformation mode rather than on
+wide-range extrapolation.
+
+Principal stretches as the most effective basis for brain tissue. Among the three functional bases tested for this example (principal
+stretches, principal invariants, and modified invariants), the principal stretch-based formulation provided the best descriptive
+performance for UT, UC, and SS. Fig. 9 illustrates this performance. Fig. 10 compares the mean squared error (MSE) and 𝑅2 metrics
+for each basis, showing that principal stretches more accurately capture both tension-compression asymmetry and shear response.
+The final symbolic strain energy function comprised terms involving both 𝜆𝛼 and their reciprocals 𝜆−1𝛼 , mirroring the behavior noted
+in Ogden-type models (Budday et al., 2017b; Mihai et al., 2017; Anssari-Benam et al., 2022).
+    Increasing sparsity (Section 4) often compressed the strain energy to a single function of the reciprocal stretches, e.g.,
+                   ∑
+                   3
+                                ( −1 )
+        𝛹̂ KAN =         𝜔̂ KAN
+                            −1
+                                 𝜆𝛼 ,    with   𝜔̂ KAN
+                                                   −1
+                                                       (𝜆−1        −1    18
+                                                         𝛼 ) = 𝑎 (𝜆𝛼 + 𝑏) .
+                   𝛼=1
+
+                                                                               14
+K.P. Abdolazizi et al.                                                                         Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+Fig. 10. Comparison of the descriptive performance on the brain tissue data. Mean squared error (MSE) and coefficient of determination (𝑅2 ) of the symbolic
+strain energy functions for the human brain (cortex) each using a different functional basis.
+
+
+
+
+Although these single-term models had some difficulty with the S-shaped stress response of UT, they provide a decent overall
+description of the brain tissue’s mechanical behavior. This highlights the important role of 𝜆−1
+                                                                                              𝛼 in accurately capturing the tension-
+compression asymmetry. The fitting results of the one-term strain energy function, along with the corresponding material parameters,
+are presented in the Appendix in Fig. G.1.
+
+Alternative bases: principal and modified invariants. The principal invariant-based CKAN converged to a strain energy function that
+was solely dependent on the second invariant 𝐼2 . This choice agrees with earlier observations that the brain’s distinctive shape-
+change-dominated behavior can be modeled effectively by functions of 𝐼2 (Kuhl and Goriely, 2024). While this approach performed
+well for uniaxial tension and simple shear, it struggled with uniaxial compression, as demonstrated in the Appendix in Fig. G.2.
+Similarly, the modified invariant-based formulation produced nearly identical results, relying exclusively on 𝜄2 (cf. Appendix,
+Fig. G.3). Consequently, both invariant-based approaches captured certain deformation modes, yet neither fully described the
+tension-compression asymmetry observed in brain tissue.
+    Overall, these findings show that choosing the right functional basis is critical for model performance, particularly for materials
+with pronounced tension-compression asymmetry. While principal invariant- and modified invariant-based CKANs suffice for
+uniaxial tension and simple shear, the principal stretch-based formulation provides a more comprehensive description of brain tissue
+mechanics. Unlike the rubber datasets of Section 5.1, this dataset does not allow for a rigorous evaluation of generalizability due to
+the absence of multi-axial or biaxial tension data in brain tissue. Nevertheless, the significant differences in descriptive performance
+across the three considered functional bases underscore the importance of selecting an appropriate representation for the targeted
+material and deformation modes.
+
+5.3. Ecoflex silicone polymer
+
+    Silicone elastomers are highly versatile materials extensively used in biomedical engineering (Bernardi et al., 2017), soft
+robotics (Case et al., 2015), and wearable devices (Jiang et al., 2018) due to their biocompatibility, thermal stability, and
+stretchability. Ecoflex, a commercial silicone elastomer, is available in various Shore hardness levels that directly correlate with
+its stiffness. In Liao et al. (2020), extensive uniaxial tension tests were conducted, including uniaxial cyclic loading-unloading tests
+on Ecoflex with varying Shore hardness levels.
+    To demonstrate the utility of auxiliary features in constitutive modeling, we analyzed virgin loading curves from these cyclic tests
+and incorporated Shore hardness as an additional input to the CKAN. Specifically, we considered Shore hardness values 𝑠 ∈ {OO-10,
+OO-20, OO-30, OO-50} and maximal uniaxial stretch 𝜆max = 6. Due to the small dataset, we employed leave-one-out cross-validation,
+withholding one Shore hardness level for validation while training on the others. This setup allowed us to evaluate the model’s
+predictive capability in interpolating and extrapolating material behavior across different Shore hardness levels.
+
+Feature augmentation for predictive constitutive modeling. In many elastomeric and collagenous tissue models, the influence of
+additional parameters, such as filler volume fraction (Mullins and Tobin, 1965) or cross-link density (Linka et al., 2018), is often
+captured through strain amplification factors 𝜒. These factors modify the principal invariants as follows:
+                 (      )
+       𝐼̂𝑖 = 𝜒(𝑠) 𝐼𝑖 − 3 + 3, 𝑖 = 1, 2,                                                                                         (32)
+
+allowing for the direct parameterization of the constitutive model by an external feature. However, determining an appropriate
+functional form for 𝜒 can be challenging and is often highly material-specific. In this study, we take a simpler approach to incorporate
+the Shore hardness 𝑠. First, 𝑠 is normalized using
+             𝑠 − 𝑠min
+       𝑠̄ =             ,                                                                                                           (33)
+            𝑠max − 𝑠min
+
+                                                                            15
+K.P. Abdolazizi et al.                                                                             Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+Fig. 11. Comparison of the predictive performance on the Ecoflex silicone polymer data. Mean squared error (MSE) and coefficient of determination (𝑅2 ) of
+the stress curves generated from the discovered symbolic principal invariant-based strain energy functions for Ecoflex silicone on the training and validation set
+using leave-one-out cross-validation.
+
+
+                 Table 2
+                 Strain energy function and material parameters discovered by the principal invariant-based CKAN trained on Ecoflex silicone
+                 polymer data from (Liao et al., 2020) using leave-one-out cross-validation.
+                                                            [                    (        )    ]3
+                   Strain energy function         𝛹̂ KAN = 𝑎 (𝑏 𝑠̄ + 1)2 + 𝑐 cosh 𝑑 𝐼1 + 𝑒 + 𝑓
+                                                  Material parameters
+                   Leave out
+                                                  𝑎 [MPa]           𝑏 [–]            𝑐 [–]            𝑑 [–]            𝑒 [–]            𝑓 [–]
+                   Shore OO-10                    9.6046            0.3722           0.2392           0.0092           0.0805           −0.3287
+                   Shore OO-20                    6.4998            0.3427           0.4190           0.0100           0.0800           −0.6707
+                   Shore OO-30                    6.4998            0.3427           0.4190           0.0100           0.0800           −0.6707
+                   Shore OO-50                    5.4116            0.4997           0.1585           0.0131           0.1045           −0.1422
+
+
+
+
+where 𝑠max = 50 and 𝑠min = 10. The resulting dimensionless variable 𝑠̄ is then included via the feature vector 𝒇 as input to the CKAN. A
+basic 2-layer CKAN architecture with the topology  = [3, 1, 1] is utilized to learn a strain energy function that explicitly incorporates
+the normalized Shore hardness 𝑠.  ̄ Since the dataset consists exclusively of uniaxial tension data and the primary objective is to
+evaluate generalizability across different Shore hardness levels, we use the computationally efficient principal invariant-based CKAN
+formulation. Due to the small dataset and the well-documented relationship that higher Shore hardness generally corresponds to
+stiffer material behavior (Liao et al., 2020), we additionally impose a monotonicity constraint on the relation between 𝑠̄ and the
+strain energy, see Appendix E.2 for details.
+
+Training results (descriptive performance) and validation results (predictive performance). Figs. 11 and 12 visualize the results of the
+identified symbolic strain energy function on the training and validation dataset. The symbolic strain energy functions demonstrate
+excellent agreement with the experimental data, achieving accurate fits to the training dataset and reliable predictions for the Shore
+hardness levels withheld in the respective training process. Especially, in extrapolating the stress–stretch curve for the withheld
+Shore hardness levels OO-10 and OO-20 in Fig. 12(a) and (b), respectively, precise predictions are achieved.
+
+Symbolic strain energy functions. The symbolic strain energy functions independently identified by the CKANs across the four training
+datasets are listed in Table 2. Notably, these identified strain energy functions share the same structure: a hyperbolic cosine of 𝐼1
+and a quadratic function of 𝑠.̄ This similarity is also evident in the learned network topologies and activation functions shown in Fig.
+13. The following characteristics of the identified strain energy functions stand out: First, during the training process, the second
+principal invariant 𝐼2 is effectively excluded from the input space, probably because of its strong correlation with 𝐼1 in uniaxial
+tensile tests. In fact, in such tests, 𝐼2 can be uniquely expressed as a function of 𝐼1 . Second, the identified material parameters 𝑑
+and 𝑒, which operate directly on 𝐼1 within the hyperbolic cosine function, are very similar across all training data sets.
+   The discovered symbolic expression underscores the capability of the CKAN framework to identify interpretable and predictive
+material models. Additionally, our findings demonstrate the efficacy of feature augmentation in enabling the predictive modeling
+of materials with variable properties, such as Ecoflex silicone elastomers.
+
+6. Conclusions
+
+    Existing approaches to mechanical constitutive modeling often require a trade-off between accuracy (fitting performance),
+interpretability, and extrapolability, while also struggling to predict the properties of unknown materials. In this paper, we
+introduced Constitutive Kolmogorov–Arnold Networks (CKANs), a new framework for discovering symbolic mechanical constitutive
+laws for materials. CKANs build on Kolmogorov–Arnold Networks (KANs) and incorporate symbolic regression as a post-processing
+
+                                                                               16
+K.P. Abdolazizi et al.                                                                             Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+Fig. 12. Training results (descriptive performance) and validation results (predictive performance) for Ecoflex silicone polymer data from Liao et al. (2020) for
+principal invariant-based symbolic CKANs applied in leave-one-out cross-validation scheme. The lines represent the model response, and the dots the experimental
+data. Blue indicates data provided during the training (and fitting performance of the model), and orange indicates data withheld during the respective training
+process. The orange lines thus indicate the ability of the trained CKAN to predict the behavior of a material type (with a different Shore hardness level) for
+which no testing data was provided within the training data.
+
+
+
+
+Fig. 13. CKAN architectures obtained during the leave-one-out cross-validation test for Ecoflex silicone polymer data. The red graphs illustrate the symbolic
+activation functions 𝑓𝑖,𝑗,𝑘 , and the red lines are the only remaining connections after the training. Unconnected nodes indicate activation functions identical to
+zero. The principal invariants 𝐼1 and 𝐼2 , along with the normalized Shore hardness 𝑠̄ as an additional feature, formed the input to the CKANs. However, the
+second principal invariant 𝐼2 was discarded during training across all datasets. That is, it was identified as irrelevant.
+
+
+
+
+                                                                                17
+K.P. Abdolazizi et al.                                                            Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+step. This combination achieves high accuracy, interpretability, and extrapolability simultaneously. Furthermore, thanks to their
+flexible neural network architecture, CKANs demonstrate strong generalization capabilities, making them well-suited for predicting
+the behavior of previously unseen materials.
+
+Interpretability. CKANs provide symbolic expressions for the mechanical constitutive behavior of materials. These symbolic
+expressions are as easily interpretable as traditional, manually derived symbolic constitutive equations, provided that the complexity
+of the expressions and the number of parameters remain manageable. This can be achieved through regularization strategies
+that promote simpler model forms, as demonstrated in Appendix G. In particular, CKANs can automatically recover insights from
+experimental data that where previously obtained through theoretical derivations. For example, in our study of human brain tissue,
+CKANs using principal or modified invariants identified the second invariant as the dominant variable, aligning with prior theoretical
+findings (Kuhl and Goriely, 2024; Linka et al., 2023). Similarly, CKANs based on principal stretches recovered an Ogden-type form,
+consistent with previous results (Budday et al., 2017a; Mihai et al., 2017). These results suggest that simple functional bases can
+suffice to capture the essential mechanical behavior, reducing both computational cost and interpretive effort.
+
+Computational efficiency. Using sparsification techniques during training, the CKAN architecture effectively eliminates non-essential
+connections, resulting in sparse symbolic expressions. This sparsity enhances computational efficiency, making CKANs well-suited
+for finite element software implementation.
+
+Extrapolability. CKANs build on the concept of constitutive artificial neural networks (CANNs) originally introduced in Linka et al.
+(2021) and Abdolazizi et al. (2023), inheriting their strong extrapolation capabilities. For instance, when trained solely on Treloar’s
+data (uniaxial tension, equibiaxial tension, pure shear), CKANs accurately predict stress–strain curves in Kawabata’s multi-axial
+dataset.
+
+Predictive modeling. Like CANNs, CKANs are very flexible regarding their input. By incorporating additional information beyond
+stress–strain data, they can predict the mechanical behavior of unknown materials. We demonstrated this by using Shore hardness
+data for Ecoflex polymers. However, as shown for CANNs, CKANs could also leverage microstructural imaging data or processing
+information to enhance material property predictions (Linka et al., 2022). In contrast, previous data-driven model discovery
+approaches rely on a predefined library of building block expressions (Flaschel et al., 2021; Linka and Kuhl, 2023; Brunton et al.,
+2016; Brunton and Kutz, 2022), which limits the variety of possible constitutive models.
+
+Limitations and future directions. Despite the advantages shown here, certain limitations remain. Some manual intervention is
+required for hyperparameter tuning and symbolic regression, highlighting the need for automated solutions. AI-driven meta-
+optimization (Hospedales et al., 2021) could streamline these steps, accelerating the discovery of near-optimal models. In a related
+direction, further constraining the model architecture through theoretical priors, such as polyconvexity, offers promising avenues.
+A recent extension of the CKAN framework introduced input-convex constraints to enforce polyconvexity and demonstrated the
+approach’s effectiveness on synthetic full-field displacement data (Thakolkaran et al., 2025). Another avenue for future research
+is the extension of CKANs to more complex materials, e.g., anisotropic (Linka et al., 2021; Kalina et al., 2025) or inelastic
+materials (Abdolazizi et al., 2023; Holthusen et al., 2024), and multi-physics problems (Franke et al., 2023), potentially aided by a
+next-generation neural architecture (Liu et al., 2024a). Finally, to firmly establish CKANs as a robust tool for constitutive modeling,
+extensive validation under real-world conditions and incorporation of uncertainty quantification will be vital.
+
+Summary. Reliable constitutive equations are crucial in computational mechanics, especially for high-stakes applications, such as
+biomedical and aerospace engineering. While black-box models can provide high predictive accuracy, their lack of transparency
+limits their use in settings where interpretability and reliability are paramount. The CKAN framework presented here is a compelling
+alternative that combines robust performance and predictive capabilities with symbolically interpretable strain energy functions.
+These features makes CKANs ideal for future virtual material design and developing digital twins of complex systems for high-stakes
+applications.
+
+CRediT authorship contribution statement
+
+   Kian P. Abdolazizi: Writing – review & editing, Writing – original draft, Visualization, Validation, Software, Methodology,
+Investigation, Formal analysis, Data curation, Conceptualization. Roland C. Aydin: Writing – review & editing. Christian J. Cyron:
+Writing – review & editing, Supervision, Resources, Funding acquisition, Conceptualization. Kevin Linka: Writing – review & editing,
+Writing – original draft, Supervision, Methodology, Funding acquisition, Conceptualization.
+
+Declaration of Generative AI and AI-assisted technologies in the writing process
+
+   During the preparation of this work, the authors used OpenAI’s ChatGPT-4o to improve the language and readability of the text.
+After using this tool, the authors reviewed and edited the content as needed and take full responsibility for its publication.
+
+Declaration of competing interest
+
+    The authors declare that they have no known competing financial interests or personal relationships that could have appeared
+to influence the work reported in this paper.
+
+                                                                  18
+K.P. Abdolazizi et al.                                                                            Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+Acknowledgments
+
+   We gratefully acknowledge ZiSheng Liao (South China University of Technology, Guangzhou) for providing the experimental data
+of Ecoflex silicone polymer. Funded by the Deutsche Forschungsgemeinschaft (DFG, German Research Foundation) – 533187597,
+517243167.
+
+Appendix A. First Piola–Kirchhoff stresses
+
+    Here, we summarize the derivation of the first Piola–Kirchhoff stresses 𝐏 for strain energy functions expressed in terms of the
+different functional bases considered in this paper. Subsequently, the general expressions of 𝐏 are specified for the homogeneous
+deformation modes of biaxial tension and simple shear, which are essential for training our CKANs.
+
+A.1. General deformations
+
+A.1.1. Principal invariant-based strain energy functions
+   Inserting the principal invariant-based strain energy functions (10)1 and (11)1 into (8), and applying the chain rule along with
+the differentiation relations
+        𝜕𝐼1          𝜕𝐼2                  𝜕𝐼3
+            = 𝐈,          = 𝐼1 𝐈 − 𝐂,         = 𝐼3 𝐂−1 ,                                                                      (A.1)
+        𝜕𝐂           𝜕𝐂                   𝜕𝐂
+yields the following first Piola–Kirchhoff stresses for compressible and incompressible materials, respectively:
+             [(               )                        ]
+                𝜕𝛹        𝜕𝛹         𝜕𝛹          𝜕𝛹 −T
+       𝐏=2          + 𝐼1        𝐅−       𝐅𝐂 + 𝐼3     𝐅   ,                                                                                                 (A.2)
+                𝜕𝐼1      𝜕𝐼          𝜕𝐼2         𝜕𝐼3
+                      [( 2              )            ]
+                          𝜕𝛹        𝜕𝛹        𝜕𝛹
+       𝐏 = −𝑝𝐅−T + 2           + 𝐼1       𝐅−      𝐅𝐂 .                                                                                                     (A.3)
+                          𝜕𝐼1       𝜕𝐼2       𝜕𝐼2
+
+A.1.2. Modified invariant-based strain energy functions
+   For a strain energy function expressed in terms of the modified invariants 𝜄1 and 𝜄2 , inserting the differentiation relations
+         𝜕 𝛹̂   𝜕 𝛹̂ 𝜕𝜄1    1 𝜕 𝛹̂                  𝜕 𝛹̂   𝜕 𝛹̂ 𝜕𝜄2    1 𝜕 𝛹̂
+              =          =         ,                     =          =         ,                                                                            (A.4)
+         𝜕𝐼1    𝜕𝜄1 𝜕𝐼1    6𝜄1 𝜕𝜄1                  𝜕𝐼2    𝜕𝜄2 𝜕𝐼2    9𝜄2 𝜕𝜄2   2
+into (A.2) and (A.3) yields the following first Piola–Kirchhoff stresses for compressible and incompressible materials, respectively:
+             [(                       )                              ]
+                 1 𝜕𝛹         1 𝜕𝛹            1 𝜕 𝛹̂           𝜕𝛹 −T
+       𝐏=2              + 𝐼1            𝐅−            𝐅𝐂 + 𝐼3      𝐅   ,                                                        (A.5)
+                6𝜄1 𝜕𝜄1      9𝜄22 𝜕𝜄2        9𝜄22 𝜕𝜄2          𝜕𝐼3
+                      [(                         )                 ]
+                          1 𝜕 𝛹̂         1 𝜕 𝛹̂          1 𝜕 𝛹̂
+       𝐏 = −𝑝𝐅−T + 2               + 𝐼1            𝐅−           𝐅𝐂 .                                                            (A.6)
+                         6𝜄1 𝜕𝜄1        9𝜄2 𝜕𝜄2         9𝜄2 𝜕𝜄2
+                                                         2                 2
+
+
+A.1.3. Principal stretch-based strain energy functions
+   We substitute the principal stretch-based strain energy functions (10)2 and (11)2 into (8). Applying the chain rule along with
+the relations
+       𝜕𝜆𝛼      1                   𝜕𝐽     𝐽
+            =      𝑵 ⊗ 𝑵𝛼,              =     ,     𝐅𝑵 𝛼 = 𝜆𝛼 𝒏𝛼 ,                                                          (A.7)
+        𝜕𝐂    2𝜆𝛼 𝛼                 𝜕𝜆𝑎    𝜆𝛼
+yields the spectral representation of the first Piola–Kirchhoff stress for compressible and incompressible materials, respectively,
+              ∑3
+                   𝜕𝛹
+        𝐏=              𝒏𝛼 ⊗ 𝑵 𝛼 ,                                                                                                                         (A.8)
+              𝛼=1
+                   𝜕𝜆 𝛼
+                  ⏟⏟⏟
+                      =𝑃𝛼
+                  (                 )
+              ∑
+              3
+                        𝑝    𝜕𝛹
+        𝐏=            −    +          𝒏𝛼 ⊗ 𝑵 𝛼 ,                                                                                                           (A.9)
+              𝛼=1
+                       𝜆𝛼    𝜕𝜆𝛼
+                  ⏟⏞⏞⏞⏞⏞⏞⏞⏞⏟⏞⏞⏞⏞⏞⏞⏞⏞⏟
+                            𝑃̂𝛼
+
+where 𝑃𝛼 and 𝑃̂𝛼 denote the principal stresses.
+   Finally, we specialize the general expressions (A.8) and (A.9) for the compressible and incompressible separable strain energy
+functions (12) and (13). In the compressible case,
+                                  ∑
+                                  3                      ∑
+                                                         3
+        𝛹 (𝜆1 , 𝜆2 , 𝜆3 , 𝒇 ) =         𝜔1 (𝜆𝛼 , 𝒇 ) +         𝜔−1 (𝜈𝛼 , 𝒇 ) + 𝛺(𝜆1 𝜆2 𝜆3 , 𝒇 )                                                          (A.10)
+                                  𝛼=1                    𝛼=1
+
+                                                                                            19
+K.P. Abdolazizi et al.                                                                                            Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+and the corresponding first Piola–Kirchhoff stress is
+                      [( 3                            )                 ]
+             𝜕𝛹          ∑ 𝜕𝜔1 𝜕𝜆𝛼 ∑    3
+                                            𝜕𝜔−1 𝜕𝜈𝛼      ∑3
+                                                              𝜕𝛺 𝜕𝐽 𝜕𝜆𝛼
+      𝐏 = 2𝐅     = 2𝐅                 +                 +                 .                                                                                              (A.11)
+             𝜕𝐂          𝛼=1
+                              𝜕𝜆𝛼 𝜕𝐂 𝛼=1 𝜕𝜈𝛼 𝜕𝐂           𝛼=1
+                                                              𝜕𝐽 𝜕𝜆𝛼 𝜕𝐂
+
+Using (A.7) and
+                         (                         )
+         𝜕𝜈𝛼  𝜈                      1                                 ∑
+                                                                       3
+                                                                         1
+             = 𝛼             𝐂−1 −       𝑵𝛼 ⊗ 𝑵𝜶       ,    𝐂−1 =               𝑵𝛼 ⊗ 𝑵𝛼,                                                                                 (A.12)
+         𝜕𝐂    2                     𝜆2𝛼                                    2
+                                                                       𝛼=1 𝜆𝛼
+
+we obtain
+                  [                                                    ( 3                         )
+                      ∑
+                      3
+                        1 𝜕𝜔1                      ∑
+                                                   3
+                                                                𝜕𝜔−1    ∑ 1
+        𝐏 = 𝐅                          𝑵𝛼 ⊗ 𝑵𝛼 +           𝜈𝛽                        𝑵𝛼 ⊗ 𝑵𝛼
+                              𝜆𝛼 𝜕𝜆𝛼                             𝜕𝜈𝛽          2
+                   𝛼=1                             𝛽=1                   𝛼=1 𝜆𝛼
+                                                           ]                                                                                                             (A.13)
+                  ∑
+                  3
+                    𝜈𝛼 𝜕𝜔−1                𝜕𝛺 𝐽    ∑3
+             −              𝑵𝛼 ⊗ 𝑵𝜶 +            𝑵 ⊗ 𝑵𝛼
+                     2 𝜕𝜈
+                𝛼=1 𝜆𝛼    𝛼            𝛼=1
+                                           𝜕𝐽 𝜆2𝛼 𝛼
+               [                                         ]
+            ∑3
+                 𝜕𝜔1     1 ∑ 𝜕𝜔−1
+                            3
+                                        𝜈 𝜕𝜔−1        𝜕𝛺
+          =           +        𝜈𝛽     − 𝛼        + 𝜈𝛼     𝒏𝛼 ⊗ 𝑵 𝛼 .                                                                                                     (A.14)
+            𝛼=1
+                 𝜕𝜆𝛼    𝜆𝛼 𝛽=1    𝜕𝜈𝛽   𝜆𝛼 𝜕𝜈𝛼        𝜕𝐽
+
+Comparing (A.14) and (A.8) finally yields
+
+                            1 ∑ 𝜕𝜔−1
+                                3
+                𝜕𝛹    𝜕𝜔1                 𝜈 𝜕𝜔−1      𝜕𝛺
+        𝑃𝛼 =        =     +       𝜈      − 𝛼     + 𝜈𝛼    .                                                                                                               (A.15)
+                𝜕𝜆𝛼   𝜕𝜆𝛼   𝜆𝛼 𝛽=1 𝛽 𝜕𝜈𝛽  𝜆𝛼 𝜕𝜈𝛼      𝜕𝐽
+
+For the incompressible case, the strain energy function takes on the form
+
+                                                   ∑
+                                                   3                          ∑
+                                                                              3
+        𝛹 = 𝛹̂ (𝜆1 , 𝜆2 , 𝜆3 , 𝒇 ) − 𝑝(𝐽 − 1) =            𝜔̂ 1 (𝜆𝛼 , 𝒇 ) +         𝜔̂ −1 (𝜆−1
+                                                                                            𝛼 , 𝒇 ) − 𝑝(𝐽 − 1).                                                          (A.16)
+                                                   𝛼=1                        𝛼=1
+
+Using
+         𝜕𝜆−1
+           𝛼           1
+                =−         𝑵𝛼 ⊗ 𝑵𝜶                                                                                                                                       (A.17)
+          𝜕𝐂          2𝜆3𝛼
+and following the same steps as in the compressible case, we obtain
+                  𝑝    𝜕 𝛹̂    𝑝    𝜕 𝜔̂ 1   1 𝜕 𝜔̂ −1
+        𝑃𝛼 = −       +      =−    +        −           .                                                                                                                 (A.18)
+                  𝜆𝛼   𝜕𝜆𝛼     𝜆𝛼   𝜕𝜆𝛼      𝜆2𝛼 𝜕𝜆−1
+                                                   𝛼
+
+
+A.2. Special deformation modes
+
+    In the numerical examples presented in Section 5, we use experimentally determined stress data from biaxial tensile and simple
+shear tests on rubber and human brain tissue, conducted under conditions of homogeneous deformation and quasi-static loading.
+Under these conditions, the first Piola–Kirchhoff stress tensor can be computed from the external forces and the specimen’s cross-
+sectional area. During training, the error between the experimental stress data and the stress predicted by the CKAN is minimized,
+thereby implicitly learning the strain energy function. Consequently, we specify the stress tensor associated with the strain energy
+function for these special load cases.
+    In the following, the component indices of tensors refer to the fixed Cartesian coordinate system with basis vectors {𝑬 1 , 𝑬 2 , 𝑬 3 }
+illustrated in Fig. A.14. For the ease of notation, we equate tensors with the matrices representing their components. This notation
+is unambiguous and thus justified because we always refer to the above fixed and well-defined basis.
+
+
+A.2.1. Biaxial tension
+   In biaxial tensile tests, we stretch a thin material specimen in two orthogonal directions 𝑬 1 and 𝑬 2 by stretches 𝜆1 and 𝜆2 , Fig.
+A.14(a). The incompressibility condition determines the stretch in the thickness direction 𝑬 3 : 𝜆3 = (𝜆1 𝜆2 )−1 . Although 𝜆1 and 𝜆2
+can be independently controlled in a biaxial tension test (Kawabata et al., 1981), specific test protocols in which 𝜆1 and 𝜆2 follow
+predefined functional relationships are often employed, Fig. A.14(b). For a biaxial tensile test, the deformation gradient in matrix
+notation and the principal invariants are:
+
+          ⎡𝜆1            0          0      ⎤
+        𝐅=⎢0             𝜆2         0      ⎥,   𝐼1 = 𝜆21 + 𝜆22 + (𝜆1 𝜆2 )−2 ,              𝐼2 = 𝜆21 𝜆22 + 𝜆−2 + 𝜆−2 ,    𝐼3 = 1.                                         (A.19)
+          ⎢                                ⎥                                                               1     2
+          ⎣0             0      (𝜆1 𝜆2 )−2 ⎦
+The only non-zero stress components are P11 and P22 and depending on the employed functional basis for the strain energy function,
+we arrive at the following expressions:
+
+                                                                                              20
+K.P. Abdolazizi et al.                                                                                      Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+Fig. A.14. Homogeneous deformations. (a) In a general biaxial tensile test, a thin incompressible material specimen is stretched in the 𝑬 1 - and 𝑬 2 -directions
+by two independent stretches 𝜆1 and 𝜆2 , respectively. The stretch 𝜆3 in the thickness direction 𝑬 3 is determined by the incompressibility condition. (b) Common
+special cases of the general biaxial tensile test are characterized by fixed ratios between the stretches 𝜆1 and 𝜆2 . (c) In a simple shear test, the top and bottom
+surfaces of a material specimen are sheared relative to each other by an angle 𝜗, while maintaining their initial distance in the 𝑬 2 -direction.
+
+
+
+
+Principal invariant-based strain energy function. Inserting the deformation gradient and first principal invariant of a biaxial tensile
+deformation from (A.19), along with the incompressibility condition, 𝜆3 = (𝜆1 𝜆2 )−1 , into (A.3) allows us to determine the hydrostatic
+pressure 𝑝 from the plane stress assumption, P33 = 0:
+                  [                       ]
+              2     𝜕 𝛹̂   𝜕 𝛹̂ ( 2      )
+       𝑝=                +       𝜆1 + 𝜆22 ,                                                                                      (A.20)
+             2  2
+            𝜆 𝜆 𝜕𝐼1 𝜕𝐼2
+                1 2
+
+Substituting 𝑝 back into (A.3) results in
+               (              )(                 )
+           ⎡             1       𝜕 𝛹̂       𝜕 𝛹̂                                                      ⎤
+           ⎢ 2   𝜆1 −                 + 𝜆22 𝜕𝐼                            0                         0⎥
+                      𝜆31 𝜆22    𝜕𝐼1
+           ⎢
+                                               2
+                                                       (                 )(                     )     ⎥
+       𝐏=⎢                                                                                                                                                         (A.21)
+                                                                                                    0⎥
+                                                                  1           𝜕 𝛹̂       𝜕 𝛹̂           .
+                               0                      2 𝜆2 −                       + 𝜆21 𝜕𝐼
+           ⎢                                                   𝜆21 𝜆32        𝜕𝐼1           2         ⎥
+           ⎢                   0                                         0                          0⎥⎦
+           ⎣
+
+Modified invariant-based strain energy function. Inserting the differentiation relations (A.4) into (A.21) yields the expression for the
+modified invariant formulation:
+             (             )(                       )
+           ⎡           1       1 𝜕 𝛹̂             ̂                                             ⎤
+           ⎢2 𝜆1 − 𝜆3 𝜆2      6𝜄1 𝜕𝜄1
+                                      + 𝜆22 12 𝜕𝜕𝜄𝛹                   0                       0⎥
+                                           9𝜄
+           ⎢          1  2                   2    2
+                                                       (          ) (                       )   ⎥
+       𝐏=⎢                                                                                                                        (A.22)
+                                                                                              0⎥
+                                                                       1 𝜕 𝛹̂             ̂       .
+                              0                       2 𝜆2 − 21 3             + 𝜆21 12 𝜕𝜕𝜄𝛹
+           ⎢                                                𝜆1 𝜆2     6𝜄1 𝜕𝜄1      9𝜄2 2        ⎥
+           ⎢                  0                                       0                       0⎥⎦
+           ⎣
+
+Principal stretch-based strain energy function. In a biaxial tensile test of a homogeneous isotropic material, only normal stresses arise,
+and consequently, the principal directions 𝑵 𝛼 and 𝒏𝛼 , and the basis vectors 𝑬 𝛼 coincide. In this case, the Cartesian stress components
+directly equate with the principal stresses. Utilizing the plane stress assumption, P33 = 0, to determine the hydrostatic pressure 𝑝
+from (A.9) gives:
+
+                1 𝜕 𝛹̂
+        𝑝=              ,                                                                                                                                          (A.23)
+              𝜆1 𝜆2 𝜕𝜆3
+
+therefore, substituting 𝑝 back into (A.9), gives:
+
+          ⎡ 𝜕 𝛹̂ − 1 𝜕𝛹̂                  0            0⎤
+          ⎢ 𝜕𝜆1 𝜆21 𝜆2 𝜕𝜆3                              ⎥
+        𝐏=⎢       0                𝜕 𝛹̂       𝜕 𝛹̂
+                                        − 1 2 𝜕𝜆
+                                                        ⎥
+                                                       0⎥ .                                                                                                        (A.24)
+          ⎢                        𝜕𝜆2   𝜆1 𝜆     3
+          ⎢                                   2
+                                                        ⎥
+          ⎣       0                       0            0⎦
+
+                                                                                      21
+K.P. Abdolazizi et al.                                                                                       Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+A.2.2. Simple shear
+   In a simple shear test, we shear the top and bottom surfaces of the specimen relative to each other by the angle 𝜗 = tan(𝛾), while
+maintaining their initial distance in the 𝑬 2 -direction, Fig. A.14(c). Here, 𝛾 denotes the amount of shear. We obtain
+
+            ⎡1         𝛾         0⎤                  √
+                                                      4 + 𝛾2 ± 𝛾
+        𝐅 = ⎢0         1         0⎥ ,       𝜆1,2 =               ,   𝜆3 = 1,          𝐼1 = 𝐼2 = 3 + 𝛾 2 ,   𝐼3 = 1.                                                 (A.25)
+            ⎢                     ⎥                      2
+            ⎣0         0         1⎦
+Depending on the employed functional basis for the strain energy function, we arrive at the following expressions for the first
+Piola–Kirchhoff stress tensor.
+
+Principal invariant-based strain energy function. Inserting the deformation gradient and first principal invariant of a simple shear
+deformation from (A.25), along with the incompressibility condition, 𝜆3 = (𝜆1 𝜆2 )−1 = 1, into (A.3) allows us to determine the
+hydrostatic pressure 𝑝 from the plane stress assumption, P33 = 0:
+             [                   ]
+               𝜕 𝛹̂   𝜕 𝛹̂ 2
+       𝑝=2          +     (𝛾 + 2) .                                                                                           (A.26)
+               𝜕𝐼1 𝜕𝐼2
+Substituting 𝑝 back into (A.3) results in
+                                        ( ̂             )
+           ⎡            𝜕 𝛹̂ 2
+                     −2 𝜕𝐼   𝛾       2𝛾 𝜕𝐼𝜕𝛹
+                                               + 𝜕𝐼𝜕 𝛹̂
+                                                                               0⎤
+           ⎢                                                                     ⎥
+               (           2
+                                   )        1         2
+       𝐏 = ⎢2𝛾 𝜕𝛹̂ + 𝜕𝛹̂ (𝛾 2 + 1)          𝜕 𝛹̂ 2                               ⎥
+                                                                               0⎥ .                                                                                 (A.27)
+           ⎢     𝜕𝐼1    𝜕𝐼2
+                                         −2 𝜕𝐼   𝛾
+           ⎢                                   2
+                                                                               0⎥⎦
+           ⎣            0                    0
+
+Modified invariant-based strain energy function. Substituting the differentiation relations (A.4) into (A.27) gives:
+                                                  (                     )
+           ⎡               1 𝜕 𝛹̂ 2                  1 𝜕 𝛹̂     1 𝜕 𝛹̂      ⎤
+           ⎢           −2          𝛾           2𝛾           +             0⎥
+                          9𝜄22 𝜕𝜄2                  6𝜄1 𝜕𝜄1    9𝜄22 𝜕𝜄2
+           ⎢ (                               )                              ⎥
+       𝐏=⎢                                                                                                                                                          (A.28)
+                                                                          0⎥
+                       ̂           ̂                         ̂                .
+             2𝛾 6𝜄1 𝜕𝜕𝜄𝛹 + 12 𝜕𝜕𝜄𝛹 (𝛾 2 + 1)        −2 12 𝜕𝜕𝜄𝛹 𝛾 2
+           ⎢       1   1     9𝜄2 2                      9𝜄2 2               ⎥
+           ⎢                  0                            0              0⎥⎦
+           ⎣
+Principal stretch-based strain energy function. In a simple shear test, the principal directions 𝑵 𝛼 and 𝒏𝛼 do not align with the basis
+vectors 𝑬 𝛼 , except in the out-of-plane direction. The principal directions in the reference configuration 𝑵 𝛼 are obtained by solving
+the eigenvector problem of 𝐂:
+               [                     ]T            [                       ]T
+                  1         𝜆1                         1          𝜆2                     [           ]T
+       𝑵 1 = √𝜆2 +1 , √𝜆2 +1 , 0 ,            𝑵 2 = √𝜆2 +1 , − √𝜆2 +1 , 0 ,        𝑵 3 = 0, 0, 1 .                               (A.29)
+                         1              1                                  2              2
+
+Utilizing (A.7)2 , we can calculate the principal directions in the current configuration 𝒏𝛼 :
+            [                        ]T           [                         ]T
+               𝛾𝜆1 +1       1                        −𝛾𝜆2 +1        1                    [                                       ]T
+       𝒏1 = 𝜆 √𝜆2 +1 , √𝜆2 +1 , 0 ,          𝒏2 = 𝜆 √𝜆2 +1 , − √𝜆2 +1 , 0 ,         𝒏3 = 0, 0,                                  1 .                                 (A.30)
+                  1          1              1                          2       2              2
+
+Inserting the principal directions 𝑵 𝛼 and 𝒏𝛼 into (A.9), and applying the plane stress assumption, P33 = 0, enables us to determine
+the hydrostatic pressure:
+              𝜕 𝛹̂
+        𝑝=         .                                                                                                                                                (A.31)
+              𝜕𝜆3
+Substituting 𝑝 along with 𝑵 𝛼 and 𝒏𝛼 back into (A.8), and observing that 1 + 𝛾𝜆1 = 𝜆21 and 1 − 𝛾𝜆2 = 𝜆22 , leads to:
+
+            ⎡ 1 𝜕𝛹̂           1 𝜕 𝛹̂    𝜕 𝛹̂                   𝜆21 𝜕 𝛹̂   𝜆2 𝜕 𝛹̂                  ⎤
+            ⎢ 𝜆21 +1 𝜕𝜆1 + 𝜆22 +1 𝜕𝜆2 − 𝜕𝜆3                             − 2 2 𝜕𝜆                  0⎥
+                                                             𝜆21 +1 𝜕𝜆1  𝜆2 +1 2
+            ⎢                                                                                      ⎥
+        𝐏 = ⎢ 1 𝜕 𝛹̂ − 1 𝜕𝛹̂ + 𝛾 𝜕 𝛹̂                       𝜆1 𝜕 𝛹̂    𝜆   𝜕 𝛹̂
+                                                                     + 2 2 𝜕𝜆     𝜕 𝛹̂
+                                                                                − 𝜕𝜆              0⎥ .                                                              (A.32)
+            ⎢ 𝜆21 +1 𝜕𝜆1 𝜆22 +1 𝜕𝜆2      𝜕𝜆3              𝜆21 +1 𝜕𝜆1  𝜆2 +1 2         3            ⎥
+            ⎢                                                                                      ⎥
+            ⎣               0                                          0                          0⎦
+
+Appendix B. Hyperparameters
+
+   Table B.1 lists the hyperparameters of the CKANs from Section 5. For CKANs using the mixed functional basis, the sub-KANs
+based on principal invariants and principal stretches are likewise parametrized according to Table B.1.
+
+Appendix C. Internal architecture of a principal stretch-based CKAN
+
+   Fig. C.1 schematically shows the internal architecture of a principal stretch-based CKAN. To preserve the symmetry of the strain
+energy function 𝛹 KAN , parameter sharing is employed.
+
+                                                                                              22
+K.P. Abdolazizi et al.                                                                             Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+             Table B.1
+             Hyperparameters of the principal invariant-, modified invariant-, and principal stretch-based (sub-)CKANs used in the numerical examples
+             in Section 5.
+                                                                               Value
+              Hyperparameter
+                                                                               Principal & modified invariant-based          Principal stretch-based
+              Topology                                                        [2,3,1]                                       [1,4,1]
+              Order of splines                                                 3                                             3
+              Grid intervals                                                   1                                             1
+              Number of trainable activation functions                         9                                             8
+              Number of parameters per trainable activation functions          4                                             4
+              Optimizer                                                        Adam                                          Adam
+              Learning rate                                                    0.001                                         0.001
+              Overall regularization magnitude 𝛬                               0.0005                                        0.0005
+              𝐿1 regularization magnitude 𝜇1                                   1                                             1
+              Entropy regularization magnitude 𝜇2                              1                                             1
+
+
+
+
+Fig. C.1. Internal architecture of a principal stretch-based Constitutive Kolmogorov–Arnold Network (CKAN): Following the ansatz of separable functions from
+(12) and (13), the 𝜆𝛼 and the 𝜈𝛼 are processed by distinct KANs, denoted as 𝖪𝖠𝖭𝜔1 and 𝖪𝖠𝖭𝜔−1 . However, to ensure material symmetry (isotropy), all three 𝜆𝛼
+have to pass through the same mapping 𝖪𝖠𝖭𝜔1 and all three 𝜈𝛼 through the same mapping 𝖪𝖠𝖭𝜔1 . This is implemented through KANs with shared parameters.
+For clarity, the feature vector 𝒇 is not shown, but it would be processed by each KAN, namely 𝖪𝖠𝖭𝜔1 , 𝖪𝖠𝖭𝜔−1 , and 𝖪𝖠𝖭𝛺 .
+
+
+
+
+                                                                               23
+K.P. Abdolazizi et al.                                                            Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+Appendix D. Normalization terms for a stress-free reference configuration
+
+    As outlined in Section 3.2, the stress 𝐒KAN associated with 𝛹 KAN does not in general vanish in the undeformed reference
+configuration. Here, we provide the specific stress normalization terms 𝛹 𝜎 and the corresponding stress tensors 𝐒𝜎 to offset 𝐒KAN
+in the reference configuration for each CKAN formulation considered in this work. By construction, 𝛹 𝜎 vanishes in the undeformed
+reference configuration.
+
+D.1. Principal invariant-based strain energy function
+
+    In view of (A.2), the second Piola–Kirchhoff stress is
+                             [( KAN               )                             ]
+                 𝜕𝛹 KAN        𝜕𝛹          𝜕𝛹 KAN       𝜕𝛹 KAN        𝜕𝛹 KAN −1
+        𝐒𝐊𝐀𝐍 = 2         =2           + 𝐼1          𝐈−         𝐂 + 𝐼3       𝐂     ,                                                        (D.1)
+                   𝜕𝐂            𝜕𝐼1        𝜕𝐼2            𝜕𝐼2         𝜕𝐼3
+and becomes in the undeformed reference configuration (𝐂 = 𝐈, 𝐼1 = 𝐼2 = 3, 𝐼3 = 1):
+                    [ KAN                    ]
+                     𝜕𝛹      𝜕𝛹 KAN 𝜕𝛹 KAN ||
+      𝐒KAN |𝐂=𝐈 = 2       +2        +          | 𝐈.                                                                                        (D.2)
+                      𝜕𝐼1      𝜕𝐼2      𝜕𝐼3    |𝐂=𝐈
+To offset this generally non-zero stress, we introduce the stress normalization term
+
+        𝛹 𝜎 (𝐽 , 𝒇 ) ∶= −𝛯(𝒇 )(𝐽 − 1)                                                                                                      (D.3)
+
+where
+                         [                                    ]
+                             𝜕𝛹 KAN    𝜕𝛹 KAN 𝜕𝛹 KAN              |
+        𝛯(𝒇 ) ∶= 2                  +2       +                    | ,                                                                      (D.4)
+                                                                  |
+                              𝜕𝐼1       𝜕𝐼2    𝜕𝐼3                |𝐂=𝐈
+is determined by the derivatives of 𝛹 KAN with respect to the principal invariants, evaluated in the undeformed reference
+configuration. However, during training, 𝛯 continuously adapts as 𝛹 KAN evolves with each update of the trainable spline parameters
+and is not computed in a post-processing step. Evaluating the corresponding stress contribution
+
+        𝐒𝜎 = −𝛯 𝐽 𝐂−1                                                                                                                      (D.5)
+
+for 𝐂 = 𝐈 confirms that 𝐒𝜎 indeed corrects (D.2), ensuring a stress-free reference configuration. For an isotropic incompressible
+material, the
+
+D.2. Modified invariant-based strain energy function
+
+    Following the same reasoning, the stress normalization term for the modified invariant-based formulation is defined as
+
+        𝛹 𝜎 (𝐽 , 𝒇 ) ∶= −𝛯(𝒇 )(𝐽 − 1),                                                                                                     (D.6)
+
+where
+                         [                                        ]
+                             1 𝜕𝛹 KAN 2 𝜕𝛹 KAN 𝜕𝛹 KAN                 |
+        𝛯(𝒇 ) ∶= 2                   +        +                       | .                                                                  (D.7)
+                                                                      |
+                             6 𝜕𝜄1     9 𝜕𝜄2    𝜕𝐼3                   |𝐂=𝐈
+The corresponding stress contribution, ensuring a stress-free reference configuration, is given by
+
+        𝐒𝜎 = −𝛯𝐽 𝐂−1 .                                                                                                                     (D.8)
+
+
+D.3. Principal stretch-based strain energy function
+
+    In view of (A.14), the second Piola–Kirchhoff stress tensor is
+                  [                                                    ]
+               ∑3
+                    1 𝜕𝜔1
+                          KAN
+                                 1 ∑ 𝜕𝜔−1
+                                     3      KAN
+                                                  𝜈 𝜕𝜔−1
+                                                        KAN
+                                                               𝜈 𝜕𝛺KAN
+        𝐒KAN =                +         𝜈𝛽      − 𝛼          + 𝛼         𝑵𝛼 ⊗ 𝑵𝛼                                                           (D.9)
+               𝛼=1
+                    𝜆𝛼 𝜕𝜆𝛼      𝜆2𝛼 𝛽=1    𝜕𝜈𝛽    𝜆2𝛼 𝜕𝜈𝛼      𝜆𝛼 𝜕𝐽
+
+and becomes in the undeformed reference configuration (𝐂 = 𝐈, 𝜆𝛼 = 𝜈𝛼 = 𝐽 = 1):
+                  [ KAN                     ]
+                   𝜕𝜔1      𝜕𝜔KAN 𝜕𝛺KAN ||
+      𝐒KAN |𝐂=𝐈 =        + 2 −1 +             | 𝐈,                                                                                       (D.10)
+                    𝜕𝜆𝛼      𝜕𝜈𝛼       𝜕𝐽     |
+                                              |𝐂=𝐈
+                        ∑3
+where we exploited that 𝛼=1 𝑵 𝛼 ⊗ 𝑵 𝛼 = 𝐈. Thus, we define the normalization term
+
+        𝛹 𝜎 (𝐽 , 𝒇 ) = −𝛯(𝒇 )(𝐽 − 1),                                                                                                    (D.11)
+
+where
+                    [                                     ]
+                         𝜕𝜔KAN          𝜕𝜔KAN     𝜕𝛺KAN       |
+                           1              −1                  |
+        𝛯(𝒇 ) ∶=                   +2           +             | .                                                                        (D.12)
+                             𝜕𝜆𝛼         𝜕𝜈𝛼       𝜕𝐽         |
+                                                              |𝐂=𝐈
+
+                                                                             24
+K.P. Abdolazizi et al.                                                                               Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+The corresponding stress contribution, ensuring a stress-free reference configuration, is
+
+        𝐒𝜎 = −𝛯𝐽 𝐂−1 .                                                                                                                                      (D.13)
+
+
+Appendix E. Implementation
+
+   The computational framework presented here builds on Liu et al. (2024b), implemented in PyTorch, and extended by Polo-
+Molina et al. (2024), which enables partial monotonicity constraints. Adapting KANs for constitutive modeling of hyperelastic
+materials required several modifications. Key implementation aspects include designing the loss function, Appendix E.1, enforcing
+monotonicity constraints, Appendix E.2, and—as discussed in Sections 4.1 and 4.2—applying sparsification and pruning. While we
+described the general symbolification process already in Section 4.3, we discuss in Appendix E.3 caveats of the symbolification
+specific to the functional bases considered herein.
+
+E.1. Loss function
+
+    The objective of CKANs is, in a first step, to learn the spline parameters that minimize the error between the stress prediction of
+the CKAN 𝐏 and the experimental stress data 𝐏.                 ̃ In all numerical examples in Section 5, we consider the special biaxial load cases
+uniaxial tension (UT) and compression (UC), equibiaxial tension (ET), and pure shear (PS), Fig. A.14(b). Each load case comprises
+                                             𝑛𝑎
+𝑛𝑎 data tuples: {(𝜆𝑎1,𝑖 , 𝜆𝑎2,𝑖 , P̃ 𝑎11,𝑖 )}𝑖=1 , where 𝑎 ∈ {UT, UC, ET, PS}. Additionally, 𝑛SS data pairs are obtained from simple shear (SS)
+                       𝑛
+                SS )} SS .
+tests: {(𝛾𝑖 , 𝑃̃12,𝑖   𝑖=1
+    Then, the objective is to minimize the following general (data) loss function:
+                                              𝑛𝑎
+                                                  ( 𝑎    𝑎      𝑎    ̃ 𝑎 )2       𝑛SS
+                                                                                      ( SS        ̃ SS )2
+                           ∑              1 ∑ P11,𝑖 (𝜆1,𝑖 , 𝜆2,𝑖 ) − P11,𝑖     1 ∑ P12,𝑖 (𝛾𝑖 ) − P12,𝑖
+        data =                                                             +                             .                                   (E.1)
+                                         𝑛
+                     𝑎∈{UT,UC,ET,PS} 𝑎 𝑖=1                 P̃ 𝑎
+                                                         11,𝑖
+                                                                              𝑛SS 𝑖=1       P̃ SS
+                                                                                              12,𝑖
+
+Often, not all load cases are considered simultaneously during training, but only a subset is used, while the withheld load cases
+validate the model’s generalization capabilities. In addition, the loss function could be augmented with other stress components,
+if available. However, typically only the P11 and P12 components are reported for the special biaxial load cases and simple shear,
+respectively, and used in this work.
+
+E.2. (Partially) monotonic cubic Hermite splines
+
+    To maintain a monotonic strain energy function in hyperelastic material modeling, we build on the work by Polo-Molina et al.
+(2024). This approach extends the Kolmogorov–Arnold Network (KAN) by imposing (partial) monotonicity constraints on the spline
+activation functions. This enforces a physically meaningful increase in strain energy as strain increases. This monotonicity also
+mitigates numerical pathologies, such as stress oscillations or material instabilities, thus enhancing both robustness and extrapolation
+capabilities.
+    While the original KAN formulation (Liu et al., 2024b) uses B-splines as activation functions, Polo-Molina et al. (2024) proposed
+cubic Hermite splines and imposed constraints on their control points to ensure monotonicity. Let 𝐗 = {𝑥𝑘 }𝑛𝑘=0 , 𝐘 = {𝑦𝑘 }𝑛𝑘=0 , and
+𝐌 = {𝑚𝑘 }𝑛𝑘=0 be the knots, their associated control points, and derivatives, respectively. Defining the index set 𝐼 = {0, … , 𝑛}, a cubic
+Hermite spline 𝑝 consists of 𝑛 cubic polynomials such that
+
+        𝑝(𝑥𝑘 ) = 𝑦𝑘 ,        𝑝′ (𝑥𝑘 ) = 𝑚𝑘 ,   ∀𝑘 ∈ 𝐼.                                                                                                        (E.2)
+
+The cubic Hermite spline 𝑝 can be expressed for a segment 𝐼𝑘 = [𝑥𝑘 , 𝑥𝑘+1 ] by the restriction
+
+        𝑝𝑘 (𝑡) ∶= 𝑝|𝐼𝑘 (𝑡) = ℎ00 (𝑡) 𝑦𝑘 + ℎ10 (𝑡) (𝑥𝑘+1 − 𝑥𝑘 ) 𝑚𝑘 + ℎ01 (𝑡) 𝑦𝑘+1 + ℎ11 (𝑡) (𝑥𝑘+1 − 𝑥𝑘 ) 𝑚𝑘+1 ,                                                (E.3)
+           𝑥−𝑥𝑘
+where 𝑡 = 𝑥 −𝑥           and the Hermite basis functions ℎ𝑖𝑗 (𝑡) are:
+           𝑘+1  𝑘
+
+
+        ℎ00 (𝑡) = 2𝑡3 − 3𝑡2 + 1,                                                     ℎ10 (𝑡) = 𝑡3 − 2𝑡2 + 𝑡,                                                  (E.4)
+                         3       2                                                             3       2
+        ℎ01 (𝑡) = −2𝑡 + 3𝑡 ,                                                         ℎ11 (𝑡) = 𝑡 − 𝑡 .                                                        (E.5)
+
+    For a monotonically increasing (decreasing) spline, it is necessary that 𝑦𝑘 ≤ 𝑦𝑘+1 (𝑦𝑘 ≥ 𝑦𝑘+1 ), ∀𝑘 ∈ 𝐼. Then, a sufficient condition
+for 𝑝𝑘 being monotonically increasing (decreasing) in 𝐼𝑘 is (Polo-Molina et al., 2024; Fritsch and Carlson, 1980):
+                      (               )                        (                 )
+             𝑚                 𝑚                  𝑚𝑘+1                 𝑚𝑘+1
+       𝛼𝑘 ∶= 𝑘 ≥ 0      𝛼𝑘 ∶= 𝑘 ≤ 0 , 𝛽𝑘 ∶=             ≥0       𝛽𝑘 ∶=       ≤0      and 𝛼𝑘2 + 𝛽𝑘2 ≤ 9,                             (E.6)
+             𝑑𝑘                𝑑𝑘                  𝑑𝑘                    𝑑𝑘
+where 𝑑𝑘 = (𝑦𝑘+1 − 𝑦𝑘 )∕(𝑥𝑘+1 − 𝑥𝑘 ) denotes the slope of the secant line between two knots 𝑥𝑘+1 and 𝑥𝑘 . These conditions ensure that
+the cubic Hermite spline remains monotonic across its entire domain.
+    During training, the parameters 𝐘 and 𝐌 are updated at each optimization step according to the algorithm proposed in Polo-
+Molina et al. (2024), while satisfying the above-stated conditions. By imposing monotonic behavior, the CKAN framework adheres
+to essential physical requirements of hyperelastic modeling while maintaining the predictive and interpretive benefits of the KAN
+
+                                                                              25
+K.P. Abdolazizi et al.                                                                    Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+architecture. If no monotonicity constraints are imposed on the inputs, the CKAN automatically reverts to B-splines as in Liu et al.
+(2024b). For the construction of B-splines we refer to de Boor (1980).
+E.3. Functional basis-specific symbolification
+
+
+   When an input vector 𝒙𝑠0 is passed to a CKAN, information propagates from the input layer to the output layer by computing the
+node outputs 𝑥𝑠𝑙,𝑖 which serve as inputs to the activation functions 𝜙𝑙,𝑗,𝑖 , cf. (17). The values of 𝑥𝑠𝑙,𝑖 and 𝜙𝑙,𝑗,𝑖 (𝑥𝑠𝑙,𝑖 ), based on the input
+vector 𝒙𝑠0 , are stored in the corresponding layers during the final forward pass of 𝒙𝑠0 and subsequently serve as sample points for the
+symbolification process outlined in Section 4.3. Thus, it is crucial to select 𝒙𝑠0 wisely in the final forward pass before symbolizing
+the activation functions. To this end, we propose dedicated sampling strategies for principal and modified invariant-based CKANs,
+as well as for principal stretch-based CKANs. For CKANs that rely on a mixed functional basis, these sampling strategies are applied
+individually to the respective sub-networks.
+
+Principal and modified invariant-based CKANs. When the CKAN is trained using mini-batches, each of which contains data from a
+single load case or a subset thereof, the symbolification process relies on only a small portion of the training data. Consequently,
+the symbolic form and the affine parameters derived from this limited sample set may be suboptimal. For CKANs that use principal
+invariants or modified invariants as the functional basis, one solution is to pass the entire training dataset as a full batch during the
+final forward pass through the CKAN, immediately before symbolification. This ensures that the symbolification captures a more
+comprehensive representation of the training data, improving the accuracy and robustness of the symbolic model.
+
+Principal stretch-based CKANs. For principal stretch-based CKANs, passing the entire training set as a full batch does not solve
+the problem. According to standard Python operator precedence, the two sums of the separable strain energy function (13) are
+evaluated from left to right. Therefore, the univariate strain energy functions 𝜔1 (𝜆𝛼 ) and 𝜔−1 (𝜈𝛼 ) are always evaluated last with 𝜆3
+and 𝜈3 as inputs, respectively. For example, in a uniaxial tension test of an incompressible material, as shown in Fig. A.14(a), where
+the specimen is stretched in the 𝑬 1 -direction by 𝜆1 ≥ 1, the lateral contractions are 0 < 𝜆3 , 𝜆2 ≤ 1. Performing symbolic regression
+of 𝜔̂ 1 using 𝑥𝑙,𝑖 and 𝜙𝑙,𝑗,𝑖 (𝑥𝑙,𝑖 ) obtained by evaluating the spline activation with 0 < 𝜆3 ≤ 1 is unlikely to yield accurate results if
+the symbolic forms are later evaluated with 𝜆1 ≥ 1. To ensure that the symbolification accounts for all 𝜆𝛼 and 𝜈𝛼 present in the
+training data, we stack all these values and pass them as a full batch to 𝜔1 and 𝜔−1 , respectively. Alternatively, one could identify
+the minimum and maximum values, 𝜆min = min{𝜆𝑎𝛼,𝑖 } and 𝜆max = max{𝜆𝑎𝛼,𝑖 }, from the training dataset and use torch.linspace
+to generate a sequence from 𝜆min to 𝜆max with 𝑛𝑠 points. This sequence is then passed to 𝜔1 before symbolification. This approach
+allows flexibility in choosing the number of sampling points 𝑛𝑠 , independent of the actual size of the training data, which can be
+advantageous when the derivatives 𝜙′ 𝑠𝑙,𝑗,𝑖 in (31) are computed numerically, for instance, using finite differences. The same procedure
+applies to the area stretches 𝜈𝛼 and the strain energy function 𝜔−1 .
+    After symbolifying an activation function, only its affine parameters remain trainable during subsequent training. However, this
+can lead to violations of constraints — such as monotonicity — that were imposed on the spline activation function and initially
+inherited by its symbolic counterpart through constraints on the affine parameters. To address this issue, we took a pragmatic
+approach and fixed the affine parameters after symbolification.2 Symbolifying one activation function at a time and continuing
+training is often beneficial, particularly if the affine parameters are fixed post-symbolification. This strategy allows the remaining
+splines to adapt to the previously symbolized activation function. Once all activation functions in the network have been symbolified,
+all the affine parameters can be optimized simultaneously in a final step. Optimizers such as BFGS-B are particularly useful for this
+final step, as they can enforce constraints directly on the affine parameters. This ensures that any constraints imposed on the strain
+energy function — such as monotonicity — are satisfied. Incorporating this final optimization step substantially improved the models’
+overall performance in all the numerical examples considered in Section 5.
+
+
+Appendix F. Treloar’s and Kawabata’s experiments
+
+
+      See Figs. F.1–F.3.
+
+
+Appendix G. Human brain tissue
+
+
+      See Figs. G.1–G.3.
+
+
+
+  2   This can be implemented, for example, by defining the affine attribute of the Symbolic_KANLayer as a torch.Tensor instead of a trainable
+torch.nn.Parameter.
+
+                                                                        26
+K.P. Abdolazizi et al.                                                                            Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+Fig. F.1. Principal stretch-based CKAN for rubber. (a) Fitting performance on Treloar’s data (Treloar, 1944b). (b) Architecture of the final CKAN after training;
+unconnected nodes indicate activation functions identical to zero. (c)–(f) Predictions on the biaxial dataset by Kawabata et al. (1981) using the CKAN trained
+on Treloar’s data only. The solid lines represent the model response. The dots represent the experimental data.
+
+
+
+
+                                                                               27
+K.P. Abdolazizi et al.                                                                          Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+Fig. F.2. Modified invariant-based CKAN for rubber. (a) Fitting performance on Treloar’s data (Treloar, 1944b). (b) Architecture of the CKAN after training;
+unconnected nodes indicate activation functions identical to zero. (c)–(f) Predictions on the biaxial dataset by Kawabata et al. (1981) using the CKAN trained
+on Treloar’s data only. The solid lines represent the model response. The dots represent the experimental data.
+
+
+
+
+                                                                             28
+K.P. Abdolazizi et al.                                                                             Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+Fig. F.3. Principal invariant-based CKAN for rubber. (a) Fitting performance on Treloar’s data (Treloar, 1944b). (b) Architecture of the final CKAN after training;
+unconnected nodes indicate activation functions identical to zero. (c)–(f) Predictions on the biaxial dataset by Kawabata et al. (1981) using the CKAN trained
+on Treloar’s data only. The solid lines represent the model response. The dots represent the experimental data.
+
+
+
+
+                                                                                29
+K.P. Abdolazizi et al.                                                                             Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+Fig. G.1. Results of the one-term principal stretch-based CKAN. (a) simultaneously fitted to uniaxial tension, compression, and simple shear data of human brain
+(cortex) tissue data reported in Budday et al. (2017a). (b) Resulting strain energy functions and material parameters. (c) Architecture of the final CKAN after
+training; unconnected nodes indicate activation functions identical to zero.
+
+
+
+
+Fig. G.2. Results of the principal invariant-based CKAN. (a) simultaneously fitted to uniaxial tension, compression, and simple shear data of human brain (cortex)
+tissue data reported in Budday et al. (2017a). (b) Resulting strain energy functions and material parameters. (c) Architecture of the final CKAN after training;
+unconnected nodes indicate activation functions identical to zero.
+
+
+
+
+                                                                               30
+K.P. Abdolazizi et al.                                                                               Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+
+
+
+Fig. G.3. Results of the modified invariant-based CKAN. (a) simultaneously fitted to uniaxial tension, compression, and simple shear data of human brain (cortex)
+tissue data reported in Budday et al. (2017a). (b) Resulting strain energy functions and material parameters. (c) Architecture of the final CKAN after training;
+unconnected nodes indicate activation functions identical to zero.
+
+
+
+
+Data availability
+
+    Data will be made available on request.
+
+
+References
+
+Abdolazizi, Kian P., Linka, Kevin, Cyron, Christian J., 2023. Viscoelastic constitutive artificial neural networks (vCANNs) – A framework for data-driven anisotropic
+    nonlinear finite viscoelasticity. J. Comput. Phys. 499, 112704.
+Abdusalamov, Rasul, Hillgärtner, Markus, Itskov, Mikhail, 2023. Automatic generation of interpretable hyperelastic material models by symbolic regression.
+    Internat. J. Numer. Methods Engrg. 124 (9), 2093–2104.
+Amores, Víctor J., Benítez, José M., Montáns, Francisco J., 2020. Data-driven, structure-based hyperelastic manifolds: A macro-micro-macro approach to
+    reverse-engineer the chain behavior and perform efficient simulations of polymers. Comput. Struct. 231, 106209.
+Anssari-Benam, Afshin, Destrade, Michel, Saccomandi, Giuseppe, 2022. Modelling brain tissue elasticity with the ogden model and an alternative family of
+    constitutive models. Philos. Trans. Ser. A, Math. Phys. Eng. Sci. 380 (2234), 20210325.
+Arruda, Ellen M., Boyce, Mary C., 1993. A three-dimensional constitutive model for the large stretch behavior of rubber elastic materials. J. Mech. Phys. Solids
+    41 (2), 389–412.
+As’ad, Faisal, Avery, Philip, Farhat, Charbel, 2022. A mechanics-informed artificial neural network approach in data-driven constitutive modeling. Internat. J.
+    Numer. Methods Engrg. 123 (12), 2738–2759.
+Attard, Mario M., Hunt, Giles W., 2004. Hyperelastic constitutive modeling under finite strain. Int. J. Solids Struct. 41 (18–19), 5327–5350.
+Bernardi, Laura, Hopf, Raoul., Sibilio, Daniela, Ferrari, Aldo, Ehret, Alexander E., Mazza, Eduardo, 2017. On the cyclic deformation behavior, fracture properties
+    and cytotoxicity of silicone-based elastomers for biomedical applications. Polym. Test. 60, 117–123.
+Boehler, Jean-Paul, 1987. In: Boehler, J.P. (Ed.), Applications of Tensor Functions in Solid Mechanics. Springer Vienna, Vienna.
+Brunton, Steven L., Kutz, J. Nathan, 2022. Data-Driven Science and Engineering: Machine Learning, Dynamical Systems, and Control. Cambridge University Press.
+Brunton, Steven L., Proctor, Joshua L., Kutz, J. Nathan, 2016. Discovering governing equations from data by sparse identification of nonlinear dynamical systems.
+    Proc. Natl. Acad. Sci. 113 (15), 3932–3937.
+Budday, Silvia, Sommer, Gerhard, Birkl, Christoph, Langkammer, Christian, Haybaeck, Johannes, Kohnert, J., Bauer, Melanie, Paulsen, Friedrich P.,
+    Steinmann, Paul, Kuhl, Ellen, Holzapfel, Gerhard A., 2017a. Mechanical characterization of human brain tissue. Acta Biomater. 48, 319–340.
+Budday, Silvia, Sommer, Gerhard, Haybaeck, Johannes, Steinmann, Paul, Holzapfel, Gerhard A., Kuhl, Ellen, 2017b. Rheological characterization of human brain
+    tissue. Acta Biomater. 60, 315–329.
+Carrara, Pietro, De Lorenzis, Laura, Stainier, Laurent, Ortiz, Michael, 2020. Data-driven fracture mechanics. Comput. Methods Appl. Mech. Engrg. 372.
+Case, Jennifer C., White, Edward L., Kramer, Rebecca K., 2015. Soft material characterization for robotic applications. Soft Robot. 2 (2), 80–87.
+Crespo, José, Latorre, Marcos, Montáns, Francisco Javier, 2017. WYPIWYG hyperelasticity for isotropic, compressible materials. Comput. Mech. 59 (1), 73–92.
+
+
+                                                                                 31
+K.P. Abdolazizi et al.                                                                               Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+Dal, Hüsnü, Denli, Funda Aksu, Açan, Alp Kağan, Kaliske, Michael, 2023. Data-driven hyperelasticity, part I: A canonical isotropic formulation for rubberlike
+     materials. J. Mech. Phys. Solids 179, 105381.
+Davidson, Jacob D., Goulbourne, N.C., 2013. A nonaffine network model for elastomers undergoing finite deformations. J. Mech. Phys. Solids 61 (8), 1784–1797.
+de Boor, Carl, 1980. A Practical Guide to Splines. vol. 27, Springer New York, NY, p. 325.
+Ehret, Alexander E., Itskov, Mikhail, 2007. A polyconvex hyperelastic model for fiber-reinforced materials in application to soft tissues. J. Mater. Sci. 42 (21),
+     8853–8863.
+Ehret, Alexander E., Stracuzzi, Alberto, 2022. Variations on Ogden’s model: Close and distant relatives. Philos. Trans. R. Soc. A: Math. Phys. Eng. Sci. 380
+     (2234).
+Flaschel, Moritz, Kumar, Siddhant, De Lorenzis, Laura, 2021. Unsupervised discovery of interpretable hyperelastic constitutive laws. Comput. Methods Appl.
+     Mech. Engrg. 381, 113852.
+Franke, Marlon, Klein, Dominik K., Weeger, Oliver, Betsch, Peter, 2023. Advanced discretization techniques for hyperelastic physics-augmented neural networks.
+     Comput. Methods Appl. Mech. Engrg. 416, 116333.
+Fritsch, Frederick N., Carlson, Ralph E., 1980. Monotone piecewise cubic interpolation. SIAM J. Numer. Anal. 17 (2), 238–246.
+Fuhg, Jan N., Anantha Padmanabha, Govinda, Bouklas, Nikolaos, Bahmani, Bahador, Sun, WaiChing, Vlassis, Nikolaos N., Flaschel, Moritz, Carrara, Pietro,
+     De Lorenzis, Laura, 2024a. A review on data-driven constitutive laws for solids. Arch. Comput. Methods Eng. 1–43.
+Fuhg, Jan N., Bouklas, Nikolaos, Jones, Reese E., 2024b. Stress representations for tensor basis neural networks: alternative formulations to Finger–Rivlin–Ericksen.
+     J. Comput. Inf. Sci. Eng. 24 (11).
+Fuhg, Jan Niklas, Jones, Reese Edward, Bouklas, Nikolaos, 2024c. Extreme sparsification of physics-augmented neural networks for interpretable model discovery
+     in mechanics. Comput. Methods Appl. Mech. Engrg. 426, 116973.
+Fung, Yuan-Cheng, 1981. Biomechanics - Mechanical Properties of Living Tissues. Springer New York, New York, NY.
+Ghaboussi, Jamshid, Garrett, James H., Wu, Xiping, 1991. Knowledge-based modeling of material behavior with neural networks. J. Eng. Mech. 117 (1), 132–153.
+Goldberg, Carey B., et al., 2024. To do no harm—and the most good—with AI in health care. Nature Med. 30 (3), 623–627.
+Hashash, Youssef. M.A., Jung, Sungmoon, Ghaboussi, Jamshid, 2004. Numerical implementation of a neural network based material model in finite element
+     analysis. Internat. J. Numer. Methods Engrg. 59 (7), 989–1005.
+Heinrich, Gert, Kaliske, Michael, 1997. Theoretical and numerical formulation of a molecular based constitutive tube-model of rubber elasticity. Comput. Theor.
+     Polym. Sci. 7 (3–4), 227–241.
+Holthusen, Hagen, Brepols, Tim, Linka, Kevin, Kuhl, Ellen, 2025. Automated model discovery for tensional homeostasis: Constitutive machine learning in growth
+     and remodeling. Comput. Biol. Med. 186, 109691.
+Holthusen, Hagen, Lamm, Lukas, Brepols, Tim, Reese, Stefanie, Kuhl, Ellen, 2024. Theory and implementation of inelastic constitutive artificial neural networks.
+     Comput. Methods Appl. Mech. Engrg. 428, 117063.
+Holzapfel, Gerhard A., 2000. Nonlinear Solid Mechanics: a Continuum Approach for Engineering Science. John Wiley & Sons Ltd., p. 456.
+Holzapfel, Gerhard A., Gasser, T. Christian, Ogden, Ray W., 2000. A new constitutive framework for arterial wall mechanics and a comparative study of material
+     models. J. Elasticity 61 (1–3), 1–48.
+Hospedales, Timothy, Antoniou, Antreas, Micaelli, Paul, Storkey, Amos, 2021. Meta-learning in neural networks: A survey. IEEE Trans. Pattern Anal. Mach. Intell.
+     44 (9), 5149–5169.
+Howard, Amanda A., Jacob, Bruno, Murphy, Sarah H., Heinlein, Alexander, Stinis, Panos, 2024. Finite basis Kolmogorov–Arnold networks: domain decomposition
+     for data-driven and physics-informed problems.
+Itskov, Mikhail, 2015. Tensor algebra and tensor analysis for engineers. Mathematical Engineering. Springer Cham, pp. 1–295.
+Jiang, Yuting, Wang, Yang, Mishra, Yogendra Kumar, Adelung, Rainer, Yang, Ya, 2018. Stretchable CNTs-ecoflex composite as variable-transmittance skin for
+     ultrasensitive strain sensing. Adv. Mater. Technol. 3 (12), 1800248.
+Kalina, Karl A., Brummund, Jörg, Sun, WaiChing, Kästner, Markus, 2025. Neural networks meet anisotropic hyperelasticity: A framework based on generalized
+     structure tensors and isotropic tensor functions. Comput. Methods Appl. Mech. Engrg. 437, 117725.
+Kaliske, Michael, Heinrich, Gert, 1999. An extended tube-model for rubber elasticity: Statistical-mechanical theory and finite element implementation. Rubber
+     Chem. Technol. 72 (4), 602–632.
+Kawabata, Sueo, Matsuda, Masatoshi, Tei, K., Kawai, Hiromichi, 1981. Experimental survey of the strain energy density function of isoprene rubber vulcanizate.
+     Macromolecules 14 (1), 154–162.
+Kearsley, Elliot A., 1989. Note: Strain invariants expressed as average stretches. J. Rheol. 33 (5), 757–760.
+Khiêm, Vu Ngoc, Itskov, Mikhail, 2016. Analytical network-averaging of the tube model: Rubber elasticity. J. Mech. Phys. Solids 95, 254–269.
+Kirchdoerfer, Trenton, Ortiz, Michael, 2016. Data-driven computational mechanics. Comput. Methods Appl. Mech. Engrg. 304, 81–101.
+Kuhl, Ellen, Goriely, Alain, 2024. I too I2 : A new class of hyperelastic isotropic incompressible models based solely on the second invariant. J. Mech. Phys. Solids
+     188, 105670.
+Latorre, Marcos, Montáns, Francisco Javier, 2013. Extension of the sussman-bathe spline-based hyperelastic model to incompressible transversely isotropic
+     materials. Comput. Struct. 122, 13–26.
+Latorre, Marcos, Montáns, Francisco Javier, 2014. What-you-prescribe-is-what-you-get orthotropic hyperelasticity. Comput. Mech. 53 (6), 1279–1298.
+Le Clézio, Helen, Karapiperis, Konstantinos, Kochmann, Dennis M., 2024. Nonlinear two-scale beam simulations accelerated by thermodynamics-informed neural
+     networks. Extrem. Mech. Lett. 73.
+Liao, Zisheng, Hossain, Mokarram, Yao, Xiaohu, 2020. Ecoflex polymer of different shore hardnesses: Experimental investigations and constitutive modelling.
+     Mech. Mater. 144, 103366.
+Linden, Lennart, Klein, Dominik K., Kalina, Karl A., Brummund, Jörg, Weeger, Oliver, Kästner, Markus, 2023. Neural networks meet hyperelasticity: A guide to
+     enforcing physics. J. Mech. Phys. Solids 179, 105363.
+Linka, Kevin, Cavinato, Cristina, Humphrey, Jay D., Cyron, Christian J., 2022. Predicting and understanding arterial elasticity from key microstructural features
+     by bidirectional deep learning. Acta Biomater. 147, 63–72.
+Linka, Kevin, Hillgärtner, Markus, Abdolazizi, Kian P., Aydin, Roland C., Itskov, Mikhail, Cyron, Christian J., 2021. Constitutive artificial neural networks: A fast
+     and general approach to predictive data-driven constitutive modeling by deep learning. J. Comput. Phys. 429, 110010.
+Linka, Kevin, Hillgärtner, Markus, Itskov, Mikhail, 2018. Fatigue of soft fibrous tissues: Multi-scale mechanics and constitutive modeling. Acta Biomater. 71,
+     398–410.
+Linka, Kevin, Kuhl, Ellen, 2023. A new family of constitutive artificial neural networks towards automated model discovery. Comput. Methods Appl. Mech. Engrg.
+     403, 115731.
+Linka, Kevin, St. Pierre, Sarah R., Kuhl, Ellen, 2023. Automated model discovery for human brain using constitutive artificial neural networks. Acta Biomater.
+     160, 134–151.
+Liu, Ziming, Ma, Pingchuan, Wang, Yixuan, Matusik, Wojciech, Tegmark, Max, 2024a. KAN 2.0: Kolmogorov–Arnold networks meet science.
+Liu, Ziming, Wang, Yixuan, Vaidya, Sachin, Ruehle, Fabian, Halverson, James, Soljačić, Marin, Hou, Thomas Y., Tegmark, Max, 2024b. KAN: Kolmogorov–Arnold
+     networks. arXiv preprint arXiv:2404.19756.
+Marckmann, Gilles, Verron, Erwan, 2006. Comparison of hyperelastic models for rubber-like materials. Rubber Chem. Technol. 79 (5), 835–858.
+
+
+                                                                                 32
+K.P. Abdolazizi et al.                                                                              Journal of the Mechanics and Physics of Solids 203 (2025) 106212
+
+McCulloch, Jeremy A., St. Pierre, Skyler R., Linka, Kevin, Kuhl, Ellen, 2024. On sparse regression, lp-regularization, and automated model discovery. Internat.
+    J. Numer. Methods Engrg. 125 (14), e7481.
+Mihai, L. Angela, Budday, Silvia, Holzapfel, Gerhard A., Kuhl, Ellen, Goriely, Alain, 2017. A family of hyperelastic models for human brain tissue. J. Mech. Phys.
+    Solids 106, 60–79.
+Mullins, Leonard, Tobin, N.R., 1965. Stress softening in rubber vulcanizates. Part I. Use of a strain amplification factor to describe the elastic behavior of
+    filler-reinforced vulcanized rubber. J. Appl. Polym. Sci. 9 (9), 2993–3009.
+Ogden, Ray W., 1972. Large deformation isotropic elasticity – on the correlation of theory and experiment for incompressible rubberlike solids. Proc. R. Soc. A
+    326 (1567), 565–584.
+Ogden, Ray W., 1997. Nonlinear Elastic Deformations. Dover Publications.
+Pierre, Skyler R.S.t, Rajasekharan, Divya, Darwin, Ethan C., Linka, Kevin, Levenston, Marc E., Kuhl, Ellen, 2023. Discovering the mechanics of artificial and real
+    meat. Comput. Methods Appl. Mech. Engrg. 415, 116236.
+Polo-Molina, Alejandro, Alfaya, David, Portela, Jose, 2024. MonoKAN: Certified monotonic Kolmogorov–Arnold network. arXiv preprint arXiv:2409.11078.
+Rivlin, Ronald S., Saunders, D.W., 1951. Large elastic deformations of isotropic materials VII. Experiments on the deformation of rubber. Philos. Trans. R. Soc.
+    Lond. Ser. A Math. Phys. Sci. 243 (865), 251–288.
+Shariff, Mohd H.B.M., 2000. Strain energy function for filled and unfilled rubberlike material. Rubber Chem. Technol. 73 (1), 1–18.
+Shukla, Khemraj, Toscano, Juan Diego, Wang, Zhicheng, Zou, Zongren, Karniadakis, George Em, 2024. A comprehensive and FAIR comparison between MLP
+    and kan representations for differential equations and operator networks. Comput. Methods Appl. Mech. Engrg. 431, 117290.
+Steinmann, Paul, Hossain, Mokarram, Possart, Gunnar, 2012. Hyperelastic models for rubber-like materials: Consistent tangent operators and suitability for
+    Treloar’s data. Arch. Appl. Mech. 82 (9), 1183–1217.
+Sussman, Theodore, Bathe, Klaus J., 2009. A model of incompressible isotropic hyperelastic material behavior using spline interpolations of tension-compression
+    test data. Commun. Numer. Methods Eng. 25 (1), 53–63.
+Taç, Vahidullah, Rausch, Manuel K., Costabal, Francisco Sahli, Tepole, Adrian Buganza, 2023. Data-driven anisotropic finite viscoelasticity using neural ordinary
+    differential equations. Comput. Methods Appl. Mech. Engrg. 411, 116046.
+Thakolkaran, Prakash, Guo, Yaqi, Saini, Shivam, Peirlinck, Mathias, Alheit, Benjamin, Kumar, Siddhant, 2025. Can KAN CANs? Input-convex Kolmogorov–Arnold
+    networks (KANs) as hyperelastic constitutive artificial neural networks (CANs). arXiv preprint arXiv:2503.05617.
+Treloar, Leslie R.G., 1944a. The elasticity of a network of long-chain molecules. II. Rubber Chem. Technol. 17 (2), 296–302.
+Treloar, Leslie R.G., 1944b. Stress-strain data for vulcanised rubber under various types of deformation. Trans. Faraday Soc. 40, 59–70.
+Truesdell, Clifford, 1984. The Elements of Continuum Mechanics. Springer Berlin Heidelberg, Berlin, Heidelberg.
+Valanis, Kirk C., Landel, Robert F., 1967. The strain-energy function of a hyperelastic material in terms of the extension ratios. J. Appl. Phys. 38 (7), 2997–3002.
+Wang, Yizheng, Sun, Jia, Bai, Jinshuai, Anitescu, Cosmin, Eshaghi, Mohammad Sadegh, Zhuang, Xiaoying, Rabczuk, Timon, Liu, Yinghua, 2024. Kolmogorov
+    Arnold informed neural network: A physics-informed deep learning framework for solving forward and inverse problems based on Kolmogorov Arnold
+    networks.
+Wang, Yiqun, Wagner, Nicholas, Rondinelli, James M., 2019. Symbolic regression in materials science. MRS Commun. 9 (3), 793–805.
+Wiesheier, Simon, Moreno-Mateos, Miguel Angel, Steinmann, Paul, 2024. Versatile data-adaptive hyperelastic energy functions for soft materials. Comput. Methods
+    Appl. Mech. Engrg. 430, 117208.
+Xiang, Yuhai, Zhong, Danming, Wang, Peng, Mao, Guoyong, Yu, Honghui, Qu, Shaoxing, 2018. A general constitutive model of soft elastomers. J. Mech. Phys.
+    Solids 117, 110–122.
+Xu, Hongyi, Sin, Funshing, Zhu, Yufeng, Barbič, Jernej, 2015. Nonlinear material design using principal stretches. ACM Trans. Graph. 34 (4), 1–11.
+Zhang, Jin Min, Rychlewski, Jan, 1990. Structure tensors for anisotropic solids. Arch. Mech. 42 (3), 267–277.
+
+
+
+
+                                                                                33
+

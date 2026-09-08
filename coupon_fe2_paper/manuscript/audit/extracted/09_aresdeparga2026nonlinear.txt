@@ -1,0 +1,1358 @@
+                                      Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+
+                                                           Contents lists available at ScienceDirect
+
+
+                                           Comput. Methods Appl. Mech. Engrg.
+                                                   journal homepage: www.elsevier.com/locate/cma
+
+
+
+
+Nonlinear projection-based model order reduction with machine
+learning regression for closure error modeling in the latent space
+S. Ares De Parga a,b,1,∗, Radek Tezaur                                c
+                                                                          , Carlos G. Hernández c ,
+Charbel Farhat c,d
+a
+  Department of Civil and Environmental Engineering, Universitat Politècnica de Catalunya - Barcelona Tech (UPC), Building B0 Campus Nord Jordi
+Girona 1-3, 08034, Barcelona, Spain
+b
+  Centre Internacional de Mètodes Numèrics en Enginyeria (CIMNE), Universitat Politècnica de Catalunya, Building C1 Campus Nord Jordi Girona
+1-3, 08034, Barcelona, Spain
+c Department of Aeronautics and Astronautics, Stanford University, 94305, Stanford, CA, USA
+d
+  Institute for Computational and Mathematical Engineering, Stanford University, 94305, Stanford, CA, USA
+
+
+
+
+a r t i c l e           i n f o                          a b s t r a c t
+
+Keywords:                                                A signiﬁcant advancement in nonlinear projection-based model order reduction (PMOR) is pre-
+Gaussian process regression                              sented through a highly eﬀective methodology. This methodology employs Gaussian process re-
+Radial basis function interpolation                      gression (GPR) and radial basis function (RBF) interpolation for closure error modeling in the
+Machine learning
+                                                         latent space, oﬀering notable gains in eﬃciency and expanding the scope of PMOR. Moving be-
+Model reduction
+Kolmogorov n-width
+                                                         yond the limitations of deep artiﬁcial neural networks (ANNs), previously used for this task,
+Petrov-Galerkin                                          this approach provides crucial advantages in terms of interpretability and a reduced demand
+                                                         for extensive training data. The capabilities of GPR and RBFs are showcased in two demand-
+                                                         ing applications: a two-dimensional parametric inviscid Burgers problem, featuring propagating
+                                                         shocks across the entire computational domain, and a complex three-dimensional turbulent ﬂow
+                                                         simulation around an Ahmed body. The results demonstrate that this innovative approach pre-
+                                                         serves accuracy and achieves substantial improvements in eﬃciency and interpretability when
+                                                         contrasted with traditional PMOR and ANN-based closure modeling.
+
+
+
+1. Introduction
+
+    The parametric numerical simulation of intricate physical phenomena, often relying on high-dimensional computational models
+(HDMs) based on partial diﬀerential equations, poses a signiﬁcant bottleneck across various scientiﬁc and engineering disciplines.
+Projection-based Model Order Reduction (PMOR) [1] oﬀers a compelling strategy to alleviate this computational burden by con-
+structing low-dimensional surrogate models that faithfully approximate the dynamics of the original system at a fraction of the
+computational cost. Fundamentally, PMOR can be interpreted as a form of physics-based machine learning, where prior knowledge
+of the governing equations is leveraged to deﬁne a structured low-dimensional representation of the system’s state space.
+    The ﬁeld of PMOR has witnessed rapid advancements, particularly in addressing the limitations imposed by the Kolmogorov
+𝑛-width barrier [2], which often restricts the eﬃciency of linear subspace methods for nonlinear systems. To overcome this, the
+advent of nonlinear PMOR techniques has been crucial. Unlike linear methods that approximate solutions within a ﬁxed linear
+subspace, nonlinear PMOR allows the reduced-order approximation to lie on a nonlinear manifold or to be constructed through
+
+
+    ∗ Corresponding author.
+
+        E-mail address: sebastian.ares@upc.edu;sares@cimne.upc.edu;aresdepargas@gmail.com (S. Ares De Parga).
+    1
+        This paper was written during the author’s residency at Stanford University.
+
+https://doi.org/10.1016/j.cma.2025.118443
+Received 1 July 2025; Received in revised form 28 September 2025; Accepted 28 September 2025
+Available online 7 October 2025
+0045-7825/© 2025 The Author(s).             Published by Elsevier B.V. This is an open access article under the CC BY license
+(http://creativecommons.org/licenses/by/4.0/).
+S. Ares De Parga et al.                                                       Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+nonlinear mappings of the low-dimensional state. This capability enables them to capture more complex solution structures and
+the intrinsic nonlinearities of the underlying physics with greater eﬃciency than linear or aﬃne counterparts, thus extending the
+applicability of PMOR to a wider range of complex parametric problems. Documented successes in ﬁelds like structural dynamics [3]
+and computational ﬂuid dynamics (CFD) [4] highlight the signiﬁcant potential of recent nonlinear PMOR methods to deliver accurate
+and eﬃcient surrogate models for demanding scientiﬁc computing applications.
+    The landscape of nonlinear PMOR is diverse, featuring various methodologies that oﬀer distinct strengths and weaknesses. Some
+alternative approaches worth considering include:
+
+ • Piecewise aﬃne approximations. These methods address nonlinearities by locally modeling systems with aﬃne representations
+   [5,6]. A decade ago, they demonstrated real-time operation on a laptop for steady Reynolds-averaged Navier-Stokes (RANS)
+   computations relevant to the NASA Common Research Model (CRM) [7]. Speciﬁcally, when combined with the least-squares
+   Petrov-Galerkin (LSPG) PMOR method [8,9] and the Gauss-Newton method with approximated tensors (GNAT) for hyperreduction
+   [8], this approach successfully managed a parametric HDM with over 𝑁 = 6.8 × 107 dimensions for the RANS-based analysis of
+   ﬂow past the CRM. This was achieved at a Reynolds number of R𝑒 = 5 × 106 in the transonic regime, in the presence of shocks, and
+   across a shape parameter domain  of dimension 𝑁 = 4 [10]. Recently, using the energy conserving sampling and weighting
+   (ECSW) method for hyperreduction [6], it signiﬁcantly accelerated the detached eddy simulations (DES) of unsteady turbulent
+   ﬂow around an F-16 C/D Block 40 ﬁghter jet at 10 000 feet with a 30◦ angle of attack and a free-stream Mach number 𝑀∞ = 0.3
+   (𝑅𝑒 = 1.82 × 107 ). This resulted in reductions of wall-clock time by three orders of magnitude and CPU time by ﬁve orders, while
+   maintaining 98 % accuracy [6]. However, as 𝑁 increases, this approach may face performance challenges due to the Kolmogorov
+   barrier. For second-order dynamical systems, it may encounter challenges related to global smoothness; however, these challenges
+   are manageable.
+ • Registration methods. These methods speciﬁcally target the Kolmogorov 𝑛-width issue, particularly in transport problems. They
+
+   transform the traditional aﬃne subspace approximation into a nonlinear form through nonlinear parameterization [11,12]. This
+   process involves mesh motion and deformation within the semi-discrete or discrete HDM. Recent applications include transonic
+   inviscid steady ﬂow past airfoils, parameterized by their upper and lower thicknesses, free-stream Mach number, and angle of
+   attack [13]. They have also been applied to hypersonic viscous steady ﬂow over a cylinder, parameterized by the Mach number
+   [14]. Nevertheless, applying these methods robustly to complex three-dimensional (3D) geometries, particularly in CFD prob-
+   lems with large-scale meshes at high Reynolds numbers, can present signiﬁcant challenges. Their feasibility for time-dependent
+   computations, such as unsteady ﬂow simulations with long-distance traveling features, also requires further investigation.
+ • Quadratic approximation manifolds. To overcome the Kolmogorov barrier, quadratic approximation manifolds have been proposed
+
+   in two forms: a simulation-free version for structural dynamics [15] and a more general, computationally eﬃcient data-driven ver-
+   sion demonstrated for convection-dominated turbulent ﬂows and other transport problems [16]. Furthermore, quadratic solution
+   approximations have been developed for nonintrusive 1 PMOR via operator inference [17].
+       Notably, the quadratic approximation manifold from [16] was successfully integrated with the LSPG PMOR method [8,9] and
+   the ECSW hyperreduction technique. This integration demonstrated its eﬀectiveness in addressing the Ahmed body turbulent wake
+   ﬂow problem – a well-known CFD benchmark in the automotive industry – where time was the sole parameter. The combined
+   approach signiﬁcantly accelerated the HDM, achieving a reduction of two orders of magnitude in wall-clock time and three
+   in CPU time, while maintaining accuracy above 97 %. Compared to traditional PMOR with aﬃne approximation and ECSW
+   hyperreduction, the quadratic approximation method reduced the online wall clock time for integrated and probe aerodynamic
+   quantities by more than 32-fold [16].
+       In [4], this combined approach also demonstrated superiority over the integration of the traditional aﬃne approximation
+   with LSPG and ECSW for a 3D benchmark steady hypersonic ﬂow problem parameterized by the free-stream Mach number. It
+   accelerated the underlying HDM, which had a dimension of 𝑁 = 654 720, by a factor of 291 and reduced its CPU time by a factor
+   of 41 920 while maintaining the desired levels of accuracy and ﬁdelity – factors that, for this relatively small scale problem, are
+   higher than those associated with the traditional aﬃne approximation.
+ • Framework for PMOR via latent space closure error modeling. Developed within the context of the LSPG PMOR method in [18]
+
+   and mathematically analyzed in [19], this framework enables the creation of an arbitrarily nonlinear approximation manifold by
+   modeling the closure error associated with the traditional aﬃne approximation in its latent space using a deep artiﬁcial neural
+   network (ANN). Unlike previous methods that employed various forms of ANNs for model reduction, the training of a projection-
+   based reduced-order model (PROM) constructed using this framework and referred to as a PROM-ANN, does not require an
+   amount of data that scales with the dimension of the HDM. Consequently, this framework stands out as the only intrusive ANN-
+   based or ANN-incorporating model reduction approach successfully demonstrated for problems with over 21 000 dimensions and
+   is among the few such frameworks amenable to hyperreduction. For a parametric, unsteady, shock-dominated benchmark problem
+   exhibiting the Kolmogorov 𝑛-width issue and an HDM dimension of 𝑁 = 1 125 000, the PROM constructed using this framework –
+   hyperreduced via ECSW and dubbed HPROM-ANN – achieved superior accuracy compared to a traditional HPROM based on an
+   aﬃne approximation of dimension 𝑛 = 95. This was accomplished with an almost order-of-magnitude smaller dimension, executing
+   online approximately 70 times faster. Notably, the HPROM-ANN with a dimension of 𝑛 = 10 accelerated the HDM by nearly three
+   orders of magnitude while maintaining a 97 % accuracy level.
+
+  1
+    A nonintrusive model reduction method is a low-dimensional approximation constructed oﬄine from solution snapshots of a discretized partial
+diﬀerential equation (PDE), without online dependence on or modiﬁcation of the discretized PDE.
+
+                                                                      2
+S. Ares De Parga et al.                                                    Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+        Furthermore, in [4], this framework was successfully applied to reduce HDMs based on the Navier-Stokes equations in the
+     hypersonic ﬂow regime. It facilitated the construction of an HPROM-ANN for a version of the 3D double-cone steady benchmark
+     problem in hypersonic CFD, parameterized by the free-stream Mach number. This approach achieved a dimension as small as
+     𝑛 = 2 and accelerated the underlying HDM, which has a dimension of 𝑁 = 654 720, by more than three orders of magnitude.
+     Additionally, it reduced CPU time by over ﬁve orders of magnitude while maintaining the desired levels of accuracy and ﬁdelity.
+        However, this framework for nonlinear PMOR has certain limitations as well, which are outlined below and addressed in this
+     paper.
+
+    The nonlinear PMOR framework introduced in [18] oﬀers substantial advantages by addressing closure errors from an aﬃne
+approximation within the latent space. By directly tackling these errors in the reduced-order space, it circumvents the need for costly
+high-dimensional reconstructions often required by other machine learning-enhanced model order reduction methods. Additionally,
+the application of deep ANNs eﬀectively captures the complex nonlinear relationships inherent in closure terms, as evidenced by its
+documented successes [18,19]. Building on these strengths, this paper seeks to further advance several aspects of the framework.
+    A key advantage of PMOR lies in its capacity to yield a priori error estimators, bounds, or indicators, oﬀering crucial insights into
+the accuracy and reliability of the PROM [20,21]. However, a signiﬁcant limitation of the current PMOR framework employing latent
+space closure error modeling is the inherent lack of interpretability within the deep ANN used for regression. This opacity impedes
+the development of rigorous theoretical a priori error estimates or indicators for the approach. Addressing this non-interpretability
+served as the primary motivation for the research presented herein. Furthermore, when applied to parametric problems with a small
+parameter domain dimension 𝑁 , traditional PMOR based on aﬃne approximation necessitates a relatively modest number of solution
+snapshots, potentially leading this framework to an HPROM-ANN with exceptionally low dimensionality. This dimensionality often
+closely aligns with the intrinsic dimension of the solution manifold, particularly when the solution’s dependence on parameters is
+simple and low-dimensional, such as linear variation with each parameter independently. As discussed in Section 3.1, such scenarios
+tend to provide insuﬃcient data for eﬀective deep ANN training to model the closure error associated with the traditional aﬃne
+approximation in its latent space, thus necessitating a complementary strategy to generate additional training data beyond the initial
+high-dimensional solution snapshots for constructing the desired, extremely low-dimensional HPROM-ANN.
+    To address these limitations and lay the groundwork for more robust, theoretically grounded nonlinear PROMs based on the afore-
+mentioned framework for nonlinear PMOR, this paper introduces a less data-intensive regression approach that employs interpretable
+machine learning techniques to model closure error within the latent space. Speciﬁcally, its main contribution is a generalized frame-
+work for creating HPROMs that incorporate latent-space closure error modeling, utilizing two closely related interpretable regression
+methods: standard Gaussian process regression (GPR) and radial basis function (RBF) interpolation. These techniques not only provide
+valuable insights into the structure of the closure error, thereby addressing the ﬁrst limitation of non-interpretability and paving the
+way for a priori error estimates, but also require signiﬁcantly less training data compared to more complex regression methods such
+as deep ANNs and therefore are more appropriate for addressing the second limitation: the scarcity of training data when a very small
+value of 𝑛 can be achieved for a given level of accuracy.
+    The resulting computational framework is demonstrated within the established methodologies of the LSPG method for constructing
+PROMs and the ECSW method for transforming them into computationally eﬃcient HPROMs. While these methods provide the
+operational context for showcasing the framework’s utility, only the essential elements needed for their use in the present nonlinear
+PROM setting are overviewed. The detailed derivations follow the comprehensive treatment in [18], which addresses the modeling of
+closure error associated with the traditional aﬃne approximation through a deep ANN within its latent space. It should be emphasized,
+however, that the proposed framework is not limited to this setting and remains readily applicable to Galerkin projection and to
+alternative hyperreduction techniques beyond ECSW.
+    The remainder of this paper is structured as follows. Section 2 reviews the foundational framework for PMOR via latent space
+closure error modeling and details its incorporation within the LSPG projection and ECSW hyperreduction methods, establishing
+the notation and nomenclature used throughout the paper. Section 3 begins with a concise overview of modeling the closure error
+inherent in the traditional aﬃne approximation using deep ANNs and pre-computed solution snapshots. It then argues for GPR and
+RBF interpolation as more eﬀective alternatives for closure error modeling. Section 4 presents two applications to showcase these
+alternatives and demonstrate their advantages. The ﬁrst, a readily reproducible two-dimensional (2D) parametric inviscid Burgers
+problem features shocks propagating across the domain, posing a signiﬁcant challenge for both traditional PMOR and many nonlinear
+PMOR techniques, including registration methods. The second application is a benchmark CFD problem from the automotive industry,
+simulating turbulent ﬂow over a generic bluﬀ body representative of a simpliﬁed car using the DES turbulence model. Section 5
+concludes that GPR and RBF-based closure error modeling in PMOR signiﬁcantly extends the reach of nonlinear PMOR, oﬀering
+better eﬃciency, accuracy, and interpretability, and eﬀectively tackling the Kolmogorov barrier in complex ﬂows.
+
+2. Projection-based model order reduction with closure error modeling in the latent space
+
+   Following the standard procedure for constructing a PROM, the nonlinear PMOR framework with latent space closure error
+modeling commences by collecting 𝑁𝑠 solution snapshots 𝐮𝑠 (𝑠 = 1, ⋯ , 𝑁𝑠 ) into a snapshot matrix 𝐒 ∈ ℝ𝑁×𝑁𝑠 . Here, 𝑁 represents the
+dimension of the high-dimensional semi-discrete or discrete problem to be solved. Subsequently, this snapshot matrix 𝐒 is compressed
+using a thin singular value decomposition (SVD) based on a singular value energy truncation criterion.
+   Speciﬁcally, the thin SVD of the snapshot matrix yields 𝐒 = 𝐔𝐒 𝚺𝐒 𝐘𝑇𝐒 , where:
+ •   𝐔𝐒 ∈ ℝ𝑁×min(𝑁,𝑁𝑠 ) contains the left singular vectors, whose columns span the range of 𝐒.
+
+                                                                   3
+S. Ares De Parga et al.                                                       Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+ • 𝚺𝐒 ∈ ℝ𝑘×𝑘 is a diagonal matrix holding the nonzero singular values 𝜎𝐒,𝑖 (𝑖 ∈ {1, … , 𝑘}) arranged in descending order: 𝜎𝐒,1 ≥ 𝜎𝐒,2 ≥
+   … 𝜎𝐒,𝑘 > 0, where 𝑘 ≤ min(𝑁, 𝑁𝑠 ).
+ • 𝐘 ∈ ℝ𝑁𝑠 ×min(𝑁,𝑁𝑠 ) contains the right singular vectors, whose columns span the range of 𝐒𝑇 .
+     𝐒
+ • 𝑘 represents the rank of the snapshot matrix 𝐒.
+ • The superscript 𝑇 denotes the transpose operation.
+
+
+    Subsequently, an orthogonal reduced-order basis (ROB) matrix 𝐕tot ∈ ℝ𝑁×𝑛tot is formed by selecting the ﬁrst 𝑛tot ≪ 𝑁 columns
+of the left singular vector matrix 𝐔𝐒 obtained from the thin SVD. The orthogonality of the columns is inherent to the left singular
+vectors, satisfying 𝐕𝑇tot 𝐕tot = 𝐈𝑛tot , where 𝐈𝑛tot is the 𝑛tot × 𝑛tot identity matrix. The reduced dimension 𝑛tot is typically determined by
+the singular value energy truncation criterion
+              𝑛tot
+               ∑      2
+                     𝜎𝐒,𝑖
+              𝑖=1
+         1−                 ≤ 𝜀2𝐒                                                                                                                (1)
+               ∑
+               𝑘
+                      2
+                     𝜎𝐒,𝑗
+              𝑗=1
+
+where 𝜀𝐒 > 0 is a user-deﬁned tolerance that controls the amount of energy captured by the reduced basis.
+  Then, this orthogonal basis 𝐕tot is partitioned into two submatrices, 𝐕 ∈ ℝ𝑁×𝑛 and 𝐕 ∈ ℝ𝑁×𝑛̄ , such that 𝑛 ≪ 𝑛̄ ≪ 𝑁 and 𝑛 + 𝑛̄ = 𝑛tot
+         𝐕tot = [𝐕          𝐕]                                                                                                                   (2)
+Given the orthogonality of the reduced-order basis 𝐕tot , its partitioned submatrices 𝐕 and 𝐕 satisfy the following orthogonality
+conditions
+                                 𝑇
+         𝐕𝑇 𝐕 = 𝐈𝑛 ,         𝐕 𝐕 = 𝐈𝑛̄ ,   and   𝐕𝑇 𝐕 = 𝟎𝑛×𝑛̄                                                                                    (3)
+   Next, leveraging the reduced-order bases 𝐕 and 𝐕, the high-dimensional solution 𝐮 of the parametric and possibly time-dependent
+problem of interest is approximated as
+         𝐮(𝑡; 𝝁) ≈ 𝐮̃ (𝑡; 𝝁) = 𝐮ref + 𝐕𝐪(𝑡; 𝝁) + 𝐕𝐪(𝑡;
+                                                  ̄ 𝝁)                                                                                           (4)
+In this reduced-order approximation, 𝑡 denotes time, 𝝁 ∈  ⊆ ℝ𝑁 represents the parameter vector, and 𝐮ref is a reference solution.
+Furthermore, 𝐪 ∈ ℝ𝑛 and 𝐪̄ ∈ ℝ𝑛̄ are the vectors of generalized coordinates corresponding to the ROBs 𝐕 and 𝐕, respectively.
+     Using the partitioned basis from (2), the solution approximation (4) can be compactly expressed as
+                          [    ][𝐪(𝑡; 𝝁)]
+        𝐮̃ (𝑡; 𝝁) = 𝐮ref + 𝐕 𝐕            = 𝐕tot 𝐪tot (𝑡; 𝝁)                                                                                     (5)
+                                  𝐪(𝑡; 𝝁)
+This compact form motivates the following considerations for choosing the dimensions of the partitioned bases:
+
+ • Set the total reduced dimension 𝑛tot to be equal to 𝑛tra . This 𝑛tra value is calculated using (1) within a traditional aﬃne subspace
+   approximation, as shown in (5), ensuring the desired accuracy is met regardless of the resulting computational cost.
+ • Select the dimension 𝑛 of the primary basis 𝐕 to be minimal, ideally aligning with the intrinsic dimension of the solution manifold.
+
+   This dimension often closely corresponds to the dimension 𝑁 of the parameter domain  when the mapping from  to the solution
+   manifold behaves like a low-dimensional embedding, preserving essential information without signiﬁcant added complexity.
+ • Determine the dimension of the secondary basis as 𝑛 ̄ = 𝑛tra − 𝑛.
+ • Using the pre-computed solution snapshots, learn oﬄine the relationship between the generalized coordinates in 𝐪(𝑡; 𝝁) and their
+
+   counterparts in 𝐪(𝑡; 𝝁) through a map  ∶ ℝ𝑛 → ℝ𝑛̄ (see Section 3.1) such that
+              𝐪(𝑡; 𝝁) =  (𝐪(𝑡; 𝝁))                                                                                                              (6)
+     This allows rewriting the solution approximation (5) as
+              𝐮̃ (𝑡; 𝝁) = 𝐮ref + 𝐕𝐪(𝑡; 𝝁) + 𝐕 (𝐪(𝑡; 𝝁))                                                                                         (7)
+     and demonstrates that the resulting PROM will have a dimension 𝑛 = 𝑛tra − 𝑛̄ ≪ 𝑛tra . Consequently, throughout the remainder of
+     this paper, the columns of the primary ROB 𝐕 ∈ ℝ𝑁×𝑛 will be referred to as the retained modes, and those of the ROB 𝐕 will be
+     referred to as the discarded modes, where “discarded” emphasizes that the columns of 𝐕 do not directly contribute to the dimension
+     of the PROM but do contribute to the embedded information. Similarly, 𝐪 will be referred to as the vector of primary generalized
+     coordinates and 𝐪 as the vector of secondary generalized coordinates.
+
+     Note that in the approximation (7), the term 𝐕 (𝐪) can be interpreted in four distinct ways:
+
+ • Closure error modeling: It serves as a data-driven model for the closure error, representing the diﬀerence between the full approxi-
+   mation and its aﬃne part 𝐮ref + 𝐕𝐪(𝑡; 𝝁).
+ • Variational multiscale method: It represents a variational multiscale approach, where the aﬃne approximation captures the coarser
+
+   scales of the solution and the correction term accounts for the ﬁner scales.
+ • Nonlinear ROB/PROM compression: It signiﬁes a nonlinear compression of a higher-dimensional ROB and its associated PROM
+
+   down to a lower dimension 𝑛 ≪ 𝑛tra .
+
+                                                                      4
+S. Ares De Parga et al.                                                          Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+ •   Eﬃcient snapshot utilization: It represents a most eﬃcient utilization of a set of solution snapshots that deﬁne a solution manifold
+     parameterized by (𝐪; 𝐪 =  (𝐪)).
+
+    Furthermore, the solution approximation (7) represents a nonlinear approximation precisely because the map  inherently in-
+troduces nonlinearity as it transforms the primary generalized coordinates 𝐪 ∈ ℝ𝑛 to the secondary generalized coordinates 𝐪̄ ∈ ℝ𝑛̄ .
+Consequently, for complex nonlinear problems, this approach oﬀers a signiﬁcant advantage over traditional aﬃne approximations.
+    The temptation might arise to think that by substituting a relationship like (6) (which deﬁnes 𝐪 in terms of 𝐪) into (4), the resulting
+solution approximation, residing within the span of the ROB 𝐕tot of a traditional aﬃne approximation with dimension 𝑛tot = 𝑛tra ,
+might not be eﬀective in overcoming the Kolmogorov barrier. However, this intuition is misleading. The nonlinear approximation
+(7) achieves a crucial advantage: it delivers a solution nearly identical to that of a traditional aﬃne approximation while requiring
+only a small fraction of the latter’s dimensionality. In essence, the nonlinear approximation (7) signiﬁcantly delays the onset of the
+limitations imposed by the Kolmogorov barrier.
+    It may be also tempting to interpret the closure error modeling discussed in this paper as yet another attempt to model the inﬂuence
+of unresolved modes on the evolution of resolved ones – a common practice in turbulence models or the PMOR of dynamical systems
+that incorporate turbulence modeling. While the approach discussed in this paper can be interpreted in this way, it was neither
+speciﬁcally designed for, nor is it limited to, such applications. In those contexts, “modes” typically refer to Fourier modes, which
+are intrinsically linked to spatial or frequency resolution. In contrast, our paper uses proper orthogonal decomposition (POD) modes,
+where the concept of “resolution” is fundamentally diﬀerent. While Fourier resolution is deﬁned by spatial or frequency scales, POD
+resolution relates to the dimensionality and accuracy of the model’s modal representation.
+
+
+2.1. Least-squares Petrov-Galerkin projection
+
+     Given the generic, parametric, nonlinear, semi-discrete, ﬁrst-order initial value problem
+                        (        )
+              ̇ 𝝁) + 𝐟 𝐮(𝑡; 𝝁); 𝝁 − 𝐠(𝑡; 𝝁) = 𝟎,
+        𝐌(𝝁) 𝐮(𝑡;                                    𝐮(0; 𝝁) = 𝐮0 (𝝁)                                                                               (8)
+
+the dimensionality of this HDM is reduced via LSPG projection. This procedure follows the exact formulation introduced in [8,9] and is
+directly applicable to the nonlinear approximations considered herein. For completeness and clarity, the essential elements of the LSPG
+projection are recalled below. Comprehensive derivations and implementation details for incorporating a solution approximation that
+features latent-space closure error modeling into the LSPG framework are provided in [18]
+    Employing the nonlinear approximation
+                                         (       )
+       𝐮̃ (𝑡; 𝝁) = 𝐮ref + 𝐕 𝐪(𝑡; 𝝁) + 𝐕  𝐪(𝑡; 𝝁)                                                                                    (9)
+
+the associated residual of the HDM (8) is deﬁned as
+                               (                   )
+                                      𝜕
+       𝐫(̃𝐮(𝑡; 𝝁), 𝑡; 𝝁) = 𝐌(𝝁) 𝐕 + 𝐕                ̇ 𝝁) + 𝐟(̃𝐮(𝑡; 𝝁); 𝝁) − 𝐠(𝑡; 𝝁)
+                                          (𝐪(𝑡; 𝝁)) 𝐪(𝑡;
+                                       𝜕𝐪
+After an implicit time discretization, the time-discrete residual equation at step 𝑡𝑚+1 is
+                    (                       (        )          )
+       𝐫 𝑚+1 (𝝁) = 𝐫 𝐮ref + 𝐕 𝐪𝑚+1 (𝝁) + 𝐕  𝐪𝑚+1 (𝝁) , 𝑡𝑚+1 ; 𝝁 = 𝟎                                                                              (10)
+
+where 𝐫 𝑚+1 ∈ ℝ𝑁 , and the superscript 𝑚+1 designates a discrete quantity evaluated at time 𝑡𝑚+1 . This system is typically overde-
+termined as it governs 𝑁 ≫ 𝑛 unknowns. It is solved by enforcing the orthogonality of the discrete residual to a suitable test space
+spanned by the ROB 𝐖𝑚+1 (𝝁) ∈ ℝ𝑁×𝑛 , which yields the projected system
+      ( 𝑚+1 )𝑇 (                                          )
+       𝐖 (𝝁) 𝐫 𝐮ref + 𝐕𝐪𝑚+1 (𝝁) + 𝐕 (𝐪𝑚+1 (𝝁)), 𝑡𝑚+1 ; 𝝁 = 𝟎                                                                   (11)
+
+    Within the LSPG method, this nonlinear system is typically solved using a Gauss-Newton iteration. Linearizing (11) at iteration 𝑘
+yields the linear update equation for Δ𝐪𝑚+1,𝑘+1
+       ( 𝑚+1,𝑘+1 )𝑇 𝑚+1,𝑘+1                     (            )𝑇 (                        )
+        𝐖         (𝝁) 𝐖        (𝝁) Δ𝐪𝑚+1,𝑘+1 = − 𝐖𝑚+1,𝑘+1 (𝝁) 𝐫 𝐮̃ (𝐪𝑚+1,𝑘 ; 𝝁), 𝑡𝑚+1 ; 𝝁                                        (12)
+
+where the test basis 𝐖𝑚+1,𝑘+1 is explicitly given by
+                              [                    ]
+                                      𝜕 𝑚+1,𝑘
+      𝐖𝑚+1,𝑘+1 (𝝁) = 𝐉𝑚+1,𝑘 (𝝁) 𝐕 + 𝐕      (𝐪     )                                                                                               (13)
+                                       𝜕𝐪
+                 𝜕𝐫 ( ( 𝑚+1,𝑘 ) 𝑚+1 )
+and 𝐉𝑚+1,𝑘 (𝝁) ∶=     𝐮̃ 𝐪     , 𝑡 ; 𝝁 is the residual Jacobian with respect to the state. This formulation remains valid for any
+                 𝜕 𝐮̃
+diﬀerentiable nonlinear map  .
+   Based on the deﬁnition in (13), solving the discrete PROM problem (11) is equivalent to solving the nonlinear least-squares
+optimization problem
+                             ‖ (                               )‖2
+         𝐪𝑚+1 (𝝁) = arg min𝑛 ‖
+                             ‖ 𝐫 𝐮ref + 𝐕 𝐱 + 𝐕  (𝐱), 𝑡𝑚+1 ; 𝝁 ‖
+                                                                ‖                                                                                 (14)
+                        𝐱∈ℝ ‖                                   ‖2
+                                                                         5
+S. Ares De Parga et al.                                                      Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+2.2. Energy-conserving sampling and weighting hyperreduction
+
+    For nonlinear PROMs derived from LSPG projection, the computational complexity of evaluating the high-dimensional residual
+and Jacobian typically scales with the HDM dimension 𝑁, not just with the reduced dimension 𝑛. This dependence on 𝑁 can become
+a signiﬁcant bottleneck in real-time or many-query settings. Hyperreduction techniques address this challenge by decoupling online
+computational costs from 𝑁. Among these, the ECSW method, originally developed for second-order dynamical systems [22,23] and
+recently extended to ﬁrst-order dynamical systems [6], has proven particularly eﬀective and has been successfully adapted to PROMs
+with general closure error modeling in the latent space [18]. The ECSW formulation is brieﬂy summarized below in this generalized
+context, while full derivations and implementation details can be found in [18,23].
+                                               𝑁
+    Consider the set of mesh entities  = {𝑒𝑖 }𝑖=1𝑒 deﬁning the high-dimensional semi-discrete model. At each discrete time step 𝑡𝑚+1 ,
+the LSPG projection leads to the projected residual
+                   (        )𝑇 (                         (       )        )
+       𝐫𝑛𝑚+1 (𝝁) = 𝐖𝑚+1 (𝝁) 𝐫 𝐮ref + 𝐕 𝐪𝑚+1 (𝝁) + 𝐕  𝐪𝑚+1 (𝝁) , 𝑡𝑚+1 ; 𝝁
+                   ∑(              )𝑇 ( [                             (      )]         )                                         (15)
+                 =     𝐋𝑒𝑖 𝐖𝑚+1 (𝝁) 𝐫𝑒𝑖 𝐋𝑒+ 𝐮ref + 𝐕 𝐪𝑚+1 (𝝁) + 𝐕  𝐪𝑚+1 (𝝁) , 𝑡𝑚+1 ; 𝝁
+                                                   𝑖
+                      𝑒𝑖 ∈
+
+Here, 𝐫𝑒𝑖 ∈ ℝ𝑑𝑒𝑖 denotes the local contribution of element 𝑒𝑖 to the global residual, with 𝑑𝑒𝑖 representing the number of attached
+                                                                                𝑑 + ×𝑁
+degrees of freedom. The Boolean matrices 𝐋𝑒𝑖 ∈ {0, 1}𝑑𝑒𝑖 ×𝑁 and 𝐋𝑒+ ∈ {0, 1} 𝑒𝑖     select the degrees of freedom associated with the
+                                                                   𝑖
+mesh entity 𝑒𝑖 and its neighboring elements within the numerical stencil, respectively.
+   ECSW approximates this residual using a sparse cubature rule with strictly positive weights 𝜉𝑒𝑖 > 0 over a signiﬁcantly reduced
+mesh ̃ ⊂ , giving
+                  ∑ (                 )𝑇 (    [                                 ]          )
+      𝐫𝑛𝑚+1 (𝝁) =
+      ̃               𝜉𝑒𝑖 𝐋𝑒𝑖 𝐖𝑚+1 (𝝁) 𝐫𝑒𝑖 𝐋𝑒+ 𝐮ref + 𝐕𝐪𝑚+1 (𝝁) + 𝐕 (𝐪𝑚+1 (𝝁)) , 𝑡𝑚+1 ; 𝝁                                       (16)
+                                                           𝑖
+                      𝑒𝑖 ∈̃
+
+    Similarly, the Jacobian of the projected residual is
+                  ( 𝑚+1 )𝑇 𝑚+1        (         )𝑇 𝜕𝐫 𝑚+1 (                       (        )           )
+         𝐉𝑚+1
+          𝑛 (𝝁) = 𝐖    (𝝁) 𝐉 (𝝁) = 𝐖𝑚+1 (𝝁)                 𝐮ref + 𝐕𝐪𝑚+1 (𝝁) + 𝐕  𝐪𝑚+1 (𝝁) , 𝑡𝑚+1 ; 𝝁
+                                                   𝜕 𝐮̃𝑚+1
+                  ∑(             )𝑇 (    [                          (        )]       )
+                =    𝐋𝑒𝑖 𝐖𝑚+1 (𝝁) 𝐉𝑒𝑖 𝐋𝑒+ 𝐮ref + 𝐕𝐪𝑚+1 (𝝁) + 𝐕  𝐪𝑚+1 (𝝁) , 𝑡𝑚+1 ; 𝝁
+                                               𝑖
+                      𝑒𝑖 ∈
+
+where 𝐉𝑒𝑖 (⋅) ∈ ℝ𝑑𝑒𝑖 ×𝑑𝑒𝑖 is the contribution of mesh entity 𝑒𝑖 to the discrete Jacobian. Given that
+                                  ((           )𝑇  )
+      ( 𝑚+1 )𝑇 𝜕𝐫 𝑚+1            𝜕 𝐖𝑚+1 (𝝁) 𝐫 𝑚+1
+       𝐖 (𝝁)                   =
+                      𝜕 𝐮̃ 𝑚+1          𝜕 𝐮̃ 𝑚+1
+it follows that 𝐉𝑚+1
+                 𝑛 (𝝁) is the Jacobian of the projected residual in (15). Therefore, it can be approximated using the same ECSW
+cubature rule as in (16), namely
+                  ∑ (                 )𝑇 (    [                      (        )]          )
+        𝐉𝑚+1
+         𝑛 (𝝁) ≈      𝜉𝑒𝑖 𝐋𝑒𝑖 𝐖𝑚+1 (𝝁) 𝐉𝑒𝑖 𝐋𝑒+ 𝐮ref + 𝐕𝐪𝑚+1 (𝝁) + 𝐕  𝐪𝑚+1 (𝝁) , 𝑡𝑚+1 ; 𝝁
+                                                       𝑖
+                      𝑒𝑖 ∈̃
+
+    ECSW’s oﬄine training proceeds by determining a sparse vector of cubature weights 𝝃 and the associated reduced mesh .̃ This
+is achieved by solving a nonnegative least-squares problem that minimizes the diﬀerence between projected residual contributions
+collected in the training snapshot subset and their sparse approximation
+         𝝃 = arg min ‖𝐂𝜻 − 𝐝‖22   s.t.   ‖𝐂𝜻 − 𝐝‖2 ≤ 𝜀ECSW ‖𝐝‖2                                                                               (17)
+                    𝜻≥0
+
+where the matrix 𝐂 and vector 𝐝 encode the contributions of the individual mesh entities to the projected residual evaluated at the
+training snapshots. Each row of 𝐂 corresponds to a training snapshot and contains the element-wise projected residual evaluations,
+while each column corresponds to a mesh entity 𝑒𝑖 . The vector 𝐝 stores the corresponding full projected residual for each snapshot,
+obtained by aggregating these element-wise contributions (see [18,23] for full details).
+    The resulting ECSW approximation signiﬁcantly reduces online computational complexity, scaling only with the reduced mesh size
+||
+ ̃ ≪ 𝑁𝑒 and the PROM dimension 𝑛, rather than the original problem dimension 𝑁. For nonlinear approximations, an additional step
+is required during the ECSW training phase because the generalized coordinates 𝐪𝑠 associated with each high-dimensional snapshot 𝐮𝑠
+cannot be computed by orthogonal projection and must instead be obtained by solving in a least-squares sense the nonlinear system
+of the form
+         𝜹(𝐪′ ) = 𝐮ref + 𝐕𝐪′ + 𝐕 (𝐪′ ) − 𝐮𝑠 = 𝟎                                                                                              (18)
+using a Gauss-Newton method with Moore-Penrose updates
+              (0)
+         𝐪′    = 𝐕𝑇 (𝐮𝑠 − 𝐮ref )                                                                                                              (19)
+                          ( (         ))+
+            (𝑘+1)     (𝑘)    𝜕𝜹 ′ (𝑘)         (𝑘)
+         𝐪′       = 𝐪′ −         𝐪        𝜹(𝐪′ )                                                                                              (20)
+                             𝜕𝐪
+                                                                     6
+S. Ares De Parga et al.                                                   Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+   The same least-squares procedure is also performed to project the initial condition onto the nonlinear approximation manifold.
+Importantly, the formulation of both LSPG projection and ECSW hyperreduction remains unchanged for any choice of nonlinear map
+.
+
+3. Machine learning regression methods
+
+3.1. Artiﬁcial neural network regression
+
+   So far, the map deﬁned in (6) has been constructed using a deep ANN, as detailed in [4,18] and summarized below.
+   From the solution approximation (7) and the orthogonality conditions (3), the vectors of primary and secondary generalized
+coordinates associated with the pre-computed solution snapshots can be computed through projection as follows
+               (       )          𝑇(        )
+      𝐪𝑠 = 𝐕𝑇 𝐮𝑠 − 𝐮ref , 𝐪̄ 𝑠 = 𝐕 𝐮𝑠 − 𝐮ref , 𝑠 = 1, … , 𝑁𝑠                                                             (21)
+Substituting these generalized coordinates back into (7) and requiring exact reproduction of the solution snapshots leads to
+         𝐮𝑠 − 𝐮ref = 𝐕𝐪𝑠 + 𝐕 (𝐪𝑠 ),        𝑠 = 1, … , 𝑁𝑠                                                                                  (22)
+                                   𝑇
+Pre-multiplying (22) by 𝐕 and utilizing the orthogonality conditions (3) results in
+        𝑇(        )
+      𝐕 𝐮𝑠 − 𝐮ref =  (𝐪𝑠 )
+which, in view of the projection deﬁnitions in (21), gives the relationship between the secondary and primary coordinates
+         𝐪̄ 𝑠 =  (𝐪𝑠 ),    𝑠 = 1, … , 𝑁𝑠
+                                                                                                                                      𝑁
+    Consequently, the ANN representing the map (6) is trained using the dataset of primary generalized coordinates {𝐪𝑠 }𝑠=1
+                                                                                                                          𝑠
+                                                                                                                            (or a
+                                                                                                    𝑁
+subset thereof) as input to predict the corresponding secondary generalized coordinates {𝐪̄ 𝑠 }𝑠=1
+                                                                                                 𝑠
+                                                                                                   (or a subset thereof). The ANN’s
+vector-valued parameter 𝜼 is determined by minimizing the following loss function over the training data
+                              𝑁′
+                          1 ∑‖ 𝑠        (       )‖2
+                               𝑠
+         𝜼 = arg min             ‖𝐪̄ −  𝐪𝑠 , 𝜼′ ‖
+                  ′ 𝜼     𝑁𝑠 𝑠=1 ‖
+                           ′                     ‖2
+
+where 𝑁𝑠′ represents the number of solution snapshots used for training. While 𝑁𝑠′ is typically equal to the total number of snapshots
+𝑁𝑠 , it can be less (𝑁𝑠′ < 𝑁𝑠 ) when a very large dataset is collected, for example, from unsteady computations. In such cases, the
+speciﬁc subset of snapshots chosen for training does not imply any particular ordering from the original dataset.
+    This work investigates the suitability of deep ANNs (as in [18] or, more generally, ANNs of any architecture) as the primary
+regression method for constructing the map (6). This inquiry is motivated by two key limitations of deep ANNs within PMOR via latent
+space closure error modeling: their inherent opacity, complicating the development of rigorous theoretical a priori error estimates or
+indicators for the solution approximation (7), and the challenge of limited training data when seeking high accuracy with a very small
+number of high-dimensional solution snapshots 𝑁𝑠 , resulting in an extremely small dimension 𝑛 of the primary ROB 𝐕 – a scenario
+highly desirable for eﬃciency.
+    As an illustrative example, consider the benchmark steady hypersonic ﬂow problem from [4], parameterized by a single free-stream
+Mach number (𝑁 = 1). Traditional PMOR based on an aﬃne approximation required a mere 𝑁𝑠 = 17 steady solution snapshots
+to construct an accurate PROM of dimension 𝑛tra = 16 across the entire considered parameter domain . Furthermore, the PMOR
+framework employing a deep ANN for the map (6) demonstrated the capability to reduce the HDM dimension from 𝑁 = 654 720 to
+𝑛 = 2 (with 𝑛̄ = 14) while maintaining comparable accuracy within . However, training this deep ANN necessitated the reconstruction
+of additional high-dimensional steady solution snapshots. A practical strategy to mitigate this involves leveraging the pre-computed
+total ROB 𝐕tot = [𝐕 𝐕] (for this example, of dimension 𝑛tra = 16) and the ECSW-generated reduced mesh based on 𝐕tot to build a
+traditional HPROM for the rapid reconstruction of these additional high-dimensional snapshots. This suﬃciently fast oﬄine strategy
+was successfully employed to construct an accurate HPROM-ANN of dimension 𝑛 = 2 for the aforementioned hypersonic ﬂow problem.
+    Nevertheless, the requirement to generate or reconstruct additional high-dimensional solution snapshots to facilitate the learning
+of the closure error using a deep ANN, while perhaps a minor inconvenience, remains a desirable aspect to eliminate.
+    To explore the potential of simpler regression methods as an alternative to deep ANNs in this context, the solution of the two-
+dimensional parametric inviscid Burgers problem, as presented in [18] and further detailed in Section 4 of this paper, is considered.
+This problem, deﬁned over a two-dimensional parameter domain (𝑁 = 2), features shocks propagating across the entire compu-
+tational domain in both directions. The construction of the map (6) is investigated using both a deep ANN and, for comparison, a
+single-layer ANN. The underlying hypothesis is that if an HPROM-ANN conﬁgured with a single-layer ANN can yield comparable
+levels of accuracy and eﬃciency to its counterpart conﬁgured with a deep ANN for a given small dimension 𝑛 of the primary ROB 𝐕,
+it would suggest that a simpler regression method, such as GPR, could also achieve similar accuracy in this context.
+    Speciﬁcally, the instance of this problem considered herein involves a high-dimensional model (based on a ﬁnite volume discretiza-
+tion) with a dimension of 𝑁 = 125 000. The HPROM-ANN is conﬁgured with a primary ROB dimension of 𝑛 = 10 and a secondary
+ROB dimension of 𝑛̄ = 140. For the single-layer ANN, the architecture comprises one hidden layer with 1 400 neurons and ELU activa-
+tion. In contrast, the multi-layer ANN replicates the architecture described in [18], consisting of six ELU-activated layers with sizes
+                                                                                                               ̄ generated by sampling
+(10, 32, 64, 128, 256, 256, 140). Both networks are trained using the same dataset of 4 501 snapshot pairs (𝐪, 𝐪),
+
+                                                                  7
+S. Ares De Parga et al.                                                            Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+                               Table 1
+                               Online performance comparison (accuracy and computational speedups) of two dif-
+                               ferent HPROM-ANN conﬁgurations for the 2D parametric inviscid Burgers’ problem
+                               at three out-of-sample parameter points (𝑛 = 10, 𝑛̄ = 140, single core).
+                                 Parameter       Relative global Euclidean error (%)   Wall-clock time (minutes)
+
+                                 (𝜇1 , 𝜇2 )      HPROM-ANN        HPROM-ANN            HPROM-ANN        HPROM-ANN
+                                                 (single-layer)   (multi-layer)        (single-layer)   (multi-layer)
+
+                                 (4.56, 0.019)   1.81             1.07                 0.29             0.28
+                                 (4.75, 0.020)   1.22             0.68                 0.30             0.29
+                                 (5.19, 0.026)   2.29             1.83                 0.32             0.30
+
+
+
+
+Fig. 1. Solution slices predicted for out-of-sample parameter point 𝝁 = (4.75, 0.020) at the time steps 𝑡 = 0, 5, 10, 15, 20, and 25 using HDM,
+HPROM-ANN conﬁgured with a single-layer ANN, and HPROM-ANN conﬁgured with a multi-layer ANN: 𝑦 = 50.2 (top); 𝑥 = 50.2 (bottom).
+
+
+
+the two-dimensional parameter domain  = [4.25, 5.50] × [0.015, 0.03] at 9 distinct points, and for each of these parameter points,
+sampling the temporal solution in the time interval [0, 25] at 500 equidistant points. In both cases, 90 % of the dataset is allocated for
+training and 10 % for validation.
+    Table 1 summarizes the performance of the two HPROM-ANN conﬁgurations detailed above. Fig. 1 presents a qualitative com-
+parison between the solutions predicted by the HDM and both HPROM-ANN conﬁgurations at a speciﬁc time 𝑡 ∈]0, 25[ and along
+two diﬀerent slices of the computational domain. The results reported in this table and ﬁgure demonstrate that, within the context of
+an aﬃne approximation with latent space closure error modeling, a shallow ANN and a deep ANN yield comparable eﬃciency and
+accuracy for the HPROM-ANN. These ﬁndings, along with numerous similar observations by the authors regarding the performance of
+HPROM-ANNs conﬁgured with single-layer and multi-layer ANNs for constructing the map (6), and the inherent opacity of ANNs that
+hinders the development of rigorous theoretical a priori error estimates or indicators for their use in PMOR, constitute the primary
+motivation for the alternative machine learning regression models developed in the subsequent two sections of this paper.
+
+
+3.2. Gaussian process regression
+
+   GPR is ﬁrst considered as an interpretable and robust alternative to (deep) ANN models for constructing the nonlinear map 
+from primary to secondary generalized coordinates, particularly in data-scarce contexts.
+   Mean regressor. Gaussian processes (GPs) have recently gained popularity in machine learning for classiﬁcation tasks, and have
+long served as a regression tool, widely known as kriging [24]. A GP is a collection of normal random variables 𝑌 (𝐱), indexed by a 𝑑-
+dimensional vector 𝐱, such that any ﬁnite subset of these variables has a multivariate normal distribution. A GP is fully characterized
+by its mean function, 𝑚(𝐱) = 𝔼[𝑌 (𝐱)], where 𝔼 denotes mathematical expectation, and its covariance function
+         (    )       (       ( ))     [             ( ( )      ( ))]
+       𝐾 𝐱, 𝐱′ = cov 𝑌 (𝐱), 𝑌 𝐱′ = 𝔼 (𝑌 (𝐱) − 𝑚(𝐱)) 𝑌 𝐱′ − 𝑚 𝐱′                                                                    (23)
+
+                                                                          8
+S. Ares De Parga et al.                                                       Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+This covariance function is often simply called the kernel. For regression, training data acts as a prior. Bayesian posterior predictions,
+given this training data, also form a GP whose mean and covariance functions are easily computed [25]. For simplicity, assuming
+a zero-mean GP 𝜉 ∼  (0, 𝐾) with covariance kernel 𝐾, an unknown response function 𝑓 † ∶ ℝ𝑑 → ℝ can be approximated from
+measurements 𝑓 † (𝐱𝑠 ) = 𝑦𝑠 , for 𝑠 = 1, … , 𝑁td , where 𝑁td denotes the number of training data points. This approximation is given by
+the regressor
+                [                                 ]
+                     |
+       𝑓 (𝐱) = 𝔼 𝜉(𝐱)|𝜉(𝐱𝑠 ) = 𝑦𝑠 , 𝑠 = 1, … , 𝑁td = 𝐊(𝐱, 𝐗)𝐊−1 (𝐗, 𝐗)𝐲                                                               (24)
+                     |
+where 𝐊(𝐗, 𝐗) is the 𝑁td × 𝑁td matrix with entries 𝐾(𝐱𝑠 , 𝐱𝑟 ), and 𝐊(𝐱, 𝐗) is the 𝑁td -dimensional row vector with entries 𝐾(𝐱, 𝐱𝑠 ), for
+𝑠, 𝑟 = 1, … , 𝑁td .
+     The regressor (24) represents the mean of the conditional GP, with its variance given by
+                     (                                 )
+                          |
+        𝜎 2 (𝐱) = Var 𝜉(𝐱)|𝜉(𝐱𝑠 ) = 𝑦𝑠 , 𝑠 = 1, … , 𝑁td = 𝐾(𝐱, 𝐱) − 𝐊(𝐱, 𝐗)𝐊−1 (𝐗, 𝐗)𝐊𝑇 (𝐱, 𝐗)                                       (25)
+                          |
+   The choice of kernel can be tailored to a particular dataset to capture varying degrees of smoothness or other known prior
+properties of the data. While the squared exponential (Gaussian) kernel is arguably the most popular, other common choices include
+inverse quadratic, rational quadratic, constant (white noise), and the Matérn family of kernels. For instance, the Matérn kernel with
+a smoothness parameter 𝜈 = 1.5 precisely matches the kernel
+                     (    √              )    ( √             )
+         ( ′)      2         3‖𝐱 − 𝐱′ ‖2          3‖𝐱 − 𝐱′ ‖2
+       𝐾 𝐱, 𝐱 = 𝜎𝑓 1 +                     exp −
+                                𝓁                     𝓁
+
+which is employed in the numerical assessments performed in Section 4. Here, 𝜎𝑓2 serves as a hyperparameter for the signal variance,
+and 𝓁 is another hyperparameter deﬁning an isotropic length-scale of correlation in the input space. Anisotropic kernels are often
+considered to account for diﬀering behavior across input space dimensions, assigning a separate length-scale for each. Kernels can
+also be combined multiplicatively and additively to form composite kernels, further enhancing the prior of the approximation.
+    The resulting GP model is often described as nonparametric because, apart from the chosen kernel and its hyperparameters, it
+depends solely on the training data. Cross-validation or maximizing the marginal log-likelihood [25] are the most popular techniques
+for estimating hyperparameter values. The latter method yields an explicit analytic formula amenable to gradient-based optimization.
+Its eﬀect can be likened to favoring the least complex model that explains the data.
+    While vector GPs have been investigated, cross-output correlations are frequently disregarded for simplicity, leading to each
+output dimension being represented by a standard, scalar-valued GP. To further reduce computational workload in this work, it is
+also assumed that these scalar-valued GPs share a common kernel deﬁned by the same hyperparameters.
+    The GPR model is trained using the data described in Section 3.1, where each high-dimensional solution snapshot 𝐮𝑠 is mapped
+to its corresponding pair of primary and secondary generalized coordinates (𝐪𝑠 , 𝐪̄ 𝑠 ). These pairs are then assembled into the training
+matrices
+               ⎡ (𝐪1 )𝑇 ⎤                      ⎡ (𝐪̄ 1 )𝑇 ⎤
+               ⎢ 2𝑇 ⎥                          ⎢ ̄2 𝑇 ⎥
+                 (𝐪 ) ⎥                           (𝐪 ) ⎥
+         𝐐td = ⎢           ∈ ℝ𝑁td ×𝑛 ,   𝐐td = ⎢             ∈ ℝ𝑁td ×𝑛̄
+               ⎢ ⋮ ⎥                           ⎢ ⋮ ⎥
+               ⎢(𝐪𝑁td )𝑇 ⎥                     ⎢(𝐪̄ 𝑁td )𝑇 ⎥
+               ⎣         ⎦                     ⎣           ⎦
+Here, 𝑁td = 𝑁𝑠′ , which denotes the chosen number of training snapshots and satisﬁes 𝑁𝑠′ ≤ 𝑁𝑠 (see Section 3.1). In the predictive
+(online) phase, the value of the nonlinear closure map  (𝐪⋆ ) ∈ ℝ𝑛̄ at a new primary coordinate 𝐪⋆ ∈ ℝ𝑛 is obtained by vectorizing
+(24) and applying the single-kernel assumption as
+                              (                      )−1
+                                                2
+        (𝐪⋆ )𝑇 = 𝐊(𝐪⋆ , 𝐐td ) 𝐊(𝐐td , 𝐐td ) + 𝜎𝑛𝑔 𝐈     𝐐td                                                                   (26)
+       2 represents the Gaussian noise variance, often called a “nugget.” This term is crucial for two reasons: it helps limit overﬁtting
+Here, 𝜎𝑛𝑔
+                                                 ′   ′
+and enhances numerical stability. 𝐈 ∈ ℝ𝑁𝑠 ×𝑁𝑠 is the identity matrix.
+                                                                                              ′
+   This formulation naturally supports an oﬄine-online decomposition. First, the matrix 𝜶 ∈ ℝ𝑁𝑠 ×𝑛̄ is computed oﬄine as follows
+           (                   )−1
+                           2
+      𝜶 = 𝐊(𝐐td , 𝐐td ) + 𝜎𝑛𝑔 𝐈    𝐐td                                                                                        (27)
+
+Each online prediction then requires only the evaluation of 𝐊(𝐪⋆ , 𝐐td ) and a matrix-vector multiplication.
+   Beyond the mean prediction, the GP model provides a prediction of uncertainty in the form of an input space parameter-dependent
+variance, which can be obtained from (25). While not exploited in the present work, this variance is often used as an error indicator
+and to guide adaptive sampling [26].
+   Analytical Jacobians for GPR. As a PMOR method for implicit discrete systems, LSPG [8,9] necessitates the evaluation of the
+Jacobian of the approximation given in (7) with respect to 𝐪. This, in turn, requires computing the Jacobian of the nonlinear map 
+with respect to 𝐪. Fortunately, a closed-form expression for this Jacobian can be derived.
+   Speciﬁcally, utilizing the precomputed weight matrix 𝜶 from (27), the Jacobian of  with respect to 𝐪⋆ is
+         𝜕
+             = 𝜶 𝑇 𝐉𝐾 (𝐪⋆ )                                                                                                                    (28)
+         𝜕𝐪⋆
+
+                                                                          9
+S. Ares De Parga et al.                                                         Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+                                                    ′
+                 ̄ , and 𝐉 (𝐪⋆ ) ∈ ℝ𝑁𝑠 ×𝑛 is deﬁned entry-wise as
+where 𝜕 ∕𝜕𝐪⋆ ∈ ℝ𝑛×𝑛      𝐾
+
+                          𝜕𝐾(𝐪⋆ , 𝐪𝑠 )
+         [𝐉𝐾 (𝐪⋆ )]𝑠𝑖 =                                                                                                                          (29)
+                            𝜕𝑞𝑖⋆
+
+For the Matérn kernel with 𝜈 = 1.5, [𝐉𝐾 (𝐪⋆ )]𝑠𝑖 can be evaluated analytically as
+
+                             𝜎𝑓2      ( √ )(          )           ‖𝐪⋆ − 𝐪𝑠 ‖2
+         [𝐉𝐾 (𝐪⋆ )]𝑠𝑖 = −3         exp − 3𝑑𝑠 𝑞𝑖⋆ − 𝑞𝑖𝑠 ,   𝑑𝑠 =
+                             𝓁2                                       𝓁
+In cases where a selected kernel cannot be diﬀerentiated analytically, its Jacobian can be computed using numerical diﬀerentiation.
+    To summarize, GPR oﬀers several key advantages, including gradient-based hyperparameter optimization, the availability of
+analytical derivatives, and a principled approach to estimating epistemic uncertainty. In the current work, a single multi-output
+formulation is employed. This approach avoids the computational burden associated with ﬁtting 𝑛̄ separate scalar GPs. As the online
+prediction stage relies solely on the posterior mean, the resulting closure operates deterministically.
+
+
+3.3. Radial basis function interpolation
+
+   Next, RBF interpolation is considered as another interpretable and robust alternative to (deep) ANNs for latent space closure error
+modeling, particularly in data-scarce scenarios. This approach oﬀers a fully deterministic regression model [27] that maintains the
+closed-form structure and analytical derivatives characteristic of GPR. However, it forgoes all probabilistic components, including
+marginal-likelihood-based hyperparameter training and predictive variance modeling.
+   RBF interpolant. RBF interpolation inherently handles vector-valued outputs, providing a scalable solution when uncertainty quan-
+tiﬁcation is not a priority. It approximates a function by using a weighted linear combination of radial kernel functions centered at
+the training input points
+         𝑁td
+         ∑         (           )
+               𝐰𝑠 𝜙 ‖𝐱 − 𝐱𝑠 ‖2
+         𝑠=1
+                                                                                                                   √
+where 𝜙 ∶ [0, ∞) → ℝ is a RBF. Common RBF kernels include the Gaussian (𝜙(𝑟) = exp(−𝜖 2 𝑟2 )), multiquadric (𝜙(𝑟) = 1 + (𝜖𝑟)2 ), and
+inverse multiquadric (𝜙(𝑟) = (1 + (𝜖𝑟)2 )−1∕2 ) kernels, where 𝜖 is a shape parameter.
+   An RBF interpolant coincides with the regressor derived from GPR when using a stationary kernel, i.e., one satisfying 𝐾(𝐱, 𝐱′ ) =
+𝜙(‖𝐱 − 𝐱′ ‖), as seen in (23). Consequently, approximating the nonlinear closure map  ∶ ℝ𝑛 → ℝ𝑛̄ using RBF interpolation formally
+leads to an expression mirroring (26)
+                                (                  )−1
+          (𝐪⋆ )𝑇 = 𝐊(𝐪⋆ , 𝐐td ) 𝐊(𝐐td , 𝐐td ) + 𝜆𝐈 𝐐td
+                   (        )      ′                                                                        (        )
+In this context, 𝐊 𝐪⋆ , 𝐐td ∈ ℝ1×𝑁𝑠 is a row vector containing RBF kernel evaluations with entries [𝐊 𝐪⋆ , 𝐐td ]𝑠 = 𝜙(‖𝐪⋆ − 𝐪𝑠 ‖2 ).
+                                         ′ ′
+The symmetric matrix 𝐊(𝐐td , 𝐐td ) ∈ ℝ𝑁𝑠 ×𝑁𝑠 is deﬁned by [𝐊(𝐐td , 𝐐td )]𝑠𝑟 = 𝜙(‖𝐪𝑠 − 𝐪𝑟 ‖2 ). The term 𝜆𝐈 acts as a regularization term,
+introduced solely for numerical stability.
+                                                                                                                         ′
+    As with GPR, this formulation supports an eﬃcient oﬄine-online framework. The interpolation weights 𝜷 ∈ ℝ𝑁𝑠 ×𝑛̄ are precom-
+puted oﬄine by solving a system with multiple right-hand sides
+       (                  )
+        𝐊(𝐐td , 𝐐td ) + 𝜆𝐈 𝜷 = 𝐐td
+
+Online predictions then only require 𝑁𝑠′ kernel evaluations and a matrix-vector product,  (𝐪⋆ ) = 𝐊(𝐪⋆ , 𝐐td )𝜷.
+                                                                                            2 in GPR, is not derived from a probabilistic
+    It is important to note that the regularization parameter 𝜆, unlike the noise variance 𝜎𝑛𝑔
+model; its role is purely for numerical stabilization. The kernel hyperparameter 𝜖 is selected by cross-validation in conjunction with
+a search procedure rather than via marginal likelihood maximization.
+    Analytical Jacobians for RBF interpolation. Like GPR (see (28) and (29)), the deterministic RBF interpolant also admits analytical
+Jacobians. The Jacobian of the nonlinear map  is given by
+
+         𝜕 ⋆
+             (𝐪 ) = 𝜷 𝑇 𝐉𝜙 (𝐪⋆ )
+          𝜕𝐪
+                                                ′
+where the Jacobian matrix 𝐉𝜙 (𝐪⋆ ) ∈ ℝ𝑁𝑠 ×𝑛 has entries
+
+         [        ]     𝜕𝜙(‖𝐪⋆ − 𝐪𝑠 ‖2 )                     𝑞 ⋆ − 𝑞𝑖𝑠
+          𝐉𝜙 (𝐪⋆ ) 𝑠𝑖 =                  = 𝜙′ (‖𝐪⋆ − 𝐪𝑠 ‖2 ) ⋆𝑖
+                               ⋆
+                             𝜕𝑞𝑖                            ‖𝐪 − 𝐪𝑠 ‖2
+
+and 𝜙′ (⋅) denotes the radial derivative of the RBF kernel. For instance, with the Gaussian kernel, this derivative is
+
+         𝜙′ (𝑟) = −2𝜖 2 𝑟 exp(−𝜖 2 𝑟2 )
+
+                                                                           10
+S. Ares De Parga et al.                                                     Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+4. Applications and performance assessments
+
+    All nonlinear model reduction methods discussed in this paper were implemented in the ﬁnite volume (FV) compressible ﬂow
+solver AERO-F [28] and integrated into its existing PMOR capabilities. This solver includes a low-Mach preconditioner [29] speciﬁcally
+designed for low-speed ﬂows. The PROMs are constructed using the LSPG projection method and hyperreduced with ECSW. The
+eﬀectiveness of these model reduction and hyperreduction methods is evaluated using two representative CFD applications.
+    The ﬁrst application can be easily reproduced by interested readers, as it involves solving an inviscid Burgers problem formulated
+in a two-dimensional (2D) square and parameterized over a 2D parameter domain  (𝑁 = 2). It is programmed in Python. It features
+shocks that propagate across the entire domain in both directions, making it particularly challenging not only for traditional PMOR
+approaches based on the aﬃne approximation of the solution but also for many otherwise promising nonlinear PMOR techniques,
+such as registration methods based on shock-ﬁtting.
+    The second application serves as a benchmark problem for CFD in the automotive industry, making it highly representative of
+industrial challenges. It focuses on simulating the turbulent ﬂow over a speciﬁc conﬁguration of the Ahmed body using the DES
+turbulence model. In this case, time is the only considered parameter and thus 𝑁 = 1, and all numerical simulations are performed
+using AERO-F.
+    For time-dependent simulations and in the presence of strong shocks, some studies [4] advocate for alternative accuracy assessment
+approaches beyond the global inﬁnity norm, 𝐿2 norm, or Euclidean norm. Examples include adaptations of the quadratic Wasserstein
+distance [30] to deterministic settings [31], or the dynamic time-warping distance measure [32]. However, given that the propagating
+shocks in the ﬁrst application are relatively weak compared to those in [4], which focuses on hypersonic ﬂows, and are nearly absent in
+the second application, this study adopts primarily the simpler and more interpretable global Euclidean norm for accuracy assessment.
+Speciﬁcally, the relative error associated with an approximate solution predicted using a reduced-order model is computed as
+                        √
+                        √ 𝑁𝑡
+                        √∑
+                        √     ‖              ̃ 𝑚 (𝝁⋆ ) ‖
+                                                         2
+                              ‖ QoI𝑚 (𝝁⋆ ) − QoI       ‖
+                              ‖                        ‖2
+                          𝑚=0
+        ℝ𝔼2,QoI (𝝁⋆ ) =       √                                                                                                   (30)
+                                 𝑁𝑡
+                                 ∑  ‖ QoI𝑚 (𝝁⋆ ) ‖2
+                                    ‖            ‖2
+                                        𝑚=0
+
+where:
+
+ • QoI𝑚 denotes a scalar or vector quantity of interest computed at time step 𝑡𝑚 by post-processing the high-dimensional solution 𝐮𝑚 .
+   This could include the solution vector 𝐮𝑚 itself.
+   ̃ 𝑚 represents the counterpart of QoI𝑚 computed using the approximate solution 𝐮̃ 𝑚 obtained from a reduced-order or hyper-
+ • QoI
+
+   reduced-order model.
+ • 𝝁⋆ and 𝑁 denote, as before, a queried but unsampled parameter point in  and the total number of computational time steps
+             𝑡
+   (excluding the initial time step), respectively.
+
+All computations reported in this section were performed in double-precision arithmetic on a Linux cluster, where each node is
+equipped with two Intel Xeon Gold 5118 processors (24 physical cores in total) clocked at 2.3 GHz and 192 GB of memory. Unless
+otherwise speciﬁed, all oﬄine (training) costs – except for the generation of high-dimensional solution snapshots – and all online
+(solution) costs are reported as wall-clock timings measured on a single node of the aforementioned cluster.
+
+4.1. Two-dimensional parametric inviscid Burgers problem
+
+4.1.1. Problem setup and discretization
+   The 2D parametric inviscid Burgers initial-boundary-value problem (IBVP) and parameter settings originally introduced in [18]
+are adopted in this study. The same 2D conﬁguration is precisely reproduced to enable direct comparisons and veriﬁcations against
+the results obtained using the PROM-ANN model presented in the referenced work. Speciﬁcally, the following IBVP is considered
+         𝜕𝑢𝑥      𝜕𝑢       𝜕𝑢
+             + 𝑢𝑥 𝑥 + 𝑢𝑦 𝑥 = 0.02 exp(𝜇2 , 𝑥)
+          𝜕𝑡      𝜕𝑥        𝜕𝑦
+         𝜕𝑢𝑦      𝜕𝑢𝑦      𝜕𝑢𝑦
+             + 𝑢𝑥     + 𝑢𝑦     =0                                                                                                            (31)
+          𝜕𝑡      𝜕𝑥       𝜕𝑦
+         𝑢𝑥 (0, 𝑦, 𝑡; 𝝁) = 𝜇1
+         𝑢𝑥 (𝑥, 𝑦, 0) = 1,      𝑢𝑦 (𝑥, 𝑦, 0) = 1
+         𝑡 ∈ (0, 𝑇𝑓 ]
+
+where 𝝁 = (𝜇1 , 𝜇2 ) is the parameter vector. The parameter 𝜇1 inﬂuences the left boundary condition 𝑢𝑥 (0, 𝑦, 𝑡; 𝝁), while 𝜇2 appears in
+the source term of the ﬁrst equation in (31). Both parameters directly impact the formation and propagation of shock waves within
+the computational domain Ω.
+    The spatial domain is given by Ω = [0, 100] × [0, 100], while the parameter domain is chosen as  = [4.25, 5.50] × [0.015, 0.03]. This
+selection ensures that the solution 𝑢 = [𝑢𝑥 𝑢𝑦 ]𝑇 of (31) exhibits shock waves propagating throughout Ω, both from left to right and
+
+                                                                   11
+S. Ares De Parga et al.                                                                   Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+from top to bottom. The presence of these traveling discontinuities signiﬁcantly limits the low-rank approximability of the solution
+set, as dictated by the Kolmogorov 𝑛-width barrier. As a result, eﬃciently solving this problem typically requires a nonlinear model-
+reduction approach capable of handling long-range shock wave propagation. The temporal domain is set to (0, 𝑇𝑓 ] = (0, 25].
+    For spatial discretization, the square domain Ω is partitioned into a uniform, structured mesh consisting of 250 × 250 equally
+sized elements (primal cells), yielding a total of 𝑁𝑒 = 62 500 elements and a state-space dimension of 𝑁 = 125 000. The IBVP (31) is
+semi-discretized using a cell-centered FV Godunov method, producing the semi-discrete solution vector 𝐮 ∈ ℝ𝑁 .
+    The time interval (0, 𝑇𝑓 ] is divided into 500 equally spaced steps of size Δ𝑡 = 0.05. The semi-discrete form of (31) is then integrated
+in time using the midpoint rule. Within each time step, the resulting system of nonlinear algebraic equations is solved using a direct
+sparse solver.
+    On a Linux cluster with the previously described hardware conﬁguration, each HDM simulation requires approximately 12.79
+minutes of wall-clock time to complete.
+
+4.1.2. Construction, training, and partitioning of the reduced-order basis and nonlinear maps
+   Solution snapshots from HDM are ﬁrst collected. Following the work in [18], the parameter domain  is uniformly sampled
+on a 3 × 3 grid through constant increments Δ𝜇1 = 0.625 and Δ𝜇2 = 0.0075. For each of the nine sampled parameter points, the
+corresponding HDM is run over the time interval 𝑡 ∈ (0, 25], with a ﬁxed time step Δ𝑡 = 0.05 (for a total of 500 time steps). This
+procedure produces 𝑁𝑠 = 4 501 solution snapshots in total, including the shared initial condition.
+   The solution snapshots are stored in the matrix 𝐒 ∈ ℝ𝑁×4 501 , and a thin SVD is computed. Following the standard energy-based
+truncation criterion with 𝜀2𝐒 = 5 %, 𝑛tra = 95 modes are ﬁrst retained to form the traditional ROB 𝐕 ∈ ℝ𝑁×95 . To construct nonlinear
+PROMs, 𝑛 = 10 retained modes of this basis are retained and complemented by 𝑛̄ = 140 discarded modes, resulting in a pair of ROBs
+𝐕 ∈ ℝ𝑁×10 and 𝐕 ∈ ℝ𝑁×140 that delivers an accuracy comparable to that of the 𝑛tra = 95 PROM, consistent with [18].
+
+4.1.3. Common training data and latent-space pairs
+    To train each nonlinear PROM, the procedure outlined in Section 2 is followed to map each high-dimensional solution snapshot
+                                           ̄ These latent pairs collectively form a shared dataset of training inputs 𝐐td ∈ ℝ4 501×10 and
+to a pair of latent-coordinate vectors (𝐪, 𝐪).
+corresponding outputs 𝐐td ∈ ℝ4 501×140 .
+    The neural-network closure approach from [18] is replicated here, where  is implemented using a feedforward fully connected
+multi-layer perceptron (MLP) architecture. In this case, the input and output sizes are 𝑛 = 10 and 𝑛̄ = 140, respectively, and the
+network consists of six linear layers with exponential linear unit (ELU) activations. Speciﬁcally, the sizes of these layers are
+                   ELU              ELU                ELU                 ELU                 ELU
+         (𝑛, 32) ←←←←←←←→
+                        ← (32, 64) ←←←←←←←→
+                                          ← (64, 128) ←←←←←←←→
+                                                             ← (128, 256) ←←←←←←←→
+                                                                                 ← (256, 256) ←←←←←←←→
+                                                                                                     ← (256, 𝑛)
+                                                                                                             ̄                                             (32)
+
+All (𝐪, 𝐪) pairs from the entire snapshot set (totaling 4 501 in this case) are gathered and randomly shuﬄed, and then 90 % of them are
+allocated for training the surrogate while 10 % are used for validation. The MLP is implemented in PyTorch and trained using a mean-
+squared error (MSE) loss: training was completed in approximately 19.3 minutes on 24 cores of the same node of the Linux cluster.
+The Gaussian-process nonlinear closure is constructed by training a single multi-output GPR model on the previously described latent-
+space dataset. A composite kernel is adopted, consisting of a Matérn kernel with smoothness parameter 𝜈 = 1.5, scaled by a constant
+kernel (signal variance 𝜎𝑓2 ), and augmented with a white-noise kernel (noise variance 𝜎𝑛𝑔      2 ). The signal variance 𝜎 2 is optimized
+                                                                                                                          𝑓
+within the bounds (10−3 , 102 ), the Matérn length-scale 𝓁 is initialized to 0.5 with bounds (10−2 , 5.0), and the noise variance is ﬁxed at
+  2 = 10−5 . The primary generalized coordinates are normalized using Min-Max scaling within the range (−1, 1), while the secondary
+𝜎𝑛𝑔
+generalized coordinates remain unscaled. GPR training is performed using the limited-memory Broyden-Fletcher-Goldfarb-Shanno
+(L-BFGS-B) optimizer from the scikit-learn library, taking approximately 96.08 minutes on 24 cores of the same node of the Linux
+cluster. The optimized hyperparameters obtained after training include a constant kernel value of 102 and a Matérn kernel length-scale
+of 𝓁 = 0.814.
+    A nonlinear closure based on RBF interpolation is likewise established by training a multi-output RBF regression model using
+the common latent-space dataset. Speciﬁcally, Gaussian, inverse multiquadric, multiquadric, and linear RBF kernels are considered.
+An iterative search procedure is employed to select the optimal kernel type, the shape parameter (𝜖) within bounds (0.2, 5), and the
+regularization parameter (𝜆) within bounds (10−12 , 10−6 ), by minimizing a cross-validation error measure. The scaling strategy for the
+primary and secondary generalized coordinates follows the same approach as that used for the GPR closure. This iterative search is
+implemented with four-fold cross-validation using the Expected Improvement acquisition function provided by the scikit-optimize
+library. Training and optimization on a 24-core CPU node of the Linux cluster take approximately 13.24 minutes. The optimized
+hyperparameters obtained after training include the inverse multiquadric kernel, a shape parameter of 𝜖 = 2.42, and a regularization
+parameter of 𝜆 = 10−12 .
+
+4.1.4. Hyperreduction using the ECSW method
+    ECSW, which is particularly eﬀective for unsteady applications [6], is used to hyperreduce each considered reduced-order model by
+training this hyperreduction method on the projected residuals. Speciﬁcally, the ECSW training is conducted using a single parameter
+combination of (4.25, 0.0225) and takes every 10th snapshot from the collected solution trajectories. The ECSW procedure is executed
+separately for the traditional PROM and each nonlinear PROM, which incorporates ANN, GPR, or RBF for closure modeling, with the
+training tolerance consistently set to 𝜀ECSW = 10−14 . For the traditional PROM, ECSW results in a considerably larger reduced mesh
+comprised of 𝑛𝑒 = 5 746 elements. In contrast, ECSW generates distinctly smaller reduced meshes for each nonlinear PROM: 1 496
+
+                                                                                 12
+S. Ares De Parga et al.                                                                 Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+                                        Table 2
+                                        Oﬄine computational timings and ECSW-generated reduced mesh
+                                        sizes for the traditional and nonlinear PROMs applied to the 2D para-
+                                        metric inviscid Burgers’ problem: ECSW computations and training
+                                        of the nonlinear closures (ANN, GPR, and RBF) are conducted on 24
+                                        CPU cores.
+                                          Computational model     𝑛      𝑛̄        𝑛𝑒          Wall-clock time (min)
+
+                                          HPROM (ECSW)            95     -         5 746       128.72
+                                          HPROM-ANN (ANN)         10     140       -           19.30
+                                          HPROM-ANN (ECSW)        10     140       1 496       8.10
+                                          HPROM-GPR (GPR)         10     140       -           96.08
+                                          HPROM-GPR (ECSW)        10     140       1 483       7.70
+                                          HPROM-RBF (RBF)         10     140       -           13.24
+                                          HPROM-RBF (ECSW)        10     140       1 487       8.74
+
+
+               Table 3
+               Online performance comparison (accuracy and computational speedups) of traditional and nonlinear HPROMs for the 2D
+               parametric inviscid Burgers’ problem.
+                 Computational model   𝑛 (𝑁 for HDM)   𝑛̄       𝑛𝑒 (𝑁𝑒 for HDM)         ℝ𝔼max
+                                                                                          2,𝐮 (%)    Wall-clock time (minutes)   Speedup factor
+
+                 HDM                   125 000         -        62 500                  -            12.75                       -
+                 HPROM                 95              -        5 746                   1.47         1.62                        7.87
+                 HPROM-ANN             10              140      1 496                   1.83         0.29                        43.35
+                 HPROM-GPR             10              140      1 483                   1.71         0.29                        43.67
+                 HPROM-RBF             10              140      1 487                   1.66         0.27                        47.13
+
+
+
+elements for HPROM-ANN, 1 483 elements for HPROM-GPR, and 1 487 elements for HPROM-RBF (see Table 2). The advantageous
+behavior of ECSW, as observed with PROM-ANNs and generally applicable to all nonlinear PROMs discussed in this paper, is rigorously
+explained in [16,18].
+
+4.1.5. Performance comparisons
+   The accuracy and computational eﬃciency of the four model reduction methods under consideration are evaluated at three
+unsampled parameter points: 𝝁1 = (4.75, 0.02)), 𝝁2 = (4.56, 0.019), and 𝝁3 = (5.19, 0.026). The assessment uses the maximum relative
+error metric, deﬁned as
+         ℝ𝔼max
+           2,QoI
+                 = max ℝ𝔼2,QoI (𝝁)
+                      𝝁1 ,𝝁2 ,𝝁3
+
+where the formulation of ℝ𝔼2,QoI is provided in (30), and the QoI is chosen as the solution vector 𝐮. Additionally, wall-clock compu-
+tational times and speedup factors relative to HDM are summarized in Table 3.
+    Samples of the solution time histories calculated at the three unsampled parameter points are provided to illustrate qualitative
+diﬀerences in shock-capturing performance between the traditional HPROM and the nonlinear HPROMs considered in this work.
+    Fig. 2 presents an accuracy comparison at 𝝁1 = (4.75, 0.020) between the traditional HPROM and HPROM-RBF. Both methods
+eﬀectively capture the moving shock; however, the traditional HPROM exhibits noticeable oscillatory behavior, which is primarily
+due to its limited representation capabilities resulting from the aﬃne approximation and truncation at 95 retained modes. In con-
+trast, HPROM-RBF, utilizing 10 retained and 140 discarded modes, signiﬁcantly reduces these oscillations. Moreover, HPROM-RBF
+demonstrates a remarkable improvement in computational eﬃciency, achieving an average speedup factor of 47.13, compared to the
+traditional HPROM’s speedup of 7.87.
+    Fig. 3 compares the accuracy of HPROM-ANN and HPROM-GPR models at the parameter point 𝝁2 = (4.56, 0.019). Both reduced-
+order models eﬀectively track the shock, with HPROM-GPR yielding slightly smoother solutions. Additionally, both models achieve
+similar computational speedups: 43.35 for HPROM-ANN; and 43.67 for HPROM-GPR, beneﬁting from the analytical Jacobian provided
+by the closed-form expression of the Matérn kernel and the optimized automatic diﬀerentiation routines implemented in PyTorch.
+    Finally, Fig. 4 provides an accuracy comparison of all three nonlinear reduced-order models at 𝝁3 = (5.19, 0.026), a test point that
+demonstrated the highest error. While all models eﬀectively track the shock with comparable accuracy for most time steps, their
+performance noticeably deteriorates near the ﬁnal time step. During this critical stage, each model encounters some diﬃculties in
+capturing the exact shock position; however, HPROM-ANN demonstrates a slightly better overall match with HDM, whereas the
+HPROM-GPR and HPROM-RBF solutions maintain smoothness and exhibit less oscillatory behavior. These observations suggest that
+both the HPROM-GPR and HPROM-RBF models serve as complementary alternatives to HPROM-ANN for modeling shock-dominated
+ﬂow problems.
+
+4.2. Ahmed body turbulent wake ﬂow problem
+
+   The focus now shifts to a speciﬁc conﬁguration of the Ahmed body and the rapid simulation of its turbulent wake using a DES
+turbulence model, with time as the sole parameter [33]. The unsteady nature of the wake ﬂow, driven by turbulence, generates a
+
+                                                                              13
+S. Ares De Parga et al.                                                        Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+
+
+Fig. 2. Solution slices predicted for 𝝁3 = (4.75, 0.020) at the time steps 𝑡 = 0, 5, 10, 15, 20, and 25 using HDM, HPROM, and HPROM-RBF: 𝑦 = 50.2
+(top); 𝑥 = 50.2 (bottom).
+
+
+
+
+Fig. 3. Solution slices predicted for 𝝁3 = (4.56, 0.019) at the time steps 𝑡 = 0, 5, 10, 15, 20, and 25 using HDM, HPROM-ANN, and HPROM-GPR:
+𝑦 = 50.2 (top); 𝑥 = 50.2 (bottom).
+
+
+
+suﬃciently rich solution that enables observation of the Kolmogorov barrier and benchmarking of various reduced-order models.
+The inherent data richness, combined with the undersampling of solution snapshots and truncation of the constructed basis, provides
+enough grounds to forgo further parameterization.
+
+
+4.2.1. Problem setup and discretization
+    The Ahmed body geometry consists of an extruded rectangular shape with a rounded nose at the front and a downward-slanted
+rear surface (Fig. 5). In the conﬁguration considered here, the slant angle is set to 20◦ . The ﬂuid ﬂow is modeled as compressible
+air, with a free-stream velocity of 𝑣∞ = 60 m/s and a zero-degree angle of attack. Air is treated as a perfect gas. The corresponding
+Reynolds number based on the body length is Re = 4.29 × 106 . DES is employed to simulate the ﬂow around this instance of the Ahmed
+body, utilizing Reichardt’s law of the wall to model boundary layers. The plane of symmetry is utilized to halve the computational
+
+                                                                       14
+S. Ares De Parga et al.                                                      Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+
+
+Fig. 4. Solution slices predicted for 𝝁3 = (5.19, 0.026) at the time steps 𝑡 = 0, 5, 10, 15, 20, and 25 using HDM, HPROM-ANN, HPROM-GPR, and
+HPROM-RBF: 𝑦 = 50.2 (top); 𝑥 = 50.2 (bottom).
+
+
+
+
+                               Fig. 5. Ahmed body turbulent wake ﬂow problem: computational ﬂuid domain.
+
+
+
+
+domain, while adiabatic wall boundary conditions are imposed on the body’s surface. The outﬂow boundary is placed far enough
+downstream to prevent wake contamination (see Fig. 5).
+   The half-domain is discretized using an unstructured tetrahedral mesh, following the meshing strategies outlined in [6,16]. Each
+vertex in the mesh has 𝑑𝑒 = 6 unknowns, with a total of 𝑁𝑣 = 2 890 434 vertices and 𝑁𝑒 = 17 017 090 tetrahedra, leading to a state-space
+dimension of 𝑁 = 𝑑𝑒 × 𝑁𝑣 = 17 342 604.
+   The DES equations are time-integrated using a second-order, three-point backward diﬀerence scheme with a ﬁxed time step
+of Δ𝑡 = 8 × 10−5 s. The HDM-based simulation proceeds until a ﬁnal time of 𝑇𝑓 = 0.2 s, requiring 2 500 time steps. At each step,
+the resulting nonlinear system of algebraic equations is solved using a Newton-Krylov method combined with an additive Schwarz
+preconditioned GMRES solver [34] for handling the linear subproblems.
+   All simulations utilize double-precision arithmetic and are executed on the previously described Linux cluster. The HDM-based
+simulation, running on 240 cores of this cluster, takes approximately 10 hours of wall-clock time to complete.
+
+                                                                    15
+S. Ares De Parga et al.                                                          Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+4.2.2. Construction, training, and partitioning of the reduced-order basis and nonlinear maps
+    Unsteady solution snapshots from the HDM model are collected every 2Δ𝑡 over the time interval 𝑡 ∈ [0, 0.2] seconds, resulting in
+a total of 𝑁𝑠 = 1 251 solution snapshots. The snapshot matrix 𝐒 ∈ ℝ𝑁×𝑁𝑠 is constructed, and a thin SVD is performed to extract a
+ROB partitioned as [𝐕, 𝐕]. The total number of POD modes, 𝑛 + 𝑛,     ̄ is chosen to capture at least 99.99 % of the singular value energy,
+leading to 𝑛 + 𝑛̄ = 636.
+    For the nonlinear PROMs, the number of retained modes is set to 𝑛 = 39, resulting in 𝑛̄ = 597 discarded modes. This choice follows
+[16], where a heuristic procedure in the construction of the quadratic PROM (QPROM) for the same Ahmed body turbulent wake
+problem led to 𝑛 = 39. This provides a natural reference point for direct comparisons between the nonlinear PROMs with closure
+modeling in the latent space and the QPROM developed in [16].
+    While this study explores additional conﬁgurations with progressively reduced primary basis dimensions 𝑛 speciﬁcally for PROM-
+RBF, it does not do so for PROM-ANN and PROM-GPR. This decision is based on three reasons: ﬁrst, a similar study for PROM-ANN was
+conducted in [18] for the Burgers IBVP (31); second, PROM-GPR and PROM-RBF are implementation variants of the same modeling
+approach; and third, limitations on space prevent a comprehensive exploration of all three models. The examined conﬁgurations for
+PROM-RBF include (𝑛, 𝑛)  ̄ = (39, 597), (10, 626), and (5, 631).
+    The construction and training of nonlinear closure maps for the PROM-ANN, PROM-GPR, and PROM-RBF models follow the
+methodology outlined for the Burgers IBVP discussed in Section 4.1. Each nonlinear map  (⋅) ∶ ℝ𝑛 → ℝ𝑛̄ is trained on pairs (𝐪, 𝐪)
+derived from the collected solution snapshots, where 𝐪 ∈ ℝ𝑛 and 𝐪 ∈ ℝ𝑛̄ . For each model, the training methodology and hyperparam-
+eters – such as the number and size of layers for the ANN, as well as the kernel, length scale, noise, and regularization bounds for the
+RBF and GPR models – are speciﬁed and discussed below. In all cases, 90 % of the solution snapshots are allocated to training, while
+10 % are reserved for validation.
+    For the ANN closure, extensive testing was conducted across multiple architectures, varying both depth (number of layers) and
+width (number of neurons per layer). These tests consistently indicated that shallow but wide neural networks generally outperform
+deeper architectures in this setting. Again, this is likely due to the limited size of the training dataset, which favors fewer layers to
+avoid overﬁtting and promote more stable training. Consequently, a shallow network comprising a single hidden layer with 4 096
+neurons and ELU activation is selected, oﬀering the best balance between accuracy and architectural complexity.
+    A GPR closure is constructed using a Matérn kernel with a smoothness parameter 𝜈 = 1.5, combined with a constant term bounded
+between 10−3 and 102 , and an initial length scale 𝓁 set to 1.0 with bounds of 10−1 to 2. Maximum log-likelihood optimization is
+performed using the L-BFGS-B optimizer from the scikit-learn library, resulting in an optimized constant-kernel value of 0.11 and
+a Matérn-kernel length scale of 𝓁 = 0.46.
+    For the RBF closure, a straightforward grid search is employed to demonstrate the simplicity and computational eﬃciency of
+training RBF models. The kernel type and shape parameter (𝜖) are optimized through a grid search spanning the range [0.2, 5],
+discretized into 100 logarithmically spaced points, while the regularization parameter is ﬁxed at 𝜆 = 10−8 . Only Gaussian and inverse
+multiquadric kernels are considered for this grid search, with the inverse multiquadric kernel consistently yielding the best results.
+For the conﬁguration (𝑛, 𝑛)̄ = (39, 597), the optimal shape parameter is determined to be 𝜖 = 0.24.
+    The RBF closure trained in only 2.1 minutes, compared to 30.0 minutes for the GPR, and 50.7 minutes for ANN, highlighting the
+eﬃciency of the simple grid-search strategy selected for the RBF. While the gradient based optimization of the marginal likelihood
+chosen for the GPR is more expensive in this case, it is important to note that this is problem and optimizer dependent, and the
+hyperparameters of GPR could also be optimized using a grid seach and cross-validation, with a squared error loss function such as
+that used for the RBF or a probability based loss function leveraging the probabilitic framework.
+    Furthermore, additional RBF models are trained with progressively smaller 𝑛, speciﬁcally (𝑛, 𝑛)    ̄ = (10, 626) and (5, 631), resulting
+in optimal shape parameters of approximately 𝜖 = 2.08 and 𝜖 = 4.54, respectively, and with training times reduced to only 0.75 and
+0.50 minutes. The corresponding results are summarized in Table 4.
+
+
+
+
+                          Table 4
+                          Oﬄine computational timings for the Ahmed body turbulent wake ﬂow problem: ECSW com-
+                          putations are performed on 240 CPU cores; the nonlinear closures ANN, GPR, and RBF are
+                          trained on 24 cores.
+                           Computational model   𝑛      𝑛̄    𝑛𝑒           Mesh support elements    Wall-clock time (min)
+
+                           HPROM (ECSW)          636    -     7 467        761 053                  532.51
+                           HPROM-ANN (ANN)       39     597   -            -                        50.69
+                           HPROM-ANN (ECSW)      39     597   629          108 519                  32.12
+                           HPROM-GPR (GPR)       39     597   -            -                        30.02
+                           HPROM-GPR (ECSW)      39     597   496          88 238                   23.56
+                           HPROM-RBF (RBF)       39     597   -            -                        2.14
+                           HPROM-RBF (ECSW)      39     597   535          84 092                   37.88
+                           HPROM-RBF (RBF)       10     626   -            -                        0.75
+                           HPROM-RBF (ECSW)      10     626   136          21 380                   16.12
+                           HPROM-RBF (RBF)       5      631   -            -                        0.50
+                           HPROM-RBF (ECSW)      5      631   72           12 222                   12.65
+
+
+
+
+                                                                      16
+S. Ares De Parga et al.                                                                Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+ Table 5
+ Ahmed body turbulent wake ﬂow poblem: relative errors in the Euclidean norm and DTW distance for global quantities (𝐶𝐷 , 𝐶𝐿 ) and local
+ quantities at wake probes (normalized velocities).
+  Computational model     𝑛            𝑛̄    ℝ𝔼2,𝐶𝐷 (%)   ℝ𝔼2,𝐶𝐿 (%)   ℝ𝔼2,𝑢𝑥 (%)   ℝ𝔼2,𝑢𝑧 (%)   ℝ𝔼DTW,𝐶𝐷 (%)   ℝ𝔼DTW,𝐶𝐿 (%)   ℝ𝔼DTW,𝑢𝑥 (%)   ℝ𝔼DTW,𝑢𝑧 (%)
+
+  HDM                     17 342 604   -     -            -            -            -            -              -              -              -
+  HPROM                   636          -     0.39         2.64         1.36         7.96         0.08           0.48           0.25           1.43
+  HPROM-ANN               39           597   0.37         2.44         1.35         7.17         0.09           0.57           0.26           1.44
+  HPROM-GPR               39           597   0.38         2.79         1.42         7.90         0.09           0.29           0.11           0.77
+  HPROM-RBF               39           597   0.21         1.52         0.80         4.42         0.06           0.46           0.15           0.85
+  HPROM-RBF               10           626   0.58         5.00         2.10         12.03        0.07           0.51           0.22           1.41
+  HPROM-RBF               5            631   0.79         6.21         2.99         17.74        0.10           0.53           0.20           2.50
+
+
+
+4.2.3. Hyperreduction using the ECSW method
+     As with the Burgers IBVP discussed in Section 4.1, ECSW is employed to hyperreduce each constructed reduced-order model
+by training it on projected residuals while maintaining a consistent training tolerance of 𝜀ECSW = 10−2 . In all cases, ECSW training
+utilizes every 45th snapshot from the collected solution trajectories. The characteristics of the resulting reduced meshes are reported
+in Table 4.
+     For the traditional HPROM, ECSW identiﬁes a relatively large reduced mesh comprising 7 467 elements, which, along with adjacent
+elements required by the FV stencil, results in a total mesh support of 761 053 elements (approximately 4.47 % of the number of
+elements of the full CFD mesh). In contrast, ECSW produces signiﬁcantly smaller reduced meshes for the nonlinear PROMs: 629
+elements with a total mesh support of 108 519 elements (0.64 %) for HPROM-ANN; 496 elements, yielding a total mesh support of
+88 238 elements (0.52 %), for HPROM-GPR with (𝑛, 𝑛)   ̄ = (39, 597); 535 elements, resulting in a total mesh support of 84 092 elements
+(0.49 %), for HPROM-RBF with (𝑛, 𝑛)  ̄ = (39, 597); 136 elements with a total mesh support of 21 380 elements (0.13 %) for HPROM-
+RBF with (𝑛, 𝑛)̄ = (10, 626); and just 72 elements, leading to a total mesh support of 12 222 elements (0.07 %), for HPROM-RBF with
+(𝑛, 𝑛)
+    ̄ = (5, 631). This progressive reduction demonstrates the direct correlation between the number of retained modes and the size
+of the ECSW-constructed reduced mesh.
+     The wall-clock timings in Table 4 indicate that all training costs are reasonable, both in absolute terms and relative to the cost of
+a single HDM simulation. Particularly, training the nonlinear closure map for PROM-RBF is exceptionally quick.
+
+4.2.4. Performance comparisons
+    The hyperreduced counterparts of the traditional PROM, along with the ANN-, GPR-, and RBF-based nonlinear PROMs, are com-
+pared here in terms of their accuracy and performance relative to HDM.
+    Fig. 6 displays isovorticity contours for the HDM, HPROM, HPROM-ANN, HPROM-GPR, and HPROM-RBF models, with the pa-
+rameters (𝑛, 𝑛)
+              ̄ = (39, 597) at 𝑡 = 0.2 seconds. Additional visuals for lower-dimensional RBF variants are omitted for brevity. This
+ﬁgure demonstrates that each method eﬀectively reproduces the unsteady separation and reattachment within the wake region, with
+the resulting ﬂow structures closely matching those of the HDM reference.
+    Figs. 7 and 8 show the time histories of the drag coeﬃcient 𝐶𝐷 , lift coeﬃcient 𝐶𝐿 , and the scaled velocity components 𝑢𝑥 ∕𝑣∞ and
+𝑢𝑧 ∕𝑣∞ at a probe in the body’s wake, computed using both HDM and all hyperreduced counterparts. Although the predictions appear
+qualitatively similar, the standard Euclidean norm can penalize minor phase discrepancies. To better evaluate the eﬀects of these
+discrepancies on overall accuracy, Table 5 includes errors for the aforementioned QoIs, computed using the dynamic time warping
+(DTW) distance [35]. Speciﬁcally, these errors are assessed here as follows
+                          (              )
+                                    ̃
+                      DTW QoI(𝑡), QoI(𝑡)
+       ℝ𝔼DTW,QoI =       √
+                            𝑁𝑡
+                            ∑
+                               ‖QoI𝑚 ‖22
+                              𝑚=0
+
+    For (𝑛, 𝑛)
+            ̄ = (39, 597), HPROM-ANN, HPROM-RBF, and HPROM-GPR deliver broadly similar accuracy across most error metrics.
+Interestingly, HPROM-RBF shows slightly lower Euclidean norm errors for the ﬂow variables, whereas HPROM-GPR demonstrates
+marginal advantages in DTW-based errors.
+    Table 6 presents the online computational performance for each model, highlighting wall-clock times and speedups relative to the
+HDM model, which runs on 240 cores. All HPROMs are executed on 8 cores. The column labeled ℝ𝔼max           DTW,QoI
+                                                                                                                   displays the maximum
+DTW-based error among the four QoIs: 𝐶𝐷 , 𝐶𝐿 , 𝑢𝑥 , and 𝑢𝑧 , as listed in Table 5. Reducing 𝑛, as done for HPROM-RBF, can signiﬁcantly
+enhance speedup while maintaining high accuracy in DTW metrics.
+    As demonstrated in Table 6, HPROM-ANN, HPROM-GPR, and HPROM-RBF achieve signiﬁcantly greater speedups compared to
+the traditional HPROM model, while maintaining equal or superior accuracy. Speciﬁcally, for (𝑛, 𝑛)      ̄ = (39, 57), HPROM-GPR and
+HPROM-RBF attain speedups and accuracy levels akin to those of the hyperreduced QPROM (HQPROM) model for this Ahmed body
+turbulent wake ﬂow problem, as reported in [16], while also enabling further reductions in 𝑛 (down to 10 and 5 for PROM-RBF) with
+good accuracy. However, for PROM-ANN, ECSW selects a slightly larger reduced mesh than for PROM-GPR and PROM-RBF, resulting
+in a modest decrease in speedup for HPROM-ANN. This outcome is inﬂuenced by the problem setup and ANN hyperparameters (e.g.,
+architecture, activation functions), underscoring the advantage of employing multiple closure strategies when designing a nonlinear
+HPROM.
+
+                                                                              17
+S. Ares De Parga et al.                                                     Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+
+
+Fig. 6. Ahmed body turbulent wake ﬂow problem: isovorticity contours colored by the local Mach number and computed at 𝑡 = 2 × 10−1 s, using
+various computational models.
+
+
+
+                                                                    18
+S. Ares De Parga et al.                                                      Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+
+
+Fig. 7. Ahmed body turbulent wake ﬂow problem: time histories of the drag coeﬃcient 𝐶𝐷 (a) and lift coeﬃcient 𝐶𝐿 (b), predicted using various
+computational models.
+
+                                                                     19
+S. Ares De Parga et al.                                                       Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+
+
+Fig. 8. Ahmed body turbulent wake ﬂow problem: time-histories of the streamwise velocity 𝑣𝑥 ∕𝑣∞ (a) and vertical velocity 𝑣𝑧 ∕𝑣∞ (b), predicted
+using various computational models.
+
+                                                                      20
+S. Ares De Parga et al.                                                          Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+         Table 6
+         Ahmed body turbulent wake ﬂow problem: online performance comparison (computational speedups) of traditional and nonlinear
+         HPROMs (HDM is processed on 240 cores and all HPROMs are run on 8 cores).
+           Computational model   𝑛            𝑛̄    𝑛𝑒           ℝ𝔼max
+                                                                   DTW,QoI (%)     Wall-clock time (min)    Speedup (wall)    Speedup (CPU)
+
+           HDM                   17 342 604   -     17 017 090   -                 611.94                   -                 -
+           HPROM                 636          -     7 467        1.43              129.02                   4.74              142.29
+           HPROM-ANN             39           597   629          1.44              12.20                    50.15             1 504.42
+           HPROM-GPR             39           597   496          0.77              9.53                     64.18             1 925.41
+           HPROM-RBF             39           597   535          0.85              9.51                     64.35             1 930.61
+           HPROM-RBF             10           626   136          1.41              3.12                     196.38            5 891.26
+           HPROM-RBF             5            631   72           2.50              1.84                     333.15            9 994.46
+
+
+
+
+5. Conclusions
+
+    This work advances nonlinear projection-based model order reduction (PMOR) by addressing closure error in the latent space
+through two alternative approaches: Gaussian process regression (GPR) and radial basis function (RBF) interpolation. Building on the
+framework established in [4,18], which enhances PMOR using artiﬁcial neural networks (ANNs), these new strategies incorporate
+either GPR or RBF closures. They retain the key advantage of the ANN-based projection-based reduced-order model (PROM-ANN):
+computational complexity is independent of the problem’s high dimension 𝑁, scaling only with the smaller latent dimensions 𝑛 and
+𝑛.
+̄ All three closures—based on ANN, GPR, or RBF integrate seamlessly with existing hyperreduction techniques, which are essential
+for many large-scale applications.
+    Numerical experiments on the two-dimensional parametric inviscid Burgers problem and the industrial-scale Ahmed body tur-
+bulent wake ﬂow demonstrate the eﬀectiveness of these closure techniques. For the Burgers problem, the hyperreduced models
+HPROM-GPR and HPROM-RBF achieve speedups of approximately 43–47 times while maintaining an accuracy above 98 %, with
+dimensions smaller than those of the traditional HPROM. In this case, HPROM-ANN attains a similar speedup of around 43 times
+with comparable accuracy.
+    For the Ahmed body ﬂow, both GPR and RBF closures provide robust predictions and substantial speedups, reaching up to 64 times
+in wall-clock time and 1 930 times CPU speedup at (𝑛, 𝑛)̄ = (39, 597). Notably, at a reduced dimension of (𝑛, 𝑛)
+                                                                                                              ̄ = (5, 631), HPROM-RBF
+achieves a wall-clock time speedup of 333 times and a CPU speedup of 9 990 times, with only a 2.5 % error margin. In comparison,
+HPROM-ANN provides a wall-clock speedup of 50 times and a CPU speedup of 1 504 times.
+    Therefore, for both problems, HPROM-GPR and HPROM-RBF are as fast or faster than HPROM-ANN and achieve comparable, if
+not superior, accuracy.
+    GPR- and RBF-based closures stand out through their interpretability. While ANNs oﬀer expressive representations capable of cap-
+turing complex relationships with abundant training data, GPRs provide explicit formulations that enable automatic hyperparameter
+tuning, and RBFs excel in deterministic evaluations, particularly when data availability is moderate.
+    Another practical advantage is that both GPR- and RBF-based closures require signiﬁcantly less training data, avoiding the need
+to generate additional samples beyond the initial high-dimensional solution snapshots.
+    In terms of training eﬃciency, GPR closures – which leverage probabilistic hyperparameter optimization – required in our study
+signiﬁcantly longer training times than RBF interpolation trained via cross-validation coupled with adaptive or non-adaptive search
+algorithms (for the Burgers problem, 96.1 minutes for GPR vs. 13.2 minutes for RBF; for the Ahmed body, 30.0 minutes for GPR vs.
+2.1 minutes for RBF). While this diﬀerence is likely problem dependent, and similar training algorithms could be applied to both
+closures, it underscores the value of retaining both probabilistic and deterministic viewpoints.
+    Finally, although in this study the online predictions of GPR closures were evaluated using the posterior mean only – since the
+predictive variance does not inﬂuence the reduced solve but would add to the online cost – predictive variance remains a distinctive
+strength of GPR. It oﬀers a promising avenue for future work on adaptive sampling and error indicators.
+    Regarding hyperreduction, ECSW-based reduced mesh selection maintains consistent mesh sizes across diﬀerent closure strategies,
+although problem-speciﬁc factors can introduce some variations, as seen in the Ahmed body case. This diversity of closure approaches
+enhances the framework’s adaptability to speciﬁc problem requirements.
+    In summary, PROM-GPR and PROM-RBF signiﬁcantly broaden the scope of nonlinear PMOR, providing notable beneﬁts in ef-
+ﬁciency, accuracy, and interpretability. They exhibit strong potential for handling shock-dominated parametric ﬂows and complex
+turbulent ﬂows, eﬀectively mitigating the Kolmogorov barrier. Future research will focus on selecting optimal latent dimensions
+and integrating these methodologies with piecewise-aﬃne local bases [5,6], further enhancing robustness and eﬃciency in realistic,
+nonlinear engineering contexts.
+
+
+CRediT authorship contribution statement
+
+   S. Ares De Parga: Writing – review & editing, Writing – original draft, Visualization, Validation, Software, Methodology, In-
+vestigation, Formal analysis, Data curation, Conceptualization; Radek Tezaur: Writing – review & editing, Writing – original draft,
+Validation, Supervision, Software, Resources, Methodology, Investigation, Formal analysis, Data curation, Conceptualization; Car-
+los G. Hernández: Software, Methodology, Investigation, Formal analysis, Conceptualization; Charbel Farhat: Writing – review &
+
+                                                                        21
+S. Ares De Parga et al.                                                                    Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+editing, Writing – original draft, Validation, Supervision, Software, Resources, Project administration, Methodology, Investigation,
+Funding acquisition, Formal analysis, Conceptualization.
+
+Data availability
+
+    Data will be made available on request.
+
+Declaration of competing interest
+
+   Charbel Farhat reports ﬁnancial support was provided by Oﬃce of Naval Research. Radek Tezaur reports ﬁnancial support was
+provided by Oﬃce of Naval Research. Charbel Farhat reports ﬁnancial support was provided by Air Force Oﬃce of Scientiﬁc Research.
+Radek Tezaur reports ﬁnancial support was provided by Air Force Oﬃce of Scientiﬁc Research. Sebastian Ares de Parga Regalado
+reports ﬁnancial support was provided by Stanford University Department of Aeronautics and Astronautics. Sebastian Ares de Parga
+Regalado reports ﬁnancial support was provided by Departament de Recerca i Universitats de la Generalitat de Catalunya. Sebastian
+Ares de Parga Regalado reports ﬁnancial support was provided by Fulbright Commission Spain. If there are other authors, they
+declare that they have no known competing ﬁnancial interests or personal relationships that could have appeared to inﬂuence the
+work reported in this paper.
+
+Acknowledgment
+
+   Charbel Farhat and Radek Tezaur acknowledge partial support by the Oﬃce of Naval Research under Grant N00014-23-1-2877
+and Grant N00014-23-1-2413; and partial support by the Air Force Oﬃce of Scientiﬁc Research under Grant FA9550-22-1-0004
+and Grant FA9550-20-1-0358. Sebastian Ares de Parga acknowledges partial support by the Departament de Recerca i Universitats
+de la Generalitat de Catalunya under Grant FI-SDUR 2021; partial support by the Fulbright Commission Spain through a Fulbright
+Predoctoral Research Fellowship (2024–2025); and partial support by the Department of Aeronautics and Astronautics at Stanford
+University.
+
+References
+
+ [1] A.C. Antoulas, Approximation of Large-Scale Dynamical Systems, SIAM, 2005.
+ [2] A. Quarteroni, G. Rozza, et al., Reduced Order Methods for Modeling and Computational Reduction, 9, Springer, 2014.
+ [3] W. He, P. Avery, C. Farhat, In situ adaptive reduction of nonlinear multiscale structural dynamics models, Int. J. Numer. Methods Eng. 121 (22) (2020) 4971–4988.
+ [4] M.R. Chmiel, J. Barnett, C. Farhat, Uniﬁed LSPG model reduction framework and assessment for hypersonic computational ﬂuid dynamics, AIAA J. 63 (1) (2025)
+     72–90.
+ [5] D. Amsallem, M.J. Zahr, C. Farhat, Nonlinear model order reduction based on local reduced-order bases, Int. J. Numer. Methods Eng. 92 (10) (2012) 891–916.
+ [6] S. Grimberg, C. Farhat, R. Tezaur, C. Bou-Mosleh, Mesh sampling and weighting for the hyperreduction of nonlinear Petrov–Galerkin reduced-order models with
+     local reduced-order bases, Int. J. Numer. Methods Eng. 122 (7) (2021) 1846–1874.
+ [7] M.B. Rivers, A. Dittberner, Experimental investigations of the NASA common research model, J. Aircr. 51 (4) (2014) 1183–1193.
+ [8] K. Carlberg, C. Bou-Mosleh, C. Farhat, Eﬃcient non-linear model reduction via a least-squares Petrov–Galerkin projection and compressive tensor approximations,
+     Int. J. Numer. Methods Eng. 86 (2) (2011) 155–181.
+ [9] K. Carlberg, C. Farhat, J. Cortial, D. Amsallem, The GNAT method for nonlinear model reduction: eﬀective implementation and application to computational
+     ﬂuid dynamics and turbulent ﬂows, J. Comput. Phys. 242 (2013) 623–647.
+[10] K.M. Washabaugh, M.J. Zahr, C. Farhat, On the use of discrete nonlinear reduced-order models for the prediction of steady-state ﬂows past parametrically
+     deformed complex geometries, in: 54th AIAA Aerospace Sciences Meeting, 2016, p. 1814.
+[11] T. Taddei, A registration method for model order reduction: data compression and geometry reduction, SIAM J. Sci. Comput. 42 (2) (2020) A997–A1027.
+[12] M.A. Mirhoseini, M.J. Zahr, Model reduction of convection-dominated partial diﬀerential equations via optimization-based implicit feature tracking, J. Comput.
+     Phys. (2022) 111739.
+[13] T. Taddei, L. Zhang, Registration-based model reduction in complex two-dimensional geometries, J. Sci. Comput. 88 (2021) 1–25.
+[14] V. Zucatti, M.J. Zahr, Model reduction of convection-dominated viscous conservation laws using implicit feature tracking and landmark image registration,
+     arXiv:2503.17463 (2025).
+[15] S. Jain, P. Tiso, J.B. Rutzmoser, D.J. Rixen, A quadratic manifold for model order reduction of nonlinear structural dynamics, Comput. Struct. 188 (2017) 80–94.
+[16] J. Barnett, C. Farhat, Quadratic approximation manifold for mitigating the Kolmogorov barrier in nonlinear projection-based model order reduction, J. Comput.
+     Phys. 464 (2022) 111348.
+[17] B. Kramer, B. Peherstorfer, K.E. Willcox, Learning nonlinear reduced models from data with operator inference, Annu. Rev. Fluid Mech. 56 (1) (2024) 521–548.
+[18] J. Barnett, C. Farhat, Y. Maday, Neural-network-augmented projection-based model order reduction for mitigating the Kolmogorov barrier to reducibility, J.
+     Comput. Phys. 492 (2023) 112420.
+[19] A. Cohen, C. Farhat, Y. Maday, A. Somacal, Nonlinear compressive reduced basis approximation for PDEs, Comptes Rendus. Mécanique 351 (S1) (2023) 357–374.
+[20] C. Homescu, L.R. Petzold, R. Serban, Error estimation for reduced-order models of dynamical systems, SIAM J. Numer. Anal. 43 (4) (2005) 1693–1714.
+[21] J.R. Singler, New POD error expressions, error bounds, and asymptotic results for reduced order models of parabolic PDEs, SIAM J. Numer. Anal. 52 (2) (2014)
+     852–876.
+[22] C. Farhat, P. Avery, T. Chapman, J. Cortial, Dimensional reduction of nonlinear ﬁnite element dynamic models with ﬁnite rotations and energy-based mesh
+     sampling and weighting for computational eﬃciency, Int. J. Numer. Methods Eng. 98 (9) (2014) 625–662.
+[23] C. Farhat, T. Chapman, P. Avery, Structure-preserving, stability, and accuracy properties of the energy-conserving sampling and weighting method for the hyper
+     reduction of nonlinear ﬁnite element dynamic models, Int. J. Numer. Methods Eng. 102 (5) (2015) 1077–1110.
+[24] N. Cressie, The origins of kriging, Math. Geol. 22 (1990) 239–252.
+[25] C.E. Rasmussen, Gaussian processes in machine learning, in: Summer School on Machine Learning, Springer, 2003, pp. 63–71.
+[26] R.B. Gramacy, Surrogates: Gaussian Process Modeling, Design, and Optimization for the Applied Sciences, Chapman and Hall/CRC, 2020.
+[27] M.D. Buhmann, Radial basis functions, Acta Numerica (2000) 1–38.
+[28] C. Farhat, P. Geuzaine, G. Brown, Application of a three-ﬁeld nonlinear ﬂuid–structure formulation to the prediction of the aeroelastic parameters of an F-16
+     ﬁghter, Comput. Fluids 32 (1) (2003) 3–29.
+[29] E. Turkel, Preconditioning techniques in computational ﬂuid dynamics, Annu. Rev. Fluid Mech. 31 (1) (1999) 385–416.
+
+                                                                                 22
+S. Ares De Parga et al.                                                                 Computer Methods in Applied Mechanics and Engineering 448 (2026) 118443
+
+
+[30] V.M. Panaretos, Y. Zemel, Statistical aspects of wasserstein distances, Annu. Rev. Stat. Appl. 6 (1) (2019) 405–431.
+[31] M.J. Azzi, C. Farhat, Enhanced multimodal nonparametric probabilistic method for model-form uncertainty quantiﬁcation and digital twinning, AIAA J. 62 (11)
+     (2024) 4265–4279.
+[32] M. Müller, Dynamic time warping, Information Retrieval for Music and Motion (2007) 69–84.
+[33] S.R. Ahmed, G. Ramm, G. Faltin, Some salient features of the time-averaged ground vehicle wake, SAE Trans. (1984) 473–503.
+[34] X.-C. Cai, C. Farhat, M. Sarkis, A minimum overlap restricted additive Schwarz preconditioner and applications in 3D ﬂow simulations, Contemp. Math, 218
+     (1998) 479–485.
+[35] T. Baltrušaitis, C. Ahuja, L.-P. Morency, Multimodal machine learning: a survey and taxonomy, IEEE Trans. Pattern Anal. Mach. Intell. 41 (2) (2018) 423–443.
+
+
+
+
+                                                                               23
+

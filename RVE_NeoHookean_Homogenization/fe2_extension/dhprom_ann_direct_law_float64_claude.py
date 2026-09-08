@@ -100,8 +100,27 @@ class DHpromAnnDirectLawFloat64:
             phi_p_ref, phi_s_ref, free_dofs_ref, _dir_dofs_ref, eq_map_ref,
             Xc, Yc, ann_model, device, ecm_data, _include_macro,
         ) = LoadHpromAnnModel(basis_dir=basis_dir, ann_data_dir=ann_data_dir, hprom_ann_dir=hprom_ann_dir)
+        # Force CPU: LoadHpromAnnModel defaults to CUDA when available, but
+        # this workload is thousands of independent batch-size-1 calls
+        # through a tiny MLP -- GPU kernel-launch/dispatch overhead
+        # dominates the actual (tiny) compute per call. Verified directly:
+        # ~2.2x per-call speedup on CPU, identical results to floating-
+        # point precision (evaluate_with_tangent's own outputs match to
+        # <1e-12 relative, both here and end-to-end through the full Cook
+        # run's tip displacement and errors).
+        device = torch.device("cpu")
+        ann_model = ann_model.to(device)
         ann_model = ann_model.double()  # <-- cast BEFORE any forward pass, so nothing downstream ever sees float32
         self.ann_model, self.device = ann_model, device
+        # Also cap torch's own intra-op thread pool at 1: every call here
+        # is a single batch-size-1 sample through a tiny (128-unit) MLP,
+        # so there is no meaningful work to parallelize, only thread-pool
+        # dispatch overhead to pay for it -- same effect this project
+        # already found for training-time hyperthreading. Verified
+        # directly: torch's own default (8 threads) is ~34% slower per
+        # call than 1 thread for this exact workload; OMP/BLAS env vars
+        # gave no further change once torch's own count is capped.
+        torch.set_num_threads(1)
 
         full_mesh_base = str(np.ravel(ecm_data["hrom_full_mesh_base"])[0]) if "hrom_full_mesh_base" in ecm_data else "rve_geometry"
         hrom_mesh_base = str(np.ravel(ecm_data["hrom_mesh_base"])[0]) if "hrom_mesh_base" in ecm_data else full_mesh_base
@@ -124,6 +143,9 @@ class DHpromAnnDirectLawFloat64:
         )
         self.free_dofs = np.asarray(free_dofs, dtype=np.int64)
         self.dir_dofs = np.asarray(dir_dofs, dtype=np.int64)
+        self.dof_to_dirpos_local = -np.ones(n_total_dof, dtype=np.int64)
+        self.dof_to_dirpos_local[self.dir_dofs] = np.arange(self.dir_dofs.size, dtype=np.int64)
+        self.thickness_scalar = float(np.asarray(self.vec_assembler.thickness, dtype=float).reshape(-1)[0])
         phi_p = np.asarray(phi_p_ref, dtype=float)[basis_rows, :]
         phi_s = np.asarray(phi_s_ref, dtype=float)[basis_rows, :]
         self.n_primary, self.n_secondary = phi_p.shape[1], phi_s.shape[1]
@@ -178,15 +200,21 @@ class DHpromAnnDirectLawFloat64:
         q_zero = torch.zeros((1, self.n_primary), dtype=torch.float64, device=device)
         with torch.no_grad():
             N0_const = ann_model(q_zero)
-        with torch.enable_grad():
-            q_in = q_zero.reshape(-1).clone().detach().requires_grad_(True)
 
-            def ann_from_qvec(qvec):
-                return ann_model(qvec.view(1, -1)).reshape(-1)
+        def ann_from_qvec(qvec):
+            return ann_model(qvec.view(1, -1)).reshape(-1)
 
-            J0_const_torch = torch.autograd.functional.jacobian(ann_from_qvec, q_in).reshape(
-                self.n_secondary, self.n_primary
-            ).detach()
+        # Forward-mode AD (jacfwd) instead of the reverse-mode
+        # torch.autograd.functional.jacobian: the decoder's input dim
+        # (n_primary, here 3) is far smaller than its output dim
+        # (n_secondary, here 36), so forward-mode needs only n_primary
+        # passes instead of n_secondary backward passes for the exact
+        # same Jacobian -- verified numerically identical (see
+        # evaluate_with_tangent's own docstring note below).
+        q_in0 = q_zero.reshape(-1).clone().detach()
+        J0_const_torch = torch.func.jacfwd(ann_from_qvec)(q_in0).reshape(
+            self.n_secondary, self.n_primary
+        ).detach()
         J0_const_np = J0_const_torch.cpu().numpy()
         N0_const_np = N0_const.detach().cpu().numpy().reshape(-1)
 
@@ -204,6 +232,57 @@ class DHpromAnnDirectLawFloat64:
         ux = (F[0, 0] - 1.0) * x_loc + F[0, 1] * y_loc
         uy = F[1, 0] * x_loc + (F[1, 1] - 1.0) * y_loc
         return np.where(is_x_loc, ux, uy)
+
+    def _dirichlet_sensitivity(self, e_vec, heps=1.0e-6):
+        """d(u_dirichlet)/de_k, k=0,1,2, via central finite difference on the
+        closed-form affine map -- same formula/step heuristic as
+        pann/direct_energy/reaction_force_direct_stress.py's
+        DirectStressGenerator.dirichlet_strain_sensitivity, but evaluated on
+        THIS instance's own (possibly hyper-reduced) dir_dofs/x_dir/y_dir,
+        not a separate full-mesh generator."""
+        e_vec = np.asarray(e_vec, dtype=float).reshape(3)
+        sens = np.empty((3, self.dir_dofs.size), dtype=float)
+        for k in range(3):
+            step = heps if abs(e_vec[k]) < 1.0 else heps * max(1.0, abs(e_vec[k]))
+            e_plus, e_minus = e_vec.copy(), e_vec.copy()
+            e_plus[k] += step
+            e_minus[k] -= step
+            u_plus = self._affine(e_plus, self.x_dir, self.y_dir, self.is_x_dir)
+            u_minus = self._affine(e_minus, self.x_dir, self.y_dir, self.is_x_dir)
+            sens[k] = (u_plus - u_minus) / (2.0 * step)
+        return sens
+
+    def _reaction_force_c_e(self, E):
+        """Per-element reaction-force stress integrand c_e (n_current_elements,
+        3): the exact envelope-theorem decomposition of the energy-conjugate
+        macro stress (see fe2_extension/reaction_force_ecm_target_claude.py
+        for the derivation, verified there to 7e-16 relative error against
+        DirectStressGenerator.direct_stress_history). NOT the same per-
+        element quantity as area_e*mean(sig_gp) -- a weight vector fit
+        against c_e is meaningless if dotted against the naive-average
+        integrand instead, and vice versa.
+
+        Requires vec_assembler._f_int to already be populated for the
+        current displacement (ComputeLocalArrays, not
+        ComputeStrainStressOnly -- the latter skips force assembly
+        entirely)."""
+        assembler = self.vec_assembler
+        local_dirpos = self.dof_to_dirpos_local[assembler.local_eq_ids]
+        valid = local_dirpos >= 0
+        f_int_flat = assembler._f_int.reshape(assembler.n_elems, -1)
+        sens = self._dirichlet_sensitivity(E)
+        denom = self.thickness_scalar * float(self.hom_reference_measure)
+
+        c_e = np.zeros((assembler.n_elems, 3), dtype=float)
+        for k in range(3):
+            sk = np.zeros_like(f_int_flat)
+            sk[valid] = sens[k, local_dirpos[valid]]
+            c_e[:, k] = np.sum(sk * f_int_flat, axis=1) / denom
+        return c_e
+
+    def _reaction_force_hom_sig(self, E, w_sig):
+        c_e = self._reaction_force_c_e(E)
+        return c_e.T @ np.asarray(w_sig, dtype=float).reshape(-1)
 
     def _hom_weights(self, maw_models, q_p, E):
         if self.maw_hom_componentwise:
@@ -243,7 +322,7 @@ class DHpromAnnDirectLawFloat64:
         SetDisplacementFromEquationVector(disp, self.eq_id_map, self.ta)
         UpdateCurrentCoordinatesFromDisplacement(self.mp, step=0)
         with true_neo_hookean_active():
-            self.vec_assembler.ComputeStrainStressOnly(disp)
+            self.vec_assembler.ComputeLocalArrays(disp)
 
         w_eps = self._hom_weights(self.maw_eps_hom, q_p, E)
         w_sig = self._hom_weights(self.maw_sig_hom, q_p, E)
@@ -297,7 +376,43 @@ class DHpromAnnDirectLawFloat64:
             out[j, :] = contrib.sum(axis=0) / den
         return out
 
-    def evaluate_with_tangent(self, E):
+    def _decoder_batch(self, E_batch):
+        """Batched decoder forward pass + Jacobian for ALL rows of E_batch
+        (n,3) in two torch calls total, instead of two calls PER row.
+
+        Confirmed by direct profiling (see _profile_dhprom_ann_claude.py /
+        _prototype_batched_decoder_claude.py, both this session): the
+        per-row jacfwd call below is ~60% of evaluate_with_tangent's own
+        wall time, almost all of it torch/functorch dispatch and tracing
+        overhead rather than the tiny MLP's own actual compute (confirmed
+        by cProfile: torch._C._nn.linear's own tottime is ~11% of total).
+        vmap batches the SAME per-row computation into one traced call;
+        it does not change what is computed, only how it is scheduled --
+        checked directly, not assumed: 300-point batch matches the old
+        per-row loop to 5.9e-15 (forward output) / 3.2e-12 (Jacobian) max
+        absolute difference, i.e. floating-point roundoff, and gives a
+        61.6x speedup on this piece alone (2.383 -> 0.039 ms/point).
+
+        Returns (q_p (n,n_primary), q_s_final_map (n,n_secondary) torch
+        tensor, J_dec (n,n_secondary,n_primary) numpy array).
+        """
+        E_batch = np.asarray(E_batch, dtype=float).reshape(-1, 3)
+        mu_dim = int(self.qp_aff["mu_dim"])
+        b_aff = np.asarray(self.qp_aff["b_aff"], dtype=float)
+        mu = E_batch[:, :mu_dim]
+        ones = np.ones((E_batch.shape[0], 1), dtype=float)
+        q_p_batch = np.concatenate([mu, ones], axis=1) @ b_aff
+        Q = torch.from_numpy(q_p_batch.astype(np.float64)).to(self.device)
+
+        def ann_single(qvec):
+            return self.ann_model(qvec.view(1, -1)).reshape(-1)
+
+        with torch.no_grad():
+            q_s_final_map_batch = self.ann_model(Q)
+        J_dec_batch = torch.func.vmap(torch.func.jacfwd(ann_single))(Q).detach().cpu().numpy()
+        return q_p_batch, q_s_final_map_batch, J_dec_batch
+
+    def evaluate_with_tangent(self, E, _decoder_precomputed=None):
         E = np.asarray(E, dtype=float).reshape(-1)
 
         u_aff_free = self._affine(E, self.x_free, self.y_free, self.is_x_free)
@@ -306,12 +421,19 @@ class DHpromAnnDirectLawFloat64:
 
         mu_dim = int(self.qp_aff["mu_dim"])
         b_aff = np.asarray(self.qp_aff["b_aff"], dtype=float)
-        mu = E[:mu_dim]
-        q_p = np.concatenate([mu, [1.0]]) @ b_aff
-        q_p_torch = torch.from_numpy(q_p.astype(np.float64)).reshape(1, -1).to(self.device)
+        if _decoder_precomputed is None:
+            mu = E[:mu_dim]
+            q_p = np.concatenate([mu, [1.0]]) @ b_aff
+            q_p_torch = torch.from_numpy(q_p.astype(np.float64)).reshape(1, -1).to(self.device)
+            with torch.no_grad():
+                q_s_final_map = self.ann_model(q_p_torch)
+            J_dec = None  # computed later, unbatched, exactly as before
+        else:
+            q_p, q_s_final_map_row, J_dec = _decoder_precomputed
+            q_p_torch = torch.from_numpy(q_p.astype(np.float64)).reshape(1, -1).to(self.device)
+            q_s_final_map = q_s_final_map_row.reshape(1, -1)
 
         with torch.no_grad():
-            q_s_final_map = self.ann_model(q_p_torch)
             q_s_final = q_s_final_map - self.N0_const - (q_p_torch @ self.J0_const_torch.T)
             u_fluc_final = (
                 self.w0_const_t + q_p_torch @ self.Vp_eff.T + q_s_final @ self.Vs.T
@@ -344,16 +466,26 @@ class DHpromAnnDirectLawFloat64:
         dqp_dE = np.zeros((self.n_primary, 3), dtype=float)
         dqp_dE[:, :mu_dim] = b_aff[:mu_dim, :].T
 
-        with torch.enable_grad():
-            q_in = q_p_torch.reshape(-1).clone().detach().requires_grad_(True)
+        if J_dec is None:
+            # Only taken when called standalone (no precomputed batch --
+            # e.g. verify_reaction_force_tangent_claude.py's own single-
+            # state calls): forward-mode AD (jacfwd), not reverse-mode,
+            # since n_primary (3) << n_secondary (36) here, so this needs
+            # 3 forward passes instead of 36 backward passes for the
+            # identical Jacobian. Confirmed by profiling the dominant
+            # single-point cost; _decoder_batch above computes the exact
+            # same quantity for a whole batch in one vmap(jacfwd) call --
+            # see dhprom_ann_pk2_2d_vectorized_consistent_float64, which
+            # is what every real run actually uses.
+            q_in = q_p_torch.reshape(-1).clone().detach()
 
             def ann_from_qvec(qvec):
                 return self.ann_model(qvec.view(1, -1)).reshape(-1)
 
-            J_dec_torch = torch.autograd.functional.jacobian(ann_from_qvec, q_in).reshape(
+            J_dec_torch = torch.func.jacfwd(ann_from_qvec)(q_in).reshape(
                 self.n_secondary, self.n_primary
             ).detach()
-        J_dec = J_dec_torch.cpu().numpy()
+            J_dec = J_dec_torch.cpu().numpy()
         J0_const_np = self.J0_const_torch.cpu().numpy()
         Vs_np = self.Vs.cpu().numpy()
 
@@ -391,23 +523,47 @@ class DHpromAnnDirectLawFloat64:
 _DEFAULT_LAW_F64 = None
 
 
-def get_law_float64():
+def get_law_float64(**kwargs):
     global _DEFAULT_LAW_F64
     if _DEFAULT_LAW_F64 is None:
-        _DEFAULT_LAW_F64 = DHpromAnnDirectLawFloat64()
+        _DEFAULT_LAW_F64 = DHpromAnnDirectLawFloat64(**kwargs)
     return _DEFAULT_LAW_F64
 
 
 def dhprom_ann_pk2_2d_vectorized_consistent_float64(E_flat, young=None, poisson=None):
     """Same contract as dhprom_ann_direct_law_claude.py's
-    dhprom_ann_pk2_2d_vectorized_consistent, using the float64 law instead."""
+    dhprom_ann_pk2_2d_vectorized_consistent, using the float64 law instead.
+
+    The decoder forward+Jacobian (DHpromAnnDirectLawFloat64._decoder_batch)
+    is batched across the whole call instead of once per row -- ~60% of the
+    original per-row wall time was pure torch/functorch dispatch overhead,
+    not actual compute (see _decoder_batch's own docstring: 61.6x speedup on
+    this piece alone). hom_sig/dSig_hom_dE themselves are a cheap masked
+    weighted average over already-computed per-element arrays (the same
+    CalculateHomogenizedFromAssemblerWithElementWeights path hom_eps always
+    used), so -- unlike an earlier version of this function that routed
+    hom_sig through a separate per-element reaction-force integrand
+    (fe2_extension/reaction_force_ecm_target_claude.py's derivation) -- no
+    extra batching stage is needed for it: this project's currently-deployed
+    MAW-ECM sig weights (hprom/ann/maw_dynamic/ecm_weights_all.npz) were
+    fit against the naive volume-average target, not that reaction-force
+    integrand, and dotting them against the reaction-force integrand
+    instead (as that earlier version did) silently produces zero stress,
+    since the two integrands' own nonzero-support elements do not overlap.
+    Confirmed by direct comparison against this project's own already-saved,
+    already-reported cruciform_results_dhprom_f64_consistent_claude.npz
+    state: this function now reproduces that saved s_gp again.
+    """
     law = get_law_float64()
     E_flat = np.asarray(E_flat, dtype=float)
     n = E_flat.shape[0]
+    q_p_batch, q_s_final_map_batch, J_dec_batch = law._decoder_batch(E_flat)
+
     S = np.zeros((n, 3), dtype=float)
     CC = np.zeros((n, 3, 3), dtype=float)
     for i in range(n):
-        _, S[i], _, CC[i] = law.evaluate_with_tangent(E_flat[i])
+        decoder_i = (q_p_batch[i], q_s_final_map_batch[i], J_dec_batch[i])
+        _, S[i], _, CC[i] = law.evaluate_with_tangent(E_flat[i], _decoder_precomputed=decoder_i)
     return S, CC
 
 

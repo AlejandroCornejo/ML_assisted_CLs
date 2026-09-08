@@ -1,0 +1,1393 @@
+INTERNATIONAL JOURNAL FOR NUMERICAL METHODS IN ENGINEERING
+Int. J. Numer. Meth. Engng 2012; 92:891–916
+Published online 11 June 2012 in Wiley Online Library (wileyonlinelibrary.com). DOI: 10.1002/nme.4371
+
+
+
+
+                Nonlinear model order reduction based on local
+                            reduced-order bases
+
+               David Amsallem1 , Matthew J. Zahr2 and Charbel Farhat1,2,3, * ,†
+    1 Department of Aeronautics and Astronautics, Stanford University, Mail Code 4035, Stanford, CA 94305, USA
+     2 Institute for Computational and Mathematical Engineering, Stanford University, Mail Code 4035, Stanford,
+
+                                                  CA 94305, USA
+      3 Department of Mechanical Engineering, Stanford University, Mail Code 4035, Stanford, CA 94305, USA
+
+
+
+
+                                                   SUMMARY
+A new approach for the dimensional reduction via projection of nonlinear computational models based on the
+concept of local reduced-order bases is presented. It is particularly suited for problems characterized by dif-
+ferent physical regimes, parameter variations, or moving features such as discontinuities and fronts. Instead
+of approximating the solution of interest in a fixed lower-dimensional subspace of global basis vectors, the
+proposed model order reduction method approximates this solution in a lower-dimensional subspace gener-
+ated by most appropriate local basis vectors. To this effect, the solution space is partitioned into subregions,
+and a local reduced-order basis is constructed and assigned to each subregion offline. During the incremental
+solution online of the reduced problem, a local basis is chosen according to the subregion of the solution
+space where the current high-dimensional solution lies. This is achievable in real time because the compu-
+tational complexity of the selection algorithm scales with the dimension of the lower-dimensional solution
+space. Because it is also applicable to the process of hyper reduction, the proposed method for nonlinear
+model order reduction is computationally efficient. Its potential for achieving large speedups while main-
+taining good accuracy is demonstrated for two nonlinear computational fluid and fluid-structure-electric
+interaction problems. Copyright © 2012 John Wiley & Sons, Ltd.
+
+Received 5 April 2012; Accepted 12 April 2012
+
+KEY WORDS:       GNAT; hyper reduction; local basis; nonlinear model order reduction; proper orthogonal
+                 decomposition
+
+                                             1. INTRODUCTION
+
+Many model order reduction (MOR) techniques are based on the following simple but powerful
+observation: very often, the trajectory of a large-scale discrete system belongs to an affine subspace
+whose dimension is significantly lower than that of the system itself. For this reason, MOR methods
+search for the solution of a set of governing equations in a subspace, thereby offering a potential for
+significant CPU time reductions [1–8]. The following additional observations are also noteworthy:
+ (i) A trajectory associated with a nonlinear static, dynamical, or parametric system can explore
+     many regions of the state space. Different portions of such a trajectory can be associated with
+     distinct regimes of the underlying physical process or a moving feature such as a discontinuity
+     or a front.
+(ii) A reduced-order basis (ROB) describing a lower-dimensional subspace often lacks robustness
+     with respect to parameter variations [9–13]. This is because the trajectories associated with
+     different configurations of the same parametric system tend to localize around different points
+
+*Correspondence to: Charbel Farhat, Department of Aeronautics and Astronautics, Stanford University, Mail Code 4035,
+  Stanford, CA 94305, USA.
+† E-mail: cfarhat@stanford.edu
+
+
+
+Copyright © 2012 John Wiley & Sons, Ltd.
+                                                                                                             10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+892                             D. AMSALLEM, M. J. ZAHR AND C. FARHAT
+
+
+      of the state space—for example, the steady states of a dynamical system associated with the
+      different configuration parameter values—and therefore belong to different subspaces.
+
+   Both additional observations outlined previously suggest that, in general, a nonlinear trajectory
+is more efficiently and better approximated by a set of local subspaces than by a single global
+one. Indeed, relying on a single ROB for the purpose of nonlinear MOR could either imply an
+unaffordable large set of global basis vectors or one that is too small to span the local behavior
+of every portion of the trajectory. For this reason, a global ROB often leads to a poor nonlinear
+reduced-order model (ROM) approximation [14].
+   Therefore, the dimension of an ROB should ideally be tailored for the purpose of capturing only
+the local behavior of a nonlinear or parametric system at a given point of the state space. This leads
+to the concept of a local ROB that is further developed in this paper. This concept is particularly
+appropriate for the proper orthogonal decomposition (POD) method [15] that constructs an ROB
+from snapshots of the system taken at various locations of the state space. A simple aspect of this
+concept was already introduced in [16] where ROBs were built and exploited according to a time-
+domain partition. Local ROBs were also exploited in [17] in the context of aeroelastic applications
+and according to a space-related partition using an error estimator based on the displacement of
+the fluid mesh. However, the computational complexity of the error estimator used in [17] scales
+with the size of the underlying high-dimensional model (HDM). In this work, the local ROBs are
+not linked a priori neither to a time-domain nor to a space-domain partition. Instead, they are built
+using an unsupervised learning algorithm that clusters snapshots without any a priori assumption.
+More importantly, the local ROBs introduced in this paper are exploited at a computational cost that
+scales with the size of the ROM. Furthermore, whenever switching from a previous local ROB to a
+new one, the MOR methods presented in [17] and [16] require projecting the current state solution
+of the ROM simulation onto the new ROB. This results in the truncation of some components of
+the state, and therefore potentially in additional errors. In [18], the authors have shown that repeated
+projections of the state solution on consecutive ROBs may also introduce numerical instabilities in
+the ROM simulation. In contrast, the nonlinear MOR method proposed in this paper does not require
+any projection when switching from one local ROB to another. This is because at each time instance,
+the proposed method uses a local ROB to approximate the state increments and not the full state.
+   In many cases, the implementation of a nonlinear MOR method based on projection includes at
+least one step whose computational complexity scales with the size of the underlying HDM. For this
+reason, many nonlinear MOR methods are equipped with a hyper reduction technique that elimi-
+nates this caveat at the cost of an additional approximation [19]. Gappy POD [5–7, 20, 21] is one
+such technique that achieves the stated objective by constructing an ROB for approximating various
+terms arising during the solution of a nonlinear problem. In this case, the same ROB is subsequently
+used for interpolating a nonlinear function. The approach proposed in this paper for introducing and
+exploiting local ROBs equally applies to hyper reduction. In fact, it is particularly beneficial to this
+specific approximation technique as it is well known that constructing an accurate local interpolant
+is easier than constructing an equally accurate global one.
+   The remainder of this paper is organized as follows. In Section 2, the focus is set on discrete
+dynamical problems, and some elements of the proposed method for nonlinear MOR based on local
+ROBs are introduced within the larger framework of residual minimization and hyper reduction.
+Then, the proposed method is fully developed in Sections 3 and 4. Its application to two nonlinear
+dynamical systems arising in computational fluid mechanics and fluid/structure/electric interaction
+is discussed in Section 5. Finally, conclusions are offered in Section 6.
+
+
+
+    2. RESIDUAL MINIMIZATION-BASED NONLINEAR MODEL ORDER REDUCTION
+
+2.1. High-dimensional nonlinear discrete model
+Consider the time-continuous initial value problem (IVP)
+
+Copyright © 2012 John Wiley & Sons, Ltd.                       Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                         DOI: 10.1002/nme
+                                                                                                                       10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+             NONLINEAR MODEL REDUCTION BASED ON LOCAL REDUCED-ORDER BASES                                      893
+
+                                              du
+                                                 .t / D f .u.t /, t /
+                                              dt
+                                               u.0/ D u0 ,                                                      (1)
+where t > 0 denotes time, u.t / 2 Rn denotes the state vector, n is the dimension of the state
+space, f W Rn  R ! Rn is a nonlinear function of its arguments, and u0 2 Rn is an initial
+condition. The aforementioned IVP arises, for example, from the semi-discretization of a partial
+differential equation.
+   Consider next the discretization of the aforementioned IVP by an implicit scheme. For simplicity
+but without any loss of generality, assume that this discretization is performed using the backward
+Euler scheme and a variable time step ti , i 2 ¹1,    , Nt º. This can be written as
+                                           ui D ui 1 C ti f.ui , ti /,                                        (2)
+                                                      P
+                                                      i
+where the subscript i designates the time ti D              tj and leads at each computational time step to
+                                                     j D1
+the nonlinear system of equations
+                                    ri D ui  ui 1  ti f.ui , ti / D 0.                                      (3)
+Usually, the aforementioned system is solved by the Newton–Raphson or a similar iterative method
+that produces at each iteration l an approximate solution denoted here by u.l/
+                                                                           i .
+
+2.2. Model order reduction
+As already stated, MOR is typically performed on the premise that the state solution u.t / belongs
+to an affine subspace of Rn whose dimension k is order of magnitude smaller than n. To this effect,
+an ROB represented by an associated matrix denoted here by V 2 Rnk is first constructed in an
+attempt to capture this subspace. Then, it is proposed to approximate the difference between the
+discrete state solutions at time steps i and i  1 as follows
+
+                                             ui  ui 1  Vui k ,                                              (4)
+where ui k 2 Rk denotes the vector of reduced coordinates in the basis V of the state incre-
+ment (ui  ui 1 ). To simplify the notation, the approximation symbol  is replaced throughout the
+remainder of this paper by the equality symbol D, except when this could confuse the reader.
+  From assumption (4), it follows that
+                                                            i
+                                                            X
+                                           ui D u0 C V             uj k ,                                      (5)
+                                                            j D1
+
+which shows that under the aforementioned assumption, the trajectories of the state solution lie in
+an affine subspace of Rn containing u0 and spanned by the column vectors of V.
+  Substituting (4) into the nonlinear system of Equation (3) transforms this system into the
+following one that has only k unknowns represented by the vector ui k 2 Rk
+
+                    ri .ui 1 C Vui k / D Vui k  ti f.ui 1 C Vui k , ti / D 0.                            (6)
+A least-squares solution of the aforementioned problem with n equations and k unknowns can be
+obtained by reformulating it first as the minimization problem
+
+                                       min       kri .ui 1 C Vui k /k2 ,                                      (7)
+                                     ui k 2Rk
+
+and then solving this problem by an iterative Gauss–Newton procedure [3, 6]. Algorithm 1, where
+                                                 .l/
+the T superscript denotes the transpose and ui k denotes the computed numerical approximation
+       k
+of ui at the l-th Gauss–Newton iteration, describes such a procedure.
+
+Copyright © 2012 John Wiley & Sons, Ltd.                                 Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                                   DOI: 10.1002/nme
+                                                                                                                           10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+894                                 D. AMSALLEM, M. J. ZAHR AND C. FARHAT
+
+
+
+
+  Throughout this work, the ROB matrix V is built using the POD method based on a collection of
+discrete snapshots [15] denoted here by yj , j D 1,    , Ns . More specifically, these snapshots are
+precomputed as follows
+                                                 .l /
+                                         yj D uijj  u0 , j D 1,    , Ns ,                                       (8)
+
+where ij 2 ¹1,    , Nt º, and lj 6 NLj designates the l-th Gauss–Newton iteration that produced
+the approximate value of the state solution uij . It can be shown that this choice of snapshots leads
+to an ROM that is consistent in the sense defined in [6].‡ Furthermore, it was observed by the
+                                                                                           .l /
+authors that this choice leads to a more accurate ROM than the popular choice yj D uijj or the
+                   .l /
+choice yj D uijj  u.0/
+                     ij adopted in [6]. Algorithm 2, where 1Ns denotes the column vector of 1s of
+dimension Ns , describes the POD procedure equipped with this choice of snapshots.
+
+2.3. Fast treatment of multiple initial conditions
+At this point, a discussion of the treatment of the case of multiple initial conditions is appropriate.
+Indeed, the snapshots yj are precomputed for a given initial condition u0 , and the ROB matrix V is
+constructed by Algorithm 2 for a given u0 . Hence, a change in the initial condition requires in princi-
+ple recomputing the snapshots yj and reconstructing V. Unfortunately, this can be computationally
+intensive as shown, for example, in [22].
+   Alternatively, two approaches are proposed in the succeeding text for reusing the snapshots yj
+and ROB matrix V to accelerate the computation of a lower-dimensional solution of the IVP (1)
+equipped with a different initial condition uQ 0 .
+   In the first approach, the solution of the minimization problem (7) is searched for in the form
+                                                   i
+                                                   X
+                                   uQ i D u0 C V          uQ j k , 8i 2 ¹1,    , Nt º.                         (12)
+                                                   j D1
+
+
+‡
+    An approximation is defined in [6] as ‘consistent’ if, when implemented without data compression, it introduces no
+    additional error in the solution of the same problem for which data was acquired.
+
+Copyright © 2012 John Wiley & Sons, Ltd.                                     Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                                       DOI: 10.1002/nme
+                                                                                                                         10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+             NONLINEAR MODEL REDUCTION BASED ON LOCAL REDUCED-ORDER BASES                                        895
+
+
+
+
+However, if uQ 0 does not lie in the affine subspace S containing u0 and spanned by the columns
+of V, it cannot be written in the aforementioned form. For this reason, the Gauss–Newton iterative
+algorithm described in Algorithm 1 is initialized in this case using the projection of the new initial
+condition uQ 0 onto the subspace S—that is, with
+                        uQ 00 D u0 C VVT .uQ 0  u0 / D VVT uQ 0 C .In  VVT /u0 ,                               (13)
+where In denotes the identity matrix of size n.
+ Alternatively, in the second approach, the solution of (7) is searched for in the form
+                                                 i
+                                                 X
+                                             Q
+                               uQ i D uQ 0 C V          uQ j k , 8i 2 ¹1,    , Nt º.                         (14)
+                                                 j D1
+
+ The new ROB matrix V      Q associated with the new initial condition uQ 0 can be computed by
+modifying steps 4 to 6 of Algorithm 2 in either manner described in the succeeding text:
+ (i) If the original snapshot matrix S is still available, it is translated by uQ 0 to obtain
+                                                   Q D S  uQ 0 1T .
+                                                   Y                                                             (15)
+                                                                 Ns
+
+     Then, steps 5 and 6 of Algorithm 2 are applied to Y  Q to compute V.
+                                                                        Q
+(ii) If the snapshot matrix S is no longer available, the procedure proposed in [23] is applied instead
+     of steps 5 and 6 of Algorithm 2 to obtain an approximation of the singular value decomposition
+     of YQ by simply updating that of Y. Because
+                                                 
+                  Q D S  uQ 0 1T D S  u0 1T C .u0  uQ 0 /1T D Y C .u0  uQ 0 /1T
+                  Y                                                                                (16)
+                                Ns             Ns                Ns                     Ns
+
+     is a rank one update of Y, the singular value decomposition update procedure proposed in [23]
+     can be applied in this case as is.
+   When snapshots are computed from a set of multiple simulations characterized by more than two
+different initial conditions, one of these is chosen as a reference initial condition uref
+                                                                                         0 , and all snap-
+shots are translated by uref
+                           0 . Provided that the solution of   the  minimization problem   (7) is searched
+for in the form given in (12) but with u0 replaced by uref0  ,  it can be shown that either approach out-
+lined previously for accelerating the computation of a new ROB matrix preserves consistency in the
+sense defined in [6] (see Appendix 1 for a proof).
+
+Copyright © 2012 John Wiley & Sons, Ltd.                                   Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                                     DOI: 10.1002/nme
+                                                                                                                    10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+896                             D. AMSALLEM, M. J. ZAHR AND C. FARHAT
+
+
+2.4. Hyper reduction using Gauss–Newton with approximated tensor quantities
+Unfortunately, the computational cost of Algorithm 1 is comparable with that incurred by the HDM
+as it requires, among other things, the evaluation at each l-th Gauss–Newton iteration of the residual
+r.l/                 .l/                                    .l/    .l/
+ i , the Jacobian Ji , and the matrix–vector product Wi D Ji V. These evaluations scale with
+the size n of the HDM. For this reason, solving the reduced minimization problem (7) cannot be
+expected in general to dramatically decrease the computational cost associated with the solution of
+the IVP (1) [19]. To address this issue, several approaches have been proposed. All of them introduce
+an additional layer of approximation referred to here as hyper reduction.
+   A first class of hyper reduction methods reduces the cost of computing an inner product of two
+vectors associated with the HDM by operating only on a few entries of these vectors. Examples
+include the hyper reduction method proposed in [24] and the missing point estimation procedure
+proposed in [25]. A second class of hyper reduction techniques are based on the concept of empirical
+interpolation [20, 21]—also known in its discrete form as the Gappy POD technique [6, 20, 26]—or
+the related discrete empirical interpolation method [5]. The main idea behind this second class of
+methods is to approximate the nonlinear residual ri arising in the reduced equations by projecting it
+on a precomputed ROB matrix Vr 2 Rnkr . The GNAT (Gauss–Newton with approximated tensor
+quantities) method introduced in [6, 7] falls within this class of methods. It is chosen here for per-
+forming all hyper reductions because of its consistency properties, robustness, and computational
+efficiency demonstrated in [6, 7]. The ROB matrix Vr is computed by applying Algorithm 2 to a set
+of snapshots consisting of residuals of the form given in Equation (3).
+   The GNAT framework approximates a residual as a linear combination of the column vectors of
+the aforementioned ROB matrix Vr . This can be written as
+                                             ri .u/  Vr rki r .u/,                                         (17)
+
+where the vector of reduced residual coordinates rki r .u/ 2 Rkr is determined by (1) choosing a subset
+of interpolation entries E  ¹1,    , nº with jEj > kr ; (2) evaluating at these entries the residual vec-
+tor ri .u/ associated with the HDM; and finally (3) solving in a least-squares sense—or in the usual
+linear sense if jEj D kr —the system of equations obtained by requiring that the approximation (17)
+be exact at the entries E. As a result, ri .u/ is evaluated only at the set of entries E.
+   Throughout the remainder of this paper, the restriction of ri .u/ to E is denoted by ZT ri .u/, where
+Z is the restriction of the identity matrix to its columns associated with the set of entries E. Then,
+the following identity holds
+                                                         
+                                         rki r .u/ D ZT Vr ZT ri .u/,                                    (18)
+where the  superscript designates the left pseudoinverse.
+  When the Jacobian matrix of ri .u/ is sparse, the sampled residuals determined by E depend only
+on a small subset of the state vector u determined by a set of entries denoted here by E 0 . Throughout
+the remainder of this paper, the restriction of u to the entries E 0 is denoted by PT u, where P is
+the restriction of the identity matrix to its columns associated with the set of entries E 0 . At each
+Gauss–Newton iteration, the GNAT method updates only these entries of the state vector and
+therefore reduces CPU cost.
+  To hyper reduce the reduced minimization problem (7), the GNAT framework also approximates
+the action of the Jacobian Ji on the ROB matrix V, denoted in step 5 of Algorithm 1 by Wi 2 Rnk ,
+using a second ROB matrix VW 2 RnkW . This can be written as
+
+                                           Wi D Ji V  VW Wki W ,                                           (19)
+where
+                                                  
+                                      Wki W D ZT VW ZT Wi .u/,                                              (20)
+
+and therefore, Wki W 2 RkW k . Here again, only the rows of the full matrix Wi with indices
+belonging to E are evaluated.
+
+Copyright © 2012 John Wiley & Sons, Ltd.                              Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                                DOI: 10.1002/nme
+                                                                                                                      10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+             NONLINEAR MODEL REDUCTION BASED ON LOCAL REDUCED-ORDER BASES                                     897
+
+   Several POD-based procedures for constructing VW can be found in [6].
+   In general, jEj  n and jE 0 j  n, and therefore, the hyper reduction performed by GNAT delivers
+dramatic CPU cost reductions while maintaining accuracy.
+   The solution of the minimization problem (7) by Algorithm 1 leads at each l-th Gauss–Newton
+iteration to the solution in a least-squares sense—and therefore via the QR decomposition—of a
+linear rectangular system of equations of the form
+                                                        .l/
+                                             .J.l/  k
+                                               i V/pi         D r.l/
+                                                                  i .                                         (21)
+
+Through the approximations (17) and (19) and using the expressions (18) and (20), GNAT reduces
+the aforementioned system of equations to
+                                              
+                                        kW .l/      .l/        .l/
+                                  VW Wi          pki D Vr rki r                          (22)
+
+and
+                                          .l/          
+                            VW ZT VW ZT W.l/
+                                         i    pki D Vr ZT Vr ZT r.l/
+                                                                  i .                                         (23)
+
+From the orthogonality of the POD-based ROB matrix VW , the aforementioned system of equations
+can be rewritten as
+                     T      T .l/  k .l/                   T .l/ 
+                     Z VW      Z Wi pi D  VTW Vr ZT Vr              Z ri .               (24)
+                                                                                    
+By precomputing the matrix–matrix products ZT VW 2 RkW jEj and VTW Vr ZT Vr 2 RkW jEj
+offline, GNAT eliminates from the solution of the minimization problem (7) the dependency on the
+large dimension n of the matrix–matrix vector product W.l/          .l/
+                                                             i D Ji V (step 5 of Algorithm 1). There-
+fore, GNAT transforms Algorithm 1 into a counterpart whose computational complexity scales with
+the reduced dimensions k, kW , jEj and jE 0 j (see [6] for further details).
+
+              3. NONLINEAR MODEL ORDER REDUCTION BASED ON LOCAL
+                             REDUCED-ORDER BASES
+
+3.1. Principle
+The new approach for nonlinear MOR proposed in this paper is organized in two stages. In the
+first one, the solution space is subdivided into subregions where the solution exhibits significantly
+different features, and a local ROB is precomputed and assigned to each subregion. This stage can
+be executed offline. In contrast, the second stage is implemented online, during the ROM simula-
+tion. At each time step ti of the ROM simulation, the subregion where the current state ui 1 lies is
+first identified. Then, its assigned ROB matrix Vi 1 D V.ui 1 / is selected for approximating the
+solution ui in the affine subspace Si 1 of variable dimension ki 1 containing ui 1 and spanned by
+Vi 1 . This approximation can be written as
+                                                                   k
+                                           ui D ui 1 C Vi 1 ui i 1 .                                      (25)
+
+   In Equation (25), it follows that the state at a given time step ti can be expressed in terms of the
+initial condition u0 and the local ROBs as
+                                                     i
+                                                     X
+                                      ui D u0 C           Vm1 ukmm1 .                                      (26)
+                                                    mD1
+
+Note that in the expression (26) of ui
+ (i) Some matrices Vm , 0 6 m 6 i  1 may appear more than once using however a different
+     subscript m.
+
+Copyright © 2012 John Wiley & Sons, Ltd.                                Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                                  DOI: 10.1002/nme
+                                                                                                               10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+898                             D. AMSALLEM, M. J. ZAHR AND C. FARHAT
+
+
+(ii) Each generalized coordinate ukmm1 is determined at time step tm and maintained constant
+     thereafter.
+  To introduce an alternative form of Equation (26) in which each ROB matrix Vm appears only
+once, let NV denote the total number of identified subregions of the solution space and their
+corresponding ROB matrices Vj . For each ROB matrix Vj , let Ij denote the set of indices
+i 2 ¹1,    , Nt º for which the state ui is identified to lie in the subregion of the solution space to
+which Vj is assigned. In Equation (26),  h it follows  i that ui belongs to an affine subspace containing
+u0 and spanned by some columns of V1    VNV . Hence, Equation (26) can be rewritten as
+
+                                                                  NV
+                                                                  X
+                                                    k
+                             ui D ui 1 C Vi 1 ui i 1 D u0 C          Vj qji ,                      (27)
+                                                                  j D1
+
+
+where the generalized coordinates qji are related to the increments ukmm1 by
+                                               X
+                                       qji D         ukmm1 .                                         (28)
+                                               16m6i ,
+                                                m2Ij
+
+
+Note that in this context, the subscript i in qji refers to the time step ti , but the index j in both Vj
+and qji does not refer to the time step tj but to the j -th subregion of the solution space.
+  Hence, the two main ideas behind the two-stage MOR based on local ROBs outlined herein are
+the following: (1) the dimension of each affine subspace Sj is much smaller than the dimension of
+the global affine subspace S in which the entire trajectory of u lies or can be well approximated,
+and (2) in the worst case, the dimension of the union of all affine subspaces Sj , j D 1,    , NV is
+of the same order of that of the global affine subspace S in which the entire trajectory of u lies or
+can be well approximated.
+
+3.2. Offline stage: construction of the local bases
+In practice, the set of ROB matrices Vj , j D 1, : : : , NV is built using a variant of the POD algo-
+rithm on the basis of the method of snapshots. The set of precomputed snapshots is first partitioned
+into NV overlapping subsets using Algorithm 3. Essentially, this algorithm starts by applying the
+k-means algorithm (see Appendix 2) to group together nearby snapshots according to their relative
+distances. This requires first defining a distance in the state space. The optimal choice for this dis-
+tance is problem specific. It may be based on the states themselves, a subset of their entries, their
+frequency content, or an output of interest, to mention a few possibilities. For example, the distance
+between the current state and each centroid state value ucm , m D 1, : : : , NV , can be computed as
+                                                   q
+              d.ui 1 , ucm / D kui 1  ucm kH D kui 1 k2H  2uTcm Hui 1 C kucm k2H ,          (29)
+
+where H 2 Rnn is a symmetric positive definite (semi-definite) matrix defining a metric
+(pseudometric) in the state space Rn , and its associated norm (or pseudonorm) is
+                                                   p
+                                         kukH D uT Hu.                             (30)
+
+In particular, the choice H D In leads to the usual 2-norm k  k2 .
+   Next, to avoid the formation of gaps between the generated clusters, neighboring snapshots are
+added to each cluster to obtain a set of overlapping clusters. This can be expected to improve the
+sought-after reduced-order approximations when the state trajectory transitions from one cluster
+to another.
+   It is noted here that the idea of clustering snapshots has already appeared in [27] to construct a
+global POD basis by agglomerating local counterparts constructed for each cluster of snapshots. In
+
+Copyright © 2012 John Wiley & Sons, Ltd.                         Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                           DOI: 10.1002/nme
+                                                                                                                      10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+             NONLINEAR MODEL REDUCTION BASED ON LOCAL REDUCED-ORDER BASES                                     899
+
+
+
+
+this paper, however, the ROBs are maintained local to appropriately and economically represent the
+local search space for the state. Indeed, it was shown in [14] that the agglomeration of local bases
+can result in unnecessarily large ROBs.
+
+3.3. Online stage: exploiting selectively the local bases
+The second stage of the approach proposed in this paper for nonlinear MOR is performed online as
+follows. At each time step, the snapshot cluster centroid whose state is closest to the current state
+is determined, and the state update is approximated using the corresponding ROB. Both operations
+are discussed in the succeeding text.
+   To determine the snapshot cluster centroid whose state is closest to the current state ui 1 , it is
+best to use the same distance adopted when clustering the snapshots. However, Equations (29) and
+(30) show that, for that choice, the explicit evaluation of d.ui 1 , ucm / would entail a computational
+complexity that scales with the dimension of the HDM because both vectors ui 1 and ucm are of
+dimension n. For this reason, an alternative approach is described in the succeeding text for finding
+the snapshot cluster centroid whose state is closest to the current state ui 1 .
+   In Equation (27), it follows that the current state ui 1 can be approximated as
+                                                          NV
+                                                          X
+                                           ui 1 D u0 C          Vj qji1 .                                   (34)
+                                                          j D1
+
+
+Copyright © 2012 John Wiley & Sons, Ltd.                                Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                                  DOI: 10.1002/nme
+                                                                                                                      10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+900                             D. AMSALLEM, M. J. ZAHR AND C. FARHAT
+
+
+Hence, two distances d.ui 1 , ucm / and d.ui 1 , ucp / can be compared by checking the sign of
+
+                 ´m,p                  2                 2
+                  i 1 D kui 1  ucm kH  kui 1  ucp kH
+                                                   2                            2
+                               XNV                          XNV                 
+                                        j
+                                                                      j
+                                                                                                             (35)
+                       D u0 C      Vj qi 1  ucm    
+                                                       u0 C      Vj qi 1  ucp 
+                                                                                    .
+                               j D1                         j D1                
+                                                            H                                     H
+
+By denoting
+
+                                   uO cm D ucm  u0 , 8m D 1, : : : , NV ,                                    (36)
+
+´m,p
+ i 1 can be rewritten as
+                                                        2                           2
+                              XNV                             XNV                   
+                       m,p
+                                         j
+                                                                        j
+                                                                                       
+                              
+                      ´i 1 D                           
+                                     Vj qi 1  uO cm             Vj qi 1  uO cp 
+                                                                                       
+                              j D1                            j D1                  
+                                                            H                           H
+                                                                                       2
+                                             XN                          N             
+                                                V
+                                                                        X  V
+                                                                                        
+                            D kuO cm k2H  2      uO Tcm HVj qji1 C        Vj qji1 
+                                             j D1                       j D1           
+                                                                          
+                                                                                          H
+                                                                                          2                  (37)
+                                                XN                         N
+                                                                            X             
+                                  2              V
+                                                                             V
+                                                                                          
+                               uO cp H C 2          uO Tcp HVj qji1  
+                                                                               V    q j 
+                                                                                   j i 1 
+                                                j D1                      j D1           
+                                                                                             H
+                                 NV
+                                 X
+                            D2          .uO cp  uO cm /T HVj qji1 C kuO cm k2H  kuO cp k2H .
+                                 j D1
+
+This suggests precomputing offline the auxiliary quantities
+
+                            d m,p D kuO cm k2H  kuO cp k2H , 81 6 m < p 6 NV                                 (38)
+
+and
+                            T
+               wm,p
+                j   D 2Vj H.uO cp  uO cm / 2 Rkj , 8j D 1, : : : , NV , 1 6 m < p 6 NV ,                     (39)
+
+and determining online the snapshot cluster centroid whose state is closest to the current state ui 1
+by checking the sign of
+                                                 NV
+                                                 X           T
+                                     ´m,p
+                                      i 1 D            wm,p
+                                                         j   qji1 C d m,p .                                  (40)
+                                                 j D1
+
+  Denoting by ji 1 the index of the local ROB matrix chosen at time step ti 1 , it follows from
+                    ji 1    ji 1     ki 2
+Equation (28) that qi 1  D qi 2  C ui 1  and qji1 D qji2 if j ¤ ji 1 , which results in
+                                                                 T     k
+                                        ´m,p     m,p     m,p       i 2
+                                         i 1 D ´i 2 C wji 1 ui 1 .                                       (41)
+
+This reveals that ´m,p
+                    i 1 can be evaluated using about 2kji 1 D 2ki 2 floating point operations and
+therefore implies that the snapshot cluster centroid whose state is closest to a current state ui 1 can
+subsequently be found in real time.
+  Finally, at each time step ti , after a local ROB matrix Vi 1 D Vji is chosen, problem (7) is solved
+by applying Algorithm 4—which summarizes the entire online computational procedure—to the
+solution of the minimization problem
+                                                                           k
+                                     min           kri .ui 1 C Vi 1 ui i 1 /k2 .                          (42)
+                                  k
+                                ui i 1 2Rki 1
+
+
+Copyright © 2012 John Wiley & Sons, Ltd.                                Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                                  DOI: 10.1002/nme
+                                                                                                               10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+              NONLINEAR MODEL REDUCTION BASED ON LOCAL REDUCED-ORDER BASES                             901
+
+
+
+
+             4. HYPER REDUCTION BASED ON LOCAL REDUCED-ORDER BASES
+
+4.1. Principle
+The performance of a hyper reduction method such as GNAT hinges on the ability of the underlying
+ROB matrices Vr and VW to accurately represent, at each time step ti , the nonlinear behavior of the
+functions ri .u/ and Wi .u/ D Ji .u/V, respectively. In general, it is easier to approximate a nonlinear
+multivariate function locally than globally. For this reason, it is proposed here to approximate ri and
+Wi using local ROB matrices Vrj and VWj , respectively, as follows
+                                              kr
+                                    ri  Vrj ri j , Wi  VWj WkWj ,                                    (43)
+        kr
+where ri j 2 Rkrj and WkWj 2 RkWj .
+   The choice of local ROB matrices Vrj and VWj is determined by locating the current state vec-
+tor in the state space. This leads to the same criterion discussed in Section 3.3 for the selection of
+the local ROB matrix Vj when approximating the state vector ui and therefore to the same ROB
+index j 2 ¹1,    , NV º. Then, as already mentioned in Section 2.4, the generalized coordinates rkrj
+and WkWj are evaluated by sampling a subset Ej of entries of the HDM residual and action of its
+Jacobian on the ROB matrix Vj , respectively.
+   It is noted that the aforementioned subset Ej , j D 1, : : : , NV and its cardinality may differ from
+one local basis to another. It is also noted that this concept of local subset of entries is equally appli-
+cable to the hyper reduction techniques presented in [24, 25]. For mesh-based applications, it can be
+implemented in the form of a ‘mesh reduction’ (for example, see [6]).
+
+4.2. Offline stage: construction of hyper reduced local nonlinear models using Gauss–Newton
+with approximated tensor quantities
+Gauss–Newton with approximated tensor quantities collects snapshots for the residual and Jacobian
+ROBs from preliminary ROM simulations performed offline. The same approach is adopted here
+for constructing a local GNAT framework—that is, the snapshots are collected from preliminary
+simulations based on ROMs that are constructed using local ROBs as described in Section 3. The
+generated snapshots are stored in NV matrices according to which local state ROB is active when the
+snapshot is computed. This leads to the construction of NV independent GNAT models following
+the numerical procedure presented in [6].
+
+4.3. Online stage: exploitation of the local nonlinear Gauss–Newton with approximated tensor
+quantities models
+At each time step ti , the local ROB is selected using the same criterion as in Section 3.3. Then, the
+state solution ui is approximated as
+                                                   k                      k
+                            ui D ui 1 C Vi 1 ui i 1 D ui 1 C Vj ui i 1 ,                        (44)
+
+Copyright © 2012 John Wiley & Sons, Ltd.                         Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                           DOI: 10.1002/nme
+                                                                                                                   10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+902                             D. AMSALLEM, M. J. ZAHR AND C. FARHAT
+
+
+where j 2 ¹1,    , NV º, the corresponding residual is approximated as
+                                                          kr
+                                              ri D Vrj ri j ,                                              (45)
+
+the action of the Jacobian onto Vj is approximated as
+                                                           kWj
+                                            Wi D VWj Wi          ,                                         (46)
+and the online GNAT procedure described in [6] is applied to the solution of the minimization
+problem (42).
+
+Remark
+As discussed in Section 2.4, at each time step ti where a local ROB matrix Vj is selected for
+approximating ui , only a subset of the entries of ui —denoted here by PTj ui —is updated as follows
+                                                                      k
+                                     PTj ui D PTj ui 1 C PTj Vj ui j .                                   (47)
+
+By using Equation (27), the aforementioned expression of PTj ui can be rewritten as
+                                                         NV
+                                                         X
+                                     PTj ui D PTj u0 C         PTj Vm qm
+                                                                       i ,                                 (48)
+                                                         mD1
+
+which shows that the online stage of the proposed local GNAT method requires only the following
+small-size entities
+  °                                   ± °                                                           ±
+   PTj u0 2 RjEj j , j D 1, : : : , NV , PTj Vm 2 RjEj jkm , j D 1, : : : , NV , m D 1, : : : , NV   (49)
+
+for computing the state solutions.
+
+                                           5. APPLICATIONS
+
+The proposed method for nonlinear MOR based on the concept of local ROBs described in
+Sections 3 and 4 is illustrated here with two complementary applications: the solution of an aca-
+demic Burgers’ problem and the simulation of an Microelectromechanical System (MEMS) device
+governed by a fluid-structure-electric interaction. The first application features a moving discontinu-
+ity and front. It focuses on demonstrating the ability of the proposed nonlinear MOR to accurately
+reproduce HDM results using a much smaller ROM. The second application features parameter
+variations. It focuses particularly on demonstrating the predictive capability of the proposed MOR
+method—that it, its ability to deliver accurate results using ROBs constructed from data associated
+with different parameter values than those used during the ROM simulations. Both applications have
+been considered in previous nonlinear model reduction studies [1, 28, 29].
+   In both aforementioned applications, the definition of the distance between two state vectors is
+based on the 2-norm in Rn . All corresponding simulations are performed with MATLAB running
+on Mac Book Pro 2.66 GHz Intel Core 2 Duo, 4GB 1067 MHz DDR3.
+
+5.1. Solution of a one-dimensional Burgers’ problem
+Consider the following one-dimensional initial-boundary-value problem (IBVP)
+                          @U    @U
+                             CU        D 0.02e 0.02x , x 2 Œ0, 100, t 2 Œ0, 50
+                          @t     @x
+                             U.x, 0/ D 1
+                                         p
+                              U.0, t / D 5,                                                                (50)
+where x denotes space. This IBVP features Burgers’ equation and models the movement of a shock.
+Its unknown U.x, t / represents a conserved quantity. It is semi-discretized here by a Godunov-type
+
+Copyright © 2012 John Wiley & Sons, Ltd.                             Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                               DOI: 10.1002/nme
+                                                                                                                         10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+             NONLINEAR MODEL REDUCTION BASED ON LOCAL REDUCED-ORDER BASES                                        903
+
+                                                                                       t = 50
+                        4
+
+
+                       3.5                                                             t = 40
+
+
+                        3
+                                                                        t = 30
+
+
+
+
+                   U
+                       2.5
+                                                     t = 20
+                        2              t = 10
+
+
+                       1.5   t = 2.5
+
+
+
+                         0     10      20       30   40       50   60        70   80      90    100
+                                                              x
+
+Figure 1. Snapshot solutions of the Burgers’ problem obtained with a high-dimensional model of size
+                                              n D 1000.
+
+
+
+
+Figure 2. First four mode shapes of the global reduced-order basis (ROB) constructed for Burgers’ problem:
+      — first mode,    second mode,  third mode, and  fourth mode. (a) NV D 1, global ROB.
+
+
+
+
+Figure 3. First four mode shapes of the two local reduced-order bases (ROBs) constructed for Burgers’
+problem: — first mode,    second mode,  third mode, and  fourth mode. (a) NV D 2, local ROB # 1
+                                     and (b) NV D 2, local ROB # 2.
+
+Copyright © 2012 John Wiley & Sons, Ltd.                                   Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                                     DOI: 10.1002/nme
+                                                                                                             10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+904                             D. AMSALLEM, M. J. ZAHR AND C. FARHAT
+
+
+finite volume method [30] that gives rise to an HDM of size n D 1000. Using this HDM, the obtained
+numerical solution is adopted as the ‘reference’ solution with respect to which approximation errors
+because of MOR will be computed. Six snapshots of this solution corresponding to six different
+time instances are shown in Figure 1.
+   First, the local nonlinear MOR method described in Section 3 is applied to the solution of the
+aforementioned problem. For this purpose, Ns D 1000 snapshots are computed offline and parti-
+tioned into NV D 1, 2, 3, and 4 snapshot clusters using the k-means algorithm described in Appendix
+2. In each case, an equal number of NV ROBs of equal dimension 10 6 k 6 50 are constructed.
+The first four ‘modes’ of each ROB are graphically depicted in Figures 2–5. It is interesting to
+note that for this problem, the mode shapes of the global basis (case NV D 1) have global sup-
+port (see Figure 2), but the mode shapes of the local bases have a predominantly local support
+(see Figures 3–5).
+   For each considered value of NV , Figure 6(a) reports the variation of the average relative error of
+the reduced-order solution as a function of the uniform ROB dimension k. For all considered values
+of NV , the average relative error is below 4%, as long as k > 15. For a fixed value of the ROB
+dimension k, increasing the number of local ROBs is found, in general, to improve the accuracy of
+
+
+
+
+Figure 4. First four mode shapes of the three local reduced-order bases (ROBs) constructed for Burgers’
+problem: — first mode,    second mode,  third mode, and  fourth mode. (a) NV D 3, local ROB # 1;
+                       (b) NV D 3, local ROB # 2; and (c) NV D 3, local ROB # 3.
+
+
+
+
+Figure 5. First four mode shapes of the four local reduced-order bases (ROBs) constructed for Burgers’
+problem: — first mode,    second mode,  third mode, and  fourth mode. (a) NV D 4, local ROB # 1;
+         (b) NV D 4, local ROB # 2; (c) NV D 4, local ROB # 3; and (d) NV D 4, local ROB # 4.
+
+Copyright © 2012 John Wiley & Sons, Ltd.                       Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                         DOI: 10.1002/nme
+                                                                                                                                                                            10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                                            NONLINEAR MODEL REDUCTION BASED ON LOCAL REDUCED-ORDER BASES                                                              905
+
+the computed reduced-order solution. For NV D 4, the average relative error is lower than 1%, even
+when the uniform dimension of the local ROB is as small as k D 15.
+  The speedups delivered by the ROMs are reported in Figure 6(b) as a function of the dimension k
+of the global or local ROB. Because without hyper reduction, the computational complexity of the
+nonlinear MOR method described in Section 3—and for that matter, most other MOR methods—
+scales with the size n of the HDM, all speedups are found, as expected, to be less than 1. In other
+words, the ROM simulations run, in this case, slower than their counterpart based on the HDM.
+
+
+
+                                                                                                               0.54
+ Average Relative Error (%)
+
+
+
+
+                                                                                        1 ROB
+                                                                                        2 ROBs
+                                                                                        3 ROBs                 0.52
+                                                                                        4 ROBs
+
+
+
+
+                                                                                                     Speedup
+                              100                                                                               0.5
+
+                                                                                                               0.48
+
+                              10-1                                                                             0.46    1 ROB
+                                                                                                                       2 ROBs
+                                                                                                                       3 ROBs
+                                                                                                                       4 ROBs
+                                                                                                               0.44
+                                   10      15    20   25      30        35    40    45       50                   10      15     20    25      30      35   40   45   50
+                                                           ROB Size                                                                        ROB Size
+ (a) Average relative error                                                                         (b) Speedup
+
+Figure 6. Performance of the nonlinear model order reduction method as a function of the number of
+introduced local reduced-order bases (ROBs) and their uniform dimension. (a) Average relative error
+                                         and (b) speedup.
+
+
+
+                         160                                                                                   160
+                                        1 ROB                                                                          1 ROB
+                                        2 ROBs                                                                         2 ROBs
+                         140            3 ROBs
+                                                                                                               140     3 ROBs
+                                        4 ROBs                                                                         4 ROBs
+                         120                                                                                   120
+
+                         100                                                                                   100
+
+                              80                                                                                80
+
+                              60                                                                                60
+
+                              40                                                                                40
+
+                              20                                                                                20
+                                10         15    20   25     30         35    40    45      50                    10      15     20    25     30       35   40   45   50
+                                                           ROB Size                                                                         ROB Size
+
+ (a)                                                                                                   (b)
+
+                                                               180
+                                                                         1 ROB
+                                                               160       2 ROBs
+                                                                         3 ROBs
+                                                               140       4 ROBs
+
+                                                               120
+                                                               100
+                                                                   80
+                                                                   60
+                                                                   40
+                                                                   20
+                                                                    10       15    20      25      30           35      40      45    50
+                                                                                                 ROB Size
+
+                                                            (c)
+
+Figure 7. Gauss–Newton with approximated tensor quantities parameter values used for hyper reduction.
+(a) Dimension kr of the basis Vr ; (b) dimension kW of the basis VW and (c) number of sampled residual
+                                               entries (jEj).
+
+Copyright © 2012 John Wiley & Sons, Ltd.                                                                                  Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                                                                                    DOI: 10.1002/nme
+                                                                                                                                                                                                       10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+906                                                               D. AMSALLEM, M. J. ZAHR AND C. FARHAT
+
+
+   Next, the same local nonlinear MOR method is applied to the solution of the IBVP (50) using the
+same local ROBs, but this time equipped with GNAT for hyper reduction (see Section 4). For each
+different case of solution space partitioning, the parameters kr , kW , and jEj are uniformly set for
+all local ROBs. However, they are varied with the uniform dimension k of the local ROB, as shown
+in Figure 7. Furthermore, the location in the space interval x 2 Œ0, 100 of the entries where the
+residuals are sampled by the GNAT procedure are reported in Figure 8 for two of the considered
+cases: (1) NV D 1 and k D 40 and (2) NV D 4 and k D 10. The reader can observe that whereas in
+the case of the global ROB, the sampled residual entries turn out to be uniformly distributed across
+the spatial domain Œ0, 100, they are localized in the case of the local ROB to the portion of Œ0, 100
+that coincides with the support of the local ROBs (see Figures 3–5).
+   Figure 9(a) reports the variation of the average relative error of the solution computed by the non-
+linear MOR method equipped with hyper reduction, as a function of the uniform ROB dimension k.
+The comparison of the results reported in this figure with those of Figure 6 reveals that no signifi-
+cant loss of accuracy is induced by the hyper reduction procedure. Figure 9(b) reports the speedups
+delivered by the nonlinear MOR method equipped with GNAT. It shows that because of hyper reduc-
+tion, the computation of the HDM solution is accelerated by a factor ranging between 40 and 90,
+depending on the chosen uniform size of the local ROB. More importantly, the results reported in
+Figure 9(a) and (b) reveal that whereas large speedups and reasonable accuracy are achievable when
+the nonlinear MOR method is equipped with GNAT and a global ROB, equally large speedups and
+much better accuracy are attained when the nonlinear MOR method is equipped with GNAT and
+local ROBs instead.
+ Global ROB Number
+
+
+
+
+                                                                                                       Local ROB Number
+
+
+
+
+                                                                                                                          4
+
+                                                                                                                          3
+                              1
+                                                                                                                          2
+
+                                                                                                                          1
+
+
+                               0         20        40             60           80           100                               0             20            40                60        80        100
+                                                         x                                                                                                         x
+ (a)                                                                                                   (b)
+
+Figure 8. Spatial distribution of the residual entries sampled by Gauss–Newton with approximated tensor
+  quantities. (a) Global ROB of dimension k D 40 and (b) four local ROBs of uniform dimension k D 10.
+
+
+                                                                                                                          90
+ Average Relative Error (%)
+
+
+
+
+                                                                            MOR+GNAT with 1 ROB
+                                                                            MOR+GNAT with 2 ROBs
+                                                                                                                          80
+                                                                            MOR+GNAT with 3 ROBs
+                                                                            MOR+GNAT with 4 ROBs                          70
+                              100                                                                                         60
+                                                                                                              Speedup
+
+
+
+
+                                                                                                                          50
+                                                                                                                          40           MOR with 1 ROB
+                                                                                                                                       MOR with 2 ROBs
+                                                                                                                          30           MOR with 3 ROBs
+                                                                                                                                       MOR with 4 ROBs
+                              10-1                                                                                        20           MOR+GNAT with 1 ROB
+                                                                                                                                       MOR+GNAT with 2 ROBs
+                                                                                                                          10           MOR+GNAT with 3 ROBs
+                                                                                                                                       MOR+GNAT with 4 ROBs
+
+                                   10   15    20   25        30        35     40       45         50                              10      15       20         25       30        35   40   45     50
+                                                        ROB Size                                                                                               ROB Size
+ (a) Average relative error                                                                                (b) Speedup
+
+Figure 9. Performance of the nonlinear model order reduction (MOR) method equipped with Gauss–Newton
+with approximated tensor quantities (GNAT) for hyper reduction as a function of the number of introduced
+local reduced-order bases (ROBs) and their uniform dimension. (a) Average relative error and (b) speedup.
+
+Copyright © 2012 John Wiley & Sons, Ltd.                                                                                                  Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                                                                                                    DOI: 10.1002/nme
+                                                                                                                      10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+               NONLINEAR MODEL REDUCTION BASED ON LOCAL REDUCED-ORDER BASES                                   907
+
+5.2. Predictive simulations of an MEMS device governed by a
+fluid-structure-electrostatics interaction
+Here, the focus is set on predictive simulations of the behavior of the MEMS pressure sensor
+described in [28] and illustrated in Figure 10. This device is constituted of a doubly cantilevered
+polysilicon beam that is suspended over a silicon substrate. As a voltage v.t / is applied between the
+beam and the substrate, the beam deflects and acts as a switch when it touches the substrate. The
+presence of a layer of air between the beam and the substrate of thickness b D 2.3 microns triggers
+a fluid-structure-electric interaction.
+   The dynamic behavior of the beam can be modeled by the Euler equation and that of the layer
+of air by the Reynold squeeze film damping equation [28]. Together and with the appropriate
+transmission conditions, these equations lead to the IBVP
+          @2 ´       @4 ´      @2 ´
+               C EI      C S         DF e .´, v.t // C F p .p/, x 2 Œ0, L, t 2 Œ0, 104 
+           @t 2      @x 4      @x 2
+    @.p´/                          
+12        r  .1 C 6K/´3 prp D0, x 2 Œ0, L, y 2 Œ0, w t 2 Œ0, 104 
+      @t
+                                                      @´          @´
+                            ´.0, t /D´.L, t / D 0, .0, t / D         .L, t / D 0, ´.x, 0/ D 0
+                                                      @x          @x
+                                                         @p            @p
+                          p.x, 0, t /Dp.x, w, t /Dpa , .0, y, t /D .L, y, t /D0,p.x, y, 0/Dpa .
+                                                         @x            @x
+                                                                                              (51)
+Here, x and y denote the usual spatial coordinates in two dimensions, and the unknowns ´.x, t / and
+p.x, y, t / represent the beam deflection and air pressure distribution below the beam, respectively.
+                   1
+L, w, h, E, I D h3 w,  D 0 hw, and S D S0 hw denote the beam’s length, width, height, Young
+                  12
+modulus, moment of inertia, density, and stress coefficient per unit length, respectively, and 0 and
+S0 denote the beam’s density and stress coefficient per unit volume, respectively.  denotes the air
+viscosity, K the Knudsen number, and pa the ambient air pressure. F e and F p denote the forces of
+electric and pressure origins acting on the beam, respectively.
+   The pressure force acting on the beam at the location x 2 Œ0, L is given by
+                                                       Z w
+                         F p .p/ D F p .p.x, , t // D     .p.x, y, t /  pa / dy,               (52)
+                                                           0
+
+and the electric force at x 2 Œ0, L associated with the voltage v.t / applied between the beam and
+the substrate is given by
+                                                                          0 wv.t /2
+                          F e .´, v.t // D F e .´.x, t /, v.t // D                     ,                     (53)
+                                                                       2.b C ´.x, t //2
+where 0 denotes the permittivity of the free space.
+
+
+
+
+               Figure 10. Schematic description of an MEMS switch device (adapted from [28]).
+
+Copyright © 2012 John Wiley & Sons, Ltd.                                Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                                  DOI: 10.1002/nme
+                                                                                                                  10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+908                             D. AMSALLEM, M. J. ZAHR AND C. FARHAT
+
+
+                 Table I. Values of the physical parameters of the MEMS system that are
+                                           maintained constant.
+                 L                           w               h                   0
+                 610 m                    40 m          2.2 m             2300 kg=m3
+                                            K             pa                    0
+                 1.82  105 kg=m s        0.028     1.1027  105 Pa     8.854  1012 F=m
+
+
+
+
+Figure 11. Operating points for the MEMS device in the parameter space Young modulus (E)-stress
+coefficient (S0 ): the green points correspond to training operating conditions and the red and maroon points
+                                        to unsampled prediction points.
+
+
+  Both governing equations are semi-discretized here by the finite difference method. This leads to
+an HDM consisting of a system of ordinary differential equations of the form
+                                           du
+                                              D f .u, v.t /I E, S0 / ,                                    (54)
+                                           dt
+which, in this case, has the dimension n D 144. In Equation (54), u is the state vector constituted of
+                                        @´
+the semi-discrete counterparts of ´,        , and p.
+                                        @t
+  As in [29], the Young modulus E and stress coefficient per unit area S0 are varied, but all other
+parameters of the problem are kept constant and set to the values given in Table I. The operating
+point defined by the two parameters E and S0 is varied as shown in Figure 11. More specifically,
+the two green points in this figure correspond to the training points, the red points to prediction
+points located within the training range, and the maroon points to prediction points located outside
+the training range.                                                                   
+  For each training point, a sinusoidal transient voltage v.t / D 7 cos          105 t V is applied
+                                                                              3
+between the beam and the substrate, and problem (54) is solved for u.t / using the HDM of size
+n D 144. Figure 12 reports for each parametric configuration the computed time history of the
+deflection of the center point of the beam (its midpoint along its length). In the remainder of this
+section, this deflection is referred to as the ‘response’ of the MEMS device or system. Depending on
+the operating point .E, S0 /, the coupled system can either exhibit oscillations or a pull-in behavior.
+  In a first set of MOR experiments, two nonlinear ROMs are constructed for each operating point
+using global ROBs of dimensions 15 and 16. Each of these two bases is built by applying the POD
+method to a series of snapshots computed using the HDM of the device at the training points T1
+and T2. Then, each constructed ROM is applied to the simulation of the response of the MEMS
+
+Copyright © 2012 John Wiley & Sons, Ltd.                            Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                              DOI: 10.1002/nme
+                                                                                                               10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+             NONLINEAR MODEL REDUCTION BASED ON LOCAL REDUCED-ORDER BASES                              909
+
+
+
+
+Figure 12. Time history of the deflection of the beam center point simulated using a high-dimensional model
+                                of the MEMS device of dimension n D 144.
+
+
+
+
+Figure 13. Performance of the global reduced-order models of dimension 15 and 16: from top to bot-
+tom, the predicted system responses are for the operating points P8, T1, P6, P3, P2, P5, P1, P7, P4, T2,
+and P9, respectively. (a) Global reduced-order basis (ROB) of dimension k D 15 and (b) global ROB of
+                                           dimension k D 16.
+
+
+device at all operating points. Figure 13 contrasts the system responses computed using the HDM
+and those computed using the two constructed global ROMs—that is, the two ROMs constructed
+by projection on the global ROBs. The reader can observe that the global ROM of dimension 15 is
+not able to accurately predict the response of the system at many operating points. The solutions it
+delivers are either characterized by beam deflections that are larger than the thickness of the air layer
+or by spurious oscillations. On the other hand, the global ROM of dimension 16 delivers accurate
+predictions at all operating points.
+   In a second set of numerical experiments, three pairs of local ROBs (NV D 2) are built using the
+method proposed in this paper and the same sets of snapshots as in the previous numerical experi-
+ments. The first pair is characterized by the uniform dimension k D 7, the second by k D 8, and the
+third by k D 12. For each pair of local ROBs, a corresponding nonlinear ROM is constructed and
+referred to as a local ROM. Figure 14 reports the system responses computed at all operating points
+using the three constructed local ROMs. It shows that whereas the local ROM of dimension k D 7
+does not deliver accurate predictions for many of the operating points, the local ROM of dimension
+k D 8 delivers excellent results for 10 of the 11 defined operating points, and the correct trend for
+the remaining operating point P9 that is located outside the training range. Figure 14 also shows
+that the local ROM of dimension k D 12 delivers excellent results for all defined operating points.
+Hence, both local ROMs of dimension k D 8 and k D 12 outperform the global ROM of dimension
+k D 15 and perform as well as the global ROM of much higher dimension k D 16.
+
+Copyright © 2012 John Wiley & Sons, Ltd.                         Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                           DOI: 10.1002/nme
+                                                                                                               10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+910                             D. AMSALLEM, M. J. ZAHR AND C. FARHAT
+
+
+
+
+Figure 14. Performance of the three local reduced-order models based on two local reduced-order basis
+(ROBs) of uniform dimension equal to 7, 8, and 12: from top to bottom, the predicted system responses are
+for the operating points P8, T1, P6, P3, P2, P5, P1, P7, P4, T2, and P9, respectively. (a) 2 Local ROBs for
+dimension ki D 7 each; (b) 2 Local ROBs for dimension ki D 8 each; and (c) 2 Local ROBs for dimension
+                                               ki D 12 each.
+
+
+
+
+Figure 15. Identification of the local reduced-order basis (ROB) used at a given time by the local
+reduced-order model of dimension k D 8 during the simulation of the MEMS device at a given
+                                            operating point.
+
+Copyright © 2012 John Wiley & Sons, Ltd.                         Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                           DOI: 10.1002/nme
+                                                                                                                  10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+             NONLINEAR MODEL REDUCTION BASED ON LOCAL REDUCED-ORDER BASES                                 911
+
+
+
+
+    Figure 16. Beam deflection and air surface pressure associated with each snapshot cluster centroid.
+
+
+
+
+Figure 17. Performance of the global reduced-order models of dimension k D 16 equipped with
+Gauss–Newton with approximated tensor quantities (GNAT) for hyper reduction: from top to bottom, the
+predicted system responses are for the operating points P8, T1, P6, P3, P2, P5, P1, P7, P4, T2, and P9, respec-
+tively (dashed lines designate the MOR+GNAT responses and solid lines designate high-dimensional model
+responses). (a) GNAT parameters: kr D kW D 23 and jEj D 50; (b) GNAT parameters: kr D kW D 23 and
+jEj D 100; (c) GNAT parameters: kr D kW D 24 and jEj D 40; and (d) GNAT parameters: kr D kW D 24
+                                                and jEj D 45.
+
+Copyright © 2012 John Wiley & Sons, Ltd.                            Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                              DOI: 10.1002/nme
+                                                                                                             10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+912                             D. AMSALLEM, M. J. ZAHR AND C. FARHAT
+
+
+   Figure 15 focuses on the local ROM of dimension k D 8 and reveals which of the two local ROBs
+is used at which time during the transient simulation associated with each different operating point.
+From this figure and Figure 12, it follows that the first ROB is used when the beam is pulled in, and
+the second one is used only when the beam oscillates. This conclusion is confirmed by Figure 16
+that reports the response of the MEMS device and its surface pressure associated with each snapshot
+cluster centroid.
+   In a third set of numerical experiments, a series of nonlinear global and local ROMs equipped
+with hyper reduction via GNAT are constructed for problem (54). For this purpose, various combi-
+nations of the uniform parameters kr , kW , and jEj are considered. However, all global ROMs are
+built with the dimension k D 16. All local ones are constructed with the dimension k D 8 using
+two local ROBs of uniform dimension k D 8. The obtained performance for the global ROM is
+reported in Figure 17. This figure shows that the GNAT parameter set .kr , kW , jEj/ D .23, 23, 50/
+leads to reasonably accurate predictions for all but four operating points. Furthermore, Figure 17
+shows that for the considered values of the parameters kr and kw , refining the sampling set E does
+not improve accuracy. It also shows that increasing the values of kr and kw to .kr , kW / D .24, 24/
+does not improve accuracy either if jEj is reduced to 40, but using these two parameter values and
+increasing jEj beyond 45 delivers a good accuracy. On the other hand, Figure 18 shows that the local
+ROMs constructed with the triplets .kr , kW , jEj/ D .19, 19, 100/ and .kr , kW , jEj/ D .20, 20, 30/
+deliver very accurate results for most operating points except those for which a pull-in effect occurs.
+It also shows that for kr > 20, kW > 20, and jEj j > 35, the local ROMs produce excellent numerical
+predictions that are undistinguishable from their counterparts without hyper reduction reported in
+Figure 14(c). All these results confirm that the local MOR method proposed in this paper delivers
+the desired accuracy using smaller subspace dimensions and coarser samplings of r and W than the
+
+
+
+
+Figure 18. Performance of the local reduced-order models of dimension k D 8 equipped with Gauss–
+Newton with approximated tensor quantities (GNAT) for hyper reduction: from top to bottom, the predicted
+system responses are for the operating points P8, T1, P6, P3, P2, P5, P1, P7, P4, T2, and P9, respec-
+tively (dashed lines designate MOR+GNAT responses and solid lines designate high-dimensional model
+responses). (a) GNAT parameters: kr D kW D 19 and jEj D 100; (b) GNAT parameters: kr D kW D 20 and
+                     jEj D 30; and (c) GNAT parameters: kr D kW D 20 and jEj D 35.
+
+Copyright © 2012 John Wiley & Sons, Ltd.                       Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                         DOI: 10.1002/nme
+                                                                                                                     10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+             NONLINEAR MODEL REDUCTION BASED ON LOCAL REDUCED-ORDER BASES                                    913
+
+                                           Table II. Speedup results.
+            Approach                                      Parameters                         Speedup
+            Global ROM                                        k D 16                           0.24
+            Local ROM                                         kD8                              0.27
+            Global ROM + GNAT                 .k, kr , kW , jEj/ D .16, 24, 24, 45/            1.78
+            Local ROM + GNAT                  .k, kr , kW , jEj/ D .8, 20, 20, 35/             2.24
+          ROM, reduced-order model; GNAT, Gauss–Newton with approximated tensor quantities.
+
+
+global MOR alternative, thereby highlighting its superior computational efficiency and its potential
+for parametric studies.
+  Finally, the speedups achieved by the best considered configuration—as far as accuracy is
+concerned—of the global and local ROMs and with and without hyper reduction are reported in
+Table II. Again, the reader can observe that as expected, no speedup is delivered by either ROM
+without hyper reduction. On the other hand, when equipped with GNAT for hyper reduction, the
+global ROM delivers the speedup factor of 1.78, and the local ROM delivers the speedup factor
+of 2.24. These small speedups are due to the small size of the original HDM. Nevertheless, they
+highlight the superiority of the local approach over the global one.
+
+                                            6. CONCLUSIONS
+
+A new nonlinear MOR framework based on the concept of local ROBs is introduced. This frame-
+work is equally applicable to nonlinear static, dynamic, and parametric problems. Like most MOR
+frameworks, it consists of two stages: one that is performed offline and one that is performed
+online. In the offline stage, the solution space is partitioned into subregions that characterize the
+nonlinear features of the solutions of interest. In practice, this partitioning is performed by com-
+puting snapshots of the solution, clustering them according to their relative distances using the
+k-means algorithm, computing in each cluster an ROB using, for example, the POD method, iden-
+tifying each snapshot cluster with a subregion of the solution space, and assigning to this subregion
+the ROB computed in that cluster. In the online stage, the subregion of the solution space containing
+the high-dimensional state vector at the previous time step or nonlinear iteration is first identi-
+fied. Then, a low-dimensional approximation of the incremental solution is constructed in the affine
+space containing the previous state vector and spanned by the local ROB of the identified subre-
+gion of the solution space by solving a residual minimization problem. Hence, by construction, this
+local framework for nonlinear MOR is well suited for physical problems characterized by differ-
+ent regimes, parameter variations, or moving features such as discontinuities and fronts. It equally
+accommodates a hyper reduction process that is usually necessary for achieving practical speedups.
+The results obtained for the solution of a moving shock problem and those obtained for the simula-
+tion of a fluid-structure-electric interaction problem associated with an MEMS device reveal that, for
+the same desired accuracy, the dimension of each local affine subspace in which a low-order approx-
+imation of the incremental solution can be found is in practice much smaller than the dimension of
+the global affine subspace in which the entire trajectory of the state vector lies or can be well approx-
+imated. They also reveal that in the worst case, the dimension of the union of all affine subspaces in
+which the incremental solutions lie is of the same order of that of the global affine subspace in which
+the entire trajectory of the state vector lies or can be well approximated. Hence, these results show
+that, in general, the local framework proposed in this paper for nonlinear MOR is more accurate,
+computationally more efficient, and therefore superior to its standard global counterpart.
+
+         APPENDIX A: PRESERVING CONSISTENCY IN THE CASE OF MULTIPLE
+                           SNAPSHOT COLLECTIONS
+
+In Section 2.3, it was stated that when snapshots are computed from a set of multiple simulations
+characterized by more than two different initial conditions, one of these can be chosen as a reference
+
+Copyright © 2012 John Wiley & Sons, Ltd.                               Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                                 DOI: 10.1002/nme
+                                                                                                             10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+914                             D. AMSALLEM, M. J. ZAHR AND C. FARHAT
+
+
+initial condition uref                                          ref
+                    0 , and all snapshots can be translated by u0 . Here, it is shown that provided that
+the solution of the minimization problem (7) is searched for in the form given in (12) but with u0
+replaced by uref
+               0 , either approach outlined in Section 2.3 for accelerating the computation of a new
+ROB matrix preserves consistency in the sense defined in [6].
+   For simplicity but without any loss of generality, the case of two simulations with two different
+initial conditions is considered here. Let u.l/         .l/
+                                              i and vi denote the approximate solutions computed
+for each of them at each l-th Newton iteration of time ti . By using u0 as the reference solution, the
+matrix of snapshots contains vectors of the form u.l/                .l/
+                                                       i  u0 and vi  u0 . Assume that these snap-
+shots are computed and stored at all time steps ti and all Newton iterations l and that the associated
+POD basis is not truncated. In this case, each approximate state vector u.l/i computed during the first
+simulation can be exactly recovered by the ROM based on residual minimization. For the second
+simulation, provided that each state vector vi is searched for under the form
+
+                                             vi D u0 C Vvk ,                                        (A.1)
+
+each approximate solution v.l/                                          .l/
+                            i can also be recovered exactly because vi  u0 belongs to the set of
+snapshots used for constructing V. Note that if v0  u0 is a snapshot and no truncation is performed,
+v0 can be written as u0 C Vvk0 where vk0 ¤ 0.
+
+ APPENDIX B: K-MEANS ALGORITHM FOR COMPUTING SNAPSHOT CLUSTERS AND
+                           THEIR CENTROIDS
+
+
+
+
+                                           ACKNOWLEDGEMENTS
+The authors acknowledge partial support by the Army Research Laboratory through the Army High Per-
+formance Computing Research Center under Cooperative Agreement W911NF-07-2-0027, partial support
+by the Office of Naval Research under Grant N00014-11-1-0707, partial support by a research grant from
+King Abdulaziz City for Science and Technology (KACST), and partial support by The Boeing Company
+under Contract Sponsor Ref. 45047. The second author also acknowledges the support from the Department
+
+Copyright © 2012 John Wiley & Sons, Ltd.                       Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                         DOI: 10.1002/nme
+                                                                                                                           10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+              NONLINEAR MODEL REDUCTION BASED ON LOCAL REDUCED-ORDER BASES                                         915
+
+of Energy Computational Science Graduate Fellowship. The content of this publication does not necessarily
+reflect the position or policy of any of these supporters, and no official endorsement should be inferred.
+
+
+                                                    REFERENCES
+ 1. Rewienski M, White J. Model order reduction for nonlinear dynamical systems based on trajectory piecewise-linear
+    approximations. Linear Algebra and its Applications 2006; 415(2-3):426–454.
+ 2. Lieu T, Farhat C, Lesoinne M. Reduced-order fluid/structure modeling of a complete aircraft configuration. Computer
+    Methods in Applied Mechanics and Engineering 2006; 195(41-43):5730–5742.
+ 3. Bui-Thanh T, Willcox K, Ghattas O. Parametric Reduced-Order Models for Probabilistic Analysis of Unsteady
+    Aerodynamic Applications. AIAA Journal 2008; 46(10):2520–2529.
+ 4. Amsallem D, Cortial J, Farhat C. Toward Real-Time Computational-Fluid-Dynamics-Based Aeroelastic Computa-
+    tions Using a Database of Reduced-Order Information. AIAA Journal 2010; 48(9):2029–2037.
+ 5. Chaturantabut S, Sorensen DC. Nonlinear Model Reduction via Discrete Empirical Interpolation. SIAM Journal on
+    Scientific Computing 2010; 32:2737–2764.
+ 6. Carlberg K, Bou-Mosleh C, Farhat C. Efficient non-linear model reduction via a least-squares Petrov–Galerkin pro-
+    jection and compressive tensor approximations. International Journal for Numerical Methods in Engineering 2011;
+    86(2):155–181.
+ 7. Carlberg K, Cortial J, Amsallem D, Zahr M, Farhat C. The GNAT nonlinear model reduction method and its appli-
+    cation to fluid dynamics problems. AIAA Paper 2011-3112, 6th AIAA Theoretical Fluid Mechanics Conference,
+    Honolulu, HI, July 2011; 1–24.
+ 8. Amsallem D, Farhat C. Stabilization of projection-based reduced-order models. International Journal for Numerical
+    Methods in Engineering 2012:1–20. DOI: 10.1002/nme.4274.
+ 9. Epureanu B. A parametric analysis of reduced order models of viscous flows in turbomachinery. Journal of fluids
+    and structures 2003; 17:971–982.
+10. Lieu T, Farhat C. Adaptation of aeroelastic reduced-order models and application to an F-16 configuration. AIAA
+    Journal 2007; 45(6):1244–1257.
+11. Amsallem D, Farhat C. Interpolation method for adapting reduced-order models and application to aeroelasticity.
+    AIAA Journal 2008; 46(7):1803–1813.
+12. Amsallem D, Cortial J, Carlberg K, Farhat C. A method for interpolating on manifolds structural
+    dynamics reduced-order models. International Journal for Numerical Methods in Engineering 2009; 80(9):
+    1241–1258.
+13. Amsallem D, Farhat C. An Online Method for Interpolating Linear Parametric Reduced-Order Models. SIAM Journal
+    on Scientific Computing 2011; 33(5):2169–2198.
+14. Gu C, Roychowdhury J. Model reduction via projection onto nonlinear manifolds, with applications to analog cir-
+    cuits and biochemical systems. Proceedings of the 2008 IEEE/ACM International Conference on Computer-Aided
+    Design, San Jose, CA, 2008; 85–92.
+15. Sirovich L. Turbulence and the dynamics of coherent structures. Part I: Coherent structures. Quarterly of applied
+    mathematics 1987; 45(3):561–571.
+16. Dihlmann M, Drohmann M, Haasdonk B. Model reduction of parametrized evolution problems using the reduced
+    basis method with adaptive time partitioning. Technical Report, Stuttgart Research Centre for Simulation Technology,
+    (2011-13), Pfaffenwaldring 7a, 70569 Stuttgart, Germany, 2011.
+17. Anttonen JSR. Techniques for reduced order modeling of aeroelastic structures with deforming grids. Ph.D. Thesis,
+    Air Force Institute of Technology, Wright-Patterson Air Force Base, Ohio, 2001.
+18. Idelsohn SR, Cardona A. A reduction method for nonlinear structural dynamic analysis. Computer Methods in
+    Applied Mechanics and Engineering 1985; 49:253–270.
+19. Rathinam M, Petzold L. A new look at proper orthogonal decomposition. SIAM Journal on Numerical Analysis
+    2004:1893–1925.
+20. Everson R, Sirovich L. Karhunen–Loeve procedure for gappy data. Journal of the Optical Society of America A 1995;
+    12(8):1657–1664.
+21. Barrault M, Maday Y, Nguyen NC, Patera AT. An empirical interpolation method: application to efficient reduced-
+    basis discretization of partial differential equations. Comptes Rendus de l’Academie des Sciences Paris 2004;
+    339:667–672.
+22. Amsallem D, Cortial J, Farhat C. On-demand CFD-based aeroelastic predictions using a database of reduced-order
+    bases and models. AIAA Paper 2009-800, 47th AIAA Aerospace Sciences Meeting and The New Horizons Forum and
+    Aerospace Exposition, Orlando, FL, January 2009; 1–13.
+23. Brand M. Fast low-rank modifications of the thin singular value decomposition. Linear Algebra and its Applications
+    2006; 415:20–30.
+24. Ryckelynck D. A priori hyperreduction method: An adaptive approach. Journal of Computational Physics 2005;
+    202(1):346–366.
+25. Astrid P, Weiland S, Willcox K. Missing point estimation in models described by proper orthogonal decomposition.
+    Automatic Control 2008; 53:2237–2251.
+26. Willcox K. Unsteady flow sensing and estimation via the gappy proper orthogonal decomposition. Computers &
+    Fluids 2006; 35:208–226.
+
+Copyright © 2012 John Wiley & Sons, Ltd.                                 Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                                   DOI: 10.1002/nme
+                                                                                                                   10970207, 2012, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.4371 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [17/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+916                             D. AMSALLEM, M. J. ZAHR AND C. FARHAT
+
+
+27. Du Q, Gunzburger M. Model reduction by proper orthogonal decomposition coupled with centroidal Voronoi tes-
+    sellation. Proceedings of 2002 AME Fluid Engineering Division Summer Meeting, Montreal, QC, Canada, 2002;
+    1–6.
+28. Hung ES, Yang Y, Senturia S. Low-order models for fast dynamical simulation of MEMS microstructures.
+    Proceedings of the 1997 International Conference on Solid-State Sensors and Actuators, Chicago, IL, 1997;
+    1101–1104.
+29. Bond BN, Daniel L. A Piecewise-Linear Moment-Matching Approach to Parameterized Model-Order Reduction
+    for Highly Nonlinear Systems. IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems;
+    26(12):2116–2129.
+30. LeVeque RJ. Finite Volume Methods for Hyperbolic Problems. Cambridge Univ Press: Cambridge, UK, 2002.
+
+
+
+
+Copyright © 2012 John Wiley & Sons, Ltd.                            Int. J. Numer. Meth. Engng 2012; 92:891–916
+                                                                                              DOI: 10.1002/nme
+

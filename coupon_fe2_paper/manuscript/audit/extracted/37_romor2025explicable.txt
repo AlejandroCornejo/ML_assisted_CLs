@@ -1,0 +1,1932 @@
+                                                        Journal of Computational Physics 524 (2025) 113729
+
+                                                                 Contents lists available at ScienceDirect
+
+
+                                                     Journal of Computational Physics
+                                                          journal homepage: www.elsevier.com/locate/jcp
+
+
+
+
+  Explicable hyper-reduced order models on nonlinearly
+  approximated solution manifolds of compressible and
+  incompressible Navier-Stokes equations
+  Francesco Romor a , Giovanni Stabile b , Gianluigi Rozza c,                                             ,∗
+  a
+      Weierstraß Institute, Mohrenstraße 39, Berlin, D-10117, Germany
+  b
+      Biorobotics Institute, Sant’Anna School of Advanced Studies, Viale Rinaldo Piaggio, 34, Pisa, I-56025, Italy
+  c
+      Mathematics Area, mathLab, SISSA, via Bonomea 265, Trieste, I-34136, Italy
+
+
+
+
+  A R T I C L E                I N F O                         A B S T R A C T
+
+  MSC:                                                         A slow decaying Kolmogorov n-width of the solution manifold of a parametric partial diﬀerential
+  68T07                                                        equation precludes the realization of eﬃcient linear projection-based reduced-order models. This
+  65M22                                                        is due to the high dimensionality of the reduced space needed to approximate with suﬃcient
+  65D15
+                                                               accuracy the solution manifold. To solve this problem, neural networks, in the form of diﬀerent
+                                                               architectures, have been employed to perform accurate nonlinear regressions of the solution
+  Keywords:
+                                                               manifolds. However, the majority of the implementations are non-intrusive black-box surrogate
+  Nonlinear model order reduction
+  Scientific machine learning                                  models and only a part of them perform dimension reduction from the number of degrees of
+  Computational fluid dynamics                                 freedom of the discretized parametric models to a latent dimension. We present a new intrusive
+                                                               and explicable methodology for reduced-order modeling that employs neural networks for the
+                                                               solution manifold approximation but that does not discard the physical and numerical models
+                                                               underneath in the predictive/online stage. We will focus on autoencoders used to compress further
+                                                               the dimensionality of linear approximants of solution manifolds, achieving in the end a nonlinear
+                                                               dimension reduction. After having obtained an accurate nonlinear approximant, we seek for the
+                                                               solutions on the latent manifold with the residual-based nonlinear least-squares Petrov-Galerkin
+                                                               method, opportunely hyper-reduced in order to be independent of the number of degrees of
+                                                               freedom. New adaptive hyper-reduction strategies are developed along with the employment
+                                                               of local nonlinear approximants. We test our methodology on two nonlinear time dependent
+                                                               parametric benchmarks involving a supersonic flow past a NACA airfoil with changing Mach
+                                                               number and an incompressible turbulent flow around the Ahmed body with changing slant angle.
+
+
+
+
+  1. Introduction
+
+     Real world numerical models, based on systems of partial diﬀerential equations (PDEs), usually study a physical phenomenon
+  under the i­fluence of diﬀerent parameters. For each parametric instance, a single numerical simulation could take from hours to
+  weeks to complete. Such is the case for complex fluid dynamics models or general large-scale simulations. Fortunately, in some
+  cases, the outputs of these models show evident correlations among them, partially because they follow the same physical laws
+
+
+      * Corresponding author.
+        E-mail addresses: francesco.romor@wias-berlin.de (F. Romor), giovanni.stabile@santannapisa.it (G. Stabile), gianluigi.rozza@sissa.it (G. Rozza).
+
+  https://doi.org/10.1016/j.jcp.2025.113729
+  Received 10 October 2023; Received in revised form 14 November 2024; Accepted 6 January 2025
+
+
+Available online 13 January 2025
+0021-9991/© 2025 Elsevier Inc. All rights are reserved, including those for text and data mining, AI training, and similar technologies.
+F. Romor, G. Stabile and G. Rozza
+                                                                                          Journal of Computational Physics 524 (2025) 113729
+embedded in the numerical models and partially because the parameters’ dependency aﬀects the solutions only through relatively
+small perturbations. Reduced-order modeling (ROM) leverages these correlations among snapshots, i.e. single solutions corresponding
+to diﬀerent parametric instances, to reduce the computational time. The most successful model order reduction (MOR) methods
+combine the knowledge from the physical and the numerical models with the information coming from a database of solutions. One
+of the most employed methods is the reduced basis method [1,2]. As most numerical models search for the solutions on discrete finite
+dimensional vector spaces like the Finite Volumes Method (FVM), the Finite Element Method (FEM), the Spectral Element Method
+(SEM) and the Discontinuous Galerkin Method (DGM), model order reduction exploits the prior information coming from a dataset
+of training snapshots to update these ansatz spaces. This results in very low-dimensional linear vector spaces for which seeking the
+solutions associated to new parametric instances is more eﬃcient if these solutions are expected to be correlated with the training
+dataset. Fundamentally, ROMs amortize the cost of computing an initial training database of solutions and low-dimensional adapted
+ansatz spaces in the oﬄine stage, through subsequent eﬃcient evaluations of unseen solutions in the online stage. It is important to
+remark that the numerical models employed in the oﬄine stage are still employed also in the online stage, so that the reduced solutions
+are discerned in the ansatz spaces through the satisfaction of the physical principles and mathematical constraints underneath the
+original numerical models.
+    Some diﬃculties arise when the solution manifold, that is the space of parameter-dependent solutions, cannot be approximated
+with a satisfactory accuracy by linear low-dimensional spaces. If we consider a parameter space  ⊂ ℝ𝑝 , 𝑝 > 0, and a solution map
+𝐔 ∶  ⊂ ℝ𝑝 → 𝑋ℎ ∼ ℝ𝑑 that associates to each parameter 𝝁 ∈  the corresponding solution 𝐔(𝝁) ∈ 𝑋ℎ ∼ ℝ𝑑 in the discretization
+space of choice 𝑋ℎ , where 𝑑 > 0 is the number of degrees of freedom, we can quantify the linear approximability of the solution
+manifold 𝑋ℎ ⊇  = 𝐔() with the Kolmogorov n-width (KnW):
+
+        𝑑𝑛 (, 𝑋ℎ ) =      inf      sup inf ‖𝐕 − 𝐔(𝝁)‖2 .
+                          𝑊 ⊂ℝ𝑑 𝝁∈ 𝐕∈𝑋ℎ
+                         dim𝑊 =𝑛
+
+A slowly decaying Kolmogorov n-width with respect to the dimension of the linear approximant precludes the realization of eﬃcient
+ROMs. One of the most prominent defects of linear ROMs is that even simple physical models, like linear advection, suﬀer from a
+slow Kolmogorov n-width decay. These are cases for which the snapshots are poorly correlated, sometimes almost orthogonal in 𝑋ℎ .
+    Recently, with the spread of scientific machine learning, black-box surrogate models have tackled slow-decaying KnW solution
+manifolds thanks to nonlinear approximants represented by neural networks (NNs), in the form of diﬀerent combined architectures.
+The majority of these surrogate models, being non-intrusive, do not even perform dimension reduction from the space of degrees
+of freedom ℝ𝑑 to a reduced or latent space ℝ𝑟 , 𝑟 ≪ 𝑑 . While a low-dimensional space is needed for linear projection-based ROMs
+to seek for the solutions eﬃciently in the online stage, surrogate models built with NNs rely on the fast evaluation of the nonlinear
+approximants for diﬀerent inputs in the prediction phase. Apart from the imposition of additional inductive biases, the predicted
+solutions do not consider the physical and mathematical knowledge of the models under study at the predictive or online phase:
+in fact, they are not obtained from the satisfaction of first principles like classical ROMs. Moreover, when dimension reduction is
+performed, it is essentially needed for feature extraction rather than to increase the eﬃciency of the surrogate models. Nonetheless,
+when architectures like autoencoders (AE) are employed, the approximation error of the solution manifolds decays more rapidly with
+respect to the latent dimension when compared to linear subspaces. This can be quant­fied with an extension of the deﬁnition of
+KnW, that is the manifold width [3] 𝛿𝑛 for continuous maps:
+
+        𝛿𝑛 (, 𝑋ℎ ) =        inf      sup ‖𝐔(𝝁) − (𝜙 ◦ 𝜓)(𝐔(𝝁))‖2 ,
+                         𝜓∈(𝑋ℎ ,ℝ𝑟 ) 𝝁∈
+                         𝜙∈(ℝ𝑟 ,𝑋ℎ )
+
+where 𝜓 ∈ (𝑋ℎ , ℝ𝑟 ) and 𝜙 ∈ (ℝ𝑟 , 𝑋ℎ ) are continuous maps represented in our case by NNs. Other extensions of the KnW include
+the stable manifold widths [4] and Lipschitz widths [5]. This enables the design of eﬃcient intrusive ROMs even for models with a
+slow KnW decay.
+    The first employment of convolutional autoencoders for intrusive ROMs, namely Galerkin and least-squares Petrov-Galerkin non­
+linear manifold methods appears in [6]. The major evident drawback is that both the architecture and the numerical schemes employed
+in the online predictive phase depend on the number of degrees of freedom (dofs), so the procedure itself is even slower than the
+full-order models. Typically, when performing MOR of nonlinear parametric PDEs hyper-reduction is employed to achieve indepen­
+dence with respect to the number of dofs. In this case, another ingredient complicates the matter since the nonlinearity coming
+from the decoder map needs also to be treated and made independent of the number of dofs. One of the first approaches in this
+direction is introduced in [7]. The architecture employed is a shallow masked autoencoder: the sparsity pattern imposed on the last
+decoder layers reduces the computational costs of the forward and Jacobian evaluations, while Gauss-Newton with approximated
+tensors (GNAT) [8] is employed to hyper-reduce the residual. One problem that arises is that shallow autoencoders are sometimes not
+enough to accurately approximate complex solution manifolds and the methodology itself constraints the choice of the architecture.
+The methodology is tested on the 2d Burgers’ equations solved with finite diﬀerences. Another strategy [9] uses teacher-student train­
+ing to compress a generic architecture that performs dimension reduction, in this case a convolutional AE, onto a small feedforward
+NN. Possible combinations of hyper-reduction with reduced over-collocation [10] only on the residual or for both the decoder and
+the residuals are taken into consideration. The methodology is tested on a 2d nonlinear conservation law test case and a 2d shallow
+water equations benchmark solved with OpenFoam [11]. Afterwards, in [12] they introduce a new implementation that considers
+as nonlinear approximant of the solution manifold the sum of a linear subspace and a linear closure term whose coeﬃcients are the
+output of a feedforward NN. The hyper-reduction method is the energy-conserving sampling and weighting method (ECSW) [13]
+
+
+                                                                      2
+F. Romor, G. Stabile and G. Rozza
+                                                                                                    Journal of Computational Physics 524 (2025) 113729
+and it is tested on a 2d Burgers’ equations model solved with finite diﬀerences. Another approach [14], directly employs a relatively
+small decoder from the latent space to the submesh ident­fied by the reduced over-collocation hyper-reduction method as nonlinear
+approximant of the solution manifold. In this way, the training phase is more eﬃcient and the solutions are finally reconstructed with
+the hyper-reduction linear basis from the collocation nodes. To increase the accuracy of shallow masked AE, in [15] they implement
+domain decomposition and build a local shallow masked AE for each subdomain. The procedure is tested on a 2d Burgers’ equation
+model.
+    In this work, we introduce a new hyper-reduction methodology and we test it on challenging benchmarks. For a moderately
+slow KnW decay, classical ROMs fail, but linear subspaces can still be employed as good approximants of the solution manifold in
+practice. This is the rationale behind employing singular value decomposition modes (SVD) [16], or other linear transforms or filters,
+as preprocessing step to dimension reduction with AE. In section 5, we will also show a case for which this assumption is not valid
+anymore and more deep NN architectures should be employed and reduced with teacher-student training following [9]. The novelties
+of our new approach are the following:
+
+   • a new collocated hyper-reduction procedure specific for our nonlinear manifold approximant that combines randomized singular
+     value decomposition modes with 1d convolutional autoencoders, in section 3
+   • an adaptive gradient-based hyper-reduction strategy, in section 3.2. Similar concepts of adaptation strategies are present in the
+     literature [17,18].
+   • the implementation of an eﬃcient way to integrate local nonlinear manifolds with intrusive nonlinear least-squares Petrov­
+     Galerkin through a local change of basis, in section 4
+   • the validation of our methodology on challenging test cases with moderately slow Kolmogorov n-width, in section 5
+
+    In summary, in section 2 the nonlinear least-squares Petrov-Galerkin method is presented, our nonlinear manifold approximant is
+introduced and some spec­fications regarding the normalization of the datasets and the evaluation of the randomized singular value
+decomposition (rSVD) modes are made. Then, in section 3 the employed hyper-reduction methods are presented. Particular attention
+is focused on the reduced over-collocation method and its new adaptive formulation in subsection 3. A brief section 4 introduces a
+straight-forward way to include local nonlinear manifolds in the methodology through a linear change of rSVD basis. Finally, two
+benchmarks are analyzed in section 5. A 2d nonlinear parametric time-dependent supersonic compressible Navier-Stokes equations
+model (CNS) is studied on a coarse and a finer mesh. A special focus is given to the comparison of diﬀerent hyper-reduction techniques
+in subsection 5.1.1 and to the implementation of local nonlinear manifolds in subsection 5.1.2. The last subsections involve the study
+of a 3d nonlinear time-dependent geometrically parametrized turbulent incompressible Navier-Stokes equations model (INS).
+
+2. Residual-based ROMs on nonlinear manifolds
+
+    The starting point is a parametric time-dependent partial diﬀerential equation (PDE) on a computational domain Ω ⊂ ℝ𝐷 , 𝐷 =
+{1, 2, 3}, with time interval [0, 𝑇𝝁 ] and parameter space 𝝁 ∈  ⊂ ℝ𝑝 :
+
+        𝐺(𝐔(𝐱, 𝑡), 𝜕𝑡 𝐔(𝐱, 𝑡), ∇𝐔(𝐱, 𝑡), … ; 𝝁) = 0,                      (𝐱, 𝑡) ∈ Ω𝝁 × [0, 𝑇𝝁 ],
+                                    𝐵(𝐔(𝐱, 𝑡); 𝝁) = 0,                   (𝐱, 𝑡) ∈ 𝜕Ω𝝁 × [0, 𝑇𝝁 ],
+                                          𝐔(𝐱, 𝑡) = 𝐔0,𝝁 (𝐱),                (𝐱, 𝑡) ∈ Ω𝝁 × {0},
+where that state function 𝐔 ∶ Ω𝝁 × [0, 𝑇𝝁 ] ⊂ ℝ𝐷 × ℝ → ℝ𝑠 , 𝑠 ≥ 1 belongs to a Banach space 𝑋(ℝ𝐷 × ℝ; ℝ𝑠 ) for all 𝝁 ∈  𝑞 , 𝑞 ≥ 1,
+of vector-valued time-dependent functions. The function 𝐔0,𝝁 (𝐱) represents the possibly parametric dependent initial condition. The
+state function 𝐔 is a synthetic notation that can include at the same time more than one physical field, like velocity, pressure, internal
+energy, and density for example. The function 𝐺 represents the PDE itself and has as arguments the state function and its partial
+derivatives with respect to time and space. We do not restrict only to first order, higher derivatives are omitted. The boundary
+conditions are expressed through the operator 𝐵 and are possibly parametric dependent. These deﬁnitions are introduced only to
+d­fine the discretized systems we will work with. We have included also geometric parametrizations Ω𝝁 ⊂ ℝ𝐷 through 𝝁.
+    We will consider nonlinear time-dependent PDEs, but in general the framework we are going to introduce can be applied also to
+stationary PDEs and linear PDEs. The only requirement is the slow Kolmogorov n-width decay of the solution manifold, otherwise, it
+would be suﬃcient to apply the well-developed theory of linear projection-based ROMs. In fact, employing a nonlinear approximation
+of the solution manifold reduces the eﬃciency of linearly approximable solution manifolds, in general.
+    To be as general as possible, we will consider a generic discretization in space, with the constraints that it is supported on a
+computational mesh Ω𝝁,ℎ ⊂ ℝ𝐷 and that the discretized diﬀerential operators have local stencils in order to implement eﬃciently
+hyper-reduction schemes later [1]. So, in our framework, we include the FVM, that we are employing, but also the FEM and the DGM,
+for example. Applying the method of lines, we discretize in space to obtain the following ordinary diﬀerential equation
+
+        𝐺ℎ (𝐔ℎ (𝑡), 𝜕𝑡 𝐔ℎ (𝑡), ∇𝐔ℎ (𝑡), … ; 𝝁) = 𝟎,      𝑡 ∈ [0, 𝑇𝝁 ],
+                         𝐵ℎ (𝑃𝜕Ω𝝁 (𝐔ℎ (𝑡)); 𝝁) = 0,      𝑡 ∈ [0, 𝑇𝝁 ],
+                                        𝐔ℎ (0) = 𝐔ℎ,0 ,
+
+
+                                                                            3
+F. Romor, G. Stabile and G. Rozza
+                                                                                                           Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. 1. Left: evolution trajectories on the 𝑟-dimensional linear latent space and solution manifold embedded in the ambient space ℝ𝑑 . The map 𝑃𝑟 is a linear
+projection. Right: evolution trajectories on the 𝑟-dimensional latent space and nonlinear solution manifold in the ambient space ℝ𝑑 . The map 𝜙 is a single chart
+nonlinear parametrization of the approximating solution manifold.
+
+
+where in this case the discrete state function 𝐔ℎ (𝑡) ∈ 𝑋ℎ (Ω𝝁,ℎ ) belongs for all 𝑡 ∈ [0, 𝑇𝝁 ] to a discretization space 𝑋ℎ (Ω𝝁,ℎ ) ∼ ℝ𝑑
+where 𝑑 > 0 is the number of degrees of freedom, with its norm ‖⋅‖𝑋ℎ . The map 𝑃𝜕Ω𝝁 ∶ 𝑋ℎ (Ω𝝁,ℎ ) → 𝑋ℎ (𝜕Ω𝝁,ℎ ) is the projection onto
+the discrete boundary 𝜕Ω𝝁,ℎ of the computational domain Ω𝝁,ℎ .
+                                                                                                                  ∣𝐼 ∣
+    Finally, we apply a discretization in time to obtain the discrete residual 𝐺ℎ,𝛿𝑡 ∶  × 𝑋ℎ × 𝑋ℎ 𝑡 → 𝑋ℎ at time 𝑡 ∈ {𝑡0 , … , 𝑡𝑁𝝁 } = 𝑇𝝁
+
+        𝐺ℎ,𝛿𝑡 (𝝁, 𝐔𝑡ℎ , {𝐔𝑠ℎ }𝑠∈𝐼𝑡 ) = 𝟎,                                                                                                                  (3a)
+
+            𝐵ℎ,𝛿𝑡 (𝑃𝜕Ω𝝁 (𝐔𝑡ℎ ); 𝝁) = 0,                                                                                                                    (3b)
+
+                                𝐔0ℎ = 𝐔ℎ,0 ,                                                                                                                (3c)
+where the time instances are 𝑡𝑖 ∈ [0, 𝑡𝑁𝝁 ], ∀𝑖 ∈ {0, 1, … , 𝑁𝝁 }, 𝑡𝑁𝝁 is the final time and 𝐼𝑡 is the set of previous time instances of the
+state variable 𝑈ℎ𝑡 ∈ 𝑋ℎ at time 𝑡, needed for the numerical time scheme of choice. For most cases of model order reduction, it is
+crucial that the discretization space 𝑋ℎ ∼ ℝ𝑑 is not time or parametric dependent.
+
+2.1. Nonlinear least-squares Petrov-Galerkin method
+
+   We will introduce the nonlinear manifold least-squares Petrov-Galerkin method (NM-LSPG) [6] from its linear manifold version
+(LM-LSPG), see Fig. 1. To perform model order reduction with LM-LSPG, we need to d­fine a linear projection map 𝑃𝑟 ∶ ℝ𝑟 → 𝑋ℎ ∼ ℝ𝑑
+from the reduced space ℝ𝑟 , 𝑟 ≪ 𝑑 to the full-state space 𝑋ℎ ∼ ℝ𝑑 . We require that, fixed a tolerance 𝜖 ≪ 1, the relative reconstruction
+error of the linear solution manifold :
+        ‖𝐔ℎ − 𝑃𝑟 𝑃𝑟𝑇 𝐔ℎ ‖2
+                               < 𝜖,    ∀𝐔ℎ ∈ .
+               ‖𝐔ℎ ‖2
+Typically, this is achieved by sampling from the parameter space  a set of independent training parameters train ⊂  . The corre­
+sponding training snapshots train = {𝐔ℎ,𝝁 }𝝁∈train are employed to evaluate 𝑃𝑟 . For every new parametric instance 𝜇 ∈ ∖train , we
+can evaluate the corresponding solution solving the following nonlinear least-squares problem at each time step 𝑡 ∈ {𝑡0 , … , 𝑡𝑁𝝁 } = 𝑇𝝁
+in the reduced variables 𝐳 ∈ ℝ𝑟 and with initial condition 𝐳0
+
+        𝐳𝑡 = argmin ‖𝐺ℎ,𝛿𝑡 (𝝁, 𝑃𝑟 (𝐳), {𝑃𝑟 (𝐳𝑠 )}𝑠∈𝐼𝑡 )‖2𝑋 ,                                                                                               (4a)
+                                                            ℎ
+                𝐳∈ℝ𝑟
+
+        𝐳0 = 𝑃𝑟𝑇 (𝐔ℎ,0 ),                                                                                                                                  (4b)
+where 𝐳𝑠 ∈ ℝ𝑟 , ∀𝑠 ∈ 𝐼𝑡 are the previous reduced coordinates needed at time 𝑡 by the numerical scheme. The nonlinear least-squares
+problem can be solved with optimization methods like Gauss-Newton with line-search [6], Levenberg-Marquardt [9] and derivative­
+free Pounders [19] implemented in PETSc [20], that we will employ.
+    If 𝐺ℎ,𝛿𝑡 is linear, then we can solve for (4a) without reconstructing the solution onto the full-state space ℝ𝑑 . If 𝐺ℎ,𝛿𝑡 is nonlinear,
+hyper-reduction techniques must be introduced in order to recover the independence from the number of degrees of freedom.
+    The evolution of the reduced trajectory in the latent space ℝ𝑟 in Fig. 1 is computed without reconstructing the full-states 𝑈ℎ𝑡 (𝝁) =
+𝑃𝑟 (𝐳(𝝁)). The reconstruction from ℝ𝑟 to the ambient space ℝ𝑑 is performed only at the end with the projection map 𝑃𝑟 .
+    The nonlinear counterpart of LM-LSPG, poses the approximability of the solution manifold  with a nonlinear manifold. We will
+d­fine this approximating nonlinear manifold as the image of a nonlinear parametrization map 𝜙 ∶ 𝑈 ⊂ ℝ𝑟 → ℝ𝑑 , that is an atlas
+with a single chart, with 𝑈 an open subset of ℝ𝑟 . For our purposes, mainly linked to the deﬁnition of the initial conditions, we also
+need an approximation of the right-inverse of 𝜙, that is 𝜓 ∶ 𝜙(𝑈 ) → ℝ𝑟 such that 𝜙 ◦ 𝜓 ≈ 𝐼𝑑 .
+
+
+                                                                            4
+F. Romor, G. Stabile and G. Rozza
+                                                                                            Journal of Computational Physics 524 (2025) 113729
+    There are many deﬁnitions that extend the notion of Kolmogorov n-width to nonlinear approximating spaces [3]. Our requirement
+is that the relative reconstruction error is below a fixed tolerance 𝜖 ≪ 1:
+        ‖𝐔ℎ − (𝜙 ◦ 𝜓)(𝐔ℎ )‖2
+                             < 𝜖,      ∀𝐔ℎ ∈ .                                                                                             (5)
+              ‖𝐔ℎ ‖2
+   The nonlinear least-squares problem solved for each time instance 𝑡 ∈ {𝑡0 , … , 𝑡𝑁𝝁 } = 𝑇𝝁 is similar to the linear case with the
+substitution of the linear projection map 𝑃𝑟 with 𝜙 and 𝜓 :
+
+        𝐳𝑡 = argmin ‖𝐺ℎ,𝛿𝑡 (𝝁, 𝜙(𝐳), {𝜙(𝐳𝑠 )}𝑠∈𝐼𝑡 )‖2𝑋 ,                                                                                   (6a)
+                                                      ℎ
+                𝐳∈ℝ𝑟
+
+        𝐳0 = 𝜓(𝐔ℎ,0 ).                                                                                                                     (6b)
+   In this case, the sources of nonlinearity are the parametrization 𝜙 of the nonlinear approximation manifold and possibly also
+the residual 𝐺ℎ,𝛿𝑡 . So, even if the residual 𝐺ℎ,𝛿𝑡 is linear we obtain a nonlinear least-squares problem to solve, due to the additional
+nonlinearity introduced by 𝜙. As mentioned in the introduction, this is often a necessary step to overcome the problem of a slow
+Kolmogorov n-width decay with a nonlinear approximating manifold that achieves a satisfactory accuracy with a lower latent/reduced
+dimension with respect to linear approximations.
+   Due to the nonlinearity, in general, solving (6a) is ineﬃcient since the dependence on the number of degrees of freedom cannot
+be overcome. There are two factors that contribute to making the formulation (6a) not feasible as it was introduced in [6]. As for
+the linear case, the first is the nonlinearity of the residual 𝐺ℎ,𝛿𝑡 , for which hyper-reduction techniques must be implemented. The
+second is the possibly expensive evaluation of 𝜙 and its dependence on the whole number of degrees of freedom 𝑑 since the image of
+𝜙 is contained in ℝ𝑑 . So, hyper-reduction or similar techniques must be implemented also for the map 𝜙, that in our case will be a
+neural network. See section 3 for more details on hyper-reduction and the next 2.2 for the deﬁnition of our nonlinear approximating
+solution manifold through the parametrization map 𝜙.
+
+2.2. Convolutional autoencoders: encodings and inductive biases
+
+    Applying SVD or principal component analysis (PCA) in machine learning jargon, to extract small dimensional and meaningful
+features from data is a technique largely employed in the data science community. After PCA, the new features can be used to train a
+neural network architecture more eﬃciently or for other purposes like clustering. This reasoning is applied also to data representing
+physical fields in model order reduction. One of the first examples is introduced by Ghattas et al. [21] in the context of inverse
+problems and model order reduction: the parameter-to-observable map is trained as a deep neural network (DNN) from the inputs
+reduced with active subspaces [22] to the outputs reduced with proper orthogonal decomposition (POD). In the context of model
+order reduction with autoencoders this technique is applied in [16].
+    We remark that an autoencoder with linear activation functions can reproduce the accuracy of truncated SVD [23], and even the
+principal modes. So, employing the SVD to extract meaningful features instead of adding few linear neural networks layers does not
+make a diﬀerence in terms of accuracy. What is crucial, especially for problems with a huge number of degrees of freedom, is the
+eﬃciency of SVD and its randomized version (rSVD) compared to the training of neural network layers with linear activations.
+    Since we are considering physical fields supported on meshes we should not be limited to SVD: other compression algorithms pos­
+sibly extracting meaningful features from spatial and temporal correlations are the Fourier and Wavelet transforms. In this context,
+model order reduction in frequency space is an active field of research [24--26]. Recently, also the Radon-Cumulative-Distribution
+(RCD) transform was applied to advection-dominated problems in model order reduction [27]. We will represent such generic trans­
+forms with 𝑓ﬁlter ∶ 𝑋ℎ ∼ ℝ𝑑 → ℝ𝑝 and their approximate or true left inverse 𝑓ﬁlter
+                                                                              −1 ∶ ℝ𝑝 → 𝑋 ∼ ℝ𝑑 , such that 𝑓 −1 ◦ 𝑓
+                                                                                            ℎ                   ﬁlter  ﬁlter ≈ 𝐼𝑑 .
+    In this work we will only consider rSVD to d­fine the filtering maps 𝑓ﬁlter and 𝑓ﬁlter
+                                                                                     −1 , but the framework can be easily extended to
+
+other compression algorithms. The deﬁnitions of 𝑓ﬁlter and 𝑓ﬁlter−1 are reported in equation (11) of the next section. We will show some
+
+testcases where the number of rSVD modes needed to achieve a satisfactory accuracy reaches 300, underlying truly slow Kolmogorov
+n-width applications, while in the literature only a moderate number of modes has been employed.
+    The neural network architectures we are going to use, d­fine the maps 𝜙 ∶ 𝑈 ⊂ ℝ𝑟 → ℝ𝑑 and 𝜓 ∶ 𝜙(𝑈 ) → ℝ𝑟 , their specifics
+are reported in the Appendix in Tables A.4 and A.5 and shown in Fig. 2. They are composed by standard 1d-convolutional layers
+(CNN) since the filtered states 𝑈̃ ℎ = 𝑓ﬁlter (𝐔ℎ ) are not supported on a possible unstructured mesh anymore, but belong to the space
+of frequencies. In principle, also 2d-CNNs can be employed [16]. So, in general, this approach is a viable alternative to graph neural
+networks [28] or other techniques that approximate physical fields supported on unstructured meshes.
+    To separate the application of the filtering/transforms maps 𝑓ﬁlter and 𝑓ﬁlter
+                                                                                 −1 from the convolutional neural networks layers, we
+
+d­fine 𝜓̃ ∶ ℝ𝑝 → ℝ𝑟 and 𝜙̃ ∶ ℝ𝑟 → ℝ𝑝 through the relations 𝜙 = 𝑓ﬁlter−1 ◦ 𝜙̃ and 𝜓 = 𝜓 ̃ ◦ 𝑓ﬁlter . So, the CNN layers are encapsulated in
+𝜙̃ and 𝜓̃ .
+    If the state vector 𝐔ℎ ∈ 𝑋ℎ includes more than one physical field, we have decided not to extract the frequencies or SVD reduced
+variables 𝐔̃ ℎ for each field, but to do so altogether in a monolithic fashion. This results in single-channel input of the CNN 𝜓̃ and a
+single-channel output of the CNN 𝜙̃ , instead of having as many channels as the number of physical fields included in 𝐔ℎ . Since we
+will reduce with rSVD all the physical fields altogether in a monolithic fashion, we need to normalize the training snapshots with
+respect to the cell-wise measure 𝑉 ∈ ℝ𝑑 (length, area or volume of each cell depending on the dimensionality of the mesh) and the
+diﬀerent order of magnitudes and unit of measurement of the diﬀerent physical fields considered.
+
+
+                                                                  5
+F. Romor, G. Stabile and G. Rozza
+                                                                                                             Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. 2. The image shows schematically our implementation of the nonlinear maps 𝜙 = 𝑓ﬁlter−1
+                                                                                            ◦ 𝜙̃ and 𝜓 = 𝜓̃ ◦ 𝑓ﬁlter that d­fine the approximate nonlinear solution
+manifold. The functions 𝜙̃ and 𝜓̃ represent neural networks composed by subsequent 1d-convolutional and transposed 1d-convolutional layers, their specifics are
+reported in Tables A.4 and A.5. The maps 𝑓ﬁlter and 𝑓ﬁlter
+                                                       −1
+                                                           are the linear projection onto the first 𝑝 rSVD modes and its transpose, their deﬁnition is reported in
+equation (11).
+
+
+
+    We remark that our CAE is trained only in the space of frequencies as input-output spaces, achieving a relevant speedup regarding
+the training phase thanks to this, as pointed out in [16]. The nonlinearity of the autoencoder is only exploited to further reduce the
+dimensionality from the frequency spaces and to directly approximate the solution manifold, which is eﬀectively linear approximated
+in our case. For truly nonlinear solution manifold approximants see [9].
+    The main concern for our methodology is achieving a satisfactory reconstruction error through the training of the autoencoders
+in frequency space. If this condition is not sati­fied, the solution manifold would not be accurately approximated and it would be
+pointless to proceed further. We do not report hyper-parameters studies for the autoencoder training, as our focus is on implementing
+hyper-reduction and examining additional parameters that aﬀect it, such as the number of magic points. The choice of nonlinear
+dimension reduction method, e.g. CNN autoencoders rather than variational autoencoders [29], could aﬀect our methodology but
+further investigations, as in [14], need to be carried out: an additional regularity of the latent dynamics could be ben­ficial, as well
+as imposing an accurate reconstruction of the tangent bundle of the solution manifold.
+
+2.3. Parallel randomized singular value decomposition
+
+    We recap in brief the procedure of randomized singular value decomposition [30], necessary to evaluate the modes when the
+snapshots matrix cannot be assembled altogether due to memory and computational constraints. An alternative is represented by the
+frequent directions algorithm [31]. We remark also that rSVD requires only matrix-vector evaluations and therefore can be applied
+also in a matrix-free fashion [32].
+    The only ingredient needed is the column-wise ordered matrix 𝐴train ∈ ℝ𝑑×𝑛train of the training snapshots collection train ∶=
+{𝐔𝝁,𝑡 }(𝝁,𝑡)∈train ×𝑇𝝁 , with 𝑇𝝁 = {𝑡1 , … , 𝑡𝑁𝝁 },
+
+                 ⎡⎛ ∣            ∣          ∣        ∣    ⎞       ⎛    ∣                  ∣          ∣              ∣             ⎞⎤
+                 ⎢⎜                                       ⎟       ⎜𝐔               𝐔𝝁|                  𝐔𝝁|                     ⎟⎥
+        𝐴train = ⎢⎜ 𝐔𝝁1 ,𝑡1    𝐔𝝁1 ,𝑡2      …    𝐔𝝁1 ,𝑡𝑁
+                                                       𝝁1 ⎟
+                                                            , … , ⎜ |train |,𝑡1
+                                                                     𝝁                         |,𝑡
+                                                                                          train 2
+                                                                                                     …               |,𝑡
+                                                                                                                train 𝑁𝝁|train | ⎟⎥
+                                                                                                                                     ∈ ℝ𝑑×𝑛train
+                 ⎢⎜ ∣               ∣        ∣       ∣    ⎟       ⎜                                                               ⎟⎥
+                 ⎣⎝                                       ⎠       ⎝    ∣                  ∣          ∣              ∣             ⎠⎦
+with |train | = 𝑛train and 𝐔𝝁,𝑡        ∈ ℝ𝑑 for all (𝝁, 𝑡) ∈ 
+                                                   train × 𝑇𝝁 . In our case, we do not assemble 𝐴train since the computational domain
+can be partitioned and assigned to diﬀerent processors during the evaluation of the full-order training solutions train .
+    We represent with 𝑀 ∈ ℕ the number of cells 𝑇 ⊂ Ωℎ of the mesh {𝑇𝑖 }𝑀   𝑖=1
+                                                                                ⊂  representing our discretized computational domain,
+and with 𝑐 ∈ ℕ the sum of the dimensions of the physical fields we are approximating: for the CNS (subsection 5.1) test case 𝑐 = 6
+for the INS ((subsection 5.2)) 𝑐 = 5. Since we employ the FVM, the total number of degrees of freedom (dofs) is 𝑑 = 𝑐 ⋅ 𝑀 .
+    For example, for the CNS test case 𝑐 = 6 we consider velocity 𝐮𝝁,𝑡 ∈ ℝ3𝑀 , density 𝜌𝝁,𝑡 ∈ ℝ𝑀 , internal energy 𝑒𝝁,𝑡 ∈ ℝ𝑀 and
+pressure 𝑝𝝁,𝑡 ∈ ℝ𝑀 , so that
+
+        𝑈𝝁,𝑡 = (𝐮𝝁,𝑡 , 𝜌𝝁,𝑡 , 𝑒𝝁,𝑡 , 𝑝𝝁,𝑡 ) ∈ ℝ𝑀×𝑐 = ℝ𝑑 .
+
+
+                                                                              6
+F. Romor, G. Stabile and G. Rozza
+                                                                                                                          Journal of Computational Physics 524 (2025) 113729
+Similarly, for the INS test case 𝑐 = 5 we consider velocity 𝐮𝝁,𝑡 ∈ ℝ3𝑀 , pressure 𝑝𝝁,𝑡 ∈ ℝ𝑀 and the turbulence viscosity 𝜈𝝁,𝑡 ∈ ℝ𝑀 , so
+that
+
+        𝑈𝝁,𝑡 = (𝐮𝝁,𝑡 , 𝑝𝝁,𝑡 , 𝜈𝝁,𝑡 ) ∈ ℝ𝑀×𝑐 = ℝ𝑑 .
+  The vector of cell-wise measures 𝐕 ∈ ℝ𝑑 is assembled from the vector 𝐯 = {Lebesgue (𝑇𝑖 )}𝑀    𝑖=1
+                                                                                                     where Lebesgue is the Lebesgue
+measure in 𝑅𝐷 ⊃ Ωℎ . So that 𝐕 = (𝐯)𝑐𝑖=1 ∈ ℝ𝑑 is formed stacking 𝐯 𝑐 -times. The physical normalization field 𝐍 ∈ ℝ𝑑 is obtained from
+the maximum 𝐿2 -norm of each field: for the CNS test case we have
+
+        𝑢max = max‖𝐮𝝁,𝑡 ‖2 ,               𝜌max = max‖𝜌𝝁,𝑡 ‖2 ,         𝑒max = max‖𝑒𝝁,𝑡 ‖2 ,        𝑝max = max‖𝑝𝝁,𝑡 ‖2 ,
+                    𝝁,𝑡                               𝝁,𝑡                         𝝁,𝑡                        𝝁,𝑡
+
+so that 𝐍 = (𝟏3𝑀 ⋅ 𝑢max , 𝟏𝑀 ⋅ 𝜌max , 𝟏𝑀 ⋅ 𝑒max , 𝟏𝑀 ⋅ 𝑝max                  ) ∈ ℝ𝑑 , with 𝟏      𝑀 the 𝑀 -dimensional vector of ones. Similarly, for the INS test
+case we consider
+
+        𝑢max = max‖𝐮𝝁,𝑡 ‖2 ,               𝜌max = max‖𝜌𝝁,𝑡 ‖2 ,         𝑒max = max‖𝑒𝝁,𝑡 ‖2 ,        𝑝max = max‖𝑝𝝁,𝑡 ‖2 ,
+                    𝝁,𝑡                               𝝁,𝑡                         𝝁,𝑡                        𝝁,𝑡
+
+so that 𝐍 = (𝟏3𝑀 ⋅ 𝑢max , 𝟏𝑀 ⋅ 𝑝max , 𝟏𝑀 ⋅ 𝜈max ) ∈ ℝ𝑑 .
+    So, applying this normalization, the columns {𝐴train 𝝁,𝑡 }(𝝁,𝑡)∈train ×𝑇𝝁 of 𝐴train are actually d­fined as
+
+        ℝ𝑑 ∋ 𝐴train
+              𝝁,𝑡 = 𝐔𝝁,𝑡 ⊘ 𝐖,                         𝐖 = 𝐍 ⊘ 𝐕,                                                                                                           (7)
+
+where we have considered only element-wise divisions ∙ ⊘ ∙ between vectors in ℝ𝑑 . Notice that in this way we obtain unit-less states
+𝐔𝝁,𝑡 ⊘ 𝐖 ∈ ℝ𝑑 . For the impact of physical normalization in model order reduction, see [33].
+
+
+  Algorithm 1: Parallelized Randomized Singular Value Decomposition.
+input : training column-wise ordered snapshots matrix 𝐴train ∈ ℝ𝑑×𝑛train ,
+        𝑟rSVD reduced rSVD dimension, 𝑝 oversampling parameter
+output: 𝑈 ∈ ℝ𝑑×𝑟rSVD rSVD modes
+ 1 D­fine the sketch dimension 𝑙 = 𝑟rSVD + 𝑝.
+ 2 Draw the sketch matrix Ω ∈ ℝ𝑛train ×𝑙 as a Gaussian random matrix.
+ 3 Assemble in parallel 𝑌 = 𝐴train Ω, with 𝑌 ∈ ℝ𝑑×𝑙 .
+ 4 Evaluate the orthonormal basis 𝑄 ∈ ℝ𝑑×𝑙 using 𝑄𝑅-factorization 𝑌 = 𝑄𝑅, with 𝑅 ∈ ℝ𝑙×𝑙 .
+ 5 Project the snapshots into a random lower 𝑙 -dimensional space in parallel: 𝑆 = 𝑄𝑇 𝐴train , with 𝑆 ∈ ℝ𝑙×𝑛train .
+ 6 Compute the thin SVD 𝑆 = 𝑈̃ Σ  ̃ 𝑉̃ , with 𝑈̃ ∈ ℝ𝑙×𝑟rSVD , Σ ∈ ℝ𝑟rSVD ×𝑟rSVD , 𝑉̃ ∈ ℝ𝑟rSVD ×𝑛train .
+ 7 Evaluate the rSVD modes 𝑈 = 𝑄𝑈̃ , with 𝑈 ∈ ℝ𝑑×𝑟rSVD .
+
+
+
+    The reduced train and test rSVD coordinates are obtained with the following linear projection, employing the rSVD modes 𝑈 ∈
+ℝ𝑑×𝑟rSVD from Algorithm 1:
+
+        ℝ𝑟rSVD ×𝑛train ∋ 𝑌train = 𝑈 𝑇 𝐴train ,                               (reduced train rSVD coordinates)
+              𝑟rSVD ×𝑛test                    𝑇
+          ℝ                  ∋ 𝑌test = 𝑈 𝐴test ,                              (reduced test rSVD coordinates)
+and the reconstructed train and test fields are obtained employing the normalizing vector 𝐖 = 𝐍 ⊘ 𝐕:
+
+        ℝ𝑑×𝑛train ∋ 𝐴rec
+                     train
+                           = 𝐖 ⊙ 𝑈 𝑌train = 𝐖 ⊙ 𝑈 𝑈 𝑇 𝐴train ,                                        (reconstructed train snapshots)
+              𝑑×𝑛test                                  𝑇
+          ℝ             ∋ 𝐴rec
+                           test = 𝐖 ⊙ 𝑈 𝑌test = 𝐖 ⊙ 𝑈 𝑈 𝐴test ,                                        (reconstructed test snapshots)
+where ⊙ is the Hadamard columns-wise product, inverse operation of the normalization applied in (7).
+   To decide if the number of rSVD modes is suﬃcient to achieve the desired accuracy for the problem at hand we consider the mean
+and max relative 𝐿2 reconstruction error on the training and test sets:
+
+                                       1          ∑            ‖𝐔rec,
+                                                                 𝝁,𝑡
+                                                                      train
+                                                                            − 𝐔train
+                                                                               𝝁,𝑡 ‖2                                                      ‖𝐔rec,
+                                                                                                                                             𝝁,𝑡
+                                                                                                                                                  train
+                                                                                                                                                        − 𝐔train
+                                                                                                                                                           𝝁,𝑡 ‖2
+        ‖𝐴rec  ‖
+          train 2,𝑚𝑒𝑎𝑛
+                       =                                                                  ,          ‖𝐴rec  ‖
+                                                                                                       train 2,𝑚𝑎𝑥
+                                                                                                                   =         max                                     ,   (10a)
+                                  𝑛train (𝝁,𝑡)∈                     ‖𝐔train
+                                                                       𝝁,𝑡 ‖2
+                                                                                                                        (𝝁,𝑡)∈train ×𝑇𝝁         ‖𝐔train
+                                                                                                                                                   𝝁,𝑡 ‖2
+                                                   train ×𝑇𝝁
+
+
+                                       1          ∑          ‖𝐔rec,
+                                                               𝝁,𝑡
+                                                                    test
+                                                                         − 𝐔test
+                                                                            𝝁,𝑡 ‖2                                                       ‖𝐔rec,
+                                                                                                                                           𝝁,𝑡
+                                                                                                                                                test
+                                                                                                                                                     − 𝐔test
+                                                                                                                                                        𝝁,𝑡 ‖2
+         ‖𝐴rec
+           test ‖2,𝑚𝑒𝑎𝑛 =                                                            ,               ‖𝐴rec
+                                                                                                       test ‖2,𝑚𝑎𝑥 =       max                                   ,       (10b)
+                                  𝑛test (𝝁,𝑡)∈                   ‖𝐔test
+                                                                    𝝁,𝑡 ‖2
+                                                                                                                       (𝝁,𝑡)∈test ×𝑇𝝁        ‖𝐔test
+                                                                                                                                                𝝁,𝑡 ‖2
+                                                  test ×𝑇𝝁
+
+
+where 𝐴rec
+       train
+             = (𝐔𝝁,𝑡      rec, train
+                                       )(𝝁,𝑡)∈train ×𝑇𝝁 ∈ ℝ𝑑×𝑛train and 𝐴rec      rec, test
+                                                                          test = (𝐔𝝁,𝑡       )(𝝁,𝑡)∈test ×𝑇𝝁 ∈ ℝ𝑑×𝑛test .
+    Finally, we want to explicitly d­fine the filtering/transform map 𝑓ﬁlter ∶ 𝑋ℎ ∼ ℝ𝑑 → ℝ𝑝 and its approximate left inverse 𝑓ﬁlter
+                                                                                                                              −1 ∶
+
+ℝ𝑝 → 𝑋ℎ ∼ ℝ𝑑 with 𝑝 = 𝑟rSVD :
+                       (      )
+     𝑓ﬁlter (𝐔ℎ ) = 𝑈 𝑇 𝐔ℎ ⊘ 𝐖 ,                       𝑓ﬁlter
+                                                        −1
+                                                              (𝐔̃ ℎ ) = (𝐖 ⊙ 𝑈 ) 𝐔̃ ℎ ,                                                                                   (11)
+
+
+                                                                                              7
+F. Romor, G. Stabile and G. Rozza
+                                                                                                     Journal of Computational Physics 524 (2025) 113729
+we remark the diﬀerence between the state vector 𝐔ℎ ∈ ℝ𝑑 , the vector of frequencies 𝐔̃ ℎ ∈ ℝ𝑝 , 𝑝 ≪ 𝑑 , and the rSVD modes 𝑈 ∈ ℝ𝑑×𝑝 .
+
+3. Hyper-reduction
+
+    As introduced in section 2.1, there are two main problematics that aﬀect the eﬃcient resolution of the nonlinear least squares
+problem in equation (6a) at each time instance 𝑡 ∈ 𝑇𝝁 and for each 𝑖-th intermediate optimization step required by the nonlinear
+least-squares method, and they are both linked to the evaluation of the residual
+
+        𝐺ℎ,𝛿𝑡 (𝝁, 𝜙(𝐳), {𝜙(𝐳𝑠 )}𝑠∈𝐼𝑡 ).
+We recall that we employ the derivative-free Pounders solver [19] implemented in PETSc [20]. Also nonlinear least-squares problem
+optimizers that employ an approximation or the true Jacobian of the residual 𝐺ℎ,𝛿𝑡 can be employed.
+   The main problematics to eﬃciently evaluate 𝐺ℎ,𝛿𝑡 are the following:
+
+ 1. in general, the nonlinearity of 𝐺ℎ,𝛿𝑡 makes its evaluation dependent on the number of dofs 𝑑 ,
+ 2. the map 𝜙 ∶ 𝑈 ⊂ ℝ𝑟 → ℝ𝑑 might be computationally heavy to evaluate for each 𝑟-dimensional input and depends on the number
+    of dofs since its output is 𝑑 -dimensional.
+
+The reason why we need this independence of the number of dofs is for our model order reduction procedure to be eﬃcient even
+when 𝑑 increases. Our two test cases 𝐶𝑁𝑆 and 𝐼𝑁𝑆 have approximately 𝑀 = 30000 and 𝑀 = 200000 cells, and 𝑑 = 180000 and
+𝑑 = 1000000 dofs respectively, which are still a moderate number of dofs compared to real applications. If we want to extend the
+methodology to larger meshes, we have to guarantee the independence on the number of dofs of our procedure.
+    We will address first the nonlinearity coming from 𝐺ℎ,𝛿𝑡 . Typically, in the case of LM-LSPG, if the residual has a nonlinear term
+directly coming from the parametric PDE model, a class of methods under the name of hyper-reduction can be applied to ameliorate
+the situation. The idea is to reconstruct the residual only from its evaluations on a subset of degrees of freedom. To do so, the values
+of the physical fields have to be computed on the stencil needed by the numerical discretization.
+    The simplest approach consists in collocating the residual on a subset of cells of the mesh, from now on called nodes or magic
+points. So we introduce two projection maps: the projection onto the magic points
+                                                                           𝑇
+                                            ⎛ ∣       ∣        ∣     ∣ ⎞
+        𝑃𝑟 ℎ ∶ ℝ 𝑑 → ℝ 𝑟 ℎ ,    𝑃𝑟ℎ (𝐔ℎ ) = ⎜ 𝐞𝑖1    𝐞𝑖2       …   𝐞𝑖𝑟 ⎟ ∈ ℝ𝑟ℎ ×𝑑 ,   0 < 𝑟ℎ ≪ 𝑑
+                                            ⎜                         ℎ ⎟
+                                            ⎝ ∣       ∣        ∣     ∣ ⎠
+                      𝑟
+                   ℎ
+where 𝑆𝑟ℎ = {𝐞𝑖𝑗 }𝑗=1 is a subset of the standard basis of ℝ𝑑 and the projection onto the submesh needed to evaluate the residual on
+the magic points
+                                                                       𝑇
+                                              ⎛ ∣    ∣         ∣    ∣ ⎞
+        𝑃𝑟𝑠 ∶ ℝ𝑑 → ℝ𝑠 ,        𝑃𝑟𝑠 (𝐔ℎ ) = ⎜ 𝐞𝑖1    𝐞𝑖2        …   𝐞𝑖𝑠 ⎟ ∈ ℝ𝑠×𝑑 ,   0 < 𝑟ℎ < 𝑠 ≪ 𝑑
+          ℎ                      ℎ         ⎜                           ⎟
+                                              ⎝ ∣    ∣         ∣    ∣ ⎠
+where 𝑆𝑟𝑠 = {𝐞𝑖𝑗 }𝑠𝑗=1 is a subset of the standard basis of ℝ𝑑 containing both 𝑆𝑟ℎ and 𝑆𝑟𝑠 , with 𝑆𝑟ℎ ⊂ 𝑆𝑟𝑠 .
+         ℎ                                                                                ℎ                ℎ
+  With these deﬁnitions the residual from equation (6a) can be hyper-reduced as
+
+        𝐳𝑡 = argmin ‖𝑃𝑟ℎ 𝐺ℎ,𝛿𝑡 (𝝁, 𝑃𝑟𝑠 (𝜙(𝐳)), {𝑃𝑟𝑠 (𝜙(𝐳𝑠 ))}𝑠∈𝐼𝑡 )‖2ℝ𝑟ℎ                                                                          (12a)
+                                          ℎ                ℎ
+               𝐳∈ℝ𝑟
+
+           = argmin ‖𝑃𝑟ℎ 𝐺ℎ,𝛿𝑡 (𝝁, (𝑃𝑟𝑠 ◦ 𝑓ﬁlter
+                                           −1      ̃
+                                                 )(𝜙(𝐳)), {(𝑃𝑟𝑠 ◦ 𝑓ﬁlter
+                                                                   −1      ̃ 𝑠 ))}𝑠∈𝐼 )‖2 𝑟 ,
+                                                                         )(𝜙(𝐳                                                                    (12b)
+                                          ℎ                           ℎ              𝑡  ℝℎ
+               𝐳∈ℝ𝑟
+
+where we have employed the deﬁnitions of 𝜙̃ ∶ ℝ𝑟 → ℝ𝑝 and 𝑓ﬁlter  −1 ∶ ℝ𝑝 → ℝ𝑑 from section 2.2. We employed the same notation 𝐳𝑡
+
+for the latent variable as in Equation (6a) even if they are the solutions of two diﬀerent minimization problems.
+    In this way we have addressed the problem coming from the nonlinearity of the residual 𝐺ℎ,𝛿𝑡 . At the same time, thanks to the
+                 −1 ◦ 𝜙̃ as composition of a linear projection depending on the dofs 𝑓 −1 and a small nonlinear neural network 𝜙̃
+choice of 𝜙 = 𝑓ﬁlter                                                                     ﬁlter
+independent on the number of dofs, we have also tackled the second problem. In fact, also the parametrization map (𝑃𝑟𝑠 ◦ 𝑓ﬁlter ̃
+                                                                                                                          −1 )(𝜙)
+                                                                                                                     ℎ
+restricted to the submesh is now independent on the number of dofs.
+    To be more specific, since we will be employing only rSVD as linear projections we have
+                              (             ) (                  )
+        𝑓ﬁlter
+         −1
+               (𝐔̃ ℎ ) = 𝑃𝑟𝑠 ◦ (𝐖 ⊙ 𝑈 ) 𝐔̃ ℎ = 𝑃𝑟𝑠 (𝐖) ⊙ 𝑃𝑟𝑠 (𝑈 ) 𝐔̃ ℎ ,                                                                            (13)
+                          ℎ                                ℎ           ℎ
+
+where we have employed deﬁnition (11). So the hyper-reduction aﬀects only the rSVD modes 𝑈 ∈ ℝ𝑑×𝑝 and the normalization vector
+𝐖 ∈ ℝ𝑑 . A schematic representation of the hyper-reduced approximate nonlinear manifold parametrization map is shown in Fig. 3.
+   We want to remark that the hyper-reduction procedure presented is eﬀective thanks to the choice of implementation of the
+parametrization map 𝜙 through a combination of neural networks and rSVD modes. However, in some cases the number of rSVD
+modes required 𝑝 = 𝑟rSVD can become so large to guarantee a threshold accuracy in the relative 𝐿2 reconstruction error that the
+
+
+                                                                               8
+F. Romor, G. Stabile and G. Rozza
+                                                                                                                Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. 3. Left: the decoder map 𝜙̃ ∶ ℝ𝑟 → ℝ𝑝 followed by the vector matrix multiplication with the rSVD modes 𝑓ﬁlter
+                                                                                                                −1
+                                                                                                                   (𝐔̃ ℎ ) ∶ ℝ𝑝 → 𝑋ℎ ∼ ℝ𝑑 . The latter are restricted to
+the submesh through the projection 𝑃𝑟𝑠 ∶ 𝑋ℎ ∼ ℝ𝑑 → ℝ𝑠 , that is the blackened dofs are discarded. Right: the map actually employed in the hyper-reduced nonlinear
+                                       ℎ
+manifold least-squares Petrov-Galerkin method 𝜙 ∶ ℝ𝑟 → 𝑃𝑟𝑠 (𝑋ℎ ) ∼ ℝ𝑠 . It is independent on the number of dofs and its evaluation is eﬃcient thanks to the relatively
+                                                          ℎ
+small size of the decoder 𝜓̃ .
+
+
+
+methodology is no more eﬃcient, since 𝑝 ≫ 0 and 𝜙̃ ∶ ℝ𝑟 → ℝ𝑟rSVD = ℝ𝑝 . This computational burden aﬀects both the oﬄine stage
+for the training of the NN and the online residual evaluation. In these cases, one may want to employ heavier and generic deep
+neural networks like CNNs for structured meshes or GNNs for unstructured meshes that recover a good approximation of the solution
+manifold. The employment of these deep NNs brings up the problem of how to hyper-reduce them. The methodology introduced in
+this section cannot be applied, but a solution is represented by a strategy called teacher-student training for which in a following
+training phase a smaller fast student NN is tuned to replicate the results of the bigger slow teacher NN. This alternative approach is
+presented and studied in [9].
+
+3.1. Hyper-reduction methods and magic points selection algorithms
+
+     We are left with the task of defining the set of magic points 𝑆𝑟ℎ , since the submesh 𝑆𝑠 ⊃ 𝑆𝑟ℎ is ident­fied from the magic points
+and the choice of numerical scheme employed to discretize the parametric PDE. Until now, we have considered only the collocation
+of the residual on the magic points as hyper-reduction method. However, not only this is not the sole possible implementation but
+also not the most common one.
+     What we have actually described is part of the reduced over-collocation hyper-reduction method [10]. In this section, we will intro­
+duce also the gappy discrete empirical interpolation method (DEIM) [34], the energy-sampling and weighting method (ECSW) [13],
+and DEIM with the quasi-optimal point selection algorithm (S-OPT) from [35].
+     We have experimentally observed that for our test cases with slow Kolmogorov n-width and 𝑟rSVD = 150 and 𝑟rSVD = 300 rSVD
+modes, the reduced over-collocation method performs better. For more comments see section 6. Moreover, for test cases with a bigger
+number of dofs we have also developed a more successful adaptive magic points selection method introduced in section 3.2.
+     So, what we will be particularly focused on are the magic points selection algorithms from DEIM, ECSW and S-OPT. The starting
+point for each one of them is the computation of a set of rSVD modes 𝑈ℎ𝑟 ∈ ℝ𝑑×𝑛ℎ𝑟 . Since we are hyper-reducing the residual
+𝐺ℎ,𝛿𝑡 we need to collect a dataset of residual snapshots train = {𝐺ℎ,𝛿𝑡 (𝝁, 𝐔𝑡ℎ , {𝐔𝑠ℎ }𝑠∈𝐼𝑡 )}(𝝁,𝑡)∈train ×𝑇𝝁 = {𝐺𝝁,𝑡 }(𝝁,𝑡)∈train ×𝑇𝝁 , with 𝑇𝝁 =
+{𝑡1 , … , 𝑡𝑁𝝁 }, in the training phase and compress them with rSVD:
+
+                 ⎡⎛ ∣             ∣       ∣         ∣     ⎞       ⎛    ∣                    ∣           ∣               ∣                 ⎞⎤
+                 ⎢⎜                                       ⎟       ⎜𝐺                 𝐺𝝁|                   𝐺𝝁|                          ⎟⎥
+        𝐺train = ⎢⎜ 𝐺𝝁1 ,𝑡1     𝐺𝝁2 ,𝑡1   …     𝐺𝝁1 ,𝑡𝑁
+                                                       𝝁1 ⎟
+                                                            , … , ⎜ |train | ,𝑡1
+                                                                     𝝁                             ,𝑡
+                                                                                            train | 1
+                                                                                                        …                 ,𝑡
+                                                                                                                   train | 𝑁𝝁   |train | ⎟⎥
+                                                                                                                                             ∈ ℝ𝑑×𝑛train ,
+                 ⎢⎜ ∣               ∣      ∣         ∣    ⎟       ⎜                                                                       ⎟⎥
+                 ⎣⎝                                       ⎠       ⎝    ∣                    ∣           ∣               ∣                 ⎠⎦
+from this residual snapshots matrix 𝐺train the rSVD modes are computed 𝑈𝐺 ∈ ℝ𝑑×𝑟ℎ𝑟 and utilized for magic points sampling after
+setting 𝑈ℎ𝑟 = 𝑈𝐺 . In this case, 𝑛ℎ𝑟 might possibly be diﬀerent than 𝑟rSVD .
+    However, employing the physical fields’ rSVD modes 𝑈ℎ𝑟 = 𝑈 ∈ ℝ𝑑×𝑟rSVD also to perform the magic points’ sampling is a fast
+alternative [36], since no additional residual snapshots need to be collected, apart from those used to d­fine the map 𝜙. Thus, the
+computational cost of an additional application of the rSVD algorithm, this time on the residual snapshots, is avoided.
+    We remark that 𝑑 > 𝑛ℎ𝑟 is the number of hyper-reduction modes 𝑈ℎ𝑟 ∈ ℝ𝑑×𝑛ℎ𝑟 , 𝑠 is the cardinality of the submesh, and 𝑟ℎ is the
+number of magic points 𝑠 > 𝑟ℎ .
+
+
+                                                                                9
+F. Romor, G. Stabile and G. Rozza
+                                                                                                                     Journal of Computational Physics 524 (2025) 113729
+3.1.1. Gappy discrete empirical interpolation
+    In the gappy DEIM algorithm, after the computation of the hyper-reduction basis 𝑈ℎ𝑟 ∈ ℝ𝑑×𝑛ℎ𝑟 from the physical fields 𝐴train ∈
+ℝ𝑑×𝑛train or residual snapshots 𝐺train ∈ ℝ𝑑×𝑛train , 𝑈ℎ𝑟 is employed to find the magic points with a greedy algorithm: at each step, it is
+selected the cell of the mesh associated to the highest value of the hyper-reduction reconstruction error 𝐫 ∈ ℝ𝑑
+
+        𝐫 = 𝐴train − 𝑈 (𝑃𝑟ℎ 𝑈 )† (𝑃𝑟ℎ 𝐴train ),             or   𝐫 = 𝐺train − 𝑈𝐺 (𝑃𝑟ℎ 𝑈𝐺 )† (𝑃𝑟ℎ 𝐺train )
+
+where with the notation (∙)† we represent the Moore-Penrose pseudo-inverse matrix and 𝑃𝑟ℎ ∈ ℝ𝑑×̃𝑟 is the intermediate projection
+matrix that evaluates a vector on the full-state space ℝ𝑑 on the magic points 𝑆𝑟ℎ = {𝐞𝑖𝑗 }𝑟𝑗=1
+                                                                                           ̃ , 0 < 𝑟̃ ≤ 𝑟 , selected up to the considered
+                                                                                                         ℎ
+step of the greedy algorithm. We remark that if vector-valued states 𝐔 ∈ ℝ𝑑 with 𝑑 = 𝑀 ⋅ 𝑐 , 𝑐 > 1 are considered, it is selected the
+cell of the mesh that maximizes the sum over each of the 𝑐 fields of the hyper-reduction reconstruction error.
+    For our implementation of the gappy DEIM greedy nodes selection algorithm, we have chosen the one studied in [8] and applied
+to the Gauss-Newton tensor approximation (GNAT) hyper-reduction method that is more general than DEIM.
+                                          𝑟ℎ
+    Once the magic points set 𝑆𝑟ℎ = {𝐞𝑖𝑗 }𝑗=1 has been evaluated, the magic points and submesh projections 𝑃𝑟ℎ , 𝑃𝑟𝑠 are computed
+                                                                                                                    ℎ
+and the following variants of nonlinear hyper-reduced least-squares problem (6a) are solved for
+                              (                                                      )
+        𝐳𝑡 = argmin ‖(𝑃𝑟ℎ 𝑈 )† 𝑃𝑟ℎ 𝐺ℎ,𝛿𝑡 (𝝁, 𝑃𝑟𝑠 (𝜙(𝐳)), {𝑃𝑟𝑠 (𝜙(𝐳𝑠 ))}𝑠∈𝐼𝑡 ) ⊘ 𝑃𝑟ℎ 𝐖 ‖2ℝ𝑟ℎ ,                                  (FB-DEIM)                          (14a)
+                                                        ℎ              ℎ
+               𝐳∈ℝ𝑟
+                                    (                                                          )
+        𝐳𝑡 = argmin ‖(𝑃𝑟ℎ 𝑈𝐺 )†         𝑃𝑟ℎ 𝐺ℎ,𝛿𝑡 (𝝁, 𝑃𝑟𝑠 (𝜙(𝐳)), {𝑃𝑟𝑠 (𝜙(𝐳𝑠 ))}𝑠∈𝐼𝑡 ) ⊘ 𝑃𝑟ℎ 𝐖𝐺 ‖2ℝ𝑟ℎ ,                        (RB-DEIM)                          (14b)
+                                                            ℎ              ℎ
+               𝐳∈ℝ𝑟
+
+        𝐳𝑡 = argmin ‖𝑃𝑟ℎ 𝐺ℎ,𝛿𝑡 (𝝁, 𝑃𝑟𝑠 (𝜙(𝐳)), {𝑃𝑟𝑠 (𝜙(𝐳𝑠 ))}𝑠∈𝐼𝑡 )‖2ℝ𝑟ℎ ,                                                      (C-DEIM),                          (14c)
+                                             ℎ              ℎ
+               𝐳∈ℝ𝑟
+
+depending on the choice of hyper-reduction basis chosen 𝑈ℎ𝑟 = 𝑈 (FB-DEIM) or 𝑈ℎ𝑟 = 𝑈𝐺 (RB-DEIM) or if it is performed reduced
+over-collocation (C-DEIM). In the case of FB-DEIM and RB-DEIM, the residuals 𝐺ℎ,𝛿𝑡 are divided element-wise by the normalization
+vectors 𝐖 ∈ ℝ𝑑 d­fined in (7) and 𝐖𝐺 ∈ ℝ𝑑 d­fined analogously from 𝐺train .
+
+3.1.2. A quasi-optimal nodes sampling method
+   As pointed out in [35], the matrix 𝑃𝑟ℎ 𝑈ℎ𝑟 ∈ ℝ𝑟ℎ ×𝑛ℎ𝑟 from the DEIM algorithm loses the orthogonality of its columns with respect
+to 𝑈ℎ𝑟 ∈ ℝ𝑑×𝑛ℎ𝑟 that is crucial for the numerical stability of DEIM and to minimize the error in the 𝐿2 -norm of the hyper-reduction
+interpolation. In fact, the hyper-reduction 𝐿2 error can be decomposed [34] as the sum of the best approximation error on the linear
+subspace in ℝ𝑑 spanned by the columns of 𝑈ℎ𝑟 ∈ ℝ𝑑×𝑛ℎ𝑟 and the distance from the projection onto it
+
+        ‖𝐴train − 𝑈ℎ𝑟 (𝑃𝑟ℎ 𝑈ℎ𝑟 )† (𝑃𝑟ℎ 𝐴train )‖22 =
+                                  𝑇                     𝑇
+                 = ‖𝐴train − 𝑈ℎ𝑟 𝑈ℎ𝑟 𝐴train ‖22 + ‖𝑈ℎ𝑟 𝑈ℎ𝑟 𝐴train − 𝑈ℎ𝑟 (𝑃𝑟ℎ 𝑈ℎ𝑟 )† (𝑃𝑟ℎ 𝐴train )‖22
+                                  𝑇                                          𝑇
+                 = ‖𝐴train − 𝑈ℎ𝑟 𝑈ℎ𝑟 𝐴train ‖22 + ‖𝑈ℎ𝑟 (𝑃𝑟ℎ 𝑈ℎ𝑟 )† 𝑃𝑟ℎ (𝑈ℎ𝑟 𝑈ℎ𝑟 − 𝐼𝑑 )𝐴train ‖22
+                                  𝑇                                      𝑇
+                 = ‖𝐴train − 𝑈ℎ𝑟 𝑈ℎ𝑟 𝐴train ‖22 + ‖(𝑃𝑟ℎ 𝑈ℎ𝑟 )† 𝑃𝑟ℎ (𝑈ℎ𝑟 𝑈ℎ𝑟 − 𝐼𝑑 )𝐴train ‖22 ,
+
+where in the last step we have used the fact that 𝑈ℎ𝑟 ∈ ℝ𝑑×𝑛ℎ𝑟 has orthonormal columns. Only the second term depends on the magic
+points selection, so the optimal strategy would be to minimize the solution of the least-squares problem
+
+                              𝑇                                                       𝑇
+        (𝑃𝑟ℎ 𝑈ℎ𝑟 )† 𝑃𝑟ℎ (𝑈ℎ𝑟 𝑈ℎ𝑟 − 𝐼𝑑 )𝐴train =         argmin ‖𝑃𝑟ℎ 𝑈ℎ𝑟 𝑋 − 𝑃𝑟ℎ (𝑈ℎ𝑟 𝑈ℎ𝑟 − 𝐼𝑑 )𝐴train ‖22 ,                                                         (16)
+                                                      𝑋∈ℝ𝑛ℎ𝑟 ×𝑛train
+
+that is to minimize the hyper-reduction 𝐿2 error of the remaining part of 𝐴train ∈ ℝ𝑑×𝑛train after the diﬀerence with its projection on
+the subspace spanned by the hyper-reduction basis 𝑈ℎ𝑟 ∈ ℝ𝑑×𝑛ℎ𝑟 .
+   A possible way, not necessarily optimal, to minimize (16) is to maximize the determinant of 𝑃𝑟ℎ 𝑈ℎ𝑟 ∈ ℝ𝑟ℎ ×𝑟ℎ𝑟 and at the same
+time maximize its column orthogonality. In [37], they developed an eﬃcient greedy algorithm to do so, maximizing
+
+                                                                 √         (
+                                                                                                     1
+                                                                                               ) ⎞ 𝑛ℎ𝑟
+                                                             ⎛
+                                                             ⎜    det (𝑃 𝑈ℎ𝑟 )𝑇 𝑃 𝑈ℎ𝑟 ⎟
+        𝑃𝑟𝑆 = argmax (𝑃 𝑈ℎ𝑟 ),                  (𝑃 𝑈ℎ𝑟 ) = ⎜       ∏𝑛ℎ𝑟                        ⎟       ∈ [0, 1],
+           ℎ
+                𝑃 ∈ℝ𝑟ℎ ×𝑛ℎ𝑟                                  ⎜         𝑖       ‖(𝑃 𝑈ℎ𝑟 )𝑖 ‖2     ⎟
+                                                             ⎝                                   ⎠
+                      𝑟
+                   𝑟ℎ
+where {(𝑃 𝑈ℎ𝑟 )𝑖 }𝑖=1 are the columns of 𝑃 𝑈ℎ𝑟 ∈ ℝ𝑟ℎ ×𝑛ℎ𝑟 , assuming ‖(𝑃 𝑈ℎ𝑟 )𝑖 ‖2 ≠ 0, ∀𝑖 ∈ {1, … , 𝑛ℎ𝑟 }. In particular, in [37] it is proved
+that (𝑃 𝑈ℎ𝑟 ) = 1 if and only if the columns of 𝑃 𝑈ℎ𝑟 are mutually orthonormal. The same quasi-optimal criterion is employed for
+hyper-reduction in [35], under the name of S-optimality (SOPT).
+   The DEIM algorithm with S-optimality magic points selection has the following formulation:
+                              (                                                          )
+        𝐳𝑡 = argmin ‖(𝑃𝑟𝑆 𝑈 )† 𝑃𝑟𝑆 𝐺ℎ,𝛿𝑡 (𝝁, 𝑃𝑟𝑆,𝑠 (𝜙(𝐳)), {𝑃𝑟𝑆,𝑠 (𝜙(𝐳𝑠 ))}𝑠∈𝐼𝑡 ) ⊘ 𝑃𝑟𝑆 𝐖 ‖2ℝ𝑟ℎ ,                           (FB-DEIM-SOPT)                        (17a)
+                              ℎ          ℎ              ℎ                  ℎ                             ℎ
+               𝐳∈ℝ𝑟
+                                    (                                                              )
+        𝐳𝑡 = argmin ‖(𝑃𝑟𝑆 𝑈𝐺 )†         𝑃𝑟𝑆 𝐺ℎ,𝛿𝑡 (𝝁, 𝑃𝑟𝑆,𝑠 (𝜙(𝐳)), {𝑃𝑟𝑆,𝑠 (𝜙(𝐳𝑠 ))}𝑠∈𝐼𝑡 ) ⊘ 𝑃𝑟𝑆 𝐖𝐺 ‖2ℝ𝑟ℎ ,                 (RB-DEIM-SOPT)                        (17b)
+                              ℎ              ℎ              ℎ                  ℎ                             ℎ
+               𝐳∈ℝ𝑟
+
+
+                                                                                     10
+F. Romor, G. Stabile and G. Rozza
+                                                                                                       Journal of Computational Physics 524 (2025) 113729
+        𝐳𝑡 = argmin ‖𝑃𝑟𝑆 𝐺ℎ,𝛿𝑡 (𝝁, 𝑃𝑟𝑆,𝑠 (𝜙(𝐳)), {𝑃𝑟𝑆,𝑠 (𝜙(𝐳𝑠 ))}𝑠∈𝐼𝑡 )‖2ℝ𝑟ℎ ,                                  (C-DEIM-SOPT)                        (17c)
+                           ℎ               ℎ               ℎ
+               𝐳∈ℝ𝑟
+
+where 𝑃𝑟𝑆,𝑠
+         ℎ
+            ∈ ℝ𝑠×𝑑 is the submesh projection corresponding to 𝑃𝑟𝑆 ∈ ℝ𝑟ℎ ×𝑑 . Also in this case, depending on the choice of hyper­
+                                                                ℎ
+reduction basis chosen 𝑈ℎ𝑟 = 𝑈 (FB-DEIM-SOPT) or 𝑈ℎ𝑟 = 𝑈𝐺 (RB-DEIM-SOPT) or if it is performed reduced over-collocation (C­
+DEIM-SOPT), there are three diﬀerent formulations.
+
+3.1.3. Energy-conserving sampling and weighting method
+    Diﬀerently from DEIM, the ECSW hyper-reduction method finds a sparse integration formula to approximate residual 𝐺ℎ,𝛿𝑡 , that
+is indeed obtained through an integration on the computational domain Ω ⊂ ℝ𝐷 , for the FVM, FEM or DGM.
+    The idea is to find a ‖∙‖0 -sparse quadrature formula (‖𝐱‖0 = #{𝑖 ∈ ℕ|𝐱𝑖 ≠ 0}, ∀ ∈ ℝ𝑑 ) such that the new weights 𝐐ℎ𝑟 ∈ ℝ𝑑 are
+sparse ‖𝐐ℎ𝑟 ‖0 ≪ 1 and approximate up to a tolerance 0 < 𝜏 ≪ 1 the sums of the training residual snapshots:
+
+        𝐐ℎ𝑟 = argmin‖𝐐‖0            s.t.   ‖𝐐 ⊙ 𝑈ℎ𝑟 − 𝐜‖22 < 𝜏‖𝐜‖22
+                 𝐐∈ℝ𝑑+
+
+where 𝐐 ⊙ 𝑈ℎ𝑟 is the element-wise multiplication of the quadrature weights vector 𝐐 ∈ ℝ𝑑 with the columns of the training residual
+                                                   ∑𝑑
+snapshots matrix 𝑈ℎ𝑟 ∈ ℝ𝑑×𝑛ℎ𝑟 , and 𝐜 ∈ ℝ𝑛ℎ𝑟 , 𝐜𝑗 = 𝑖=1 (𝑈ℎ𝑟 )𝑖𝑗 , ∀𝑗 ∈ {1, … , 𝑛ℎ𝑟 } is the vector of integrals. With the notation ℝ𝑑+ we
+consider the set of non-negative 𝑑 -dimensional vectors. In practice, this NP-hard problem is relaxed to the following non-negative
+least-squares problem
+
+        𝐐𝑟ℎ = argmin‖𝐐 ⊙ 𝑈ℎ𝑟 − 𝐜‖22 ,
+                 𝐐∈ℝ𝑑+
+
+we solve it with the non-negative least-squares algorithm based on [38] and implemented in the Eigen library [39].
+   The nonlinear manifold least-squares problem (4a), are hyper-reduced with the ECSW method in the following formulations:
+                           (                                                   )
+                     ̃ ℎ𝑟 ⊙ 𝑃𝑟 𝐺ℎ,𝛿𝑡 (𝝁, 𝑃 𝑠 (𝜙(𝐳)), {𝑃 𝑠 (𝜙(𝐳𝑠 ))}𝑠∈𝐼 ) ⊘ 𝑃𝑟 𝐖 ‖2 𝑟 ,
+        𝐳𝑡 = argmin ‖𝐐                                                                                        (FB-ECSW)                             (18a)
+                              ℎ           𝑟        ℎ   𝑟       ℎ      𝑡      ℎ   ℝℎ
+               𝐳∈ℝ𝑟
+                                    (                                                       )
+                     ̃ ℎ𝑟 ⊙ 𝑃𝑟 𝐺ℎ,𝛿𝑡 (𝝁, 𝑃 𝑠 (𝜙(𝐳)), {𝑃 𝑠 (𝜙(𝐳𝑠 ))}𝑠∈𝐼 ) ⊘ 𝑃𝑟 𝐖𝐺 ‖2 𝑟 ,
+        𝐳𝑡 = argmin ‖𝐐                                                                                       (RB-ECSW)                              (18b)
+                              ℎ           𝑟        ℎ   𝑟       ℎ      𝑡      ℎ    ℝℎ
+               𝐳∈ℝ𝑟
+
+        𝐳𝑡 = argmin ‖𝑃𝑟ℎ 𝐺ℎ,𝛿𝑡 (𝝁, 𝑃𝑟𝑠 (𝜙(𝐳)), {𝑃𝑟𝑠 (𝜙(𝐳𝑠 ))}𝑠∈𝐼𝑡 )‖2ℝ𝑟ℎ ,                                    (C-ECSW),                              (18c)
+                                           ℎ           ℎ
+               𝐳∈ℝ𝑟
+
+where 𝐐 ̃ ℎ𝑟 ∈ ℝ𝑟ℎ is the quadrature weights vector obtained from the restriction of 𝐐ℎ𝑟 ∈ ℝ𝑑 to its non-zero entries. We also d­fine
+                                                                                        ̃ ℎ𝑟 = 𝑃𝑟 𝐐ℎ𝑟 ∈ ℝ𝑑 , and as a consequence the
+𝑃𝑟ℎ ∈ ℝ𝑑×𝑟ℎ as the boolean matrix that selects the non-zero entries of 𝐐ℎ𝑟 ∈ ℝ𝑑 so that 𝐐        ℎ
+                                𝑠
+projection onto the submesh 𝑃𝑟 ∈ ℝ .  𝑑×𝑠
+                                ℎ
+    Also for this case, depending on the choice of hyper-reduction basis chosen 𝑈ℎ𝑟 = 𝑈 (FB-ECSW) or 𝑈ℎ𝑟 = 𝑈𝐺 (RB-ECSW) or if it
+is performed reduced over-collocation (C-ECSW), there are three diﬀerent formulations.
+
+3.2. Gradient-based adaptive hyper-reduction
+
+    The most successful hyper-reduction strategy for our implementation of the NM-LSPG method is the adaptive reduced over­
+collocation method (C-UP) that we introduce now. For comments on the results see section 6. The method employs the standard
+formulation of the reduced over-collocation hyper-reduction method
+
+        𝐳𝑡 = argmin ‖𝑃𝑟ℎ 𝐺ℎ,𝛿𝑡 (𝝁, 𝑃𝑟𝑠 (𝜙(𝐳)), {𝑃𝑟𝑠 (𝜙(𝐳𝑠 ))}𝑠∈𝐼𝑡 )‖2ℝ𝑟ℎ ,         (C-UP)
+                                           ℎ           ℎ
+               𝐳∈ℝ𝑟
+
+with the diﬀerence that the magic points are sampled adaptively every 𝑛 time-steps, minimizing the indicator d­fined in equation (20),
+during the time-evolution of the NM-LSPG trajectories. For simplicity, our choice of 𝑛 is fixed. Its cost is amortized over the successive
+NM-LSPG time evaluations.
+   A heuristic approach relies on the positioning of the magic points where the sensitivities of the residual at time 𝑡 have greater
+components in 𝐿2 -norm. If we d­fine the residual map at time 𝑡
+
+        ℝ𝑟 ∋ 𝐳 ↦ 𝐺ℎ,𝛿𝑡 (𝝁, 𝜙(𝐳), {𝜙(𝐳𝑠 )}𝑠∈𝐼𝑡 ) = 𝐺ℎ,𝛿𝑡 (𝜙(𝐳)) ∈ ℝ𝑑 ,            𝐺ℎ,𝛿𝑡 ∶ ℝ𝑟 → ℝ𝑑 ,
+losing for brevity the dependencies on the previous time steps, its sensitivities with respect to the latent coordinate 𝐳𝑡 at time 𝑡 are
+for all 𝑖 ∈ {1, … , 𝑟},
+                                           [                             ]       [            ]
+                    𝜕𝐺ℎ,𝛿𝑡 (𝜙(𝐳)) ||          𝜕𝐺ℎ,𝛿𝑡 (𝜙(𝐳)) ||                     𝜕𝜙(𝐳) ||
+        ℝ𝑑 ∋ 𝐉𝑖 =                  |     =                   |                ◦
+                        𝜕𝐳𝑖        | 𝑡
+                                   |𝐳=𝐳             𝜕𝝓       |
+                                                             |𝜙(𝐳)=𝜙(𝐳𝑡 ) 𝑑×𝑑       𝜕𝐳𝑖 ||𝐳=𝐳𝑡 𝑑×1
+                    [                             ]                         [              ]
+                      𝜕𝐺ℎ,𝛿𝑡 (𝜙(𝐳)) ||                 [ −1 ]                    ̃ ||
+                                                                              𝜕 𝜙(𝐳)
+                  =                  |                ◦ 𝑓ﬁlter            ◦          |
+                           𝜕𝝓        |                           𝑑×𝑟rSVD        𝜕𝐳𝑖 ||𝐳=𝐳𝑡
+                                     |𝜙(𝐳)=𝜙(𝐳𝑡 )   𝑑×𝑑                                     𝑟rSVD ×1
+
+
+
+                                                                          11
+F. Romor, G. Stabile and G. Rozza
+                                                                                                                                    Journal of Computational Physics 524 (2025) 113729
+                                             [ ]
+                          = [𝐆]𝑑×𝑑 [𝐅]𝑑×𝑟rSVD 𝚽𝑖 𝑟
+                                                                 rSVD ×1
+
+with
+                    𝜕𝐺ℎ,𝛿𝑡 (𝜙(𝐳)) ||                                                                                       ̃ ||
+                                                                                                                         𝜕 𝜙(𝐳)
+        𝐆=                         |            ∈ ℝ𝑑×𝑑 ,                 𝐅 = 𝑃𝑟𝑠 ◦ 𝑓ﬁlter
+                                                                                    −1
+                                                                                          ∈ ℝ𝑑×𝑟rSVD ,           𝚽=             |    ∈ ℝ𝑟rSVD ×𝑟
+                        𝜕𝝓         |                                               ℎ                                       𝜕𝐳 ||𝐳=𝐳𝑡
+                                   |𝜙(𝐳)=𝜙(𝐳𝑡 )
+where with the chain rule we have highlighted the terms that compose the evaluation of the Jacobian matrix of the residual.
+   The exact evaluation of the Jacobian 𝚽 ∈ ℝ𝑟rSVD ×𝑟 of the parametrization map 𝜙̃ ∶ ℝ𝑟 → ℝ𝑟rSVD is eﬃcient enough to be employed
+by our adaptive hyper-reduction procedure. However, the matrix multiplication 𝐆𝐅𝚽 is ineﬃcient since 𝐆 ∈ ℝ𝑑×𝑑 depends on the
+number of degrees of freedom and the submesh size 𝑑 .
+   Our solution consists instead in evaluating 𝑂 ∶ 𝑈 ⊂ ℝ𝑟 ×  → ℝ𝑑×𝑟 ,
+                                        (                                              )                         [                                 ]
+                𝑡
+                                              ̃ ||
+                                            𝜕 𝜙(𝐳)          ̃ ||
+                                                          𝜕 𝜙(𝐳)                                                       ̃ ||
+                                                                                                                     𝜕 𝜙(𝐳)          ̃ ||
+                                                                                                                                   𝜕 𝜙(𝐳)
+        𝑂(𝐳 , 𝝁) = 𝑓ﬁlter ◦    −1
+                                                   |    −        |                           = [𝐖 ⊙ 𝑈 ]𝑑×𝑟rSVD              |    −        |                   ,
+                                              𝜕𝐳 ||𝐳=𝐳𝑡     𝜕𝐳 ||𝐳=𝐳𝑡−1                                                𝜕𝐳 ||𝐳=𝐳𝑡     𝜕𝐳 ||𝐳=𝐳𝑡−1
+                                                                                                                                                   𝑟rSVD ×𝑟
+
+considering the current time-step 𝑡 and the previous one 𝑡 − 1. In this way, we are employing the sensitivities of the neural network
+itself, rather then including also the information coming from the residual through the Jacobian 𝐆 ∈ ℝ𝑑×𝑑 . The impact of neglecting
+the Jacobian is left for future studies.
+    We select only the first 𝑟ℎ cells of the computational domain that maximize
+                            ( 𝑐              )
+                  ⎛          ∑                   ⎞
+                  ⎜
+         argmax argmax                𝑡
+                                 𝑂𝑖 (𝐳 , 𝝁)2     ⎟                                                                                                                                 (20)
+        𝑘={1,…,𝑀} ⎜ 𝑗=1,…,𝑟                      ⎟
+                  ⎝          𝑖=1              𝑘𝑗 ⎠
+
+where 𝑂𝑖 (𝐳𝑡 , 𝝁) ∈ ℝ𝑀 for 𝑖 ∈ {1, … , 𝑐} are the degrees of freedom corresponding to the 𝑖-th physical field composing the full-state
+𝐔ℎ ∈ 𝑋ℎ ∼ ℝ𝑑 . When we update the magic points and consequently the submesh every 𝑛 time steps, we use the notation C-Un, for
+example, C-U50 for an adaption of the magic points every 50 time steps.
+    The methodology presented derives from heuristic considerations and the necessity to keep the computational costs as low as
+possible. Experimentally it is shown that it is able to track the main moving features of our transient numerical simulations, thus
+adapting the magic points’ position close to the most informative regions of the computational domain. See Fig. 4. Additional collo­
+cation nodes are imposed on the boundaries to force the satisfaction of boundary conditions as can be noticed in Fig. 4, at the i­flow
+left boundary.
+
+4. Local nonlinear manifold
+
+    Sometimes the 𝐿2 -norm relative reconstruction error (10a) cannot approximate with suﬃcient accuracy the nonlinear solution
+manifold in terms of reconstruction error, or the autoencoder architecture 𝜙 ◦ 𝜓 ∶ ℝ𝑑 → ℝ𝑑 or 𝜙̃ ◦ 𝜓̃ ∶ ℝ𝑟rSVD → ℝ𝑟rSVD does not meet
+the tolerance requirement (5). This happens when there are regions in the parameter space that correspond to less correlated solutions
+in the solution manifold.
+    A possible solution is to partition the parameter space in subdomains where the approximation properties of the rSVD modes and
+the autoencoder are satisfactory for the problem at hand. There are many implementations of local ROMs, often under the name of
+dictionary-based ROMs: the accuracy of the local linear approximations can be maximized in practice with ad hoc metrics based, for
+example, on the Grassmann manifold [40]. Generally, they also can be eﬃciently applied to our framework, thanks to the deﬁnition
+of our autoencoder through linear projections.
+    The setting is introduced only for two communicating local solution manifolds. For 𝑖 = 1, 2, with the notations
+
+        𝑛𝑖              ⊂ 𝑛train ,                                                                                                 (local parameter subset)
+              train,𝑖
+          𝑖          𝑟
+        𝜙 ∶ ℝ → 𝑋ℎ ∼ ℝ ,                𝑑
+                                                𝜙̃ 𝑖 ∶ ℝ𝑟 → ℝ𝑝 ,               𝑖
+                                                                           𝜓 ∶ 𝑋ℎ ∼ ℝ → ℝ ,    𝑑     𝑟     𝑖
+                                                                                                         𝜓̃ ∶ ℝ → ℝ ,𝑝     𝑟
+                                                                                                                                           (local autoencoder)
+          𝑖                         𝑑       𝑝           𝑖                  𝑝                  𝑑
+        𝑓ﬁlter ∶ 𝑋ℎ ∼ ℝ → ℝ ,                        (𝑓ﬁlter )  −1
+                                                                     ∶ ℝ → 𝑋ℎ ∼ ℝ ,                                                  (local linear projections)
+
+        𝐴𝑖𝑛         ∈ ℝ𝑑×𝑛train,𝑖 ,              𝑖
+                                             𝐖 ∈ℝ ,         𝑑        𝑖
+                                                                  𝑈 ∈ℝ         𝑑×𝑟rSVD
+                                                                                         ,                                             (local rSVD quantities)
+            train,𝑖
+
+we denote the corresponding parametric subsets, the decoder maps, the encoder maps, the linear filter/transform maps, the training
+snapshots matrices, the normalizing vectors and the local rSVD basis of the two local solution manifolds. In principle, the local latent
+dimensions 𝑟 = 𝑟1 = 𝑟2 with our notation, can be diﬀerent 𝑟1 ≠ 𝑟2 and the same is valid for 𝑝 = 𝑟rSVD = 𝑝1 = 𝑝2 , that is 𝑝1 = 𝑟1rSVD ≠
+𝑟2rSVD = 𝑝2 . In fact, it is possible to adapt the latent and linear filter dimensions of the nonlinear approximating manifold parametrized
+by 𝜙𝑖 to the local Kolmogorov n-width decay of the subset of the parameter space under consideration. In a sense, the rationale is
+similar to the one behind hp-FEM or hp-DG methods.
+     Gluing two local solution manifolds requires care especially because it may not be guaranteed that the corresponding full­
+states are close ((𝑓ﬁlter2 )−1 ◦ 𝑓 2           1 )−1 )(𝐔̃1 ) = (𝑓 1 )−1 (𝐔̃1 ) to each other with suﬃcient accuracy. Many techniques have
+                                           ◦ (𝑓ﬁlter
+                                     ﬁlter               ℎ       ﬁlter     ℎ
+been developed to tackle this problem, but, for the moment, we will study only the most simple one: more eﬀective interface cou­
+pling techniques should be implemented, in practice. In fact, a possible way to avoid this consists in just overlapping the training
+
+
+                                                                                                    12
+F. Romor, G. Stabile and G. Rozza
+                                                                                                                     Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. 4. Visual example of adaptive gradient-based reduced over-collocation. Predicted velocity magnitude time snapshots, for 𝑡 ∈ {0.0 s, 0.4 s, 0.8 s, 1.2 s, 1.6 s, 2.0 s}, of
+the 2d compressible Navier-Stokes equations’ model described in subsection 5.1.2 for a value of the Mach number Ma = 2.12422656, the fourth of five test parameters.
+It can be seen that the 700 hyper-reduction collocation nodes in black (the mesh cells corresponding to the hyper-reduction collocation nodes are colored in black, the
+mesh is reported in Fig. 6) and the corresponding submesh in grey, updated with gradient-based adaptive hyper-reduction through equation (20) every 50 time steps,
+follow the transient dynamics. The time instants reported refer to the reference time interval 𝑡 ∈ [0.0 s, 2.5 s], the real time instants are obtained applying the scaling
+reported in equation (24). (For interpretation of the colors in the figure(s), the reader is referred to the web version of this article.)
+
+
+
+
+datasets 𝐴𝑛train,1 ∈ ℝ𝑑×𝑛train,1 and 𝐴𝑛train,2 ∈ ℝ𝑑×𝑛train,2 , that is considering a bigger intersection of their corresponding parameters sub­
+sets 𝑛1           ⊂ 𝑛train and 𝑛2          ⊂ 𝑛train , 𝑛1         ∩ 𝑛2         ≠ ∅. In this preliminary work, we do not perform parametric studies on
+         train,1                    train,2                 train,1       train,2
+the size of the intersection of the parametric subdomains.
+   In our case, we have that the change of basis linear map 𝑓ﬁlter
+                                                             12 = 𝑓 2        1 )−1 ∶ ℝ𝑟rSVD → ℝ𝑟rSVD is computed oﬄine as
+                                                                         ◦ (𝑓ﬁlter
+                                                                   ﬁlter
+                                                                              (((           ) )        )
+        𝐔̃ 2ℎ = 𝑓ﬁlter
+                 12
+                       (𝐔̃ 1ℎ ) = (𝑓ﬁlter
+                                    2
+                                          ◦ (𝑓ﬁlter
+                                              1
+                                                    )−1 )(𝐔̃ 1ℎ ) = (𝑈 2 )𝑇         𝐖1 ⊙ 𝑈 1 𝐔̃ 1ℎ ⊘ 𝐖2 .                                                                (22)
+This change of basis between communicating local solution manifolds is represented schematically in Fig. 5.
+   We will consider only two local solution manifolds such that only the time interval is partitioned, see section 5.1.2.
+
+5. Numerical experiments
+
+    We will test the presented methodology on two challenging benchmarks from the point of view of model order reduction, as they
+evidently suﬀer from a slow Kolmogorov n-width decay. Employing classical linear projection-based ROMs would be unfeasible as
+they would need more than hundreds of rSVD modes. For the comparison of classical methods with intrusive ones exploiting nonlinear
+approximants see [7,12].
+    The test cases we will present are developed with the open source CFD software library OpenFoam [41]. Being rather small test
+cases, discretized with the finite volumes method on meshes with 4500, 32160 and 198633 cells, the speedups obtained are relatively
+small. However, since our ROMs are independent on the number of dofs, as long as increasing the resolution does not bring to a slower
+Kolmogorov n-width decay, more evident speedups can be achieved. Compared to the finite diﬀerences method employed in [7,12],
+the FVM implementation in OpenFoam is highly optimized and it is therefore more challenging to achieve a speedup for small test
+cases, but the computational cost of the forward evaluation of the decoder is similar. The new methodology is implemented on top
+of the open-source software library for model order reduction ITHACA-FV [42].
+    The first test case we consider involves the compressible Navier-Stokes equations (CNS) in the supersonic regime. We will consider
+as parameters time and the Mach number Ma ∈ [2, 5] imposed at the i­flow boundary. In order to show, that the method scales well
+increasing the number of dofs, we employ two meshes: a coarse one with 4500 cells and a finer one with 32160 cells, see Fig. 6. On
+the first mesh in subsection 5.1.1, we test diﬀerent hyper-reduction methods. On the second mesh in subsection 5.1.2 we test the use
+of local nonlinear manifold approximants and the straight-forward change of basis we have presented in section 4. The OpenFoam
+solver we employ is the sonicFoam [11] solver.
+
+
+                                                                                       13
+F. Romor, G. Stabile and G. Rozza
+                                                                                                                       Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. 5. Above: the decoder 𝜙1 of subdomain 1 on the left, and the encoder 𝜓 2 followed by the decoder 𝜙2 of subdomain 2. To pass from one subdomain whose solution
+manifold is spanned by the rSVD modes associated to (𝑓 1 )−1
+                                                          ﬁlter
+                                                                to the one spanned by the rSVD modes associated to 𝑓ﬁlter
+                                                                                                                    2
+                                                                                                                          and (𝑓 2 )−1
+                                                                                                                                    ﬁlter
+                                                                                                                                          , an eﬃcient change of basis needs to
+be performed during the online stage. The dependency on the number of dofs is avoided by multiplying in the oﬄine stage the rSVD basis associated to subdomain 1 with
+the ones associated to subdomain 2. Below: the same maps as above, only now an eﬃcient change of basis between subdomains 𝐔           ̃ 2 = 𝑓 12 (𝐔̃ 1 ) = (𝑓 2 ◦ (𝑓 1 )−1 )(𝐔̃ 1 )
+                                                                                                                                        ℎ      ﬁlter ℎ       ﬁlter  ﬁlter       ℎ
+can be used online, since it is precomputed oﬄine as a change of basis matrix of sizes 𝑝2 × 𝑝1 .
+
+
+    The second test case we consider is the incompressible turbulent flow around the Ahmed body (INS). The parameters are time and
+the slant angle of the Ahmed body. The test case presented is introduced and studied in [43]. There, steady state solutions are obtained
+with the solver SIMPLE [44] (Semi-Implicit Method for Pressure-Linked Equations), however we employ PISO [45] (Pressure Implicit
+with Splitting of Operator) since we want to reduce the transient dynamics that has a slow Kolmogorov n-width decay instead. Adding
+time as a parameter brings to a much more complex solution manifold to approximate.
+    The specifics of the convolutional autoencoders used are reported in the Appendix A along with the training costs and other hyper­
+parameters. For all the CAE trainings we employed the ADAM [46] optimizer with initial learning rate of 0.001 and a scheduler that
+halves it every 200 epochs if the validation loss has not improved. Every architecture is trained for 3000 epochs on a single GPU NVIDIA
+Quadro RTX 4000. The wallclock time expended on training is between 1 hour and 1 hour and half for the test cases in 5.1.1, 5.1.2
+and 5.2.1. Substantial computational savings depend on the choice of the architecture, especially on the fact that the training is
+independent with respect to the number of dofs since the inputs and outputs of the autoencoder belong to the lower dimensional
+space generated by the rSVD basis. In Tables 1, 2 and 3, are also reported the average time step computational cost over each time
+step and test parameter, the average update of the magic point computational cost over each time step and test parameter, and the
+average total computational cost over each test parameter considered.
+    The metrics we have employed to assess the accuracy of our methodology are reported both in the training parameter range and
+in the extrapolation range (shaded regions in red): the accuracy decays in the extrapolation regime. Extending the training parameter
+range should solve this issue, unless the solution manifold has an intrinsic higher dimensionality and cannot be approximated with
+suﬃcient accuracy anymore. Possible solutions include the employment of local approximants as discussed in section 4.
+    In order not to interrupt the presentation of the numerical results, we postponed to Appendix B the showcase of some predicted
+solutions of each test case: Fig. B.23 refers to the CNS1 test case in section 5.1.1, Fig. B.24 refers to the CNS2 test case in section 5.1.2
+and finally Figs. B.25 and B.26 refers to the test case INS1 in section 5.2.1.
+
+
+                                                                                    14
+F. Romor, G. Stabile and G. Rozza
+                                                                                                                           Journal of Computational Physics 524 (2025) 113729
+                              Table 1
+                              CNS-1. Timings of the CNS on a coarse mesh, subsection 5.1.1. The timings of the reduced over-collocation
+                              method C-UP50 relative to the choice of 𝑟ℎ = {150, 300, 600, 1200} collocation nodes is reported along the
+                              full-order model (FOM) timings of the sonicFoam solver. The same reference time step as the FOM one is
+                              employed (Δ𝑡)ref = 0.001. Before the FOM results, the timings of C-UP50 but with a larger reference time
+                              step of (Δ𝑡)ref = 0.004 are reported in bold for a number of magic points 𝑟ℎ = 500. For the timings of the
+                              CNS on the finer mesh, see Table 2.
+
+                                    collocation nodes (𝑟ℎ )           average time-step      average update every 50           average total time
+
+                                    𝑟ℎ = 150, (Δ𝑡)ref = 0.001         11.937 [ms]            56.830 [ms]                       29.842 [s]
+                                    𝑟ℎ = 300, (Δ𝑡)ref = 0.001         25.294 [ms]            97.628 [ms]                       63.235 [s]
+                                    𝑟ℎ = 600, (Δ𝑡)ref = 0.001         36.894 [ms]            110.110 [ms]                      92.234 [s]
+                                    𝑟ℎ = 1200, (Δ𝑡)ref = 0.001        56.277 [ms]            119.707 [ms]                      140.691 [s]
+
+                                    𝑟ℎ = 𝟓𝟎𝟎, (Δ𝑡)ref = 0.004         28.736 [ms]            82.337 [ms]                       17.960 [s]
+
+                                    FOM, (Δ𝑡)ref = 0.001              13.440 [ms]            -                                 33.614 [s]
+
+                                                                          FOM snapshots evaluation         rSVD      AE training
+
+                                                   Total oﬄine cost       343 [s]                          62 [s]    61 [min]
+
+
+
+                   Table 2
+                   CNS-2. Timings of the CNS on a finer mesh, subsection 5.1.2. The timings of the reduced over-collocation method C-UP20
+                   (first three columns) and C-UP50 (last three columns) relative to the choice of 𝑟ℎ = {150, 300, 600, 1200} collocation nodes is
+                   reported along with the full-order model (FOM) timings of the sonicFoam solver. The reference time step of C-UP20 and C-UP50
+                   is (Δ𝑡)ref = 0.004, four times bigger than the FOM. The diﬀerent reference time steps aﬀect the average total time and not the
+                   mean time steps computational costs. For the timings of the CNS on the coarse mesh, see Table 1. The change of basis between
+                   the local nonlinear manifolds is included in the average total time. The label ‘av’ stands for average and ‘up’ stands for update.
+
+                                 av time-step           av up every 20      av total time            av time-step      av up every 50          av total time
+
+                       150       38.615 [ms]            286.103 [ms]        34.215 [s]               35.297 [ms]       302.612 [ms]            25.890 [s]
+                       300       52.209 [ms]            325.225 [ms]        42.774 [s]               48.940 [ms]       316.992 [ms]            34.717 [s]
+                       600       62.888 [ms]            330.269 [ms]        49.642 [s]               61.803 [ms]       358.956 [ms]            42.887 [s]
+                       1200      74.759 [ms]            362.719 [ms]        58.302 [s]               75.128 [ms]       362.236 [ms]            51.510 [s]
+
+                       FOM       110.334 [ms]           -                   275.944 [s]              110.334 [ms]      -                       275.944 [s]
+
+                                                                         FOM snapshots evaluation          rSVD      AE training
+
+                                                   Total oﬄine cost      1.57 [h]                          269 [s]   1.34 [h]
+
+
+
+                 Table 3
+                 INS-1. Timings of the INS for small geometrical deformations, subsection 5.2.1. The timings of the reduced over-collocation methods
+                 C-UP20 and C-UP50 relative to the choice of 𝑟ℎ = {500, 1000, 1500, 2000, 2500} collocation nodes is reported along the full-order
+                 model (FOM) timings of the PISO solver. The time step of C-UP20 and C-UP50 is (Δ𝑡)ref = 0.0005, five times bigger than the FOM-1
+                 with (Δ𝑡)ref = 0.0001 on 1 CPU core. The diﬀerent reference time steps aﬀect the average total time and not the mean time steps
+                 computational costs. The timings for the FOM-8 run in parallel with 8 CPU cores are wallclock times. The label ‘av’ stands for
+                 average and ‘up’ for update.
+
+                     MP             av time-step        av up every 20      av total time            av time-step          av up every 50       av total time
+
+                     500            66.650 [ms]         660.136 [ms]        19.931 [s]               49.171 [ms]           572.604 [ms]         12.125 [s]
+                     1000           116.432 [ms]        749.300 [ms]        30.779 [s]               136.320 [ms]          778.478 [ms]         30.378 [s]
+                     1500           171.507 [ms]        809.385 [ms]        42.395 [s]               160.974 [ms]          842.653 [ms]         35.565 [s]
+                     2000           212.034 [ms]        777.112 [ms]        50.178 [s]               194.183 [ms]          723.026 [ms]         41.729 [s]
+                     2500           276.482 [ms]        933.621 [ms]        64.633 [s]               312.016 [ms]          973.697 [ms]         66.298 [s]
+
+                     FOM-1          791.318 [ms]        -                   13.189 [min]             791.318 [ms]          -                    13.189 [min]
+                     FOM-8          365.355 [ms]        -                   3.589 [min]              365.355 [ms]          -                    3.589 [min]
+
+                                                     FOM-1 snapshots evaluation           FOM-8 snapshots evaluation           rSVD          AE training
+
+                            Total oﬄine cost         1.09 [h]                             23 [min]                             15 [min]      1.45 [h]
+
+
+
+5.1. Supersonic flow past a NACA airfoil
+
+    The first nonlinear time-dependent parametric PDE model we consider
+                                                                     √ are the compressible Navier-Stokes equations for a perfect
+                                                                                                       𝑅
+diatomic gas with ratio of specific heat 𝛾 = 7∕5. A speed of sound of 𝑐 = 𝛾 𝑇 = 1 m/s is imposed through the choice of molar mass
+                                                                            𝑀
+𝑀 at a temperature of 𝑇 = 1𝐾 , where 𝑅 is the universal gas constant. The following system of PDEs is solved on the 2d computational
+domain Ωℎ ⊂ ℝ shown in Fig. 6:
+               2
+
+
+
+
+                                                                                    15
+F. Romor, G. Stabile and G. Rozza
+                                                                                                             Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. 6. Left: computational domain of the compressible flow past a NACA airfoil test case. Center: coarse mesh with 4500 cells. Right: finer mesh with 32160 cells.
+
+
+
+                                                                  𝜕𝑡 𝜌 + ∇ ⋅ (𝜌𝐮) = 0,                                (mass conservation)                   (23a)
+                                                   ( (                        ))
+                                                             𝑇
+                  𝜕𝑡 (𝜌𝐮) + ∇ ⋅ (𝜌𝐮 ⊗ 𝐮) + ∇𝑝 − ∇ ⋅ 𝜈 ∇𝐮 + ∇𝐮 + 13 (∇ ⋅ 𝐮)𝐼𝑑      = 0,                        (momentum conservation)                       (23b)
+                                                 ( (                        ) )
+        𝜕𝑡 𝜌(𝑒 + 𝐾) + ∇ ⋅ ((𝜌(𝑒 + 𝐾) + 𝑝)𝐮) − ∇ ⋅ 𝜈 ∇𝐮 + ∇𝐮𝑇 + 13 (∇ ⋅ 𝐮)𝐼𝑑 𝐮 = 0,                                  (energy conservation)                   (23c)
+
+                                                            𝑒 = 𝑇 𝑐𝑣 ,     𝑝𝑐𝑣 = 𝜌𝑅𝑒,   𝐾 = 12 𝜌𝐮2 ,                     (state equations),                 (23d)
+the parameters we consider are time and the inlet Mach number Ma = |𝐮|∕𝑐 = |𝐮|, 𝜇 = Ma ∈ [2, 5], 𝑡 ∈ 𝑉𝜇 = {1, … , 𝑁𝜇 }. The viscosity
+is fixed at 𝜈 = 1𝑒 − 5. The boundary conditions are imposed at the i­flow Γinflow , ou­flow Γoutflow and airfoil Γairfoil boundaries, see
+Fig. 6. The initial and boundary conditions for the velocity 𝐮, pressure 𝑝 and temperature 𝑇 fields are:
+
+                        ⎧𝐮(𝐱, 𝑡) = Ma,        (𝐱, 𝑡) ∈ (Ω̊ ℎ × {𝑡 = 0}) ∪ (Γinflow × [0, 𝑇𝝁 ])
+                        ⎪
+                        ⎨𝑝(𝐱, 𝑡) = 1,         (𝐱, 𝑡) ∈ (Ω̊ ℎ × {𝑡 = 0}) ∪ (Γinflow × [0, 𝑇𝝁 ]) ,
+                        ⎪𝑇 (𝐱, 𝑡) = 1,        (𝐱, 𝑡) ∈ (Ω̊ ℎ × {𝑡 = 0}) ∪ (Γinflow × [0, 𝑇𝝁 ])
+                        ⎩
+        ⎧𝐧 ⋅ ∇𝐮(𝐱, 𝑡) = 0,          𝐱 ∈ Γoutflow          ⎧𝐮(𝐱, 𝑡) = 0,            𝐱 ∈ Γairfoil
+        ⎪                                                 ⎪
+        ⎨(non-reflective),          𝐱 ∈ Γoutflow ,        ⎨𝐧 ⋅ ∇𝑝(𝐱, 𝑡) = 0,       𝐱 ∈ Γairfoil ,
+        ⎪𝐧 ⋅ ∇𝑇 (𝐱, 𝑡) = 0,         𝐱 ∈ Γoutflow          ⎪𝐧 ⋅ ∇𝑇 (𝐱, 𝑡) = 0,      𝐱 ∈ Γairfoil
+        ⎩                                                 ⎩
+where non-reflective boundary conditions are imposed on the pressure field at the ou­flow boundaries.
+    The Mach number training and test instances are sampled from the parameter space  = [2, 5] × 𝑇𝜇 , such that the Mach angle 𝛼
+is sampled uniformly, and the time step Δ𝑡𝜇 and final time 𝑡𝑁𝜇 are chosen depending on the Mach number from the reference time
+step (Δ𝑡)ref = 0.001 and final time (𝑡𝑁 )ref = 2.5:
+                      1                       Maref                        Maref
+        𝛼 = arcsin        ,   Δ𝑡𝜇 = (Δ𝑡)ref           ,   𝑡𝑁𝜇 = (𝑡𝑁 )ref                                                                                      (24)
+                     Ma                        Ma                           Ma
+in this way the training and test time series have the same length even if the final times are diﬀerent.
+    We take into account two diﬀerent meshes a coarse one with 4500 cells and 2700 dofs and a finer one with 32160 cells and
+192960 dofs. We will refer to these two test cases with the notation CNS-1 for the coarse mesh and CNS-2 for the finer mesh. The
+employment of two meshes permits us to show that our methodologies achieve more signiﬁcant speedups when the number of dofs
+is increased since they are independent on the number of dofs: the timings and relative speedups can be observed from Tables 1
+and 2.
+    The solver we will employ is OpenFoam’s [41] pressure-based transonic/supersonic solver for compressible gases sonicFoam [11].
+SonicFoam Algorithm 2 (Fig. 7) solves for the solution at the 𝑛-th time instant following PIMPLE predictor-corrector scheme, a com­
+bination of PISO [45] and SIMPLE [44]. A more detailed introduction to the notation introduced hereafter can be found in [47]. In
+Algorithm 2, we highlight the predictor-corrector scheme and the main steps. We employ the Euler scheme in time. Starting from the
+previous fields 𝐮𝑛 velocity, 𝜌𝑛 density, 𝑒𝑛 internal energy, and 𝑝𝑛 pressure, the solutions at time step 𝑛 + 1 are evaluated. After an inter­
+mediate density evaluation 𝜌∗ in line 2 corresponding to the continuity equation (23a), begins the PIMPLE corrector loop from line 3:
+this outer loop comes from SIMPLE and relaxes the intermediate solution fields after every iteration. Then, at line 4, the intermediate
+velocity field 𝐮∗ is evaluated implicitly solving the momentum equation (23b): the diagonal 𝐴[𝜌∗ ] and over-diagonal 𝐻[𝐮∗ , 𝜌∗ ] parts
+of the system are highlighted along with the pressure contribution ∇𝑝∗ since they will be employed later in the pressure-Poisson
+equation at line 10. The energy predictor step at line 5 is evaluated afterwards corresponding to the energy conservation (23c). Then,
+the thermodynamics properties corresponding to the state equations (23d) are corrected and the PISO pressure corrector loop begins
+at line 7. Inside the non-orthogonal corrector loop in case of non-orthogonal meshes, the pressure-Poisson equation is repeatedly
+solved and, afterwards, the velocity is corrected to satisfy the continuity equation and the density is updated with the new pressure
+through the equations of state. Many steps have not been reported for simplicity, for a more detailed analysis see [11]. What we
+want to show is that in comparison, the nonlinear least-squares Petrov-Galerkin scheme for the compressible Navier-Stokes (CNS)
+equations (NM-LSPG-CNS) is simpl­fied, at each 𝑛-th time step and 𝑖-th intermediate optimization step in Algorithm 3: having a
+
+
+                                                                              16
+F. Romor, G. Stabile and G. Rozza
+                                                                                                             Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. 7. INS. Comparison between the 𝑛-th time instant iterations of the full-order model numerical scheme sonicFoam (Left) and the nonlinear manifold least-squares
+Petrov Galerkin (NM-LSPG-CNS) method (Right).
+
+
+
+
+solution manifold, trained on a previous database, as ansatz space, the corrector loops can be avoided and only the residual eval­
+uation of the mass (23a), momentum (23b), energy (23c) and pressure-Poisson equations are needed. For the same reasoning the
+orthogonal corrector loops can be avoided as the solutions searched for on the approximant nonlinear manifold should be already
+corrected.
+   Along the lines of the previous considerations, we can employ larger time steps. In fact, it will be shown that using four times
+the reference time step, that is (Δ𝑡)ref = 0.004, brings a speedup also in the case of a coarse mesh, see Table 1. To get a grasp of the
+extension of the solution manifold for the test cases CNS-1 and CNS-2, we show 4 snapshots corresponding to the time instants and
+Mach numbers 𝑡 = 0.2 s, Ma = 5.2, 𝑡 = 2.5 s, Ma = 5.2, 𝑡 = 0.2 s, Ma = 1.8, and 𝑡 = 2.5 s, Ma = 1.8 in Fig. 8.
+   The value of the 𝐿2 relative error is low for the internal energy field because its average absolute value is high as can be seen in
+Appendix B for the test cases CNS1 and CNS2.
+
+
+                                                                             17
+F. Romor, G. Stabile and G. Rozza
+                                                                                                                 Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. 8. CNS-1 and CNS-2. From left to right: test full-order snapshots representing the velocity field magnitude corresponding to the parametric values (𝑡 = 0.2 s, Ma =
+5.2), (𝑡 = 2.5 s, Ma = 5.2), (𝑡 = 0.2 s, Ma = 1.8), and (𝑡 = 2.5 s, Ma = 1.8). The whole extension of the solution manifold includes the transient dynamics from the time
+instants 𝑡 = 0 s to 𝑡 = 2.5 s opportunely rescaled through equation (24) and the diﬀerent test Mach number values Ma ∈ [1.8, 5.2]. The presence of moving discontinuities
+at diﬀerent Mach angles makes this test case diﬃcult to reduced with classical linear projection based ROMs.
+
+
+
+
+Fig. 9. CNS-1. Comparison of hyper-reduction methods based on the mean 𝐿2 relative error evaluated on each physical field of interest for the CNS test case. The
+acronyms correspond to: AE-REC is the autoencoder reconstruction error from (5), C-UP50 is the reduced collocation method with the gradient based-sampling
+strategy from subsection 3.2 applied every 50 time steps over 2000 time instants; the other notations are introduced in subsections 3.1.1, 3.1.2, and 3.1.3. For all the
+methods, it is employed a fixed number of 𝑟ℎ = 𝟓𝟎𝟎 collocation nodes and 𝑟rSVD = 𝟏𝟓𝟎 rSVD modes used for both the deﬁnition of the nonlinear approximant map
+introduced in section 2.2 and the hyper-reduction basis. With the current monolithic hyper-reduction implementation, the best methods are the collocated ones.
+
+
+5.1.1. Interpolation and quadrature based hyper-reduction on a coarse mesh (CNS-1)
+   As anticipated, in this subsection we will consider a coarse mesh of 4500 cells, reported in Fig. 6, for a total of 𝑑 = 27000 dofs.
+The training interval is Ma ∈ [2, 5] and 𝑡 ∈ {0, Δ𝑡, … , 2500 ⋅ Δ𝑡} = 𝑇𝝁 with Maref = 2 and (𝑇𝜇 )ref = 2, and the time steps opportunely
+scaled with respect to the current Mach number through equation (24). We consider the following training and test Mach numbers
+
+        train = {5, 4.256, 3.709, 3.291, 2.960, 2.693, 2.473, 2.290, 2.134, 2} × 𝑇𝝁 ,               |train | = 10 ⋅ 2500,                                       (25a)
+
+         test = {𝟓.𝟐, 4.042, 3.314, 2.816, 2.455, 2.182, 𝟏.𝟗𝟕𝟎, 𝟏.𝟖} × 𝑇𝝁 ,             |test | = 8 ⋅ 2500,                                                    (25b)
+it can be observed that the first and last two test parameters are in the extrapolation regime as they don’t belong to the interval [2, 5].
+From now on, the test parameters will be numbered with the order in which they appear in equation (25b) and refer only to the
+Mach number: from test parameter 1 with Ma = 5.2 to test parameter 8 with Ma = 1.8, we will use this notation also in the following
+ﬁgures. A grasp of the solution manifold extension can be observed in Fig. 8. So, the training dataset 𝐴train ∈ ℝ𝑑×𝑛train is represented
+by 𝑛train = |train | ⋅ 1250 = 12500 training snapshots, as only one every two time instants is saved. The test dataset 𝐴test ∈ ℝ𝑑×𝑛test is
+composed by 𝑛test = |test | ⋅ 500 = 5000 snapshots as only one every four time instants is saved. The number of rSVD modes considered
+is 𝑟rSVD = 150 evaluated from the training dataset 𝐴train . The CAE architecture employed is reported in Table A.4.
+    As a first study, we show in Fig. 9 the accuracy of the diﬀerent hyper-reduction methods introduced in section 3. A fixed number
+of 𝑟ℎ = 𝟓𝟎𝟎 collocation nodes and 𝑟rSVD = 𝟏𝟓𝟎 rSVD modes used for both the deﬁnition of the nonlinear approximant map introduced
+in section 2.2 and the hyper-reduction basis are employed for all the methods. When residual basis RB is employed they are evaluated
+separately with respect to the ones used to d­fine the nonlinear approximant 𝜙 ∶ ℝ𝑟 → ℝ𝑑 . It can be seen that the reconstruction
+error (5) of the autoencoder represents the baseline accuracy that we want to reach in terms of mean 𝐿2 relative error. It is also clear
+that with our implementation of hyper-reduction the most accurate methods are the collocated ones. The lower accuracy of the other
+methodologies may be attributed to our choice of considering the physical fields of interest altogether in a monolithic fashion, both
+for the evaluation of the rSVD basis employed in the hyper-reduction oﬄine stage and the computation of the normalization vectors
+from equation (7). Moreover, collocation methods are more eﬃcient as the collocated residuals do not need to be multiplied further
+by a pseudo-inverse or a vector of weights as in DEIM and ECSW methods. Further comments are added in section 6.
+
+
+                                                                                18
+F. Romor, G. Stabile and G. Rozza
+                                                                                                          Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. 10. CNS-1. The decay of the mean 𝐿2 relative error is assessed for the C-DEIM, C-DEIM-SOPT, and C-UP50 reduced over-collocation methods with sampling
+strategies corresponding to a greedy one, the quasi-optimal (SOPT) one and the gradient-based adaptive one every 50 time steps. In this case we employ the same
+reference time step as the full-order model (Δ𝑡)ref = 0.001. The baseline represented by the autoencoder mean 𝐿2 reconstruction error AE-REC is reported. The
+extrapolation parameters have a shaded red background.
+
+
+    Since we observed that collocated hyper-reduction reached a better accuracy, we show in the next study the decay of the mean 𝐿2
+relative error associated to the C-DEIM, C-DEIM-SOPT, and C-UP50 methods, varying the number of collocation nodes/magic points
+from 150 to 1200. The results are shown in Fig. 10. The most eﬃcient method is C-UP50, the gradient-based adaptive one, that pays
+the additional cost of a submesh update every 50 time steps.
+    The advantage of having a continuous nonlinear approximant for the solution manifold, enables the possibility to choose a bigger
+reference time step in the online prediction stage. The results in terms of mean and max 𝐿2 relative error are shown in Fig. 11. Thanks
+to this choice of reference time step (Δ𝑡)ref = 0.004 four times bigger than the full-order one (Δ𝑡)ref = 0.001 and twice as the sampling
+step used to select the training snapshots 𝐴train ∈ ℝ𝑑×𝑛train , a speedup can be achieved also for this small test case.
+    The average computational times of the NM-LSPG method with gradient-based adaptive hyper-reduction C-UP50 are shown in
+Table 1. The average is performed considering all 8 test parameters for diﬀerent Mach numbers. The average total time includes the
+cost of submesh updates introduced by the C-UP50 hyper-reduction. There is no evident speedup with respect to the full-order model.
+However, when a four time bigger reference time step (Δ𝑡)ref = 0.004 is imposed a speedup of almost 2 is achieved also for this small
+test case.
+
+5.1.2. Collocated hyper-reduction on a finer mesh (CNS-2)
+   To be sure to obtain a good approximation with rSVD modes, we increase the number of training snapshots for this CNS-2 test
+case on the finer mesh of 32160 cells shown in Fig. 6. So we consider the following 20 training and 5 test parameters:
+
+        train = {5., 4.617, 4.290, 4.007, 3.760, 3.543, 3.350, 3.178, 3.024, 2.885,
+                   2.758, 2.644, 2.539, 2.442, 2.354, 2.272, 2.196, 2.126, 2.061, 2.} × 𝑇𝝁 ,        |train | = 20 ⋅ 2500,                              (26a)
+
+         test = {5.2, 3.469, 2.622, 2.124, 1.8} × 𝑇𝝁 ,       |test | = 5 ⋅ 2500,                                                                      (26b)
+the first and last test parameters in bold correspond to the extrapolation regime. We remark that we did not optimize the number of
+training snapshots: possibly, a smaller number of them is needed to obtain an accurate regression of the solution manifold. As for the
+previous test case we will refer to the test Mach numbers from Ma = 5.2 to Ma = 1.8 with the numbers from 1 to 5 in this order. A
+
+
+                                                                           19
+F. Romor, G. Stabile and G. Rozza
+                                                                                                               Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. 11. CNS-1. Accuracy of the nonlinear manifold least-squares Petrov-Galerkin (NM-LSPG) method with adaptive gradient-based reduced over-collocation (C­
+UP50) every 50 time steps. The results are reported in terms of the mean 𝐿2 relative error for the physical fields of interest with respect to the 8 test parameters.
+The extrapolation regimes are delimited by a red shaded background. The number of magic points is ℎ𝑟 = 500. It is important to notice that the reference time step
+is (Δ𝑡)ref = 0.004 and not (Δ𝑡)ref = 0.001 equal to the full-order model one. This permits the methodology to reach a speedup even for this small test cases with only
+4500 cells.
+
+
+
+
+Fig. 12. CNS-2. The decay of the mean and max 𝐿2 reconstruction errors d­fined through equations (10a) for the 20 train parameters introduced in equation (26a), is
+shown. The number of rSVD modes initially chosen on the whole parameter space for this test case is 𝑟rSVD = 𝟑𝟎𝟎. Even though the solution manifold includes moving
+discontinuities at diﬀerent Mach angles as shown in Fig. 8, a moderately high number of rSVD modes can still be employed to obtain a good reconstruction error
+but at the same time precludes the implementation of eﬃcient linear projection-based ROMs. A heuristic understanding of the moderately slow Kolmogorov n-width
+decay for this test case can be observed in the degradation of the reconstruction error on the test set in Fig. 13.
+
+
+
+grasp of the extension of the solution manifold we want to approximate is shown in Fig. 8. The training dataset 𝐴train ∈ ℝ𝑑×𝑛train is
+represented by 𝑛train = |train | ⋅ 625 = 20 ⋅ 625 = 12500 training snapshots, since only one every four time instants is saved. The test
+dataset 𝐴test ∈ ℝ𝑑×𝑛test is composed by 𝑛test = |test | ⋅ 625 = 5 ⋅ 625 = 3125 snapshots as only one every four time instants is saved. At
+ﬁrst, the number of rSVD modes considered on the whole parameter space is 𝑟rSVD = 300 evaluated from the training dataset 𝐴train .
+Later, we will extract rSVD on two separate time intervals to study the performance of local nonlinear solution manifolds. The decay
+of the mean and max 𝐿2 reconstruction errors is shown for the fields of interest in Figs. 12 and 13 for the training and test datasets.
+The rSVD basis evaluated from the training dataset as explained in section 2.3 are the same used to evaluate the test reconstruction
+error in Fig. 13. The presence of moving discontinuities coming from the transient dynamics and the diﬀerent Mach angles causes an
+evident degradation of the test reconstruction error with respect to the training reconstruction error.
+
+
+                                                                              20
+F. Romor, G. Stabile and G. Rozza
+                                                                                                             Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. 13. CNS-2. The decay of the mean and max 𝐿2 reconstruction errors d­fined through equations (10a) for the 5 test parameters introduced in equation (10b), is
+shown. The number of rSVD modes initially chosen on the whole parameter space for this test case is 𝑟rSVD = 300. The presence of moving discontinuities at diﬀerent
+Mach angles as shown in Fig. 8 causes an evident degradation of the reconstruction error with respect to the training reconstruction error in Fig. 12. A shaded red
+background ident­fies the extrapolation regime.
+
+
+
+    For this test case, a moderately high number of rSVD modes equal to 𝑟rSVD = 300 can be employed to approximate with suﬃ­
+cient accuracy the solution manifold. However, it can be observed that more complex parameter dependencies can exacerbate this
+behavior and make the approximation of the solution manifold with a linear rSVD basis unfeasible. In those cases, fully nonlinear NN
+architectures directly supported on the dofs of the physical fields of interest can be employed and hyper-reduced with the variant of
+the nonlinear manifold LSPG method introduced in [9].
+    We want to study the implementation of local nonlinear manifolds approximants and how to eﬃciently change from one
+subdomain to the other in the online stage. We consider only two parametric subdomains determined by the splitting of the
+reference time interval [0 s, 2.5 s] into two subintervals [0 s, 1.2 s] ⊃ 𝑇𝝁1 and [0.6 s, 2.5 s] ⊃ 𝑇𝝁2 , with |𝑇𝝁1 | = 1.2∕(Δ𝑡)ref = 300 and
+|𝑇𝝁2 | = (2.5 − 0.6)∕(Δ𝑡)ref = 625 − 150 since one every 4 time instants in [0, 2.5] is saved with a reference time step of (Δ𝑡)ref = 0.001.
+Notice that they overlap in order to achieve a good accuracy when the change of basis is performed. The change of basis between the
+domains is performed at the reference time instant 𝑡 = 𝟎.𝟖𝐬. More sophisticated techniques can be implemented [48]. The notation
+we employ to distinguish between the subdomains is introduced in section 4. So the parameter spaces we consider are:
+
+        𝑛1          = {5., 4.617, 4.290, 4.007, 3.760, 3.543, 3.350, 3.178, 3.024, 2.885,
+           train,1
+
+                        2.758, 2.644, 2.539, 2.442, 2.354, 2.272, 2.196, 2.126, 2.061, 2.} × 𝑇𝝁1 ,       |𝑛1          | = 20 ⋅ 300,
+                                                                                                             train,1
+
+        𝑛2        = {5., 4.617, 4.290, 4.007, 3.760, 3.543, 3.350, 3.178, 3.024, 2.885,
+           train,2
+
+                        2.758, 2.644, 2.539, 2.442, 2.354, 2.272, 2.196, 2.126, 2.061, 2.} × 𝑇𝝁2 ,       |𝑛2          | = 20 ⋅ (625 − 150),
+                                                                                                             train,2
+
+                                                                             𝑑×𝑛train,𝑖
+and consequently the training snapshots matrices 𝐴𝑖𝑛                      ∈ℝ         𝑖 = 1, 2 are assembled and the two rSVD basis 𝑈 𝑖 ∈ ℝ𝑑×𝑟rSVD
+                                                                  train,𝑖
+𝑖 = 1, 2 evaluated. Each one has 𝑟rSVD = 300 modes, but in principle a diﬀerent number can be used. The number of training snapshots
+are 𝑛train,1 = 20 ⋅ |𝑇𝝁1 | = 20 ⋅ 300 and 𝑛train,2 = 20 ⋅ |𝑇𝝁2 | = 20 ⋅ (625 − 150). The same CAE architecture for the two nonlinear approximants
+𝜙𝑖 ∶ ℝ𝑟 → 𝑋ℎ ∼ ℝ𝑑 𝑖 = 1, 2 is employed and reported in Table A.5. The latent dimension is 4 in both cases. We remind that the change
+of basis matrix from equation (22) is computed oﬄine so the methodology maintains the independence with respect to the number
+of dofs.
+    The results for the choice of 𝑟ℎ = 800 collocation nodes, (Δ𝑡)ref = 0.001 reference time step and 𝐶 − 𝑈 𝑃 50 hyper-reduction method,
+are reported in Fig. 14. There, the whole trajectories corresponding to the orderly numbered 5 test parameters are shown. In particular,
+the extrapolation regimes involving parameters 1 and 5 are shown, and the instant 𝑡 = 0.8 s in reference time scale, is highlighted for
+each test trajectory by an orange vertical line. It must be observed that not always the employment of local nonlinear submanifolds
+permits to reach smaller prediction errors: the only test parameter aﬀected by an improvement is test parameter 4, that nonetheless
+corresponds to Mach number Ma = 2.124, and therefore it is more diﬃcult to approximate since the Mach angle is wider. For this
+
+
+                                                                             21
+F. Romor, G. Stabile and G. Rozza
+                                                                                                              Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. 14. CNS-2. Results corresponding to the employment of two local nonlinear manifolds corresponding to the reference time intervals [0 s, 1.2 s] = 𝑇𝝁1 and
+[0.6 s, 2.5 s] = 𝑇𝝁2 , as introduced in section 4. The mean 𝐿2 relative error and relative errors in max norm are shown for each of the 625 time instances associ­
+ated with each one of the 5 test parameters corresponding to the test Mach numbers in equation (26b):each one of the five columns corresponds to a diﬀerent test
+parameters. The reference time instant in which the change of basis is performed is 𝑡 = 0.8 s and it is highlighted by an orange vertical line for each of the 5 test
+parameter. The extrapolation parameters 1 and 5 have a shaded red background.
+
+
+test case, we don’t notice discontinuities from the passage of the solution from one local solution manifold to the other, as it can be
+seen also from the continuity of the errors in Fig. 14.
+    Similarly to the previous test case CNS-1, the decay of the mean 𝐿2 relative error is studied in Fig. 15 for the C-UP20 and C-UP50
+hyper-reduction methods with reference time step (Δ𝑡)ref = 0.004, that is four times the reference time step of the FOM (Δ𝑡)ref = 0.001.
+In this case always two local subdomains are considered. Associated with these studies, the computational costs for mean time instant
+evaluation and mean total time expended for the whole trajectory evaluation with reference time step (Δ𝑡)ref = 0.004, are shown in
+Table 2. It can be observed that the computational costs increase from the same number of collocation nodes (MP) in Table 2 with
+respect to Table 1: this is due mostly to the number of rSVD basis changed from 150 to 300.
+
+5.2. Incompressible turbulent flow around the Ahmed body
+
+   The other benchmark (INS) we introduce to test our methodology involves the Reynolds-averaged Navier-Stokes equations (RANS)
+used to model an incompressible flow around the Ahmed body:
+                                          (         (          ))
+        𝜕𝑡 𝐮̄ + ∇ ⋅ (̄𝐮 ⊗ 𝐮̄ ) + ∇𝑝̄ − ∇ ⋅ (𝜈 + 𝜈𝑡 ) ∇̄𝐮 + ∇̄𝐮𝑇 = 0,                   (momentum conservation)                                                (28a)
+
+                                                                ∇ ⋅ 𝐮̄ = 0,                    (mass conservation)                                            (28b)
+where 𝐮̄ and 𝑝̄ are the time averaged velocity and the kinematic pressure fields, and 𝜈𝑡 is the kinematic Eddy turbulent viscosity.
+The turbulence is modeled with the Spalart-Allmaras one-equation model [49,50]. The Reynolds number is in the order of Re =
+2.8 ⋅ 106 . The parameters we consider are the slant angle 𝜃 of the Ahmed body and time  = [𝜃min , 𝜃max ] × 𝑇𝝁 . We will consider two
+parameter ranges for the slant angle: one associated to small geometrical deformations in subsection 5.2.1 (INS-1) with 𝜃min = 15◦ and
+𝜃max = 18.265◦ and one associated to large geometrical deformations in subsection 5.2.2 (INS-2) with 𝜃min = 15◦ and 𝜃max = 35◦ . The
+computational domain is shown in Fig. 16. The geometry of the Ahmed body and the mesh are deformed with radial basis function
+interpolation as described in [43].
+    The mesh, geometries, initial and boundary conditions are taken from the studies performed in [43] where a classical linear
+projection-based reduced order method is applied to reduce the computational cost of the FOM solved with the SIMPLE [44] numerical
+scheme with the employment of a neural network to approximate the Eddy viscosity. In that case, steady-state solutions are predicted
+
+
+                                                                              22
+F. Romor, G. Stabile and G. Rozza
+                                                                                                               Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. 15. CNS-2. The decay of the mean 𝐿2 relative error is assessed for the C-UP20, and C-UP50 reduced over-collocation methods with sampling strategies corre­
+sponding to the gradient-based adaptive one every 50 and 20 time steps, respectively. In this case we employ a reference time step of four times (Δ𝑡)ref = 0.004 s the
+full-order model one (Δ𝑡)ref = 0.001 s. We always consider two local nonlinear manifolds. The baseline represented by the autoencoder mean 𝐿2 reconstruction error
+AE-REC is reported. The extrapolation parameters 1 and 5 have a shaded red background.
+
+
+
+
+Fig. 16. INS. Left: computational domain of the incompressible turbulent flow past the Ahmed body test case. The mesh has 198633 cells, for a total of 𝑑 = 993165
+dofs for each geometrical deformation corresponding to a diﬀerent choice of the slant angle 𝜃 . Right: description of the boundaries of the computational domain: a
+ﬁxed velocity 40 ms−1 and pressure 𝑝 = 0 fields are imposed at the i­flow boundary Γinflow for each geometrical deformation.
+
+
+while we focus, with the PISO [45] numerical scheme, on the transient dynamics since it is more challenging from the point of view
+of solution manifold approximation.
+    The time interval is not dependent on the slant angle 𝜃 , that is the final time is 𝑇𝝁 = 𝑇 = 0.1 s, the time step is (Δ𝑡)𝝁 = Δ𝑡 = 0.0001 s
+and the collection of time instants is 𝑇𝝁 = 𝑉 = {0 s, 0.0001 s, … , 0.1 s}. The initial and boundary conditions for the velocity 𝐮̄ and
+pressure 𝑝̄ averaged fields are:
+        {                                                           {
+          𝐮(𝐱, 𝑡) = 40 ms−1 ,         (𝐱, 𝑡) ∈ Ω̊ ℎ × {𝑡 = 0}           𝐮(𝐱, 𝑡) = 40 ms−1 ,   𝐱 ∈ Γinflow
+                                                              ,                                           ,
+         𝑝(𝐱, 𝑡) = 0,                           ̊
+                                      (𝐱, 𝑡) ∈ Ωℎ × {𝑡 = 0}             𝐧 ⋅ ∇𝑝(𝐱, 𝑡) = 0,     𝐱 ∈ Γinflow
+        {                                                {
+         𝐧 ⋅ ∇𝐮(𝐱, 𝑡) = 0,          𝐱 ∈ Γoutflow           𝐮(𝐱, 𝑡) = 0,           𝐱 ∈ ΓAhmed ∪ Γbottom
+                                                   ,                                                   ,
+         𝑝(𝐱, 𝑡) = 0,               𝐱 ∈ Γoutflow           𝐧 ⋅ ∇𝑝(𝐱, 𝑡) = 0,      𝐱 ∈ ΓAhmed ∪ Γbottom
+        {
+          𝐧 ⋅ ∇𝐮(𝐱, 𝑡) = 0,         𝐱 ∈ Γsides
+         𝐧 ⋅ ∇𝑝(𝐱, 𝑡) = 0,          𝐱 ∈ Γsides
+where the computational domain and its boundaries Γoutflow , Γinflow , ΓAhmed , Γbottom and the remaining faces Γsides are shown in
+Fig. 16. The computational mesh considered has a fixed number of cells for each geometrical deformation equal to 𝑀 = 𝟏𝟗𝟖𝟔𝟑𝟑 for
+a total of 𝑑 = 𝟗𝟗𝟑𝟏𝟔𝟓 dofs considering the average velocity, pressure and Eddy viscosity fields.
+    The OpenFoam solver we employ is the transient PISO numerical scheme. The predictor-corrector scheme is similar to the one
+described for the sonicFoam solver in subsection 5.1 and shown in Algorithm 4 (Fig. 17) in a simpl­fied version for a comparison
+with the nonlinear manifold least-squares Petrov-Galerkin (NM-INS) method in Algorithm 5. As before, we consider only the 𝑛-th
+
+
+                                                                              23
+F. Romor, G. Stabile and G. Rozza
+                                                                                                          Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. 17. INS. Comparison between the 𝑛-th time instant iterations of the full-order model numerical scheme PISO (Left) and the nonlinear manifold least-squares
+Petrov Galerkin (NM-INS)method (Right).
+
+
+time instant and possible 𝑖-th intermediate optimization steps for the NM-INS method. First, the velocity field is obtained with an
+implicit predictor step in line 2, where the time discretization is hidden inside the diagonal 𝐴 and over-diagonal 𝐻[𝐮∗ , 𝜈𝑡𝑛 ] parts of
+the finite volume discretization of the Reynolds averaged momentum equation (28a). Afterwards, the velocity is corrected to satisfy
+the continuity equation (28b) through the kinematic pressure, obtained with a pressure-Poisson equation in line 5. Finally, the new
+Eddy viscosity is obtained.
+    The NM-INS method does not implement a predictor-correct strategy instead: only residual evaluations need to be computed and
+PISO and non-orthogonal corrector loops are omitted, as we search for the converged solutions corresponding to the last corrector
+steps. We remark that we don’t consider the residual of the Eddy viscosity equation of the Spalart-Allmaras one-equation model in the
+NM-INS algorithm, but only the velocity and pressure ones. This choice and the diﬃculty of linearly approximating the Eddy viscosity
+in our testcase, compared to the velocity and pressure fields, could be the reasons behind the worse accuracy in the predictions of
+the Eddy viscosity. For example, this can be observed in Fig. 19.
+    As for the CNS test case, we consider a five times bigger time step for the nonlinear manifold method: instead of Δ𝑡 = 0.0001 s
+employed for the full-order solutions, we set Δ𝑡 = 0.0005 for the NM-INS method.
+
+5.2.1. Small geometrical deformations (INS-1)
+   As can be understood from the small geometrical deformations in Fig. 18, the diﬃculty resides in the approximation of the transient
+dynamics rather than in the i­fluence of the geometrical parameter. We consider 5 training slant angles and 4 test slant angles inside
+the training range (no extrapolation):
+                           (               )
+        train = {15◦ + 𝑖 ⋅ (35◦ − 15◦ )∕49 |𝑖 ∈ {0, 2, 4, 6, 8}} × 𝑉 , |train | = 5,                                                                  (29a)
+                           (               )
+         test = {15◦ + 𝑖 ⋅ (35◦ − 15◦ )∕49 |𝑖 ∈ {1, 3, 5, 7}} × 𝑉 , |test | = 4, .                                                                    (29b)
+In the order written in equations (29a) and (29b), we name the training and test parameters from 1 to 5 and from 1 to 4, respectively.
+    As anticipated we employ a five times bigger time step Δ𝑡 = 0.0005 s with respect to the full-order one Δ𝑡 = 0.0001 s. We apply
+the C-UP-20 hyper-reduction with 𝑟ℎ = 1500 collocation nodes. For the test parameter 1, 𝜃 = 15.4◦ , the mean 𝐿2 relative errors
+corresponding to the 1000 time instants from 0.0005 s to 0.1 s are shown in Fig. 19. As can be seen, eﬃcient and relatively accurate
+predictions can be obtained. The computational time spent is summarized in Table 3, reaching a speedup of around 26 with respect
+
+
+                                                                           24
+F. Romor, G. Stabile and G. Rozza
+                                                                                                                  Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. 18. INS-1. Left: Ahmed body with slant angle 𝜃 = 15.408◦ from the training parameter set. Right: Ahmed body with slant angle 𝜃 = 18.265◦ from the training
+parameter set.
+
+
+
+
+Fig. 19. INS-1. Every 10 time steps, the 𝐿2 relative error is reported for the predicted physical fields of interest associated to test parameter 1, corresponding to the
+slant angle 𝜃 = 15.408◦ and the C-UP20 method with 𝐫𝐡 = 𝟏𝟓𝟎𝟎 collocation nodes. The training parameter range is relatively small [15◦ , 18.265◦ ]. The 𝐿2 autoencoder
+relative reconstruction error represents an experimental lower bound to the prediction error. The accuracy is worse in the first time steps, a possible strategy to further
+reduce it is to employ local nonlinear manifold approximations as described in section 4.
+
+
+
+
+to the full-order model for this simple test case. Local nonlinear manifold approximations could be employed to achieve better
+predictions in the initial time instants, splitting the time interval.
+    The convergence with respect to the number of collocation nodes is shown in Fig. 20 for the hyper-reduction methods C-UP-20 and
+C-UP-50 and collocation nodes 𝑟ℎ ∈ {500, 1000, 1500, 2000, 2500}. The corresponding timings are reported in Table 3 for a comparison
+with the full-order method. The computational cost of the submesh update can be reduced by restricting the collocation nodes that
+can be selected only to a neighborhood of the current submesh.
+
+
+5.2.2. Large geometrical deformations (INS-2)
+    A situation where the methodology devised may fail is considered. One of the main problems of employing rSVD modes to
+linearly approximate solution manifolds with respect to nonlinear dimension reduction methods that employ neural networks, is a
+slow Kolmogorov n-width decay or, from a diﬀerent point of view, the high generalization error on the test set. This is evident when
+increasing the dimension of the linear reduced space, the error on the training set decreases, but the error in the test set does not.
+    An example of this behavior is shown in Fig. 22. This time we want to approximate the solution manifold corresponding to the
+parameter range for the slant angle 𝜃 ∈ [15◦ , 35◦ ]. We sample uniformly 50 slant angles:
+                      (               )
+         = {15◦ + 𝑖 ⋅ (35◦ − 15◦ )∕49 |𝑖 ∈ {0, … , 49}} × 𝑉 ,                 || = 50 ⋅ 1000,                                                                      (30)
+and, as usual, we number the test parameters in order from 1 to 50. The training and test parameters of the previous section 5.2.1,
+correspond to the indices {1, 3, 5, 7, 9} for the training slant angles and {2, 4, 6, 8} for the test slant angles.
+   With reference to Fig. 21 below, it is clear that a linear approximant of the whole solution manifold cannot be used, if the
+computational budget is limited to only 13 training time series. The worse test error from parameter 27 to 47 corresponds to diﬀerent
+characteristics of the flow: at diﬀerent values of the slant angle, diﬀerent properties of the flow can be observed, see [43]. Increasing
+the computational budget, local linear reduced basis achieve substantial improvements. The results in terms of mean 𝐿2 reconstruction
+error are reported in Fig. 21 below. Each local linear solution manifold approximant is highlighted by shaded backgrounds of diﬀerent
+colors. The leftmost corresponds to the parameters’ range of the previous section 5.2.2.
+
+
+                                                                                25
+F. Romor, G. Stabile and G. Rozza
+                                                                                                               Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. 20. INS-1. The decay of the mean 𝐿2 relative error is assessed for the C-UP20, and C-UP50 reduced over-collocation methods with sampling strategies corre­
+sponding to the gradient-based adaptive one every 50 and 20 time steps, respectively. In this case we employ a reference time step of four times (Δ𝑡)ref = 0.0005 s the
+full-order model one (Δ𝑡)ref = 0.0001 s. The baseline represented by the autoencoder mean 𝐿2 reconstruction error AE-REC is reported.
+
+
+
+
+Fig. 21. INS-2. Left: Ahmed body with slant angle 𝜃 = 15◦ from the training parameter set. Right: Ahmed body with slant angle 𝜃 = 35◦ from the training parameter
+set.
+
+
+
+    Neural networks are known to overcome this problem with truly nonlinear dimension reduction algorithms, that is, with respect
+to the methodology introduced in this work, without the direct involvement of linear rSVD basis. Possible hyper-reduction strategies
+that can be applied to a general truly nonlinear neural network architecture are studied in [9]. Nevertheless, the methodology
+presented in this work could eﬀectively be applied for each of the four subdomains in Fig. 22 with satisfactory accuracy in terms of
+test reconstruction error.
+
+6. Discussion
+
+    Some crucial considerations not yet underlined, are the subject of this section:
+
+   • choice of latent dimension. The latent dimensionality equal to 𝐫 = 𝟒 and the number of rSVD modes equal to 𝐫rSVD = 𝟏𝟓𝟎 or
+     𝐫rSVD = 𝟑𝟎𝟎 are not chosen after parametric studies and therefore more optimal values for the problems at hand can be generally
+     found. As long as we obtain a satisfactory approximation of the solution manifold for some values of the latent dimension of the
+     autoencoder and of the reduced dimension of the linear projections, we did not change them, thus exploiting the possibility to
+     employ the same neural networks architectures shown in Tables A.4 and A.5 for our numerical investigations. In fact, our focus
+     is in the hyper-reduction methodologies applied after a relatively accurate nonlinear approximant of the solution manifold is
+     obtained. Fixed a tolerance for the 𝐿2 relative reconstruction error, the best value for 𝑟rSVD can be eﬃciently found observing
+     the decay of the reconstruction error as done in section 5.2.2 for the INS-2 test case. Also, the latent dimensionality of the
+     autoencoder cannot be established a priori, for some theoretical bounds see [51]. Nevertheless, many empirical studies can be
+     performed to determine the latent dimensionality [52].
+   • non collocated hyper-reduction methods. The non collocated versions of the hyper-reduction methods introduced in section 3
+     do not perform better in terms of accuracy as shown in Fig. 9, with respect to the collocated variants. The same gappy DEIM
+     implementation performs well when applied in synergy with teacher-student training of a reduced decoder for a 2d nonlinear
+     conservation law parametric model in [9], the only physical field considered is velocity, so normalization is not needed. Anyway,
+     in terms of eﬃciency, collocation methods are faster since they do not perform additional matrix-vector multiplications (for DEIM
+
+
+                                                                               26
+F. Romor, G. Stabile and G. Rozza
+                                                                                                               Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. 22. INS-2. Studies of the decay of the mean 𝐿2 reconstruction errors d­fined through equations (10a) for the 50 geometrical deformations in (30). For brevity,
+we report only the errors on the velocity field. Top: approximation of the whole solution manifold with 13 training time series. It is evident the major drawback in
+employing linear approximants: the generalization error on the test set remains high even if the reduced dimension is increased from 50 to 800. Bottom: approximation
+of the solution manifold with 4 local linear approximants. They are highlighted by the shaded regions in background. The leftmost corresponds to the solution manifold
+studied in the previous section 5.2.1.
+
+
+
+     and DEIM-SOPT) or scalar products (ECSW), after the evaluation of the residuals at the magic points. Moreover, employing
+     adaptive hyper-reduction strategies in the online stage has higher computational costs for non collocated approaches since
+     pseudo-inverse matrices need to be evaluated (for DEIM).
+   • stability issues. Reduced over-collocation methods may bring unstable numerical schemes, especially if the solution manifold is
+     not approximated with enough accuracy by the nonlinear approximant. In our case, the reconstruction error of the autoencoders
+     was satisfactory enough not to have stability issues inside the training range. Possible solutions involve the training of NN
+     architectures with a more smooth latent space and more regular maps such as those that should be guaranteed by variational
+     autoencoders [29] or other machine learning architectures. On this line of thought, many additional inductive biases can be
+     imposed. However, from the point of view of numerical analysis, stabilization strategies for ROMs have frequently been employed
+     also for the classical projection-based methodologies as they often suﬀer from stability issues, especially when hyper-reduction is
+     applied. Possible solutions include structure-preserving and/or regularized versions [53,54] of hyper-reduction methods. Further
+     stability issues that may be inherited by the ROM from the FOM, e.g. inf-sup stability [1] for the INS, are the focus of future
+     studies.
+   • inductive biases and autoencoder regularity. The training and the NN architecture itself can be enriched by inductive biases.
+     Among them, there are first principles (e.g. conservation laws), geometrical symmetries (group equivariant filters [28]), latent
+     operators/numerical schemes (e.g. operator inference [55,56]) latent regularity (supposedly imposed by variational autoencoders
+     and other architectures), structure-preservation [57], other numerical and mathematical properties (e.g. positiveness).
+   • comparison with linear ROMs. In general, the overhead represented by the nonlinear approximant is compensated by the fact
+     that the dimension of the latent variable is signiﬁcantly reduced: in our test cases from 𝑝 = 300 to 𝑟𝑟𝑆𝑉 𝐷 = 4. A direct comparison
+     for other choices of nonlinear approximant has been reported in [12].
+
+
+                                                                              27
+F. Romor, G. Stabile and G. Rozza
+                                                                                         Journal of Computational Physics 524 (2025) 113729
+7. Conclusions
+
+    We developed and tested on challenging benchmarks a new method that exploits nonlinear solution manifold approximants. It
+relies on convolutional autoencoders and linear transforms/filter maps (speciﬁcally parallel randomized singular value decomposi­
+tion) to approximate solution manifolds even when aﬀected by a moderately slow Kolmogorov n-width decay. The main novelty
+resides in the implementation of new eﬃcient collocated and adaptive gradient-based hyper-reduction strategies speciﬁcally tailored
+for our choice of nonlinear approximants. Local solution manifold approximations and eﬃcient ways to perform the change of basis
+are also taken into consideration. We managed to achieve signiﬁcant speedups while keeping a satisfactory accuracy even when we
+considered small benchmarks in terms of degrees of freedom, implemented in OpenFoam. Our test cases model complex physics such
+as the compressible and incompressible turbulent Navier-Stokes equations and suﬀer from a moderately slow Kolmogorov n-width
+decay that would need in the order of hundreds of linear basis to be well-approximated by classical projection-based ROMs.
+    The crucial objective that we want to reach with our methodology is the development of numerically and physically explicable
+model order reduction methods while exploiting machine learning architectures. The majority of scientific machine learning strategies
+employ neural networks in the predictive/online stage as black box surrogate models, without exploiting the underlying physics of
+the models embedded in the numerical schemes of the full-order models’ solvers. Diﬀerently, our approach eﬃciently exploits the
+numerical schemes also in the predictive phase, with the possibility to characterize the latent solutions found as minimizers of the
+residuals of conservation laws. The interpretability of the results is evidently increased.
+    The main disadvantages regard the employment of linear basis: parametric models that suﬀer for a slow Kolmogorov n-width
+decay, such as the incompressible flow around the Ahmed body with geometrical deformations studied in section 5.2.2, may require
+too many computational resources to obtain local linear approximations of the solution manifold. The use of more generic truly
+nonlinear neural networks architectures should bring lower generalization errors. Some implementations of hyper-reduction for
+generic NN architectures involve teacher-student training and are presented in [9].
+    Other aspects that can be substantially improved are stabilization issues: the development of stabilization mechanisms that would
+aid the nonlinear least-squares optimizers in the search for a physically accurate latent solution would greatly improve our method­
+ology. On the same subject, structure-preserving and other regularizing frameworks, without mentioning additional useful inductive
+biases, would also help to achieve more accurate solutions.
+
+CRediT authorship contribution statement
+
+   Francesco Romor: Writing -- original draft, Methodology, Investigation. Giovanni Stabile: Writing -- review & editing, Concep­
+tualization. Gianluigi Rozza: Writing -- review & editing, Supervision, Project administration, Funding acquisition.
+
+Declaration of competing interest
+
+    The authors declare the following financial interests/personal relationships which may be considered as potential competing
+interests: Gianluigi Rozza reports financial support and administrative support were provided by International School for Advanced
+Studies.
+
+Acknowledgements
+
+   This work was partially funded by European Union Funding for Research and Innovation - Horizon 2020 Program - in the
+framework of European Research Council Executive Agency: H2020 ERC CoG 2015 AROMA-CFD project 681447 ``Advanced Reduced
+Order Methods with Applications in Computational Fluid Dynamics'' P.I. Professor Gianluigi Rozza. We also acknowledge the PRIN
+2017 ``Numerical Analysis for Full and Reduced Order Methods for the eﬃcient and accurate solution of complex systems governed by
+Partial Diﬀerential Equations'' (NA_FROM_PDEs). GS acknowledges the financial support under the National Recovery and Resilience
+Plan (NRRP), Mission 4, Component 2, Investment 1.1, Call for tender No. 1409 published on 14.9.2022 by the Italian Ministry of
+University and Research (MUR), funded by the European Union -- NextGenerationEU -- Project Title ROMEU -- CUP P2022FEZS3 --
+Grant Assignment Decree No. 1379 adopted on 01/09/2023 by the Italian Ministry of Ministry of University and Research (MUR)
+and acknowledges the financial support by the European Union (ERC, DANTE, GA-101115741). Views and opinions expressed are
+however those of the author(s) only and do not necessarily r­flect those of the European Union or the European Research Council
+Executive Agency. Neither the European Union nor the granting authority can be held responsible for them.
+
+
+
+
+                                                               28
+F. Romor, G. Stabile and G. Rozza
+                                                                                                              Journal of Computational Physics 524 (2025) 113729
+Appendix A. Architectures
+
+    We report here the details of the architectures of the Convolutional Autoencoders employed.
+
+                     Table A.4
+                     The 1d Convolutional Autoencoder for the CNS1 on the coarse mesh in subsection 5.1.1. The labels ‘Act’, ‘Pad’, and ‘Str’
+                     stand for Activations, Padding and Strides, respectively.
+
+                          Encoder    Act     Weights            Pad     Str          Decoder       Act       Weights           Pad     Str
+
+                          Conv1d     ELU     [1, 8, 4, 4]       1       2            Linear        ELU       [4, 512]          -
+                          Conv1d     ELU     [8, 16, 4, 4]      1       2            ConvTr1d      ELU       [128, 64, 5, 5]   1       2
+                          Conv1d     ELU     [16, 32, 4, 4]     1       2            ConvTr1d      ELU       [64, 32, 4, 4]    1       2
+                          Conv1d     ELU     [32, 64, 4, 4]     1       2            ConvTr1d      ELU       [32, 16, 5, 5]    1       2
+                          Conv1d     ELU     [64, 128, 4, 4]    1       2            ConvTr1d      ELU       [16, 8, 5, 5]     1       2
+                          Linear     ELU     [512, 4]           -                    ConvTr1d      ReLU      [8, 1, 4, 4]      1       2
+
+
+                     Table A.5
+                     The 1d Convolutional Autoencoder for the CNS2 on the finer mesh in subsections 5.1.2 and for the INS1 in subsection 5.2.1.
+
+                          Encoder    Act     Weights            Pad     Str          Decoder       Act       Weights           Pad     Str
+
+                          Conv1d     ELU     [1, 8, 4, 4]       1       2            Linear        ELU       [4, 512]          -
+                          Conv1d     ELU     [8, 16, 4, 4]      1       2            ConvTr1d      ELU       [128, 64, 5, 5]   1       2
+                          Conv1d     ELU     [16, 32, 4, 4]     1       2            ConvTr1d      ELU       [64, 32, 4, 4]    1       2
+                          Conv1d     ELU     [32, 64, 4, 4]     1       2            ConvTr1d      ELU       [32, 16, 5, 5]    1       2
+                          Conv1d     ELU     [64, 128, 4, 4]    1       2            ConvTr1d      ELU       [16, 8, 5, 5]     1       2
+                          Linear     ELU     [512, 4]           -                    ConvTr1d      ReLU      [8, 1, 4, 4]      1       2
+
+
+
+
+                                                                              29
+F. Romor, G. Stabile and G. Rozza
+                                                                                                             Journal of Computational Physics 524 (2025) 113729
+Appendix B. Predicted snapshots
+
+    Some snapshots associated to the test cases studied are reported: Fig. B.23 refers to the CNS1 test case in section 5.1.1, Fig. B.24
+refers to the CNS2 test case in section 5.1.2 and finally Figs. B.25 and B.26 refers to the test case INS1 in section 5.2.1.
+
+
+
+
+Fig. B.23. CNS1. Predicted velocity, density, internal energy and pressure fields for the test case described in section 5.1.1 with Ma = 3.314 corresponding to test
+parameter number 3 at the final time instant 𝑡 = 2.5 s. The number of cells is 4500 the total number of degrees of freedom is 27000. The number of collocation nodes
+is 𝑟ℎ = 500.
+
+
+
+
+                                                                             30
+F. Romor, G. Stabile and G. Rozza
+                                                                                                             Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. B.24. CNS2. Predicted velocity, density, internal energy and pressure fields for the test case described in section 5.1.1 with Ma = 2.622 corresponding to test
+parameter number 3 at the final time instant 𝑡 = 2.5 s. The number of cells is 32160 the total number of degrees of freedom is 192960. The adaptive magic points are
+shown in Fig. 4. The number of collocation nodes is 𝑟ℎ = 700.
+
+
+
+
+                                                                             31
+F. Romor, G. Stabile and G. Rozza
+                                                                                                               Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. B.25. INS1. Predicted velocity and pressure fields for the test case described in section 5.2.1 with corresponding to test parameter number 1 at the time instant
+s 𝑡 ∈ {0.025 s, 0.05 s, 0.075 s, 0.1 s}. The number of cells is 32160 the total number of degrees of freedom is 192960. The number of collocation nodes is 𝑟ℎ = 2000.
+The adaptive magic points are shown in Fig. B.26.
+
+
+
+
+                                                                              32
+F. Romor, G. Stabile and G. Rozza
+                                                                                                              Journal of Computational Physics 524 (2025) 113729
+
+
+
+
+Fig. B.26. INS1. Adaptive collocation nodes for the test case described in section 5.2.1 with corresponding test parameter number 1 at the time instants
+𝑡 ∈ {0.025 s, 0.05 s, 0.075 s, 0.1 s}. The number of collocation nodes is 𝑟ℎ = 2000. The number of cells is 198633 the total number of degrees of freedom is 993165.
+Above 4 slices: bottom view of the Ahmed body. Below 4 slices: lateral view of the Ahmed body.
+
+
+
+
+Data availability
+
+    Data will be made available on request.
+
+References
+
+ [1] J.S. Hesthaven, G. Rozza, B. Stamm, et al., Cert­fied Reduced Basis Methods for Parametrized Partial Diﬀerential Equations, vol. 590, Springer, 2016.
+ [2] G. Rozza, G. Stabile, F. Ballarin, Advanced Reduced Order Methods and Applications in Computational Fluid Dynamics, SIAM, 2022.
+ [3] R.A. DeVore, R. Howard, C. Micchelli, Optimal nonlinear approximation, Manuscr. Math. 63 (1989) 469--478, https://doi.org/10.1007/BF01171759.
+ [4] A. Cohen, R. DeVore, G. Petrova, P. Wojtaszczyk, Optimal stable nonlinear approximation, Found. Comput. Math. 22 (2021) 607--648, https://doi.org/10.1007/
+     s10208-021-09494-z.
+ [5] G. Petrova, P. Wojtaszczyk, Lipschitz widths, Constr. Approx. 57 (2022) 759--805, https://doi.org/10.1007/s00365-022-09576-3.
+ [6] K. Lee, K.T. Carlberg, Model reduction of dynamical systems on nonlinear manifolds using deep convolutional autoencoders, J. Comput. Phys. 404 (2020) 108973,
+     https://doi.org/10.1016/j.jcp.2019.108973.
+ [7] Y. Kim, Y. Choi, D. Widemann, T. Zohdi, A fast and accurate physics-informed neural network reduced order model with shallow masked autoencoder, J. Comput.
+     Phys. 451 (2022) 110841, https://doi.org/10.1016/j.jcp.2021.110841.
+ [8] K. Carlberg, C. Farhat, J. Cortial, D. Amsallem, The gnat method for nonlinear model reduction: eﬀective implementation and application to computational fluid
+     dynamics and turbulent flows, J. Comput. Phys. 242 (2013) 623--647, https://doi.org/10.1016/j.jcp.2013.02.028.
+ [9] F. Romor, G. Stabile, G. Rozza, Non-linear manifold reduced-order models with convolutional autoencoders and reduced over-collocation method, J. Sci. Comput.
+     94 (2023) 74, https://doi.org/10.1007/s10915-023-02128-2.
+[10] Y. Chen, S. Gottlieb, L. Ji, Y. Maday, An eim-degradation free reduced basis method via over collocation and residual hyper reduction-based error estimation, J.
+     Comput. Phys. 444 (2021) 110545, https://doi.org/10.1016/j.jcp.2021.110545.
+[11] L.F.G. Marcantoni, J.P. Tamagno, S.A. Elaskar, High speed flow simulation using openfoam, Mec. Comput. 31 (2012) 2939--2959.
+[12] J. Barnett, C. Farhat, Y. Maday, Neural-network-augmented projection-based model order reduction for mitigating the Kolmogorov barrier to reducibility, J.
+     Comput. Phys. 492 (2023) 112420, https://doi.org/10.1016/j.jcp.2023.112420, https://www.sciencedirect.com/science/article/pii/S0021999123005156.
+[13] C. Farhat, T. Chapman, P. Avery, Structure-preserving, stability, and accuracy properties of the energy-conserving sampling and weighting method for the hyper
+     reduction of nonlinear finite element dynamic models, Int. J. Numer. Methods Eng. 102 (2015) 1077--1110, https://doi.org/10.1002/nme.4820.
+[14] J. Cocola, J. Tencer, F. Rizzi, E. Parish, P. Blonigan, Hyper-reduced autoencoders for eﬃcient and accurate nonlinear model reductions, arXiv preprint arXiv:
+     2303.09630, 2023.
+[15] A.N. Diaz, Y. Choi, M. Heinkenschloss, A fast and accurate domain decomposition nonlinear manifold reduced order model, Comput. Methods Appl. Mech. Eng.
+     425 (2024) 116943, https://doi.org/10.1016/j.cma.2024.116943, https://www.sciencedirect.com/science/article/pii/S0045782524001993.
+[16] S. Fresca, A. Manzoni, Pod-dl-rom: enhancing deep learning-based reduced order models for nonlinear parametrized pdes by proper orthogonal decomposition,
+     Comput. Methods Appl. Mech. Eng. 388 (2022) 114181, https://doi.org/10.1016/j.cma.2021.114181.
+[17] B. Peherstorfer, Model reduction for transport-dominated problems via online adaptive bases and adaptive sampling, SIAM J. Sci. Comput. 42 (2020)
+     A2803--A2836, https://doi.org/10.1137/19M1257275.
+[18] Y. Wen, E. Vanden-Eijnden, B. Peherstorfer, Coupling parameter and particle dynamics for adaptive sampling in neural Galerkin schemes, Phys. D, Nonlinear
+     Phenom. 462 (2024) 134129, https://doi.org/10.1016/j.physd.2024.134129, https://www.sciencedirect.com/science/article/pii/S0167278924000800.
+[19] S. Wild, Solving Derivative-Free Nonlinear Least Squares Problems with POUNDERS, Argonne National Lab., 2014.
+[20] S. Balay, S. Abhyankar, M. Adams, J. Brown, P. Brune, K. Buschelman, L. Dalcin, A. Dener, V. Eijkhout, W. Gropp, et al., Petsc Users Manual, 2019.
+[21] T. O’Leary-Roseberry, U. Villa, P. Chen, O. Ghattas, Derivative-informed projected neural networks for high-dimensional parametric maps governed by pdes,
+     Comput. Methods Appl. Mech. Eng. 388 (2022) 114199, https://doi.org/10.1016/j.cma.2021.114199.
+
+
+
+                                                                              33
+F. Romor, G. Stabile and G. Rozza
+                                                                                                               Journal of Computational Physics 524 (2025) 113729
+[22] P.G. Constantine, Active Subspaces: Emerging Ideas for Dimension Reduction in Parameter Studies, SIAM, 2015.
+[23] Q. Fournier, D. Aloise, Empirical comparison between autoencoders and traditional dimensionality reduction methods, in: 2019 IEEE Second International
+     Conference on Art­ficial Intelligence and Knowledge Engineering (AIKE), 2019, pp. 211--214.
+[24] N. Guglielmi, M. López-Fernández, M. Manucci, Pseudospectral roaming contour integral methods for convection-diffusion equations, J. Sci. Comput. 89 (2021)
+     1--31, https://doi.org/10.1007/s10915-021-01601-0.
+[25] F. Nobile, D. Pradovera, Non-intrusive double-greedy parametric model reduction by interpolation of frequency-domain rational surrogates, ESAIM: Math. Model.
+     Numer. Anal. 55 (2021) 1895--1920, https://doi.org/10.1051/m2an/2021040.
+[26] R. Hawkins, M. Khalid, K. Smetana, J. Trampert, Model order reduction for seismic waveform modelling: inspiration from normal modes, Geophys. J. Int. 234
+     (2023) 2255--2283, https://doi.org/10.1093/gji/ggad195.
+[27] T. Long, R. Barnett, R. Jefferson-Loveday, G. Stabile, M. Icardi, A reduced-order model for advection-dominated problems based on the Radon cumulative
+     distribution transform, Adv. Comput. Math. 51 (2025), https://doi.org/10.1007/s10444-024-10209-5.
+[28] M.M. Bronstein, J. Bruna, Y. LeCun, A. Szlam, P. Vandergheynst, Geometric deep learning: going beyond Euclidean data, IEEE Signal Process. Mag. 34 (2017)
+     18--42, https://doi.org/10.1109/MSP.2017.2693418.
+[29] D.P. Kingma, M. Welling, Auto-encoding variational Bayes, arXiv preprint arXiv:1312.6114, 2013.
+[30] N. Halko, P.G. Martinsson, J.A. Tropp, Finding structure with randomness: probabilistic algorithms for constructing approximate matrix decompositions, SIAM
+     Rev. 53 (2011) 217--288, https://doi.org/10.1137/090771806.
+[31] M. Ghashami, E. Liberty, J.M. Phillips, D.P. Woodruff, Frequent directions: simple and deterministic matrix sketching, SIAM J. Comput. 45 (2016) 1762--1792,
+     https://doi.org/10.1137/15m1009718.
+[32] T. Isaac, N. Petra, G. Stadler, O. Ghattas, Scalable and eﬃcient algorithms for the propagation of uncertainty from data through inference to prediction for
+     large-scale problems, with application to flow of the Antarctic ice sheet, J. Comput. Phys. 296 (2015) 348--368, https://doi.org/10.1016/j.jcp.2015.04.047.
+[33] E.J. Parish, F. Rizzi, On the impact of dimensionally-consistent and physics-based inner products for pod-Galerkin and least-squares model reduction of com­
+     pressible flows, arXiv preprint arXiv:2203.16492, 2022, https://doi.org/10.1016/j.jcp.2023.112387.
+[34] S. Chaturantabut, D.C. Sorensen, Nonlinear model reduction via discrete empirical interpolation, SIAM J. Sci. Comput. 32 (2010) 2737--2764, https://doi.org/
+     10.1137/090766498.
+[35] J.T. Lauzon, S.W. Cheung, Y. Shin, Y. Choi, D.M. Copeland, K. Huynh, S-opt: a points selection algorithm for hyper-reduction in reduced order models, SIAM J.
+     Sci. Comput. 46 (2024) B474--B501, https://doi.org/10.1137/22M1484018.
+[36] Y. Choi, D. Coombs, R. Anderson, Sns: a solution-based nonlinear subspace method for time-dependent model order reduction, SIAM J. Sci. Comput. 42 (2020)
+     A1116--A1146, https://doi.org/10.1137/19M1242963.
+[37] Y. Shin, D. Xiu, Nonadaptive quasi-optimal points selection for least squares linear regression, SIAM J. Sci. Comput. 38 (2016) A385--A411, https://doi.org/10.
+     1137/15M1015868.
+[38] C.L. Lawson, R.J. Hanson, Solving Least Squares Problems, SIAM, 1995.
+[39] G. Guennebaud, B. Jacob, et al., Eigen v3, http://eigen.tuxfamily.org, 2010.
+[40] T. Daniel, F. Casenave, N. Akkari, D. Ryckelynck, Model order reduction assisted by deep neural networks (rom-net), Adv. Model. Simul. Eng. Sci. 7 (2020) 1--27,
+     https://doi.org/10.1186/s40323-020-00153-6.
+[41] H.G. Weller, G. Tabor, H. Jasak, C. Fureby, A tensorial approach to computational continuum mechanics using object-oriented techniques, Comput. Phys. 12
+     (1998) 620, https://doi.org/10.1063/1.168744.
+[42] G. Stabile, S. Hijazi, A. Mola, S. Lorenzi, G. Rozza, POD-Galerkin reduced order methods for CFD using finite volume discretisation: vortex shedding around a
+     circular cylinder, Commun. Appl. Ind. Math. 8 (2017) 210--236, https://doi.org/10.1515/caim-2017-0011.
+[43] M. Zancanaro, M. Mrosek, G. Stabile, C. Othmer, G. Rozza, Hybrid neural network reduced order modelling for turbulent flows with geometric parameters, Fluids
+     6 (2021) 296, https://doi.org/10.3390/ﬂuids6080296.
+[44] R. Issa, B. Ahmadi-Befrui, K. Beshay, A. Gosman, Solution of the implicitly discretised reacting flow equations by operator-splitting, J. Comput. Phys. 93 (1991)
+     388--410, https://doi.org/10.1016/0021-9991(91)90191-M.
+[45] S.V. Patankar, D.B. Spalding, A calculation procedure for heat, mass and momentum transfer in three-dimensional parabolic flows, in: Numerical Prediction of
+     Flow, Heat Transfer, Turbulence and Combustion, Elsevier, 1983, pp. 54--73.
+[46] D.P. Kingma, J. Ba, Adam: a method for stochastic optimization, arXiv preprint arXiv:1412.6980, 2014.
+[47] F. Moukalled, L. Mangani, M. Darwish, F. Moukalled, L. Mangani, M. Darwish, The Finite Volume Method, Springer, 2016.
+[48] R. Zimmermann, Manifold interpolation, system- and data-driven methods and algorithms, in: P. Benner, S. Grivet-Talocia, A. Quarteroni, G. Rozza, W. Schilders,
+     L.M. Silveira (Eds.), Model Order Reduct. 1 (2021) 229--274, https://doi.org/10.1515/9783110498967-007.
+[49] P. Spalart, S. Allmaras, A one-equation turbulence model for aerodynamic flows, in: 30th Aerospace Sciences Meeting and Exhibit, 1992, p. 439.
+[50] D.C. Wilcox, et al., Turbulence Modeling for CFD, vol. 2, DCW Industries, La Canada, CA, 1998.
+[51] N. Franco, A. Manzoni, P. Zunino, A deep learning approach to reduced order modelling of parameter dependent partial diﬀerential equations, Math. Comput.
+     92 (2023) 483--524, https://doi.org/10.1090/mcom/3781.
+[52] F. Denti, D. Doimo, A. Laio, A. Mira, The generalized ratios intrinsic dimension estimator, Sci. Rep. 12 (2022) 20005, https://doi.org/10.1038/s41598-022-
+     20991-1.
+[53] R.B. Klein, B. Sanderse, Structure-preserving hyper-reduction and temporal localization for reduced order models of incompressible flows, arXiv preprint arXiv:
+     2304.09229, 2023.
+[54] R. Herkert, P. Buchfink, B. Haasdonk, Dictionary-based online-adaptive structure-preserving model order reduction for parametric Hamiltonian systems, Adv.
+     Comput. Math. 50 (2024), https://doi.org/10.1007/s10444-023-10102-7.
+[55] B. Peherstorfer, K. Willcox, Data-driven operator inference for nonintrusive projection-based model reduction, Comput. Methods Appl. Mech. Eng. 306 (2016)
+     196--215, https://doi.org/10.1016/j.cma.2016.03.025.
+[56] W.I.T. Uy, D. Hartmann, B. Peherstorfer, Operator inference with roll outs for learning reduced models from scarce and low-quality data, Comput. Math. Appl.
+     145 (2023) 224--239, https://doi.org/10.1016/j.camwa.2023.06.012.
+[57] P. Buchfink, S. Glas, B. Haasdonk, Symplectic model reduction of Hamiltonian systems on nonlinear manifolds and approximation with weakly symplectic
+     autoencoder, SIAM J. Sci. Comput. 45 (2023) A289--A311, https://doi.org/10.1137/21M1466657.
+
+
+
+
+                                                                              34
+

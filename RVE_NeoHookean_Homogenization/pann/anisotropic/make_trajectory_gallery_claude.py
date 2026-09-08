@@ -279,6 +279,8 @@ def main() -> None:
         states = []
         verification_summary = []
         global_max_mag = 0.0
+        global_xmin = global_ymin = np.inf
+        global_xmax = global_ymax = -np.inf
         for n in range(1, N_TRAJECTORIES + 1):
             e_last, u_last = load_trajectory_final_state(n)
             ux, uy = mesh.displacement_field(u_last)
@@ -287,7 +289,21 @@ def main() -> None:
 
             mag = np.sqrt(ux**2 + uy**2)
             global_max_mag = max(global_max_mag, float(np.max(mag)))
+            xdef, ydef = mesh.X0 + ux, mesh.Y0 + uy
+            global_xmin, global_xmax = min(global_xmin, xdef.min()), max(global_xmax, xdef.max())
+            global_ymin, global_ymax = min(global_ymin, ydef.min()), max(global_ymax, ydef.max())
             states.append((n, e_last, ux.copy(), uy.copy(), mag))
+
+        # A single shared window (with a small margin) applied to every panel
+        # below, NOT each panel auto-fit to its own extent: otherwise a
+        # trajectory that barely deforms (e.g. E22=-0.1) and one that
+        # deforms enormously (E11=E22=2) end up drawn at the same apparent
+        # size, hiding exactly the size difference the reader most wants to
+        # see (caught in review: Riccardo Rossi, page-7 comment, 2026-08-19).
+        pad = 0.03 * max(global_xmax - global_xmin, global_ymax - global_ymin)
+        shared_xlim = (global_xmin - pad, global_xmax + pad)
+        shared_ylim = (global_ymin - pad, global_ymax + pad)
+        print(f"[gallery] shared axis window: x in {shared_xlim}, y in {shared_ylim}")
 
         print(
             "[verify] SUMMARY: worst max|error| over all trajectories = "
@@ -307,11 +323,14 @@ def main() -> None:
             im = ax.tripcolor(
                 triang, mag, shading="gouraud", cmap="viridis", vmin=vmin, vmax=vmax
             )
-            # adjustable="datalim" keeps every panel's physical box the same
-            # uniform grid size/position (only the data window pads to
-            # preserve a true 1:1 aspect); the default "box" instead shrinks
-            # each panel's box individually, which staggers panels of
-            # different shapes and collides their titles.
+            # Shared xlim/ylim across every panel (set BEFORE aspect) is what
+            # actually makes a bigger deformation look bigger on the page;
+            # adjustable="datalim" then keeps every panel's own box the same
+            # uniform size/position while enforcing a true 1:1 aspect within
+            # that shared window (the default "box" instead shrinks each
+            # panel's box individually, which would undo the shared scale).
+            ax.set_xlim(shared_xlim)
+            ax.set_ylim(shared_ylim)
             ax.set_aspect("equal", adjustable="datalim")
             ax.set_xticks([])
             ax.set_yticks([])

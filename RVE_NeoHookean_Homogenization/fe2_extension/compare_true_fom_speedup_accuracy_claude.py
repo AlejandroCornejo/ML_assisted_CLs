@@ -52,8 +52,8 @@ ROWS = [
     ("Free hyperelastic (tier 2)", "cook_results_pann_free_claude.npz", 1.295, 3.114, 3.251),
     ("Polyconvex ICNN (tier 3a)", "cook_results_icnn_w5_final_claude.npz", 2.586, 3.0979, 3.2330),
     ("Polyconvex ICKAN (tier 3b)", "cook_results_ickan_w5_final_claude.npz", 8.690, 3.1678, 3.3019),
-    ("HPROM--ANN-FE$^2$", "cook_results_hprom_iterative_f64_consistent_claude.npz", 3995.1, 3.0700, 3.2019),
-    ("D-HPROM--ANN-FE$^2$", "cook_results_dhprom_f64_consistent_claude.npz", 1230.0, 3.0958, 3.2284),
+    ("HPROM--ANN-FE$^2$", "cook_results_hprom_iterative_f64_consistent_claude.npz", 1979.8, 3.0700, 3.2019),
+    ("D-HPROM--ANN-FE$^2$", "cook_results_dhprom_f64_consistent_claude.npz", 386.4, 3.0958, 3.2284),
 ]
 
 

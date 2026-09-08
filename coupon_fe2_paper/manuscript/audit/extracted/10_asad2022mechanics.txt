@@ -1,0 +1,1157 @@
+Received: 16 December 2021     Revised: 21 February 2022   Accepted: 21 February 2022
+
+DOI: 10.1002/nme.6957
+
+
+RESEARCH ARTICLE
+
+
+
+
+A mechanics-informed artificial neural network approach
+in data-driven constitutive modeling
+
+Faisal As’ad1                Philip Avery1                 Charbel Farhat1,2,3
+
+1
+  Department of Aeronautics and
+Astronautics, Stanford University,                 Abstract
+Stanford, California, USA                          A mechanics-informed artificial neural network approach for learning consti-
+2
+  Institute for Computational and                  tutive laws governing complex, nonlinear, elastic materials from strain–stress
+Mathematical Engineering, Stanford
+                                                   data is proposed. The approach features a robust and accurate method for train-
+University, Stanford, California, USA
+3
+ Department of Mechanical Engineering,
+                                                   ing a regression-based model capable of capturing highly nonlinear strain–stress
+Stanford University, Stanford, California,         mappings, while preserving some fundamental principles of solid mechanics. In
+USA                                                this sense, it is a structure-preserving approach for constructing a data-driven
+Correspondence                                     model featuring both the form-agnostic advantage of purely phenomenologi-
+Faisal As’ad, Department of Aeronautics            cal data-driven regressions and the physical soundness of mechanistic models.
+and Astronautics, Stanford University,
+                                                   The proposed methodology enforces desirable mathematical properties on the
+Durand Building, Room 224, Stanford,
+CA 94305-3035, USA.                                network architecture to guarantee the satisfaction of physical constraints such
+Email: faisal3@stanford.edu                        as objectivity, consistency (preservation of rigid body modes), dynamic stabil-
+                                                   ity, and material stability, which are important for successfully exploiting the
+Funding information
+Air Force Office of Scientific Research,           resulting model in numerical simulations. Indeed, embedding such notions in a
+Grant/Award Number: FA9550-20-1-0358;              learning approach reduces a model’s sensitivity to noise and promotes its robust-
+National Aeronautics and Space
+Administration, Grant/Award Number:
+                                                   ness to inputs outside the training domain. The merits of the proposed learning
+80NSSC21K0228; National Science                    approach are highlighted using several finite element analysis examples. Its
+Foundation, Grant/Award Number:                    potential for ensuring the computational tractability of multi-scale applications
+1937129
+                                                   is demonstrated with the acceleration of the nonlinear, dynamic, multi-scale,
+                                                   fluid-structure simulation of the supersonic inflation dynamics of a parachute
+                                                   system with a canopy made of a woven fabric.
+
+                                                   KEYWORDS
+                                                   artificial neural network, constitutive modeling, convexity, hyperelasticity, machine learning,
+                                                   stability, supersonic parachute inflation dynamics
+
+
+
+
+1        I N T RO DU CT ION
+
+The constitutive modeling of a complex material exhibiting a highly nonlinear behavior can be a difficult task. Two main
+approaches for obtaining strain–stress relationships are available for this purpose: phenomenological modeling based
+on empirical observations;1,2 and mechanistic models derived from first principles based on the material’s underlying
+structure.3 Phenomenological models are appealing (and perhaps even necessary) in the context of highly heterogeneous
+materials with complex or even ambiguous micro-structures. However, they are subject to the typical shortcomings of
+empirical relationships. Namely, they can violate some fundamental principles that govern the material they describe
+
+2738     © 2022 John Wiley & Sons, Ltd.                           wileyonlinelibrary.com/journal/nme           Int J Numer Methods Eng. 2022;123:2738–2759.
+                                                                                                                                 10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+AS’AD et al.                                                                                                              2739
+
+
+
+and typically require a heuristic choice of a parameterized function whose parameters are fitted. Furthermore, they can
+be sensitive to data sparsity or noise and become overfitted. While mechanistic models avoid these problems, they are
+typically formulated on a material-by-material basis and their derivations can be infeasible for moderately complex mate-
+rials. Hence, they cannot necessarily be constructed using a single, comprehensive, modeling framework. Consequently,
+a general framework for the mechanics-informed learning of a constitutive law from data that retains the advantages of
+both the phenomenological and mechanistic approaches is desirable. This article, which is based on the earlier conference
+paper,4 presents such a framework, in the context of complex, highly nonlinear, elastic materials.
+    The data-driven aspect of a desired model motivates the use of artificial neural networks (ANNs). Indeed, such net-
+works have excellent nonlinear function fitting capabilities, while remaining form-agnostic, which makes them suitable
+if not attractive for a general strain–stress modeling framework. Once trained, ANNs have a rapid online execution time:
+this is particularly beneficial in the context of an explicit finite element (FE) simulation where the evaluation of a consti-
+tutive law can dominate the simulation cost. Moreover, the current availability of automatic differentiation in machine
+learning packages and its efficiency in the context of ANNs trivializes the task of obtaining a tangent modulus matrix—for
+example, for implicit dynamic computations. For these reasons, regression-based ANNs have been explored for con-
+stitutive modeling as early as in References 5 and 6 and exhibited strong promise. They have been applied to model
+kinematic hardening7 and to generate implicit models for material viscoplasticity.8 In the absence of paired strain–stress
+training data, ANN frameworks have also been proposed for learning constitutive relations from indirect observations.9
+Recently, they have gained popularity in the literature for accelerating the homogenization of nonlinear, multi-scale FE
+computations.10-13
+    In the context of numerical simulations such as those based on FE computational models, purely regression-based
+constitutive models—for example, models based on regression ANNs or piece-wise linear interpolation of tabulated
+data—often create numerical problems.14 In particular, they can lead to various types of numerical instabilities and
+spurious phenomena, despite fitting well to the available data. Consequently, the main purpose of this article is to
+present a general framework for constructing a computationally affordable, data-driven, and yet structure-preserving
+ANN-based elastic constitutive model by embedding into it a priori a knowledge of some fundamental concepts in
+mechanics. Noteworthy related efforts recently published in the literature include References 15-17—which was pub-
+lished online at the same time as this article was accepted–as well as the earlier version of this work that appeared in
+Reference 4.
+    To this end and as stated above, the context is set in this article, to that of elastic materials whose behavior does not
+depend on history variables. Hence, for such materials, the training data may exclusively take the form of strain–stress
+data pairs to make it equally compatible with numerical and experimental data.
+    A second purpose of this article is to highlight the potential of the proposed general framework for data-driven mod-
+eling for ensuring the computational tractability of nonlinear multi-scale computations. To this end, the article also
+reports on its application to the acceleration of the multi-scale, dynamic, fluid-structure interaction (FSI) analysis of the
+supersonic inflation of a parachute system whose canopy is made of a woven fabric. Specifically, acceleration is demon-
+strated through the construction of a data-driven mapping between the Green–Lagrange strain predicted by a macro-scale
+FE model and its conjugate, the second Piola–Kirchhoff stress tensor predicted through homogenization applied to a
+counterpart micro-scale FE model.13
+    The remainder of this article is organized as follows. Section 2 introduces regression-based ANNs for the data-driven
+modeling of constitutive laws. Section 3 identifies fundamental mechanics knowledge that a regression ANN for
+data-driven constitutive modeling should be aware of and how to embed such knowledge into an ANN. Section 4 high-
+lights first the various merits of the proposed mechanics-informed approach for building ANNs for the data-driven
+constitutive modeling of complex, nonlinear, elastic materials using a series of FE-based applications. Then, it demon-
+strates the potential of this approach for accelerating nonlinear, dynamic, multi-scale computations by reporting on its
+application to a supersonic parachute inflation dynamics (PID) simulation. Finally, Section 5 summarizes in the form of
+conclusions the most important findings of this work.
+
+
+2    REPRESENTAT ION O F A NONLINEAR ELASTIC LAW
+BY A REG R E SSION AN N
+
+Again, the scope of this article is set to that of a nonlinear elastic constitutive law—that is, a tensor-valued function
+mapping a state of strain to a state of stress. Let E ∈ Sym3 (R) and S ∈ Sym3 (R) denote the Green–Lagrange strain tensor
+                                                                                                                                 10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+2740                                                                                                              AS’AD et al.
+
+
+
+and second Piola–Kirchhoff stress tensor, respectively. Due to the symmetry of these tensors, a constitutive mapping can
+be formulated between their vectorized upper-triangular (or equivalently, lower-triangular) parts designated here by hats.
+Explicitly, the mapping can be written using the Voigt notation as
+                                                             ( )
+                                                          ̂   ̂ ,
+                                                          S=G E
+
+                           [                                   ]       [                                ]T
+where G ∶ R6 → R6 , E  ̂ = E11 E22 E33 2E23 2E13 2E12 T , ̂        S = S11 S22 S33 S23 S13 S12 , and the super-
+script T designates the transpose.
+    The objective of a direct regression ANN is to approximate G as  𝜃 using available training data, where
+    ⋃Nl ( (l) (l) )
+𝜃= l=1  , b         denotes the set of N𝜃 matrix-valued and vector-valued parameters of the ANN organized in Nl fully
+connected sequential layers. For simplicity, but without any loss of generality, it is assumed here that a single nonlinear
+activation function 𝜙 ∶ R → R is used in the network. In this case, the forward pass of a fully connected ANN takes the
+form given in Algorithm 1.
+
+
+Algorithm 1. Forward pass of a fully connected sequential ANN
+
+Input: x (0) ; Output: y
+ 1: for l = 1, … , Nl − 1 do
+                   (                   )
+ 2:     x (l) = 𝜙  (l) x (l−1) + b(l)
+ 3: end for
+ 4: y =  (Nl ) x (Nl −1) + b(Nl )
+
+
+
+                                                            {( (m) (m) )}Nm
+       Assuming that a set of Nm strain–stress data pairs     ̂ ,̂
+                                                              E   S         is available for training, the ANN parameters
+                                                                          m=1
+are typically determined by minimizing a squared error loss function. In this case, this can be written as
+
+                                                      Nm d (  ( (m) )       )2
+                                                      ∑ ∑
+                                           𝜃 = argmin          ̂
+                                                            𝛽 E      −̂
+                                                                       Sk(m) ,                                            (1)
+                                                𝛽∈RN𝜃 m=1 k=1             k
+
+
+where †k denotes the kth entry of the vector † and d denotes the dimensionality of the vectorized stress tensor (in general,
+d = 6 for a solid but can be reduced in some cases). However, the above loss function is not necessarily appropriate
+when different stress components vary significantly in magnitude, as is commonly the case for a large class of anisotropic
+materials. This is because in this case, some stress components may dominate the solution of the minimization problem
+implied in (1), which may lead to the deterioration of the model’s accuracy for predicting the smaller magnitude stress
+components. This issue can be remedied by scaling each component of the loss function by the component-wise standard
+deviation of the training stress data—that is, by rewriting (1) as
+
+                                                                ( (m) )             2
+                                                              ⎛
+                                                      Nm d  𝛽 E ̂         Sk(m) ⎞⎟
+                                                                          −̂
+                                                      ∑  ∑⎜             k
+                                           𝜃 = argmin         ⎜                   ⎟,                                      (2)
+                                                𝛽∈R 𝜃 m=1 k=1 ⎜
+                                                   N               𝜎 k            ⎟
+                                                              ⎝                   ⎠
+
+where 𝜎k denotes the standard deviation of the kth component of the training stress data. In general, the loss func-
+tion is minimized using a stochastic gradient descent algorithm, where the gradients with respect to each of the ANN’s
+parameters are obtained exactly through automatic differentiation.
+Remark 1. The scope of this work covers both numerical and experimental data. In the case of numerical data, the
+main application is the construction of a reliable, data-driven surrogate constitutive model as in nonlinear computational
+homogenization frameworks based on the concept of a locally attached micro-structure (see, e.g., Section 4). In the case
+of experimental data, expressions (1) and (2) call for the following clarification. In general, strains and forces are mea-
+sured during an experiment. For membrane and (thin) plate or shell coupons, stress resultants can be derived from force
+                                                                                                                                    10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+AS’AD et al.                                                                                                                 2741
+
+
+
+measurements, the quantities ̂ Sk(m) appearing in (1) and (2) can be interpreted as vectorized second Piola–Kirchhoff stress
+resultants, and therefore the training of the ANN can be performed using strain–{stress resultant} data pairs. For solid
+coupons, expressions (1) and (2) implicitly assume that the training vectorized second Piola–Kirchhoff stresses ̂ Sk(m) have
+been derived by either the experimentalist or the analyst using a preferred approach—for example, in the case of a uni-
+axial coupon test, by converting first the measured forces to area-averaged Cauchy stresses and transforming the latter
+stresses to vectorized second Piola–Kirchhoff stresses.
+
+
+3        MECHANICS-BA SED MODEL CONSTRAINTS
+
+When its size is allowed to grow, the ANN defined by (2) can fit well, in the least squares sense, to data from materials
+governed by complicated nonlinear elastic laws. However, being a phenomenological model, it can violate fundamen-
+tal principles in mechanics and therefore may not be generally exploitable in the context of numerical simulations.
+This can be due to imperfect training, noisy training data, or overfitting. The issue is exacerbated by the lack of
+interpretability of ANNs,18 which makes it difficult to judge the physical soundness of the model parameters after
+training. Consequently, it is desirable to enforce mechanics-based constraints in the construction of a data-driven con-
+stitutive law. Furthermore, embedding a priori a knowledge of mechanics in a data-driven model can be expected
+to favor learning the structure of a constitutive relation rather than overfitting the training data: hence, it can be
+expected to reduce the model’s sensitivity to noise and promote its robustness to inputs outside the training domain.
+In this sense, mechanics-based constraints can be expected to act as a form of regularization. To this end, this section
+identifies and discusses four mechanics-based constraints that are important to a regression-based constitutive law.
+It also proposes methods for enforcing such constraints in the representation of a nonlinear elastic law by a regres-
+sion ANN. The constraints and associated enforcement methods are conceived to be complementary in the sense
+that the formulation and enforcement of one of them does not compromise the formulation and/or enforcement of
+another one.
+
+
+3.1            Dynamic stability
+
+The definition of the dynamic stability of a mechanical system varies widely in the literature. Here, it is defined as the
+ability of a system to always maintain finite kinetic energy when finite work is performed on it.
+Theorem 1. A body described by an elastic material law is dynamically stable if and only if it is hyperelastic—that is,
+
+                                                                 𝜕W
+                                                        S(E) =      (E)                                                      (3)
+                                                                 𝜕E
+
+for some W ∶ Sym3 (R) → R, which represents the strain energy density of the body.
+Proof. The proof presented below is inspired by Carroll,19 which itself draws on observations originally made by R.S.
+Rivlin.20 Assume that all processes considered here are isothermal and for the sake of simplicity, assume also that
+all traction and body force densities are time-independent when defined in the reference configuration. Consider
+a body whose reference configuration is denoted by Ω, let Γ = 𝜕Ω denote its boundary, and let (•)t designate the
+configuration-dependent quantity (•) defined in the deformed configuration at time t. Then, the rate of change of the
+total kinetic energy of the body is given by
+
+                                 dK             dE
+                                    (t) = − S ∶    dΩ +    t ⋅ u̇ dΓt +    𝜌 b ⋅ u̇ dΩt ,                                    (4)
+                                 dt        ∫Ω   dt      ∫Γt t           ∫Ωt t
+
+where t is the traction; b is the body force density; 𝜌 is the material density; u is the deformation state; the dot designates
+the time derivative; and the symbol ∶ designates the double contraction operation between two tensors, performed by
+contracting the last two indices of the first tensor with the first two indices of the second one. In order to pull all integrals
+back into the reference configuration, it is first noted that
+
+                                           tt dΓt = dft = Ft df = Ft F−1
+                                                                      t t dΓ = t dΓ
+                                                                                                                                                                           10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+2742                                                                                                                                                        AS’AD et al.
+
+
+
+and
+
+                                                                  𝜌t dΩt = 𝜌t det(Ft ) dΩ = 𝜌 dΩ,
+
+where F denotes the deformation gradient and f denotes the force vector. Hence, (4) can be rewritten as
+
+                                            dK             dE
+                                               (t) = − S ∶    dΩ + t ⋅ u̇ dΓ +    𝜌b ⋅ u̇ dΩ.                                                                       (5)
+                                            dt        ∫Ω   dt     ∫Γ           ∫Ω
+
+    Next, consider a cyclic deformation of the body from time ta to time tb , such that u(ta ) = u(tb ) everywhere in Ω. It
+follows that E(ta ) = E(tb ). Then, the change in kinetic energy over a cycle is given by integrating (5) between ta and
+tb —that is,
+                                                      tb (                                                                             )
+                                                                            dE
+                                        ΔK =                 −        S∶       dΩ + t ⋅ u̇ dΓ +    𝜌b ⋅ u̇ dΩ                              dt.                      (6)
+                                               ∫ta               ∫Ω         dt     ∫Γ           ∫Ω
+
+   Consider the first term of (6): note that by definition, the internal energy of the body depends only on its state and
+that, for an isothermal cyclic deformation process, the deformation and thermal states of the body at the beginning and
+end of the process remain identical. Therefore, the change in internal energy must be zero, which can be written as
+
+                                   tb                 tb                   tb                           (                                        )
+                                        dUint                dE
+                   ΔUint =                    dt =        S∶    dΩdt +                                   −        n ⋅ q dΓ +               𝜌qs dΩ dt = 0,           (7)
+                             ∫ta         dt        ∫ta ∫Ω    dt        ∫ta                                   ∫Γ                    ∫Ω
+
+where q is the heat flux and qs is the heat supplied per unit mass. Using the second law of thermodynamics, it can be
+shown that the combination of the heat flux and heat supply terms is non-positive, and therefore
+
+                                                      tb (                                      )                   tb
+                                                                                                                             dS
+                                                         −        n ⋅ qdΓ +               𝜌qs dΩ dt ≤                    T      = 0,                                (8)
+                                               ∫t a          ∫Γ                      ∫Ω                       ∫ta            dt
+                                                                            tb
+                                                                                          dE
+                                                                      ∴             S∶       dΩ dt ≥ 0,                                                             (9)
+                                                                          ∫ta ∫Ω          dt
+
+where S is the total entropy in the body and (9) follows from (7) and (8). Since the body forces and tractions are assumed
+to be time-independent, they perform zero network on the body, as shown in (10) and (11).
+
+                                    tb                                      tb
+                                           t ⋅ u̇ dΓdt =                         t ⋅ u̇ dtdΓ =          (t ⋅ u(tb ) − t ⋅ u(ta )) dΓ = 0,                         (10)
+                             ∫ta ∫Γ                               ∫Γ ∫ta                         ∫Γ
+                             tb                                            tb
+                                         b ⋅ u̇ dΩ dt =                         b ⋅ u̇ dt dΩ =           (b ⋅ u(tb ) − b ⋅ u(ta )) dΩ = 0.                        (11)
+                          ∫ta ∫Ω                                 ∫Ω ∫ta                            ∫Ω
+
+       Therefore, the change in kinetic energy over a cycle can be rewritten as
+
+                                                                                                   tb
+                                                                                                             dE
+                                                ΔK = K(tb ) − K(ta ) = −                                S∶      dt dΩ ≤ 0,                                        (12)
+                                                                                          ∫Ω ∫ta             dt
+
+where the inequality is a consequence of (9). The non-positivity of the change in the kinetic energy makes intuitive sense:
+otherwise, given that the considered cyclic process can be repeated an arbitrary number of times, the existence of a path
+of deformation for which ΔK is positive would imply the possibility to generate an infinite amount of kinetic energy using
+zero network—which is non-physical. Now, the result ΔK < 0 is also not permissible as by reversing the direction of the
+deformation cycle (introducing a negative sign in the above expression) it would lead to ΔK > 0. Hence, the only physical
+and dynamically stable possibility is ΔK = 0, which is satisfied for arbitrary Ω and deformation paths if and only if the
+integrand of the outer integral in (12) identically vanishes—that is, S ∶ dE = dW is a perfect differential, or equivalently,
+S = 𝜕W
+     𝜕E
+        .                                                                                                                  ▪
+                                                                                                                               10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+AS’AD et al.                                                                                                            2743
+
+
+
+    Even if the data used to train the surrogate model is obtained from a hyperelastic material, a staightforward regres-
+sion ANN that directly maps strains to stresses in the form ̂         ̂ cannot be expected to necessarily satisfy (3). Even
+                                                             S =  𝜃 (E)
+in the case of noise-free data and convergence of the loss function to zero, interpolation and extrapolation by a straight-
+forward ANN inside and outside the training domain, respectively, is not guaranteed to be conservative. Therefore, in
+order to guarantee the hyperelastic property of a regression model for any arbitrary strain input, it is proposed here to
+represent the constitutive law by an ANN that learns the strain energy density function as W = 𝜃 (E).̂ To this end, it is
+noted that previous works focused on learning hyperelastic material laws from data have either relied on including strain
+energy density as part of the training data,21 which is incompatible with physical experiments, or have approximated the
+hyperelasticity constraint by weakly enforcing the symmetry of the tangent modulus.22 Consequently, this work proposes
+a novel training approach that implicitly forces the ANN to learn the integral of the data, rather than the data itself, by
+determining 𝜃 as follows
+
+                                                                (     )           2
+                                                           ⎛ 𝜕𝛽 ̂ (m) − ̂
+                                                                         Sk(m) ⎞⎟
+                                                   ∑  ∑⎜ 𝜕Êk E
+                                                   Nm d
+                                        𝜃 = argmin         ⎜                    ⎟.
+                                             𝛽∈RN𝜃 m=1 k=1 ⎜        𝜎k          ⎟
+                                                           ⎝                    ⎠
+
+Hence, in this work, the weights of the ANN are trained so that the partial derivatives of the network with respect
+to the input match the training stress data. This promotes the learning of a strain energy density function—up to
+an irrelevant additive constant. After the training (is )completed, the stresses can be obtained by differentiating the
+                                                𝜕
+ANN with respect to the strains—that is, ̂ S= 𝜃 E  ̂
+                                                      ̂ . Importantly, the resulting strain–stress mapping is uncondi-
+                                                  𝜕E
+tionally hyperelastic by construction, regardless of the strain input or the attained smallest value of the training loss
+function.
+Remark 2. Reverse mode automatic differentiation can be leveraged to exactly differentiate a trained ANN and achieve
+computational efficiency in the online computation of stresses. Reverse mode automatic differentiation is particularly
+efficient when obtaining the Jacobian of a function f ∶ Rn → Rm , where m ≫ n (in the context of this article where an
+ANN is constructed to learn a strain energy density, n = 1 and m = 6). The gradient of the ANN with respect to all of its
+inputs can be obtained at roughly the same computational cost as that for one function evaluation. On the other hand,
+computing this gradient by finite differencing would require at least m + 1 function evaluations and would be tainted
+by numerical errors. The stark difference in online computational cost between eager execution and graph execution of
+the ANN model is also noteworthy. Eager execution interprets the code and executes it in real-time, which means that
+the evaluation of the constitutive law requires that of W , the construction of the backwards graph, and the propagation
+through the backwards graph. This introduces unnecessary computations and potentially software-related computational
+overhead. Conversely, graph execution involves interpreting the code as a graph, in which case the backwards graph is
+constructed and compiled offline. It implies that the online evaluation of the constitutive law would require only prop-
+agation through a single graph that directly relates the strains to the stresses and therefore is computationally more
+economical.
+
+
+3.2            Objectivity
+
+The concept of objectivity is that of material frame indifference—that is, the position or orientation of an observer should
+not affect any quantity of interest.23 In particular, an objective scalar is one which has the same values to all observers:
+therefore, a strain energy density function must be invariant to any orthogonal transformation of the deformation gradi-
+         ̃ denote the strain energy density function of a material expressed in terms of the deformation gradient F. It
+ent. Let W
+                                ̃ requires that
+follows that the objectivity of W
+
+                                                       ̃ (QF) = W
+                                                       W        ̃(F)
+
+for any orthogonal matrix Q (i.e., QT Q = I). This condition is essential for numerical simulations using data-driven con-
+stitutive models, as the simulation results should not depend on the definition of a reference frame. Let now F = RU
+denote the polar decomposition of the deformation gradient, where R is an orthogonal matrix describing a rigid body
+                                                                                                                                    10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+2744                                                                                                                 AS’AD et al.
+
+
+
+mode and U is the matrix associated with the stretch tensor. Choosing Q = RT leads to
+                                                (   )    (    )
+                                              ̃ RT F = W
+                                              W        ̃ RT RU = W
+                                                                 ̃(U).
+
+In other words, the objectivity of the strain energy density function requires that this function be expressible solely in
+terms of U and not the individual components of F. Hence, a necessary condition for objectivity in this case is the existence
+of some functions W and T such that W   ̃(F) = W(T (U)). This is also a sufficient condition, because as shown below, the
+stretch tensor is invariant under arbitrary orthogonal transformations of F
+
+                                                     QF = Q(RU) = RU,
+
+                                                                             1 2
+where R = QR is an orthogonal matrix. Since the Green–Lagrange strain E =      (U − I) is expressible purely as a function
+                                                                             2
+                                                                                              ̃ through the existence of
+of U, it follows that using E as input to the ANN automatically guarantees the objectivity of W
+W. Indeed,
+                                            (                      (          )
+                              ̃(QF) = W         1( T T      )        1( T   )
+                                                                                ̃(F).
+                              W                   F Q QF − I ) = W     F F−I =W
+                                                2                    2
+
+Then, for compatibility with a hyperelastic strain–stress map, the second Piola–Kirchhoff stress S must be chosen as the
+corresponding stress measure, as it is the energy conjugate of E.
+
+
+3.3       Material stability
+
+                                                                                                                        ̃ in
+Material stability requires that small loads do not lead to arbitrary deformations. It is ensured by the ellipticity of W
+  24                                   ̃
+F. A strain energy density function W (F) is elliptic if and only if
+
+                                                     ̃
+                                                    𝜕W
+                                        (a ⊗ b) ∶      F ∶ (a ⊗ b) ≥ 0 ∀a, b ∈ R3 .
+                                                    𝜕F
+
+For twice differentiable strain energy density functions, ellipticity is equivalent to convexity along directions correspond-
+ing to rank-one tensors (commonly referred to as rank-one convexity). Physically, it implies that only real wave speeds
+are permissible in the material. In general, enforcing a model to be elliptic a priori is a challenging task: for this reason, a
+common approach in continuum mechanics for achieving this goal is to enforce instead a stronger mathematical property
+that implies ellipticity—for example,
+
+                                          convexity ⇒ polyconvexity ⇒ ellipticity.
+
+Certainly, ellipticity can be achieved by enforcing the convexity of W  ̃(F). However, requiring the strain energy density
+          ̃
+function W (F) to be convex in F is too strong a condition, as it places non-physical restrictions on the material behavior.25
+Since the domain where the deformation gradients has a positive determinant is non-convex, convexity in F necessarily
+excludes the physically reasonable growth condition W   ̃ → ∞ as det F → 0+ , which places a barrier on material “inver-
+sion.” Without this barrier, it would be possible to collapse the volume of the material to a point or line using a finite
+amount of work. Furthermore, convexity of W   ̃ in F does not allow for the nonuniqueness of the energy minimizer of the
+Euler–Lagrange equations, which prevents observing instability phenomena such as buckling. Last but not least, it can
+be proven through counterexamples that the convexity of W    ̃(F) violates objectivity.26 For all these reasons, the standard
+approach in constitutive modeling is to enforce instead polyconvexity, which is a weaker constraint. To this end, it is noted
+that the strain energy density function is polyconvex in F if and only if it is expressible as a convex function of the minors
+of F—that is,
+
+                                                  ̃(F) = f (F, Cof F, det F),
+                                  ∃f convex, s.t. W                              ∀F ∈ R3×3 .
+
+However, objectivity was identified in Section 3.2 as an essential property, particularly in the context of the
+numerical exploitation of data-driven modeling: for this reason, the objective strain measure E was chosen
+                                                                                                                                   10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+AS’AD et al.                                                                                                                2745
+
+
+
+as input to an ANN model. Hence, enforcing polyconvexity in F is difficult as E is not in general convex
+in F.
+    On the other hand, consider the convexity of W in E, which is equivalent to the symmetric positive semi-definiteness
+of the gradient of S with respect to E—that is,
+
+                                                               𝜕S
+                                                         C=       ≽ 0.
+                                                               𝜕E
+
+The concept of symmetric positive semi-definiteness is generalized to fourth-order tensors as follows. An n-dimensional
+fourth-order tensor denoted by T is said to be symmetric positive semi-definite if ∀ V, W ∈ Symn (R), the following two
+conditions hold27
+
+                                                  V ∶ T ∶ W = W ∶ T ∶ V,
+
+                                                        V ∶ T ∶ V ≥ 0.
+
+Now, double contracting the Hessian of W (E(F)) with respect to F on both left and right sides by some test matrix 𝚿 ∈
+R3×3 leads to
+
+                                𝜕2W             (    ) (           )     (           )
+                           𝚿∶        F ∶ 𝚿 = S ∶ 𝚿T 𝚿 + 𝚿T F + FT 𝚿 ∶ C ∶ 𝚿T F + FT 𝚿 .                                    (13)
+                                𝜕F𝜕F
+
+    If the above result is positive for some F, then W is locally convex in the deformation gradient at F. The first term on
+the right side of (13) represents the geometric stiffness and the second term the material stiffness. The convexity of W in
+E ensures that the material stiffness term is positive, since C ≽ 0 and contracted on both sides with a symmetric matrix.
+When S ≽ 0, or the material is in a tensile state, the geometric stiffness term is non-negative. Hence, in a tensile state,
+the convexity of W in E implies the local convexity of W in F, which implies local ellipticity and therefore local material
+stability. This result is related to the following theorem proven in Reference 28.
+Theorem 2. If W(E) is convex and u0 (x) is a weak solution of the Euler–Lagrange equations, and if ∀x ∈ Ω S(u0 (x)) ≽ 0,
+u0 (x) is a global energy minimizer.
+    Nonetheless, the convexity of W(E) does not imply the global convexity of W in F, as in a compressive state (S ≺ 0), the
+geometric stiffness term in (13) is negative: therefore, the entire right side of (13) can be non-positive. Hence, the convexity
+of W in E allows for the nonuniqueness of the solution as in buckling (compressive state) and for the appropriate growth
+of W as det F → 0+ , while also using an objective strain measure.
+    The convexity property is also desirable from a modeling perspective, as it implies the monotonicity of stress as a
+function of strain. In the case where the strain–stress training data are noisy, a non-monotone model may conform to the
+noise and thus produce spurious oscillations. However, as illustrated in Figure 1, a monotone model can regularize the
+noise and resist the generation of spurious oscillations.
+    For all these reasons, it is desirable to enforce the convexity of the hyperelastic ANN W = 𝜃 (E)     ̂ with respect to its
+                                                                                                  29
+inputs, using the following sufficient conditions of input-convex neural networks (ICNNs):
+
+1. All weights, except those connecting directly to the input, are non-negative.
+2. The activation functions are convex and non-decreasing.
+
+    To ensure the positivity of the weights in a manner that is compatible with automatic differentiation and the uncon-
+strained gradient-based optimization algorithms used to train ANNs, the following form of positive weights is proposed.
+Where the positivity constraint is relevant in the lth layer of an ANN, the weights are replaced by
+                                                                              (            )
+                                                                       1             2 (l)
+                                       ij(l) = Softplus((l) ; 𝛼) =       log 1 + e𝛼 ij ,
+                                                          ij           𝛼 2
+
+
+where the parameters (l)
+                      ij
+                          and 𝛼 are trainable parameters of the ANN. Crucially, the ranges of these parameters are
+not constrained. As constructed above, the parameters ij(l) always have non-negative values. “Passthrough” layers with
+                                                                                                                                       10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+2746                                                                                                                    AS’AD et al.
+
+
+
+
+FIGURE 1           Effect of the convexity of W (or monotonicity of S) on a regression model in the presence of noise
+
+
+
+unconstrained weights  ̃(l) can also be included to directly connect the ANN inputs to deeper hidden layers, in order to
+                          ij
+improve the predictive power of the network without sacrificing the convexity property. Moreover, using a generic nota-
+tion, any convex function f of the input vector x can be added to the ANN’s output y (in this work, f (x) = xT AT Ax is used,
+where A is yet another matrix-valued trainable parameter of the ANN).(
+                                                                              ⋃Nl ( (l) ̃ (l) (l) ))                   ̃ are
+    In summary, the parameters of the network can be written as 𝜃 = A, 𝛼,             , ,b  l=1
+                                                                                                       , where  and 
+                                           ̃ ij , respectively, and the ICNN is described in Algorithm 2.
+matrices collecting the parameters ij and 
+
+
+Algorithm 2. Forward pass of the proposed ICNN
+
+Input: x (0) ; Output: y
+               (                   )
+ 1: x (1) = 𝜙   ̃(1) x (0) + b(1)
+ 2: for l = 2, …(, Nl − 1 do                                       )
+ 3:                                                   ̃(l) x (0)
+         x (l) = 𝜙 Softplus((l) ; 𝛼)x (l−1) + b(l) + 
+ 4: end for
+                                            ( (0) )
+ 5: y = Softplus((Nl ) ; 𝛼)x (Nl −1) + f    x
+
+                                                  ( )
+    To compute the stresses, the ANN W = 𝜃 E       ̂ must be differentiated. To compute the tangent modulus, it must be
+differentiated twice. Hence, in addition to being non-decreasing and convex, the activation function of the ANN should
+also be at least twice differentiable. Furthermore, since the gradients of the loss function computed during training involve
+second derivatives of the network (because the proposed loss function contains first derivatives of the network), the
+activation function should have non-vanishing second derivatives. These restrictions exclude popular activation functions
+such as the hyperbolic tangent (tanh), the rectified linear unit (ReLU), the exponential linear unit (ELU), and the Softplus
+activation functions. Accordingly, a new activation function that satisfies all aforementioned requirements, namely, the
+SoftplusSquared function, is proposed here. It is defined by
+                                                                                        (          )2
+                                                                                1              𝛽2z
+                                            𝜙(z) = SoftplusSquared(z; 𝛽) =          log  1 + e        ,                       (14)
+                                                                               2𝛽 4
+
+where 𝛽 is a parameter that controls the curvature of the function at the origin and contributes an additional learnable
+parameter to the network. Note that a desirable property for an activation function is the good approximation of the iden-
+tity function near the origin. Unfortunately, the SoftplusSquared function (14) fails to do so. Nonetheless, this issue can
+be corrected by a combination of shifting and scaling when required, without compromising any of the other desirable
+properties of an activation function. Another activation function that satisfies all aforementioned requirements is the
+                                                                                                                                 10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+AS’AD et al.                                                                                                              2747
+
+
+
+SoftExponential function:30 however, it did not perform as well as the SoftplusSquared function for the problems
+considered in this article.
+
+
+3.4            Consistency
+
+In this work, a consistent material law is defined as a law that enables a numerical computation such as an FE analysis
+simulation to preserve the rigid body modes of a structure whose material it describes. In other words, a consistent mate-
+rial law maps a state of zero strain onto a state of zero stress and therefore ensures that S(0) = 0. In general, even when
+the training data satisfies this property, a regression ANN model may violate it. This is unacceptable for numerical simu-
+lations, as it causes a body to deform in the absence of a load or a prescribed displacement. In the context of a hyperelastic
+model, some structure must be imposed on the strain energy density response surface so that it has a zero gradient at the
+origin. For fully connected ANNs, this is a non-trivial task because the activation functions seldom have zero gradients
+at the origin. Therefore, it is proposed here to enforce consistency by representing the strain energy density function by
+the sum of the ANN of interest and a linear correction term, as follows
+                                                  ( )    ( )
+                                                 W E      ̂ + h ⋅ E,
+                                                   ̂ = 𝜃 E       ̂                                                      (15)
+                                             ( )     ( ) 𝜕 ( )
+                                          ⇒̂
+                                           S Ê = 𝜕W Ê =   𝜃 ̂
+                                                              E + h.                                                     (16)
+                                                   ̂
+                                                  𝜕E       ̂
+                                                          𝜕E
+                     𝜕
+    Choosing h = − ̂𝜃 (0) guarantees the desired consistency property. Furthermore, the ANN defined by (15) and (16)
+                      𝜕E
+preserves hyperelasticity as well as the convexity of the strain energy density function. In practice, it is important not to
+perform the correction described in (16) a posteriori—that is, after the ANN has been trained—as doing so may decrease
+the ANN’s accuracy away from the origin. Instead, the representation (16) should be embedded in the training procedure
+by altering the loss function as follows
+
+                                                            ( (m) ) 𝜕                   2
+                                                       ⎛ 𝜕𝛽 E
+                                                             ̂     −     𝛽
+                                                                           (0) − ̂
+                                                                                 S (m) ⎞
+                                               ∑ ∑⎜ 𝜕Êk
+                                                 Nm   d
+                                                                       ̂k
+                                                                      𝜕E          k ⎟
+                                    𝜃 = argmin         ⎜                               ⎟.
+                                         𝛽∈RN𝜃 m=1 k=1 ⎜            𝜎k                 ⎟
+                                                       ⎝                               ⎠
+
+
+4        APPLICAT IONS AND PERFORMANCE ASSESSMENTS
+
+The main purpose of this section is two-fold: (1) to highlight the merits of the proposed mechanics-informed ANN
+approach for data-driven modeling using several FE analysis examples; and (2) to demonstrate its potential for achieving
+computational tractability in an FE computational homogenization framework developed for the nonlinear, dynamic,
+two-scale (macro-micro) modeling of woven fabrics.13 This framework is based on the concept of a locally attached
+micro-structure31-34 and more specifically, on the generalization of the “FE squared” (or FE2 ) method.33
+   For convenience, both parts of the stated objective are discussed using: the same material, namely, a woven fabric
+material made of Nylon yarns; and the same FE-based analysis framework, namely, the aforementioned computational
+homogenization framework for the modeling of woven fabrics.13 Hence, throughout this section:
+
+• Every reported FE analysis is a multi-scale analysis based on the computational homogenization framework for woven
+  fabrics described in Reference 13.
+• The macro-scale FE model is always based on membrane elements with a single Gauss point quadrature each and thus
+  calls for a constitutive law for plane-stress problems (SZ = [S33 S23 S13 ]T = 0). Such a law can be written as SP = g(EP ),
+  where g ∶ R3 → R3 , EP = [E11 E22 2E12 ]T , and SP = [S11 S22 S12 ]T . Hence, it is noted that all arguments and methods
+  presented in Section 3 remain valid when all occurrences of E  ̂ and ̂S in that section are replaced by EP and SP .
+• At the micro-scale level, the geometry of the representative volume element (RVE) for the woven fabric material made
+  of Nylon yarns is that shown in Figure 3. The corresponding FE model is geometrically nonlinear. It is built using 1024
+  brick elements, 1836 nodes, 5508 degrees of freedom (dofs), 4 pairs of contact surfaces where the yarns interact with
+                                                                                                                                      10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+2748                                                                                                                   AS’AD et al.
+
+
+
+   each other and contact is enforced by the penalty method, and periodic boundary conditions. At this level, the material
+   is represented by the Saint Venant–Kirchhoff material law with a Young’s modulus E = 3.5 × 109 Pa and a Poisson ratio
+   𝜈 = 0.4.
+
+    To this end, this section is organized as follows. First, the data generation process is explained and the training data
+set is presented. Next, the individual and complementary merits of the various mechanics-informed constraints proposed
+in this article are highlighted (in terms of robustness, stability, and accuracy) using a variety of small-scale but represen-
+tative test problems. For this purpose, the following three ANNs are considered for constructing data-driven constitutive
+models:
+
+• A standard regression ANN designed to guarantee objectivity and referred to in the remainder of this section as the
+  standard regression ANN.
+• An ANN designed to guarantee objectivity, consistency, as well as dynamic stability, and referred to in the remainder
+  of this section as the hyperelastic ANN.
+• An ANN designed to guarantee objectivity, consistency, dynamic stability, as well as convexity, and referred to in the
+  remainder of this section as the convex hyperelastic ANN.
+
+    Specifically, in each FE analysis discussed below, some or all of the above ANNs are used to construct the data-driven
+mappings between the Green–Lagrange strain predicted by the macro-scale FE model and the second Piola–Kirchhoff
+stress tensor obtained through the application of homogenization to the counterpart micro-scale FE model.13 In the show-
+case application discussed in Section 4.6, only the convex hyperelastic ANN is used for this purpose; and to demonstrate
+the enablement of computational tractability for nonlinear computational homogenization frameworks based on the con-
+cept of a locally attached micro-structure in general—and the FE2 method in particular—when applied to large-scale,
+nonlinear structural computations.
+    All analyses reported in this section were performed using AERO Suite, its nonlinear FE structural analyzer AERO-S
+equipped with the computational homogenization framework described in Reference 13, and its flow solver AERO-F.35
+All ANN models were constructed and trained using the open source machine learning framework PyTorch.
+
+
+4.1       Data collection
+                                                                                              {( (m) (m) )}Nm
+To train and evaluate the three ANN models specified above, a data set of the form              EP , SP       is generated
+                                                                                                               m=1
+using the concept of a numerical coupon static test analogous to the tensile test. Here, the coupon is triangular with unit
+base and height, and pinned at one corner as shown in Figure 2. At the macro-scale level, it is modeled using a single,
+geometrically nonlinear, triangular membrane element with a single Gauss point for stress evaluation. At the micro-scale
+level, the geometry of the RVE and its FE discretization are those described above and illustrated in Figure 3.
+    The virtual test is performed by prescribing at the two free corners the displacements (u1 , u2 , u3 ) shown in Figure 2.
+These are sampled in [−0.1, 0.3] × [−0.1, 0.3] × [−0.3, 0.3]. Each sampled data set (u1 , u2 , u3 ) results in a prescribed strain
+EP that is transformed into a set of displacement boundary conditions for defining at the micro-scale level a nonlinear,
+displacement-driven, static analysis problem. The stresses obtained from the solution of this problem are homogenized
+via a spatial averaging procedure and forced to satisfy the plane-stress conditions using the algorithm proposed in
+Reference 36.
+    The generated strain–stress data are reported in Figure 4. It reveals a weakness in axial compression, due to the buck-
+ling of the yarns. It also shows that the material is significantly weaker in shear than in axial tension, since the yarns
+can slide past each other with little resistance. Hence, the generated data justify the choice of the RVE as weaknesses in
+compression and shear typically characterize woven fabric materials.
+
+
+4.2       Model robustness
+
+Numerically generated data tends to be highly idealized, in the sense that: it can be generated in a large domain, at a
+high resolution; and it is by default noise-free. On the other hand, data collected from physical experiments tends to be
+                                                                                                                                                10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+AS’AD et al.                                                                                                                             2749
+
+
+
+
+F I G U R E 2 Displacement-driven numerical coupon static test problem: FE discretization at the macro-scale level using a single
+membrane element with a single Gauss point
+
+
+
+
+FIGURE 3         Geometry and static behavior of the RVE in the presence of contact: Bi-axial compression (left) and bi-axial tension (right)
+
+
+
+sparse and noisy, and seldom covers the entire domain of interest. This contrast is noteworthy as overfitting is a com-
+mon issue in the construction of ANNs.37 Hence, performance assessment is performed herein with particular attention
+to the ability of an ANN to deal with noise, interpolate within the training subdomain, and extrapolate outside this
+subdomain.
+    To support such an assessment, the training data set is assembled from the generated data set in two steps, as follows.
+First, a small bounding box within the domain where data were collected is considered: this box covers the strain space
+[−0.05, 0.2] × [−0.05, 0.2] × [−0.3, 0.3] and contains approximately 50% of the numerically generated data (Figure 5). Next,
+50% of the data contained in this box is sampled randomly and 5% Gaussian noise is added to the sampled data. The result
+is an approximate 25%–75% train–test data split, where the training data is noisy and therefore more representative of
+experimental data.
+    Figures 6–8, where each black box delimits the training subdomain, graphically depict the performance of all three
+ANNs built for constructing data-driven constitutive models for the considered material made of Nylon yarns. They show
+that:
+
+• The standard regression ANN overfits the training data: it exhibits spurious oscillations both inside and outside the
+  training subdomain.
+10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+     AS’AD et al.
+
+
+
+
+                                                                                                                                                                                                                                      F I G U R E 4 Data collected from the numerical coupon test—Projections onto the: S11 − E11 plane (top-left); S22 − E22 plane (top-right);
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                   Numerically generated data domain and training data subdomain
+                                                                                                                                                                                                                                      and S12 − 2E12 plane (bottom)
+
+
+
+
+                                                                                                                                                                                                                                                                                                                                                                                   FIGURE 5
+     2750
+                                                                                                                                                  10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+AS’AD et al.                                                                                                                               2751
+
+
+
+
+FIGURE 6          Performance of the standard regression ANN for the 25%–75% train–test split scenario: S11 − E11 (left) and S12 − 2E12 (right)
+
+
+
+
+FIGURE 7          Performance of the hyperelastic ANN for the 25%–75% train–test split scenario: S11 − E11 (left) and S12 − 2E12 (right)
+
+
+
+• The hyperelastic ANN performs much better inside the training subdomain (at least as far as axial stress is concerned),
+  where it handles well the noisy data. However, it performs poorly outside the training subdomain.
+• On the other hand, the convex hyperelastic ANN performs remarkably well inside as well as outside the training sub-
+  domain, particularly for the prediction of the axial stress. It also captures remarkably well the nonlinear behavior of the
+  stress around small to vanishing values of the strain, when the fabric material switches from tension to compression
+  and vice-versa.
+• Of all three ANNs, only the convex hyperelastic ANN captures reasonably well the highly nonlinear shear behavior.
+
+
+
+
+4.3            Preservation of the rigid body modes (consistency)
+
+The significance of consistency for material modeling is highlighted here using the explicit FE transient analysis of a
+hollow cylindrical membrane subjected only to a uniform initial velocity. The exact solution of this problem is a rigid
+body translation along the direction of the initial velocity. Figure 9 shows that when using an inconsistent ANN for
+representing the material law, the structure collapses in time, despite the absence of any form of loading. This is because
+even though the membrane has initially a zero strain state, the inconsistent ANN maps this state to a nonzero stress state
+                                                                                                                                                 10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+2752                                                                                                                              AS’AD et al.
+
+
+
+that continuously deforms it. Figure 9 also shows that on the other hand, the FE simulation based on a consistent ANN
+               ( )
+where W = 𝜃 EP + h ⋅ EP reproduces the exact solution of the problem.
+
+
+
+4.4        Material stability and static analysis
+
+To emphasize the importance of satisfying material stability when representing a nonlinear elastic constitutive law
+by a regression ANN, the nonlinear FE static analysis of the same hollow cylindrical membrane from Section 4.3,
+this time pressurized by a pressure difference of 2 bar (Figure 10), is considered here, using two instances of New-
+ton’s method: (a) one where the entire load is applied in a single step; and (b) another one where the load is applied
+incrementally and the nonlinear solver is converged before applying the next load increment. The latter case serves
+the purpose of avoiding intrinsic numerical convergence difficulties that are not necessarily related to data-driven
+modeling of the constitutive law. Figure 11 shows that in test (a), the FE analyses based on both the standard regres-
+sion ANN and the hyperelastic ANN diverge at some iteration, but that based on the convex hyperelastic ANN
+converges. The figure also shows that at some load factor in test (b), the non-convex ANNs diverge again, but the
+
+
+
+
+FIGURE 8         Performance of the convex hyperelastic ANN for the 25%–75% train–test split scenario: S11 − E11 (left) and S12 − 2E12 (right)
+
+
+
+
+FIGURE 9        Hollow cylindrical membrane with only uniform initial velocity: t = 0 s (top); t = 0.05 s when using a standard regression
+ANN in the FE analysis (middle); and t = 0.05 s when using a consistent ANN (bottom)
+
+
+
+
+F I G U R E 10     Pressurized hollow cylindrical membrane at ΔP = 2 bar
+                                                                                                                                                   10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+AS’AD et al.                                                                                                                                2753
+
+
+
+convex hyperelastic ANN converges to a physically reasonable strain value. These results suggest the presence of a
+spurious material instability in the system when constitutive modeling is performed using the first two data-driven
+models (or the nonexistence of a solution to the considered problem), rather than simply the occurrence of numerical
+divergence.
+
+
+4.5            Dynamic stability and transient analysis
+
+To demonstrate for elastic materials the relationship between hyperelasticity and dynamic stability discussed in this arti-
+cle, the explicit FE transient analysis of an undamped, prestressed, square and flat membrane subjected to a constant
+pressure differential (Figure 12) is considered. In the absence of damping, the membrane can be expected to oscillate
+cyclically after some initial transient behavior. Figure 13 reports the time-histories of the vertical displacement of the
+center node of the FE model and those of the total kinetic energy in the membrane, predicted using all three ANNs for
+data-driven modeling of the material law. It shows that for this problem, the FE analysis performed using the standard
+regression ANN—which does not necessarily represent a hyperelastic material—becomes unstable at some point in time,
+due to the accumulation of the kinetic energy. It also shows that on the other hand, the counterpart FE analyses per-
+formed using the hyperelastic and convex hyperelastic ANNs maintain bounded displacements and kinetic energy, and
+thus remain stable at all times.
+
+
+
+
+F I G U R E 11     Static analysis of a pressurized hollow cylinder: Direct application of the entire load (left) and incremental load stepping
+(right)
+
+
+
+
+F I G U R E 12     Prestressed membrane subject to pressure from the bottom: In the undeformed state (left) and in a deformed state (right)
+                                                                                                                                                   10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+2754                                                                                                                                AS’AD et al.
+
+
+
+                                       Regression ANN                                                     Regression ANN
+                          0.2                                                                 10
+                          0.1                                                                  5
+                           0
+                                                                                               0
+       Displacement (m)
+
+
+
+
+                                                                         Kinetic energy (J)
+                                       Hyperelastic ANN                                                   Hyperelastic ANN
+                          0.2                                                                 10
+                          0.1                                                                  5
+                           0
+                                                                                               0
+
+                                    Convex hyperelastic ANN                                            Convex hyperelastic ANN
+                          0.2                                                                 10
+                          0.1                                                                  5
+                           0
+                                                                                               0
+                                0           1            2                                         0           1               2
+                                            Time (s)                                                           Time (s)
+F I G U R E 13      Transient analysis of a prestressed membrane subject to a pressure difference: Displacement of the center (left) and total
+kinetic energy (right)
+
+
+
+4.6                       Showcase application: Multi-scale simulation of supersonic PID
+
+The results of the FSI simulations of the SR03 flight test of NASA’s Advanced Supersonic Parachute Inflation Research
+Experiment (ASPIRE) for qualifying the parachute system of the rover Perseverance that landed on Mars on February 18,
+2021 are reported here for two different material models of the canopy made of Nylon yarns:
+
+• A homogeneous, linear, orthotropic model with finite strains.
+• The nonlinear material model furnished by the computational homogenization framework for modeling of woven
+  fabrics described in Reference 13, equipped with a convex hyperelastic ANN for building the data-driven mapping
+  between the Green–Lagrange strain of the macro-scale FE model of the parachute system described below and the
+  second Piola–Kirchhoff of the stress tensor computed using the RVE shown in Figure 3. It is noted that when the
+  standard regression ANN is used to furnish a similar material model, the numerical FSI simulation discussed below
+  rapidly becomes unconditionally unstable and therefore cannot be performed, which further supports the theorem
+  proved in Section 3.1 emphasizing the importance of hyperelasticity for dynamic stability.
+
+    The numerically simulated parachute system—including its canopy and 80 suspension lines, as well as the slen-
+der forebody—is displayed in Figure 14(left) in its as-built (stress-free) configuration. It is geometrically identical
+to the parachute system used for the SR03 ASPIRE flight test. The supersonic FSI simulation is started from the
+line-stretch stage, which is modeled here by the accordion-like folding of the canopy shown in Figure 14(right). This
+initial configuration prestresses the suspension lines at t = 0 s, in an attempt to accurately model the line-stretch
+stage.
+    The detailed FE structural model of the parachute system consists of: 267,878 geometrically nonlinear membrane
+elements discretizing the canopy; 80,000 geometrically nonlinear beam elements discretizing the 80 suspension lines;
+representations of the contact surfaces associated with the accordion-like folding of the canopy at t = 0 s; and 4968 rigid
+solid elements representing the forebody and its aerodynamic shape.
+                                                                                                                                 10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+AS’AD et al.                                                                                                              2755
+
+
+
+
+F I G U R E 14   ASPIRE parachute system in: As-built configuration (top) and folded configuration (bottom)
+
+
+
+
+    Air is modeled as a perfect gas and its viscosity is modeled using Sutherland’s temperature-dependent viscosity model.
+The viscous flow is modeled using AERO-F’s LES turbulence modeling capability. The free-stream conditions are set to
+those of the SR03 flight test at the instance of line-stretch38 —that is, the free-stream Mach number is set to M∞ = 1.88,
+the free-stream density is set to 𝜌∞ = 6.01 × 10−3 kg m−3 , and the free-stream pressure is set to P∞ = 414 Pa. While the
+supersonic FSI simulation was performed in dimensional mode, it is noted here that the corresponding Reynolds number
+based on the parachute diameter is ReD = 3.3 × 106 .
+    Due to the anticipated large shape and topology changes of the flexible parachute system during its deployment, and
+the unrestrained motion of the rigid forebody, the FSI simulation of supersonic PID is performed using the arbitrary
+Lagrangian–Eulerian (ALE) formulation of the embedded (or immersed) boundary method FIVER (finite volume method
+with exact two-material Riemann problems)39 described in Reference 40. Hence, the parachute system and the forebody
+are embedded in a background CFD grid that is adapted in time to resolve all flow features of interest (boundary layers,
+shocks, and wakes) using automatic adaptive mesh refinement (AMR).41 The 8% porosity of the woven fabric of the canopy
+is modeled using the homogenized flux-body force treatment of compressible viscous porous wall boundary conditions
+presented in Reference 42.
+    Finally, the structural and fluid discretizations are coupled using the stability-preserving, second-order, time-accurate,
+implicit-explicit fluid-structure partitioned analysis procedure described in Reference 43.
+    Figure 15 displays snapshots of the computed structural evolution of the parachute system and the corresponding
+Mach contours.
+    Figure 16(left) reports the predicted time-histories of the total drag generated by the parachute system using the two
+different material models described above and contrasts them with their counterpart measured during the flight test.38
+The reader can observe that both considered fabric material models lead to simulated total drag time-histories that match
+reasonably well their counterpart measured during the SR03 flight test, particularly during the inflation process (t < 0.4
+s). Precisely, the material model based on the convex hyperelastic ANN predicts more accurately the inflation time and
+the peak inflation, and thus the inflation speed. This may be attributed to the ability of this ANN to capture, unlike
+the linear orthotropic model, the nonlinearity of the behavior of the fabric at low strains, as already demonstrated in
+Section 4.2.
+    However, Figure 16(right) shows that the two considered numerical FSI simulations predict significantly different
+time-histories of the maximum von Mises stress in the canopy, which is a useful indicator for material failure. This sub-
+stantial discrepancy can be attributed to the nonlinearities captured by the ANN-based material model near the zero
+strain values, which prevent any compressive contribution to the von Mises stress from being as large as in the case of a
+linear orthotropic material law. This hypothesis is supported by the von Mises stress contours computed at t = 0.23 s and
+shown in Figure 17, where in the case of the linear orthotropic material model, the areas of high von Mises stress appear
+to coincide with regions of compression in the canopy. Intuitively, this suggests that the fabric material is more compliant
+                                                                                                                                                     10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+2756                                                                                                                                  AS’AD et al.
+
+
+
+
+F I G U R E 15     Numerical FSI simulation of the SR03 flight test of NASA’s ASPIRE project: Parachute evolutions and Mach contours
+computed at t = 0.12 s (left); t = 0.20 s (middle); and t = 0.36 s (right)
+                                                                       Max von Mises stress (MPa)
+
+
+                                                                                                    300
+                     60
+
+                                                                                                    200
+       Drag (klbf)
+
+
+
+
+                     40
+
+
+                                                                                                    100
+                     20       Linear orthotropic
+                              Convex hyperelastic ANN                                                         Linear orthotropic
+                              ASPIRE SR03 flight test                                                         Convex hyperelastic ANN
+                      0                                                                               0
+                          0   0.2         0.4           0.6                                               0    0.2       0.4    0.6
+                                    Time (s)                                                                         Time (s)
+
+F I G U R E 16        Numerical FSI simulation of the SR03 flight test of NASA’s ASPIRE project: Computed versus measured time-histories of
+the total drag (left) and computed time-histories of the maximum canopy von Mises stress (right)
+
+
+
+than predicted using a linear material law and thus less likely to fail. Unfortunately, the flight test data does not include
+information that can be used for validating a computed von Mises stress result.
+    Finally, Figure 18 compares the time-evolution of the canopy shape numerically predicted using the convex hyperelas-
+tic ANN with that recorded during the flight test, at four different time-instances. It shows that the numerical simulation
+captures well the canopy inflation time as well as the unfurling pattern. In particular, the numerically simulated infla-
+tion of the canopy mimics well its lobe-like character observed in the flight test data and reproduces the circumferential
+wavelength of the lobes: this gives confidence that the multi-scale ANN material law accurately captured the behavior of
+the fabric material.
+                                                                                                                                             10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+AS’AD et al.                                                                                                                          2757
+
+
+
+
+F I G U R E 17 Numerical FSI simulation of the SR03 flight test of NASA’s ASPIRE project: von Mises stress contours computed at
+t = 0.23 s using the linear orthotropic constitutive law (left) and the convex hyperelastic ANN (right)
+
+
+
+
+F I G U R E 18   SR03 flight test of NASA’s ASPIRE project: Images extracted at four different time-instances from the video of the
+parachute deployment (left) and corresponding numerical simulation results obtained using the convex hyperelastic ANN (right)
+
+
+5        S U M M ARY AN D CON CLU SIONS
+
+ANNs have excellent nonlinear function fitting capabilities. As such, they are prime candidates for data-driven constitu-
+tive modeling. However, it is shown in this article that even for simple nonlinear laws such as nonlinear elasticity, they
+are not necessarily robust and may require a large amount of training data. However, it is also shown that these defi-
+ciencies can be eliminated by teaching ANNs some basic notions of mechanics such as objectivity, consistency, dynamic
+stability, and convexity. The article presents a framework for teaching ANNs such notions of mechanics in the form of
+                                                                                                                                                10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+2758                                                                                                                             AS’AD et al.
+
+
+
+complementary implicit constraints. Through a series of carefully designed simple FE analyses, it highlights the merits
+of each constraint or set of constraints for robustness, numerical stability, and accuracy. Equally importantly, it is shown
+in this article that properly designed ANNs enable nonlinear computational homogenization frameworks based on the
+concept of a locally attached micro-structure to achieve computational tractability, even for large-scale, nonlinear, FE
+structural computations such as those pertaining to the dynamic analysis of the supersonic inflation of a parachute system
+whose canopy is made of a woven fabric material.
+
+DATA AVAILABILITY STATEMENT
+The data that support the findings of this study are available from the corresponding author upon reasonable request.
+
+ORCID
+Faisal As’ad https://orcid.org/0000-0002-8538-9283
+Philip Avery https://orcid.org/0000-0002-1310-6790
+Charbel Farhat https://orcid.org/0000-0003-2563-8820
+
+REFERENCES
+ 1. Lin H, Xie S, Yong R, Chen Y, Du S. An empirical statistical constitutive relationship for rock joint shearing considering scale effect.
+    C R Méc. 2019;347(8):561-575.
+ 2. Besdo D, Ihlemann J. A phenomenological constitutive model for rubberlike materials and its numerical applications. Int J Plast.
+    2003;19(7):1019-1036.
+ 3. Pond D, McBride A, Davids L, Reddy B, Limbert G. Microstructurally-based constitutive modelling of the skin–linking intrinsic ageing to
+    microstructural parameters. J Theor Biol. 2018;444:108-123.
+ 4. As’ad F, Avery P, Farhat C. A mechanics-informed artificial neural network approach in data-driven constitutive modeling. Proceedings
+    of the AIAA Scitech 2022 Forum; 2022:0100; AIAA.
+ 5. Ghaboussi J, Garrett J Jr, Wu X. Knowledge-based modeling of material behavior with neural networks. J Eng Mech. 1991;117(1):132-153.
+ 6. Ghaboussi J, Pecknold DA, Zhang M, Haj-Ali RM. Autoprogressive training of neural network constitutive models. Int J Numer Methods
+    Eng. 1998;42(1):105-126.
+ 7. Theocaris P, Panagiotopoulos P. Plasticity including the Bauschinger effect, studied by a neural network approach. Acta Mech.
+    1995;113(1):63-75.
+ 8. Furukawa T, Yagawa G. Implicit constitutive modelling for viscoplasticity using neural networks. Int J Numer Methods Eng.
+    1998;43(2):195-219.
+ 9. Huang DZ, Xu K, Farhat C, Darve E. Learning constitutive relations from indirect observations using deep neural networks. J Comput
+    Phys. 2020;416:109491.
+10. Le B, Yvonnet J, He QC. Computational homogenization of nonlinear elastic materials using neural networks. Int J Numer Methods Eng.
+    2015;104(12):1061-1084.
+11. Arnold SM, Piekenbrock M, Ricks TM, Stuckner J. Multiscale analysis of composites using surrogate modeling and information optimal
+    designs. Proceedings of the AIAA Scitech 2020 Forum; 2020:1863; AIAA.
+12. Stuckner J, Graeber S, Weborg B, Ricks TM, Arnold SM. Tractable multiscale modeling with an embedded microscale surrogate.
+    Proceedings of the AIAA Scitech 2021 Forum. AIAA; 2021:1963.
+13. Avery P, Huang DZ, He W, Ehlers J, Derkevorkian A, Farhat C. A computationally tractable framework for nonlinear dynamic multiscale
+    modeling of membrane woven fabrics. Int J Numer Methods Eng. 2021;122(10):2598-2625.
+14. Borrvall T, Ehle C, Stratton T. A fabric material model with stress map functionality in LS-DYNA. Proceedings of the 10th European
+    LS-DYNA Conference. LS-DYNA; 2015.
+15. Flaschel M, Kumar S, De Lorenzis L. Unsupervised discovery of interpretable hyperelastic constitutive laws. Comput Methods Appl Mech
+    Eng. 2021;381:113852.
+16. Xu K, Huang DZ, Darve E. Learning constitutive relations using symmetric positive definite neural networks. J Comput Phys.
+    2021;428:110072.
+17. Klein DK, Fernández M, Martin RJ, Neff P, Weeger O. Polyconvex anisotropic hyperelasticity with neural networks. J Mech Phys Solids.
+    2022;159:104703.
+18. Fan FL, Xiong J, Li M, Wang G. On interpretability of artificial neural networks: a survey. IEEE Trans Radiat Plasma Med Sci.
+    2021;5(6):741-760.
+19. Carroll M. Must elastic materials be hyperelastic? Math Mec Solids. 2009;14(4):369-376.
+20. Reiner M, Abir D. Second-order Effects in Elasticity, Plasticity and Fluid Dynamics: International Symposium, Haifa, Israel, April 23-27,
+    1964:1962; Macmillan.
+21. Vlassis NN, Ma R, Sun W. Geometric deep learning for computational mechanics Part I: anisotropic hyperelasticity. Comput Methods Appl
+    Mech Eng. 2020;371:113299.
+22. Weber P, Geiger J, Wagner W. Constrained neural network training and its application to hyperelastic material modeling. Comput Mech.
+    2021;68(5):1179-1204.
+                                                                                                                                                  10970207, 2022, 12, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6957 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [29/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+AS’AD et al.                                                                                                                               2759
+
+
+
+23. Noll W. A mathematical theory of the mechanical behavior of continuous media. The Foundations of Mechanics and Thermodynamics.
+    Springer; 1974:1-30.
+24. Knowles JK, Sternberg E. On the ellipticity of the equations of nonlinear elastostatics for a special material. J Elast. 1975;5(3):341-361.
+25. Marsden JE, Hughes TJ. Mathematical Foundations of Elasticity. Courier Corporation; 1994.
+26. Coleman BD, Noll W. On the thermostatics of continuous media. Arch Ration Mech Anal. 1959;4(1):97-128.
+27. Hoger A. Positive definiteness of the elasticity tensor of a residually stressed material. J Elast. 1994;36(3):201-226.
+28. Yang Gao D, Neff P, Roventa I, Thiel C. On the convexity of nonlinear elastic energies in the right Cauchy-Green tensor. J Elast.
+    2017;127(2):303-308.
+29. Amos B, Xu L, Kolter JZ. Input convex neural networks. Proceedings of the International Conference on Machine Learning; 2017:146-155;
+    PMLR.
+30. Godfrey LB, Gashler MS. A continuum among logarithmic, linear, and exponential functions, and its potential to improve generalization
+    in neural networks. Proceedings of the 2015 7th International Joint Conference on Knowledge Discovery, Knowledge Engineering and
+    Knowledge Management (IC3K); 2015:481-486; IEEE.
+31. Smit RJ, Brekelmans WM, Meijer HE. Prediction of the mechanical behavior of nonlinear heterogeneous systems by multi-level finite
+    element modeling. Comput Methods Appl Mech Eng 1998; 155(1-2): 181–192.
+32. Miehe C, Schröder J, Schotte J. Computational homogenization analysis in finite plasticity simulation of texture development in
+    polycrystalline materials. Comput Methods Appl Mech Eng. 1999;171(3-4):387-418.
+33. Feyel F, Chaboche JL. FE2 multiscale approach for modelling the elastoviscoplastic behaviour of long fibre SiC/Ti composite materials.
+    Comput Methods Appl Mech Eng. 2000;183(3-4):309-330.
+34. Kouznetsova V, Brekelmans W, Baaijens F. An approach to micro-macro modeling of heterogeneous materials. Comput Mech.
+    2001;27(1):37-48.
+35. Geuzaine P, Brown G, Harris C, Farhat C. Aeroelastic dynamic analysis of a full F-16 configuration for various flight conditions. AIAA J.
+    2003;41(3):363-371.
+36. Klinkel S, Govindjee S. Using finite strain 3D-material models in beam and shell elements. Eng Comput. 2002;19(3):254-271.
+37. Ying X. An overview of overfitting and its solutions. J Phys Conf Ser. 2019;1168:022022.
+38. O’Farrell C, Sonneveldt BS, Karhgaard C, Tynis JA, Clark IG. Overview of the ASPIRE project’s supersonic flight tests of a strengthened
+    DGB parachute. Proceedings of the 2019 IEEE Aerospace Conference; 2019:1-18.
+39. Ho J, Farhat C. Discrete embedded boundary method with smooth dependence on the evolution of a fluid-structure interface. Int J Numer
+    Methods Eng. 2021;122(19):5353-5383.
+40. Farhat C, Lakshminarayan VK. An ALE formulation of embedded boundary methods for tracking boundary layers in turbulent
+    fluid–structure interaction problems. J Comput Phys. 2014;263:53-70.
+41. Borker R, Huang D, Grimberg S, Farhat C, Avery P, Rabinovitch J. Mesh adaptation framework for embedded boundary methods for
+    computational fluid dynamics and fluid-structure interaction. Int J Numer Methods Fluids. 2019;90(8):389-424.
+42. Huang DZ, Wong ML, Lele SK, Farhat C. Homogenized flux-body force treatment of compressible viscous porous wall boundary
+    conditions. AIAA J. 2021;59(6):2045-2059.
+43. Farhat C, Rallu A, Wang K, Belytschko T. Robust and provably second-order explicit–explicit and implicit–explicit staggered
+    time-integrators for highly non-linear compressible fluid–structure interaction problems. Int J Numer Methods Eng. 2010;84(1):73-107.
+
+
+
+
+   How to cite this article: As’ad F, Avery P, Farhat C. A mechanics-informed artificial neural network approach
+   in data-driven constitutive modeling. Int J Numer Methods Eng. 2022;123(12):2738-2759. doi: 10.1002/nme.6957
+

@@ -1,0 +1,1814 @@
+INTERNATIONAL JOURNAL FOR NUMERICAL METHODS IN ENGINEERING
+Int. J. Numer. Meth. Engng 2016; 107:853–881
+Published online 11 February 2016 in Wiley Online Library (wileyonlinelibrary.com). DOI: 10.1002/nme.5188
+
+
+
+
+     The finite element square reduced (FE2R ) method with GPU
+    acceleration: towards three-dimensional two-scale simulations
+
+                                   Felix Fritzen1,*,† and Max Hodapp2
+  1 EMMA – Efficient Methods for Mechanical Analysis Group, Chair of Continuum Mechanics, Institute of Applied
+
+                Mechanics (CE), University of Stuttgart, Pfaffenwaldring 7, 70569 Stuttgart, Germany
+ 2 Laboratory for Multiscale Mechanics Modeling / Laboratoire de modélisation mécanique multi-échelle (LAMMM)
+
+     Ecole polytechnique fédérale de Lausanne (EPFL) STI IGM LAMMM, ME D3 1726 (Bâtiment ME), Station 9,
+                                          CH-1015 Lausanne Switzerland
+
+
+
+
+                                                    SUMMARY
+
+The FE2 method is a renown computational multiscale simulation technique for solid materials with fine-
+scale microstructure. It allows for the accurate prediction of the mechanical behavior of structures made of
+heterogeneous materials with nonlinear material behavior. However, the FE2 method leads to excessive CPU
+time and storage requirements, even for academic two-dimensional problems. In order to allow for realistic
+three-dimensional two-scale simulations, a significant reduction of the CPU and memory usage is required.
+For this purpose, the authors have recently proposed a reduced basis homogenization scheme based on a
+mixed incremental variational principle. The approach exploits the potential structure of generalized stan-
+dard materials. Thereby, important speed-ups and memory savings can be achieved. Using high-performance
+GPUs, the reduced-basis method can be further accelerated. In the present contribution, our previous works
+are combined and extended to form the FE2 -reduced method: the FE2R . The FE2R can be used to simu-
+late three-dimensional structural problems with consideration of the nonlinearity and microstructure of the
+underlying material at acceptable computational cost. Thereby, it allows for a new level of complexity in
+nonlinear multiscale simulations. Numerical examples illustrate the capabilities of the chosen approach.
+Copyright © 2016 John Wiley & Sons, Ltd.
+
+Received 17 November 2014; Revised 14 August 2015; Accepted 7 December 2015
+
+KEY WORDS:        Nvidia CUDA; graphics processing unit (GPU); potential based reduced basis model order
+                  reduction (pRBMOR); generalized standard material (GSM); mixed incremental variational
+                  approach; finite element square reduced (FE2R ); computational homogenization
+
+
+                                              1. INTRODUCTION
+
+In modern engineering applications materials with pronounced heterogeneity on the microscale
+become more and more popular. Such heterogeneities can either be due to varying crystal orien-
+tations, for example, in polycrystalline metals or ceramics, or due to different micro-constituents.
+The latter is the case for composite materials with fiber and particle reinforcement. Because of
+advantageous properties of the composites, for example e. g., with respect to damping or the stiffness
+to weight ratio, they are increasingly applied. For example, each generation of aircrafts in the pre-
+ceding century has seen an increase in the amount of composites used. The Boeing 787 Dreamliner
+(first delivered in 2011) features the current peak percentage at around 50% of the total mass of the
+aircraft being made of composites.
+
+
+
+*Correspondence to: Felix Fritzen, EMMA – Efficient Methods for Mechanical Analysis Group, Chair of Continuum
+  Mechanics, Institute of Applied Mechanics (CE), University of Stuttgart, Pfaffenwaldring 7, 70569 Stuttgart, Germany.
+† E-mail: felix.fritzen@mechbau.uni-stuttgart.de
+
+
+
+Copyright © 2016 John Wiley & Sons, Ltd.
+                                                                                                             10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+854                                        F. FRITZEN AND M. HODAPP
+
+
+   These numbers clearly illustrate that a thorough understanding of the mechanical behavior of
+composite materials is of crucial importance. Considering also the decrease in physical experiments
+and the increase in virtual experiments based on numerical simulations, the urgent need for fast sim-
+ulation methods is apparent. Analytical methods that can be used to predict the mechanical response
+of heterogeneous materials go back to the upper Voigt [1] and the lower Reuss [2] estimates, which
+provide rigorous bounds on the linear behavior of the composite. More sophisticated methods based
+on Eshelby’s seminal work [3] have been exploited in many of the subsequent developments. Some
+popular methods are the bounds of Hashin and Shtrikman [4] and the Mori–Tanaka scheme [5].
+These analytical estimates have limitations with respect to the consideration of the geometric com-
+plexity, that is, if the micro-morphology is not ellipsoidal, or in the presence of nonlinear material
+behavior. For the latter case, variational methods [6–9] can be used. However, these methods still
+have limitations with respect to the underlying material behavior and the microstructural geometry.
+   Computational homogenization methods can overcome the limitations with respect to the geome-
+try and the constitutive models. In the context of solid mechanics, the Finite Element Method (FEM;
+e.g., [10, 11]) is well established, and a variety of commercial programs is at hand for different
+engineering applications. In the multiscale context, the FE2 (FE Square; e.g., [12–14]) method can
+be used if the length scales of the structural problem and of the microstructure are clearly sepa-
+rated. The FE2 method associates each integration point on the structural scale with an FE model
+of the microstructure. Because the microstructure itself contains usually hundreds of thousands of
+unknowns and internal state variables and, at the same time, the structural problem contains hun-
+dreds of thousands of integration points (and thus the same number of RVEs), the computational
+cost (CPU time and storage requirements) of the FE2 technique is prohibitively large, particularly
+for three-dimensional (3D) problems. Therefore, the FE2 method has not been applied to realistic
+3D problems to the best of our knowledge.
+   In order to alleviate the computational burden of two-scale simulations, Balzani, Brands,
+Scheunemann and Schröder suggest the use of simplified representative volume elements: the so-
+called statistically similar RVEs (SSRVEs; [15, 16]). The SSRVEs are constructed based on real
+3D images of the microstructure by means of optimizing parameterized microstructures (e.g., con-
+taining spheroidal inclusions) such that certain statistical measures of the original material are
+preserved. The concept allows to construct periodic SSRVEs, which is an important advantage over
+the direct use of 3D images in numerical simulations. Still the computational cost for the simula-
+tion of SSRVEs is high, and applications to nested FE simulations can only be realized using a large
+amount of resources (i.e., parallel computing with large hard disk storage requirements).
+   A completely different approach for the rapid simulation of periodic 3D RVEs was proposed
+approximately two decades ago by Moulinec, Michel, and Suquet [17, 18]. They suggested the use
+of the elegant fast Fourier transform (FFT) in order to quickly solve the boundary value problem
+using the Lippmann–Schwinger equation. The method has undergone a remarkable development
+(e.g., [19–24]), and it has recently been applied in two-scale FE–FFT simulations [25]. While the
+computing time (more precisely mainly the time required for the stiffness assembly and for the linear
+solver in the FEM) can be reduced considerably by application of the FFT, the storage requirements
+remain unaltered.
+   In the past decade, the increasing demand for high-performance simulation methods has led to a
+broad activity in the emerging field of model order reduction methods (e.g., [26–30]). Many appli-
+cations treated in the mathematical community are designed for time-dependent linear problems or
+problems with affine parameter dependence of the differential operator. Only recently, a introduc-
+tory textbook on the topic was released [31]. The aim of model reduction is to find low-dimensional
+parameterizations of approximate, yet accurate, solutions. Often this is performed by replacing
+rather general solution spaces by problem-specific ones. An interpretation of these reduced solution
+spaces for mechanical problems is, for example, that a linear combination of physically meaningful
+displacement fields (for the investigated problem) is used to approximate the solution.
+   Many of the existing model reduction techniques are specific to discrete systems, that is, they
+require a discretization of the problem a priori, and the methods then operate directly on the discrete
+system. For example, the nodal degrees of freedom in an FE discretization are assembled in a global
+vector uh 2 RN , which is sought after in order to find the solution to partial differential equations
+
+Copyright © 2016 John Wiley & Sons, Ltd.                      Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                          DOI: 10.1002/nme
+                                                                                                              10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                         THE FINITE ELEMENT SQUARE REDUCED METHOD                                     855
+
+
+(PDEs). In that case, the model reduction technique aims to replace the high-dimensional vector uh
+by a low-parametric approximation u.Q Often this is performed by using a linear space that is spanned
+by a reduced basis (RB)
+                                   ° ±                             Xn
+                       V r D span v.i /  RN , uQ D V  D              i v.i / ;                  (1)
+                               i D1;:::;n                             i D1
+                                  
+with V D v.1/ ; v.2/ ; : : : ; v.n/ 2 RN n ;  2 Rn . Formally, the problem of finding the N unknowns
+(the entries of uh ) has been replaced by finding a reduced basis (described by the matrix V ) and the
+n-dimensional vector  of reduced degrees of freedom, where the number n denoting the reduced
+degrees of freedom is significantly smaller than N .
+   A rather straightforward approach to exploit the model reduction is to use a Galerkin projection.
+This approach was, for example, also considered by [32] in the Reduced Model Multiscale Method
+(R3M), which provides a reduced order model for hyperelastic materials (two-dimensional porous
+microstructures undergoing finite strains were considered). The same working group has later pro-
+posed the use of Numerical Explicit Potentials (NEXP; [33]) and of Stochastic NEXP (S-NEXP
+[34]) for the efficient simulation of hyperelastic solids. The key idea is to precompute the free energy
+of the hyperelastic solid and, based on the preanalysis data, find suitable interpolants. The method
+has two disadvantages with respect to its application in two-scale simulations: (i) the missing con-
+sideration of dissipative processes and, thus, the missing path-dependency and (ii) the rather large
+number of required precomputations in order to obtain the interpolation functions (for instance, in
+[33], 100 samples are computed for a two-dimensional RVE covering deformations between 0 and
+0.1% only). For the same class of hyper-elastic materials, Temizer and Zohdi [35] proposed a numer-
+ical homogenization procedure in the sense of material maps. If applicable, the NEXP approach
+or the concept of material maps can provide accurate approximations with an excellent computa-
+tional efficiency of the resulting effective material model. However, many realistic problems require
+the consideration of dissipative processes and for a broad range of loadings. Even for hyperelastic
+materials, the latter can lead to a prohibitive amount of required precomputations.
+   Other Galerkin projection-based approaches provide reduced models that involve a prohibitive
+amount of algebraic operations. Despite the reduced number of degrees of freedom, the compu-
+tational effort for the algebraic operations at runtime leads to a modest overall acceleration of
+the numerical problem. This has long been recognized, and many authors propose to replace the
+exact Galerkin projection by approximations. Thereby, additional computational gains are possible.
+Many different methods have been proposed over the years, for example, the empirical interpola-
+tion method (EIM; [26]), the discrete EIM (DEIM; [36]) or the missing point estimate (MPE; [27]),
+to mention only a few. All of these approaches have in common that they replace the evaluation
+of the high-dimensional residual of the discrete system by an evaluation of selected values of the
+residual only. Obviously, this is not possible without assuming a certain correlation of the entries of
+the discrete residual vector. It shall be emphasized that the discrete system serves as a basis for the
+representation of the global residual in a reduced way. Moreover, projection-based model reduction
+techniques usually require the storage of all history variables (i.e., of the internal state variables of
+the material). Thereby, they fail at significantly reducing the storage requirements, which is a key
+demand for the practical realization of two-scale simulations of 3D problems.
+   A method that is suited for nonlinear mechanical problems involving internal variables is the A
+Priori Hyperreduction (APHR; e.g., [28, 30]). While the method can allow for considerable speed-
+ups (e.g., values of 4 to 30 are mentioned), it preserves a lot of freedom with respect to the modeling.
+Unfortunately, the computational savings and the reduction in the memory requirements are limited
+for the APHR.
+   For the specific field of nonlinear homogenization, Michel and Suquet [37] proposed the Nonuni-
+form Transformation Field Analysis (NTFA). In contrast to other model order reduction techniques,
+the NTFA parameterizes not the displacements but the internal variables of the system using a
+reduced basis spanned by so called plastic modes. By exploiting the micromechanical properties of
+the system, it can be shown that the microscopic displacement field u.x/ is a linear function of the
+actuation of the plastic modes and of the macroscopic strain applied to the representative volume
+
+Copyright © 2016 John Wiley & Sons, Ltd.                       Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                           DOI: 10.1002/nme
+                                                                                                               10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+856                                        F. FRITZEN AND M. HODAPP
+
+
+element (RVE). While being very efficient with respect to computation time and memory savings,
+the NTFA has the limitation of being particularly sensitive to the microscopic material model, which
+also determines the effective yield criterion for the reduced variables in a semi-heuristic way. Exten-
+sions of the original proposal to other isotropic material laws and applications to 3D problems have
+been proposed in the past decade [38–44]. Besides the complications related to the effective yield
+criterion, a limitation of the NTFA is the recourse to constant hardening variables within the individ-
+ual phases. Therefore, effects induced by local hardening or softening of the inelastic phase cannot
+be accounted for.
+   In order to derive a reduced-order model for a more general class of inelastic materials, the authors
+recently proposed an extension of the NTFA that eliminates the semi-heuristic yield criterion and,
+at the same time, most of the limitations with respect to the local constitutive model. The method
+is referred to as potential based reduced basis model order reduction (pRBMOR; [45, 46]). The
+generalizations with respect to the NTFA are achieved by allowing for a rather rich sub-class of GSM
+[47–49]. A mixed variational representation of the constitutive behavior in the reduced framework
+leads to an evolution law for the reduced variables of the effective material. The freedom with
+respect to the modeling does not come for free: many algebraic operations are required in order to
+compute the functionals defining the evolution law. The speed-up of the method was found to be on
+the order of 50 to 500 with respect to full FE calculations, which is a good achievement, when being
+compared with other reduced-basis model order reduction methods.
+   Recently, the method was extended by the authors [46] to also account for a reduced basis of
+non-uniform hardening states, and a massively parallel GPU implementation of the algorithm using
+mixed precision floating point arithmetics was introduced. It provides additional gains with respect
+to the computation time by a factor 100 and higher (one GPU vs one CPU core). Thereby, the
+total speed-up of the GPU accelerated pRBMOR is on the order of 104 and higher. In the present
+contribution, the GPU accelerated version [46] is used and extended in order to accelerate actual 3D
+two-scale simulations of FE2 type.
+   The paper is structured as follows: In Section 2, the two-scale problem is formally described. In
+Section 3, the pRBMOR framework proposed in previous works [45, 46] is formulated. A discussion
+of theoretical and algorithmic aspects of the method and a methodological comparison with the
+APHR are presented. Section 4 is devoted to FE2 and the novel FE2R method. The conceptual idea
+of computational homogenization (in the sense of the FE2 method) is detailed. Based on this, the
+computational demands for a feasible two-scale simulation are formulated, and a comparison with
+simulations using the rapid FFT is conducted. Then the pRBMOR approach is equipped with an
+algorithmic stiffness operator. The implementation of the pRBMOR with GPU acceleration into
+a FE code is briefly described. The resulting multiscale method is called FE2R . In Section 5, 3D
+two-scale problems are computed using the newly proposed FE2R method. The results show that
+the chosen reduced basis approach is able to provide speed-ups and memory savings that allow for
+realistic two-scale simulations. The paper closes with a summary and a conclusion in Section 6,
+where the necessity for some future developments is emphasized.
+
+1.1. Notation
+An index-free notation is adopted for scalars (e.g., , a, and b), first-order tensors (e.g., a; n, and
+x), second order tensors (e.g., ",  , and ), and fourth order tensors (e.g., A and C). Vectors (e.g.,
+â and O ) and matrices (e.g., Â, Ĉ, and D̂) use a different typesetting. The standard inner product is
+used to define the norm
+                                                      p
+                                              kAk D       AA                                           (2)
+
+of a tensor A of arbitrary order. In order to better reflect the algorithmic realization of the presented
+model reduction technique, a normalized Voigt notation is introduced in order to express symmetric
+second-order tensors as six-dimensional vectors. Therefore, a set of six symmetric, orthonormal
+basis tensors B .ˇ / is assumed, such that, for example,
+
+Copyright © 2016 John Wiley & Sons, Ltd.                        Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                            DOI: 10.1002/nme
+                                                                                                                   10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                           THE FINITE ELEMENT SQUARE REDUCED METHOD                                        857
+
+                           6
+                           X
+                    D         .O /ˇ B .ˇ /   ,   .O /ˇ D   B .ˇ / ;           O 2 R6 :                (3)
+                         ˇ D1
+
+
+Analogously, fourth-order tensors with both minor symmetries are expressed by 6  6 matrices
+according to
+              6
+              X
+       CD           .CO /˛ˇ B .˛/ ˝ B .ˇ /     ,    .CO /˛ˇ D C  .B .˛/ ˝ B .ˇ / /;       CO 2 R66 :      (4)
+             ˛;ˇ D1
+
+
+In the following, tensors and their respective vector/matrix representations are identified, for exam-
+ple,  , O , except for  and O , which have different interpretations . 2 Sym.R3 / W local driving
+force; O 2 RN W global driving force). Further, we define the averaging operator
+                                                      Z
+                                                  1
+                                      h'.x/i D           '.x/ dV:                                   (5)
+                                                 jj
+                                                         
+
+
+
+          2. TWO-SCALE PROBLEM AND COMPUTATIONAL HOMOGENIZATION
+
+2.1. Two-scale problem
+In the following, we investigate a structural problem on the domain     N  R3 . The structure is made
+of a micro-heterogeneous material where the heterogeneity can be natural (e.g., in wood or polycrys-
+talline metals) or artificial (e.g., in composites). The scale-separation hypothesis is assumed to hold,
+and a continuum mechanical description on both scales is used. At the structural or macroscopic
+scale, the heterogeneous material appears homogeneous. However, the microstructure and the distri-
+bution of the physical properties therein both strongly influence the mechanical behavior. In order to
+predict the mechanical properties of the micro-heterogeneous solid, we consider a sufficiently large
+representative volume element (RVE) . The position vector is denoted xN 2       N on the macroscopic
+scale and x 2  on the microscopic scale, that is, at the level where the material heterogeneities
+can be observed. On both scales, the Cauchy stress tensor (N and  ) and the infinitesimal strain ten-
+sor ("N and ") are asserted, where overlined quantities correspond to the structural scale. Attention is
+confined to a linear kinematic description and to quasi-static problems. Then the balance of linear
+and angular momentum read
+
+                 divxN .N / C bN D 0;         N D .N /T          + boundary conditions,                  (6)
+                      divx . / D 0;            D T               + boundary conditions:                  (7)
+
+   Here bN denotes a force density, for example, due to gravitational fields. The boundary condi-
+tions involve Dirichlet and Neumann conditions on the macroscopic scale. On the microscale, the
+boundary conditions emerge from the scale-transition operators
+                     Z                                     Z
+                  1                                     1
+            N D         n ˝ x dA D h i ;       "N D         sym .u ˝ n/ dA D h"i ;         (8)
+                 jj                                   jj
+                      @                                            @
+
+where n is the outward unit normal vector and u is the local displacement field on the small scale.
+Because of their favorable properties with respect to the required RVE size (e.g., [12, 50]), peri-
+odic displacement fluctuation conditions are used to enforce (8) in this work. The task of nonlinear
+                                                                              N / (t 2 Œ0; T ). This
+homogenization is to relate the effective stress tensor N to the strain path ".t
+macroscopic relation is a priori unknown because of the dependence on the microstructure and the
+nonlinearities therein.
+
+Copyright © 2016 John Wiley & Sons, Ltd.                            Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                                DOI: 10.1002/nme
+                                                                                                                             10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+858                                             F. FRITZEN AND M. HODAPP
+
+
+2.2. Microscopic constitutive model
+On the microscopic scale, we assume that the material belongs to a sub-class of GSM [47–49].
+More specifically, we assert that the Helmholtz-free energy density depends on the total strain ",
+the plastic strain tensor "p and an additional vector of hardening variables qO 2 Rnq with the
+particular structure
+
+                                          1                         1
+                         ."; "p ; q/
+                                  O D       ."  "p /  CŒ"  "p  C "p  KŒ"p  C                   q .q/:
+                                                                                                        O             (9)
+                                          2                         2
+Here, C is a positive definite fourth-order tensor having the major and both minor symmetries,
+which determines the stress tensor  from the elastic strain "e D "  "p via
+                                                @
+                                           D      D CŒ"  "p  D CŒ"e :                                            (10)
+                                                @"
+The tensor K in (9) is semi-positive definite and has the same symmetries as C. It is used to model
+linear kinematic hardening. Finally, q is a hardening potential. Following standard procedures [51],
+the thermodynamic driving forces are
+
+                                      @                                                        @
+                           D            D   KŒ"p                  and            rO D        :                 (11)
+                                      @"p                                                      @qO
+
+The reduced Clausius Duhem inequality requires the non-negativity of the dissipation
+
+                                                                         Š
+                                               D D   "P p C rO  qPO > 0:                                          (12)
+
+In the GSM framework, the rates of the internal state variables "P p and qPO are related to the
+thermodynamic driving forces  and rO by an implicit relation involving the dissipation potential 
+
+                                                PO
+                                      @."P p ; q/                                            PO
+                                                                                    @."P p ; q/
+                              D                                 and         rO D                ;                   (13)
+                                        @"P p                                          @qPO
+
+where a differentiable potential  is assumed in the following.‡ The dissipation potential  is
+assumed to be convex, and, hence, its Legendre transform
+                                                 °                                  ±
+                                          O D sup   "P p C rO  qPO  ."P p ; q/
+                                    .; r/                                     PO                                  (14)
+                                                     "P p ;qPO
+
+
+exists without further presumptions. It is referred to as the dual dissipation potential, it is also con-
+vex, and its dual gives, again, the dissipation potential  D   . A rate explicit formulation for the
+inelastic processes is given by the relations
+
+                                      @  .; r/
+                                               O                                        
+                                                                                   @ .; r/
+                                                                                          O
+                             "P p D                              and         qPO D           :                       (15)
+                                          @                                          @rO
+From a modeling point of view, the dual dissipation potential is often favorable as it allows for
+a force-based description of the inelastic processes, that is, in stress-space. In the following, it is
+asserted that the material is defined by the free-energy and the dual dissipation   . Two examples
+are provided in the Appendix.
+
+
+
+‡ More general cases involve the sub-gradient of .
+
+
+
+Copyright © 2016 John Wiley & Sons, Ltd.                                      Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                                          DOI: 10.1002/nme
+                                                                                                                  10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                         THE FINITE ELEMENT SQUARE REDUCED METHOD                                         859
+
+2.3. Incremental variational formulation
+Incremental variational formulations have been discussed extensively in the®literature in  ¯ the past two
+                                                                                     p
+decades (e.g., [12, 52–54]). For brevity, we first introduce the state Sn D "n ; "n ; qO n of the GSM
+at time tn . The state at the end of the increment of length t is characterized by S D ¹"; "p ; qº.
+                                                                                                   O The
+strain is the driving parameter, that is, the strain increment " is prescribed. Similarly, the following
+Backward Euler approximations of the rates of the internal state variables
+
+                                                                        "p                         qO
+           "p D "p  "pn ;           qO D qO  qO n ;        "P p        ; and             qPO        (16)
+                                                                        t                          t
+are defined. Following Ortiz and Stainier [52], the incremental potential
+
+                   …."; "p ; q/
+                                O D          ."; "p ; q/
+                                                      O                                      PO
+                                                             ."n ; "pn ; qO n / C t ."P p ; q/          (17)
+
+is introduced. The minimizers "p , qO of … within the set of admissible increments are consistent
+approximations of the time continuous evolution of the internal state variables of the GSM. The
+minimizers define an incremental quasi-hyperelastic or pseudo-hyperelastic potential W and the
+stress tensor 
+                                                                                @W ."/
+                      W ."/ D      inf …."; "p ; q/;
+                                                     O                    D            :                 (18)
+                                  "p ; qO                                       @"
+
+Making use of the dual dissipation   and the relation  D   , the mixed incremental potential
+
+  … ."; "p ; q;
+                 O ; r/
+                      O D          ."; "p ; q/
+                                            O     ."n ; "pn ; qO n / C   "p C rO  qO  t   .; r/
+                                                                                                        O (19)
+
+is obtained. The saddle-point of … defines an alternative pseudo-hyperelastic potential via
+
+                                                                                       @W  ."/
+              W  ."/ D      inf sup … ."; "p ; q;
+                                                     O ; r/;
+                                                          O                     D               :        (20)
+                            "p ;qO ;rO                                                 @"
+
+                 3. REDUCED-BASIS COMPUTATIONAL HOMOGENIZATION
+
+3.1. Reduced-basis mixed incremental variational homogenization algorithm
+The mixed incremental variational formulation recently proposed by the authors in [45] and
+extended in [46] is used in the sequel (pRBMOR). The method originates from the NTFA initially
+suggested by Michel and Suquet [37, 38], which extends Dvorak’s Transformation Field Analy-
+sis (TFA; [55, 56]). In contrast to classical model reduction methods that parameterize the discrete
+nodal displacements, the pRBMOR and the NTFA parameterize only the internal variables.
+   The pRBMOR recently proposed by the authors extends the NTFA approach. In Figure 1, the
+differences of the pRBMOR, the NTFA, and the TFA are outlined, where the reference solution is
+considered to be given by a FE model of the RVE problem. In the pRBMOR, a reduced basis of
+
+
+
+
+Figure 1. Concise comparison of FE model, pRBMOR [45, 46], NTFA [37], and TFA [55] (decreasing
+                          generality of the solution fields from left to right).
+
+Copyright © 2016 John Wiley & Sons, Ltd.                           Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                               DOI: 10.1002/nme
+                                                                                                                                       10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+860                                             F. FRITZEN AND M. HODAPP
+
+
+plastic modes .˛/ .x/ (˛ D 1; : : : ; N ) is asserted in analogy to the NTFA. The modes are defined
+once and then remain constant. Under the given assumptions, the space–time-dependent plastic
+strain field is approximated by
+
+                                N
+                                X
+                 "p .x; t /           ˛ .t /
+                                                    .˛/
+                                                           .x/               ,          "Op .x; t /  PO .x/ O .t /:          (21)
+                                ˛D1
+
+
+Here, "Op .x/ is the vector representation of "p .x/, and PO .x/ is a localization operator containing the
+vector representations O .˛/ .x/ of the plastic modes as columns. The vector O .t / is referred to as
+mode activity vector. It represents the reduced plastic strain field with respect to the global basis. In
+order to complement the spatially non-uniform plastic strain fields, spatially non-uniform hardening
+variables are also considered [46], and the time-dependent hardening state is approximated by
+                                M
+                                X
+                  q.x;
+                  O    t/             ˇ .t /q
+                                             O      .ˇ /
+                                                           .x/               ,          q.x;
+                                                                                        O          O
+                                                                                             t /  Q.x/ O .t /:               (22)
+                                ˇ D1
+
+Here, the heterogeneous, global ansatz functions qO .ˇ / .x/ are called hardening modes, Q.x/O    is the
+                                                   O
+localization operator for the hardening state, and .t / is the reduced hardening vector.
+   Following the procedure described by Michel and Suquet [37] and later generalized and detailed
+by the authors (e.g., [40, 45, 57]), the strain field ".x; t / and the stress field  .x; t / are linear
+functions of the applied macroscopic strain "N and of the plastic mode activity vector O according to
+                                N
+                                X
+                  N / C
+  ".x; t / D A.x/Œ".t                         .˛/
+                                       ˛ .t /" .x/                     ,        "O.x; t / D EO e .x/"ON.t / C EO p .x/ O .t /; (23)
+                                ˛D1
+
+
+                                       N
+                                       X
+                       N / C
+   .x; t / D C.x/A.x/Œ".t                              .˛/
+                                                ˛ .t /  .x/           ,        O .x; t / D SOe .x/"ON.t / C SOp .x/ O .t /: (24)
+                                       ˛D1
+
+The operators EO e .x/, EO p .x/, SOe .x/, and SOp .x/ are the strain and stress localization operators with
+respect to the applied strain (index e) and the mode activity O (index p). The matrix-vector notation
+on the right-hand side is used in the remainder of this work. Because the local stress field depends
+linearly on "N and O , the macroscopic stress is given by the linear relation
+
+                                                    ON ."ON; O / D CON "ON  AOT O :                                         (25)
+
+The matrix AO contains the negative effective stress hO .˛/ i, and CON is the homogenized elastic stiff-
+ness. In summary, the chosen ansatz can relate the local fields  .x/, ".x/, "p .x/, and q.x/    O      to
+the macroscopic variables ",     O       O
+                             N , and . Thereby, also the thermodynamic driving forces .x/,
+r.x/
+O    °depend±only on the effective state variables via (11). For convenience, the macroscopic state
+S D "; N O ; O and the localization rule
+
+                X6                       
+             N O D
+ .x/   x; ";       SOe .x/"ON C TOp .x/ O B .ˇ / and                                     TOp .x/ D SOp .x/ K.x/
+                                                                                                               O   PO .x/ (26)
+                                                                   ˇ
+                           ˇ D1
+
+                         O
+are introduced, where K.x/    represents the tensor K.x/ in matrix form. Following [45, 46], the
+evolution law for the reduced variables O , O for arbitrary strain loadings ".t
+                                                                            N / derives from a mixed
+incremental variational approach. First, we define
+                                                   T " O        # 
+                                             "ONi        CN AOT    "ONi             ˝                                 ˛
+              N i D h .x; ti /i D 1                                       1 OO
+                                                                         C OiT K i C                          q .q
+                                                                                                                 Oi / ;       (27)
+                                  2            Oi       AO DO 0     Oi  2
+
+Copyright © 2016 John Wiley & Sons, Ltd.                                            Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                                                DOI: 10.1002/nme
+                                                                                                                               10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                              THE FINITE ELEMENT SQUARE REDUCED METHOD                                                 861
+
+
+                                            N  .Oi ; RO i / D h  .x;  i ; rOi /i                                 (28)
+
+at a discrete time ti . The vectors O and RO represent the effective thermodynamic driving forces
+related to O and O . In the following, quantities at time tn carry a subscript n (e.g., "n ). The variables
+at time tnC1 D tn C t are written without additional index (e.g., "N  "N nC1 ). The saddle point of
+the incremental potential
+
+                   
+                                                                                        
+                  … .S ; S n ; ; O D N nC1  N n C  O  O C  O  RO  t N  O ; RO :
+                               O R/                                                                                    (29)
+
+
+imposes the following necessary conditions for  O ,  O , O , and RO
+                                                                                 
+                         Š                                                Š          @             q .q/
+                                                                                                        O
+                  ı … D 0 D O  AO"ON  DO O ;                              O
+                                                                   ı … D 0 D R C QO T                                 (30)
+                                                                                                    @qO
+
+
+                          Š                       @N                       Š                    @N 
+                    ı … D 0 D  O  t                  ;            ıR … D 0 D  O  t                 :            (31)
+                                                    @O                                             @RO
+
+According to [45, 46], the partial derivatives with respect to O and RO in (31) are computed by taking
+into account the stationary conditions. Asserting that (30) holds for perturbations d O and d O the
+relations
+
+                                                       @ q          2                       D                  E
+          O O;
+    dO D Dd                 O dO
+                       dRO D H         with HO .x/ D                         and        O D QO T .x/HO .x/Q.x/
+                                                                                         H                 O           (32)
+                                                       @qO @qO
+
+                                                                                O the linearizations of
+are found. Because of the regularity of DO [57] and the asserted regularity§ of H
+the microscopic driving forces with respect to O , RO are
+                                                                                            @.x/
+   d O D DO 1 dO ;       ) d.x/ D TOp .x/DO 1 dO                               )             D TOp .x/DO 1 ;     (33)
+                                                                                             @O
+        O 1 dRO
+   dO D H                  ) dr.x/
+                              O    D HO .x/Q.x/
+                                           O   HO 1 dRO                            )
+                                                                                            @r.x/
+                                                                                             O
+                                                                                                  D HO .x/Q.x/
+                                                                                                          O   HO 1 :
+                                                                                             @RO
+                                                                                                                   (34)
+Substituting the definition of N  (28) and the relations (33), (34) into (31) the increments of the
+reduced state variables are
+                                                                                
+                            @  .x; ; r/
+                                        O                   O 1 QO T .x/HO .x/ @ .x; ; r/
+                                                                                          O
+    O D t DO 1 TOpT .x/                 ;      O D t H                                  : (35)
+                                  @                                                 @rO
+
+For further details regarding the derivation, we refer to [46]. The stationary conditions (30) and (35)
+are finally expressed in the (highly) nonlinear root finding problem
+                                        2                                            3
+                                                     O  AO"ON  DO O
+                                       6          RO C hQODT .x/r.x/i
+                                                                   O                 7
+                                       6                                        E 7 Š
+                            O O; O / D 6
+                    fO.O ; R;                                                      7 D 0:
+                                                                                         O                             (36)
+                                       6  O  t DO 1 TOpT .x/ @ .x;;@
+                                                                             r/
+                                                                             O
+                                                                                     7
+                                       4                D                          E 5
+                                                  O 1 QO T .x/HO .x/ @  .x;;r/
+                                          O  t H                              O
+                                                                            @rO
+
+
+
+             O is, for example, symmetric and negative definite for all strictly monotonic hardening materials. For linear
+§ The matrix H
+ hardening, the matrix HO is constant and can be precomputed once the hardening modes are defined.
+
+Copyright © 2016 John Wiley & Sons, Ltd.                                        Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                                            DOI: 10.1002/nme
+                                                                                                                     10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+862                                        F. FRITZEN AND M. HODAPP
+
+
+This nonlinear problem is solved using a Newton–Raphson procedure requiring the Jacobian
+                               2                                     3
+                                           IO                 0O
+                                                             DO 0O
+                            6                                      O 7
+                            6              0O                 IO
+                                                              0O H  7
+                          O 6
+                         J D6                             1         7;                                      (37)
+                                     O
+                            4 DO K  DO
+                                  1      1        O   O
+                                             DO 1 KR H     IO 0O 75
+                                  1 T          1        1
+                                O    O  O     O
+                              H KR D H KRR H
+                                          1        O   O      O
+                                                              0 I O
+
+                         O ,K
+where the definitions of K     O and K   O                                                          N
+                               R        RR are borrowed from [46]. Finally, the effective stress 
+is computed by the linear relation (25).
+
+3.2. Theoretical and algorithmic aspects
+The reduced model presented in Section 3.1 is defined in a continuous framework, that is, it is
+independent of the underlying discretization technique such as the FEM (e.g., [10, 11]) or the FFT
+(e.g., [17, 18, 25]). The discretization is introduced in terms of low-dimensional, reduced function
+spaces defined via the nonuniform modes for the plastic strain .˛/ .x/ and for the hardening vari-
+ables qO .˛/ .x/. These basis functions are assumed to be given (see Section 3.4 for detail regarding
+the mode identification). The independence from a specific spatial discretization method is a major
+conceptual difference of the pRBMOR with respect to many other model order reduction techniques
+mostly operating immediately on discrete data. Another important difference concerns the evolution
+of the internal variables "p and q.O In the pRBMOR, they are controlled by the reduced variables O
+     O
+and via (35):
+
+                          O"p .x/ D PO .x/ O ;               q.x/
+                                                                O      O
+                                                                     D Q.x/ O:                              (38)
+
+These increments usually do not coincide with the equilibrium increments
+
+                   p            @  .x; ; r/
+                                            O                                       @  .x; ; r/
+                                                                                                O
+               " .x/ D t                    and                 qO  .x/ D t                  :         (39)
+                                      @                                                  @rO
+The difference of the increments from the pRBMOR (38) to the equilibrium increments (39) is
+controlled by the microscopic dual dissipation potential   , which acts as a sort of penalization.
+Physical principles lead to these reduced evolution equations, which can be interpreted as state-
+                                                               p
+dependent projections of the local equilibrium increments " .x/, qO  .x/ according to
+                             ˝       p    ˛
+                        O D Pp .x/" .x/             with        Pp .x/ D DO 1 TOpT .x/;                  (40)
+
+               D                   E                                        
+           O D Pq .x; O /qO  .x/             with    Pq .x; O / D HO . O / 1 QO T .x/HO .x; O /:         (41)
+
+These projections differ from classical Galerkin projections (emerging, e.g., from minimum least
+square principles) because Pp and Pq incorporate the microscopic mechanical properties via TOp , Q,  O
+      O                                                                                O
+and H . Conversely, Galerkin projections make use of the relocalization operators P .x/ and Q.x/  O
+only. Therefore, the new projectors Pp and Pq can better account for the microscopic dissipative
+processes. Further, Pq depends also on the reduced variable O , that is, it incorporates the hardening
+potential q .
+
+3.3. Comparison with the A Priori Hyperreduction of Ryckelynck
+The evolution law for the reduced coefficients is a key difference to the APHR [28, 30], which is a
+successful model reduction technique for nonlinear solid mechanical problems. In the APHR, the
+microscopic material state is stored as a local variable in a subset of the RVE. This confined region
+is referred to as reduced integration domain (RID). The mechanical equilibrium is only enforced for
+
+Copyright © 2016 John Wiley & Sons, Ltd.                              Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                                  DOI: 10.1002/nme
+                                                                                                              10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                         THE FINITE ELEMENT SQUARE REDUCED METHOD                                     863
+
+the nodes inside of the RID with the displacements being computed using a global basis of ansatz
+functions. Formally, this can be seen as a Petrov–Galerkin procedure. The microscopic internal
+variables inside of the RID are computed using classical implicit time integrators. Then a reduced
+basis for the internal variables is used to extrapolate the internal state found inside of the RID to the
+remainder of the RVE using a sort of minimum least square approximation. This projection of the
+internal state onto the reduced basis is not physically motivated, but derived based on mathematical
+aspects that are independent of the underlying constitutive model. Note also that in the APHR, the
+memory savings are closely related to the size of the RID, that is, the bigger the RID, the smaller
+the memory savings and vice versa. This point is controversial because the accuracy of the method
+increases with increasing size of the RID and vice versa, which leads to an obvious trade-off between
+accuracy and computational savings.
+   The pRBMOR proposed in [45, 46] differs from the APHR in several points. First, the mem-
+ory requirements in the pRBMOR are independent of the integration domain, but they depend only
+on the number of reduced ansatz functions. Second, the evolution of the reduced internal variables
+(here: O , O ) is driven by the local constitutive equations of the material and a penalization using the
+dual dissipation potential. Thereby, the different material parameters and the degree of nonlinearity
+of the constitutive model are incorporated in the projection, and the operator Pq .x; O / can depend on
+the reduced hardening state O . Third, the displacements and strains are a priori linear functions of
+the applied loading and of the reduced plastic strains. This is an essential advantage of the pRBMOR
+because there is no need for an additional reduced basis (for the displacements/strains). Moreover,
+mechanical equilibrium is guaranteed because of the superposition of self-equilibrated stress fields,
+whereas in other model reduction techniques, this equilibrium needs to be determined iteratively.
+Fourth – and maybe most importantly – the APHR and most if not all other model reduction tech-
+niques for nonlinear solid mechanical problems require the computation of the local increments of
+the microscopic internal state variables using implicit time integrators in order to allow for the sub-
+sequent projection. Such local time integrators require the solution of low-dimensional, often highly
+nonlinear problems. Each of the nonlinear constitutive problems involves a varying number of itera-
+tions (in the following referred to as local or inner iterations). For each reduced displacement field,
+the nonlinear problems have to be solved in order to compute the microscopic stress. The latter then
+enters into the mechanical residual, which is then used to correct the reduced displacement field.
+Each correction necessitates another integration of the local constitutive equations until the mechan-
+ical residual is sufficiently small. The computational effort for the time integration of the constitutive
+models depends multiplicatively on the number of iterations of the reduced displacements (referred
+to as global or outer iterations) and the number of inner iterations.
+   The authors would like to emphasize that the APHR is considered a very efficient and general
+model reduction technique. It has the advantage of being suited for arbitrary constitutive mod-
+els (i.e., not necessarily of GSM type) and for geometrically nonlinear or multi-physics problems.
+However, this generality comes at the expense of increased computational cost, which is often
+significantly greater than for the specialized pRBMOR. In contrast to the APHR or other model
+reduction techniques involving inner iterations in order to provide equilibrated increments of the
+internal variables, the proposed pRBMOR is based on simultaneous iterations of the internal state at
+all points within the microstructure. More precisely, the pRBMOR algorithm requires the following
+operations in order to assemble the global (reduced) residual vector (36):
+   computation of the local state (Relocalization)
+    Compute the local internal variable q.x/
+                                           O    and the local stress-like driving force .x/. Both
+    operations involve small-sized matrix-vector multiplications for each evaluation point, that is,
+    for each integration point of the RVE.
+   local function evaluations 1
+    Compute the local driving force rO and the matrix HO , that is, perform (possibly nonlinear)
+    vectorial function evaluations for each evaluation point.
+   local function evaluations 2
+    Compute the gradients of the dual dissipation potential @   .x; ; r/,
+                                                                          O @r   .x; ; r/
+                                                                                          O given the
+
+Copyright © 2016 John Wiley & Sons, Ltd.                       Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                           DOI: 10.1002/nme
+                                                                                                                       10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+864                                        F. FRITZEN AND M. HODAPP
+
+
+    previously computed local driving forces .x/, r.x/,
+                                                     O     that is, perform two (possibly nonlinear)
+    vectorial function evaluations for each evaluation point.
+   non-uniform state dependent projection
+    Evaluate the functionals (30)–(31) emerging from the stationary conditions, that is, perform
+    (matrix-)matrix-vector multiplications and compute the weighted mean.
+In particular, no inner iterations exist, and the internal variables at all points in the RVE are altered
+only within the relocalization step. This means that a unique execution path without branching is
+guaranteed. Further, all of the computations operate on independent input/output data; the operations
+are rather simple and small sized, that is, they involve usually only few floating point values each
+and rather simple functions calls. Thus, the operations are well suited for parallel execution (SIMD;
+vectorization) allowing for high-performance implementations using many core systems such as
+graphics processing units (GPUs). This has motivated the development of a specific library for
+Nvidia GPUs that allows for substantial speed-ups on the order 100 and higher [46].
+
+3.4. Mode identification and data handling
+An important step of the pRBMOR is the identification of the plastic modes and of the hardening
+modes. Inspired by classical model reduction, we divide the pRBMOR into an offline or pre-analysis
+stage and an online stage. During the pre-analysis, the full RVE problem needs to be solved for a set
+of different loading paths. The output (i.e., the internal variables) of all discrete time steps during
+the pre-analysis phase has to be stored. Once the pre-analysis data are computed, a snapshot proper
+orthogonal decomposition (POD) is used to extract N plastic modes and M hardening modes from
+the computed inputs. Therefore, the symmetric positive semi-definite matrices
+                                 D            E                                    ˝               ˛
+                                       p      p
+           MO p       D MO p        D ".˛/  ".ˇ / ;        MO q            D MO q       D qO .˛/  qO .ˇ / ;   (42)
+                 ˛ˇ            ˇ˛                                      ˛ˇ           ˇ˛
+
+                         p
+are computed. Here, ".˛/ is the plastic strain in the ˛th of all stored data sets, and qO .˛/ is defined
+analogously for q.O The N and M leading eigenpairs of the two matrices define the plastic modes and
+the hardening modes through linear combinations of the stored plastic strain fields and hardening
+variables, respectively [39, 57].
+   The choice of the loading paths for the precomputations is tricky, and it influences the accu-
+racy of the resulting reduced material model considerably. Generally speaking, the more distinct the
+input for the snapshot POD, the richer the resulting reduced basis. A mere increase of the number
+of modes using the same input data can only improve the accuracy to a limited extent as stated in
+[58] for the pRBMOR for materials including cohesive interfaces. This illustrates why an increasing
+number of modes in the absence of additional snapshots usually does not help to reduce the errors
+any further after a certain level of accuracy is attained. Instead, the same number of modes identified
+using more diverse input data can produce reduced order models with considerably smaller errors.
+This effect is discussed in detail [58] for materials including nonlinear cohesive interfaces. An ad
+hoc choice for the generation of the input data was promoted in [40] in terms of six linearly indepen-
+dent strain loadings, which should be applied using a problem-related load rate mimicking the one
+of potential fields of application. A sophisticated kinematic approach for the automatic generation
+of well-chosen loading directions was recently promoted in [58] with the key idea of finding training
+directions that are homogeneously distributed on the hyper-sphere in R6 . In the current work, we
+use a similar approach for the definition of the training directions. The number of pre-analysis com-
+putations is provided in Section 4 for the considered examples. The authors would like to emphasize
+that the computational effort for the offline phase is basically negligible if the pRBMOR is used in
+order to accelerate actual two-scale simulations otherwise treated using computational homogeniza-
+tion techniques. Even hundreds of training directions make up for only a fraction of the overall cost
+that can later be economized during the solution of the two-scale problem (i.e., in the online phase).
+More precisely, hundreds of years of saved computing time have to be related to a couple of days
+required for the numerical training.
+
+Copyright © 2016 John Wiley & Sons, Ltd.                               Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                                   DOI: 10.1002/nme
+                                                                                                                  10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                         THE FINITE ELEMENT SQUARE REDUCED METHOD                                         865
+
+   In addition to the nonlinear pre-analysis computations and to the subsequent snapshot POD, the
+offline phase comprises the simulation of N C 6 additional linear problems. These are needed
+in order to determine the elastic strain localization operator A.x/ and the self-equilibrated fields
+".˛/           .˛/
+   .x/ and   .x/. The pRBMOR model then consists of the following data:
+
+   N plastic modes .˛/ .x/ and M hardening modes qO .˛/ .x/
+    (represented by the operators PO .x/ and Q.x/);
+                                               O
+                               O          O
+   the localization operators Se .x/ and Tp .x/ for the driving force .x/;
+   the matrices DO 2 RN N , AO 2 RN 6 , and CON 2 R66 .
+When the pRBMOR is used based on a FE model of the RVE, the reduced ansatz functions and
+the various localization operators are defined in terms of a set of matrices for each of the ngp inte-
+gration points. More precisely, each integration point within the inelastic phase is equipped with an
+integration weight wi and the following matrices
+
+                     PO .i / D PO .x .i / / 2 R6N ;       QO .i / D Q.x
+                                                                     O .i / / 2 Rnq M ;                  (43)
+
+                       SOe.i / D SOe .x .i / / 2 R66 ;    TOp.i / D TOp .x .i / / 2 R6N                 (44)
+
+for i D 1; : : : ; ngp . It is important to note that the matrix dimension is identical for all integration
+points. The total amount of data describing the problem is approximately proportional to the number
+of modes N and M , respectively, the dimension of the hardening variable nq and the number of
+integration points ngp . Because the operators are constant in time, they need to be stored only once
+for an arbitrary number of concurrent executions of the pRBMOR algorithm in the online stage.
+   During the online stage, memory is (temporarily) required in order to store the local hardening
+                                                      O .i / / and other local matrices, for example, HO .i / D
+       O .i / /, the local driving forces .x .i / /, r.x
+state q.x
+ O    .i /
+H .x /. However, this memory is not occupied permanently, but only during the actual iterations
+and the respective data can be erased after convergence of the effective constitutive model.
+
+                       4. FINITE ELEMENT SQUARE REDUCED METHOD
+
+4.1. Computational homogenization/FE2
+In order to describe the nonlinear response of a heterogeneous material, the computational homog-
+enization method or FE2 is an ad hoc choice imposing the bare minimum of constraints on the
+modeling. The FE2 technique [13, 14] assumes scale separation as stated before. Then each point xN
+of the macroscopic problem undergoes a strain loading ".         N t / (t 2 Œ0; T ), which is defined through
+                                                              N x;
+the macroscopic displacement field u.    N x;
+                                           N t / at discrete time steps. For each increment, the constitu-
+tive response (in the sense of N ) is unknown because of possible microstructural heterogeneities and
+nonlinearities. In order to determine N , the strain increment is assigned to an FE model of the RVE
+using appropriate boundary conditions. The nonlinear RVE problem is then solved using classical
+solution methods. Then the effective stress tensor N .x;   N t / is obtained by means of the scale transi-
+tion operators (8) as a volume average of the microscopic stress  .x/. The FE2 scheme is illustrated
+in Figure 2.
+   The resulting macroscopic stress field N .x;  N t / has to satisfy balance of linear momentum on the
+macroscale, and, thus, iterations with respect to the macroscopic displacements are carried out in the
+nonlinear case. Therefore, a linearization of N with respect to the effective strain "N is required. In the
+FE2 context, this linearization is composed of two contributions. In order to derive the macroscopic
+consistent algorithmic stiffness operator C   N a for the FE2 , the microscopic strain ".x/ is additively
+decomposed into the macroscopic strain "N and a fluctuation field ".x/.      Q      This fluctuation field has
+zero average, and its components are defined by the nodal displacement fluctuation vector uQ h and
+the classical finite element operator B.x/ according to
+
+                                      ".x/ D "N C ".x/
+                                                  Q    D "N C B.x/uQ h :                                  (45)
+
+Copyright © 2016 John Wiley & Sons, Ltd.                          Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                              DOI: 10.1002/nme
+                                                                                                                      10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+866                                        F. FRITZEN AND M. HODAPP
+
+
+
+
+                                Figure 2. Schematic representation of the FE2 .
+
+                                         N uQ h / related to microscopic equilibrium has the variation
+The microscopic stress at a given state .";
+                                                                    
+                                    ı .x/ D Ca .x/ ı "N C B.x/ı uQ h :                                       (46)
+
+In the finite element context, the components of the nodal force residual vector
+                                           Z
+                                      r D B T .x/ .x/dV
+                                       h
+                                                                                                              (47)
+                                                 
+
+of the RVE problem, which are not associated with kinematic boundary conditions, have to vanish.
+Formally,
+
+                                              kLTF r h k < TOL                                                (48)
+
+has to be satisfied for some tolerance TOL, where LTF selects the components of the residual vector
+that are not linked to Dirichlet conditions. Under a variation ı ",
+                                                                 N this translates into
+                                              Z
+                                                                    Š
+                                LTF ır h D LTF B T .x/ı .x/dV D 0:                            (49)
+                                                  
+
+
+Substituting (46) and solving for ı uQ h D LF ı uQ hF , the relation
+
+                                               ı uQ hF
+                                                       D K 1
+                                                            r P                                               (50)
+                                                ı "N
+
+is obtained. Here, the reduced stiffness matrix K r ; and the auxiliary matrix P are given by
+                 0                              1                            0                       1
+                     Z                                                           Z
+      K r D LTF @        B T .x/Ca .x/B.x/ dV A LF ;            P D LTF @            B T .x/Ca .x/ dV A :     (51)
+                                                                              
+
+Assuming Ca has the major symmetry, the macroscopic tangent stiffness can be computed in a
+straightforward way:
+                                        
+                           N    @ı N     @ı .x/               1 T 1
+                           Ca D       D           D hCa .x/i      P K r P:                                   (52)
+                                @ı "N       @ı "N              jj
+
+While the matrix K r and the local tangent operator Ca .x/ are computed in the FE2 context anyway,
+the solution of the linear system (50) and the assembly of P induce an additional computational
+effort, even if a factorization of the reduced stiffness matrix K r is available. The operator defined
+
+Copyright © 2016 John Wiley & Sons, Ltd.                               Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                                   DOI: 10.1002/nme
+                                                                                                                           10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                             THE FINITE ELEMENT SQUARE REDUCED METHOD                                              867
+
+
+
+
+Figure 3. Comparison of FE-based and FFT-based algorithms for the solution of periodic quasi-static solid
+                                mechanical boundary value problems.
+
+by (52) includes the average of the microscopic tangent stiffness Ca .x/. When neglecting the second
+term, the first part would lead to an overestimation of the tangent stiffness, similar to the upper Voigt
+bound for linear elasticity. The additional contribution involving P in (52) leads to a softening in the
+sense of a decrease of the eigenvalues of hCa i. The symmetry of the macroscopic tangent operator
+is a priori warranted, if Ca is symmetric. This is, for example, the case for all generalized standard
+materials described in Section 2.2.
+
+4.2. Aspects of FFT based approaches
+An alternative approach for solving the boundary value problem on the microscale is the FFT. For
+the special application of periodic microstructural RVE’s Mounlinec and Suquet, [17] introduced
+the so-called basic scheme, primarily to overcome the problem of meshing highly heterogeneous
+domains. Although it is not our aim to review this method in detail, we provide a short algorithmic
+comparison between FEM and FFT (see Algorithm 1 and 2 in Figure 3, respectively) in order to
+outline briefly the differences and similarities between both approaches.
+   In the FFT-based approach, the microscopic boundary value problem (7) is rewritten in terms of
+the Lippmann–Schwinger equation (see [17] for details)
+                                              ".x/ D "N  N .x/     .x/;                                         (53)
+where N .x/ is the Green operator for a homogeneous reference medium with stiffness C          N and .x/
+is a polarization stress. The convolution in (53) can be performed efficiently in Fourier space where
+it reduces to a simple multiplication.
+    When comparing both algorithms to each other, it becomes apparent that the main difference
+lies in the iterative update procedure for the unknowns. In the FE approach, the displacement vec-
+tor uh is updated by solving a high-dimensional sparse linear system involving the algorithmic
+stiffness operator of the material. In contrast to that, the strains are directly iterated by means of the
+Lippmann–Schwinger equation (performed in Fourier space and followed by the inverse FFT) in
+the FFT approach. Additionally, the abortion criterion for the iterative procedure for the FEM (neg-
+ligible nodal force residual ! weak form of the residual) and for the FFT (kdiv. /k < TOL) are
+considerably different.
+    The FFT makes use of obvious technical advantages due to the butterfly algorithm. The (inverse)
+FFT of a problem of dimension N can be handled at a computational complexity of O.N log.N //,
+while the solution of the linear system in the FE method is less structured.¶ The solution to such
+sparse linear systems produces an effort usually on the order of O.N 2 / or higher.|| Because the
+
+
+¶ except for regular/block-structured discretizations.
+|| In some cases, iterative solvers can yield a lower complexity, yet requiring rather strong assumptions and with often
+predominantly large constants (independent of N ) influencing the actual computing time.
+
+Copyright © 2016 John Wiley & Sons, Ltd.                                Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                                    DOI: 10.1002/nme
+                                                                                                              10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+868                                        F. FRITZEN AND M. HODAPP
+
+
+dimension N of the problem is prohibitively high, the FFT solution benefits from its low com-
+putational complexity, and, moreover, it features a highly structured algorithm that allows for
+high-performance implementations and better exploitation of hardware resources. Additionally,
+the FFT/inverse FFT omits the stiffness assembly of the FEM, and it has rather modest memory
+requirements in comparison with a factorization of the FE stiffness matrix.
+   In both methods, the inner iteration, that is, the evaluation of the local constitutive model at
+each integration point (for the FEM)/voxel (for the FFT), are identical. For nonlinear materials,
+the computation of the constitutive models can be challenging, and it usually comprises a Newton-
+Raphson method if implicit time integration procedures are used.
+   If applied within a nested two-scale framework the computation of the macroscopic tangent
+operator C N a introduces a computational cost similar to (52) for the FFT. As pointed out by
+Spahn et al., [25] a numerical evaluation of C N a might be favorable for which six linear independent
+small perturbations ı "N are considered in order to approximate C N a via finite differences. The authors
+of [25] found good convergence properties of the macroscopic problem for kı "k           N 2 O.106 /.
+However, the following deficiencies can occur:
+   the algorithmic stiffness operator obtained thereby is usually non-symmetric;
+   the nonlinear constitutive model needs to be evaluated multiple times;
+   the perturbation step size is nontrivial to choose (particularly for microstructural RVEs);
+   the sign of the perturbation can strongly affect CN a.
+
+Note that the same procedure for the computation of C    N a could be used for the FE scheme. However,
+the method described in Section 4.1 is usually preferred because of its favorable properties (e.g., it
+is symmetry preserving with regard to C   N a ).
+   Initially, Moulinec and Suquet proposed the basic scheme using the FFT to study complex rein-
+forced microstructures in their elastic regime. It was shown that this method is equivalent to a
+steepest descent algorithm, which is known to converge rather slowly under certain conditions [23],
+for example, if the phase contrast gets large. Hence, the basic scheme has nowadays been replaced
+by more refined algorithms with improved computational efficiency especially for high-phase con-
+trast, for example, involving Krylov subspace methods [23, 59] or Lagrangian multipliers [18]. The
+FFT method has evolved rather rapidly, and it was extended to more involved problems, for exam-
+ple, for the consideration of viscoplasticity and large strains [19–21, 60]. Thereby, the FFT proved
+to be a valuable alternative to the FEM (e.g., [61]).
+   Today, efficient software libraries for the FFT/inverse FFT exist off the shelf, for example,
+in terms of the parallelized FFTW [62] or the GPU-accelerated version by Nvidia (cuFFT;
+http://developer.nvidia.com/cufft). An operable FFT code for mechanical problems is also freely
+available at http://www.sattse-technologies.com/projects/en/craft, which was initially developed
+by A. Labé, H. Moulinec and P. Suquet at the Laboratoire de Mécanique et d’Acoustique,
+Marseille, France.
+   In the context of true multiscale simulations such as two-scale problems as described in Section 2,
+the authors are aware of a single contribution [25], which uses a nested FE–FFT-based approach in
+a setting that is similar to the one used in the present work (3D; nonlinear materials). However, the
+authors of [25] used a rather simple constitutive model with a single internal variable denoting the
+damage of the material. The CPU time reported in [25] was still on the order of several days although
+the problem size was rather small (500 macro elements, whereof only 93 elements are coupled
+to the FFT; FFT discretization: 643 250,000 voxels). Although being already rather efficient with
+respect to the computing time, the main problem of the FE–FFT multiscale method remains the need
+to store the local constitutive variables for each RVE problem. This induces tremendous memory
+requirements, which are a general problem when solving nested PDEs involving internal variables.
+Further, the FFT approach still requires numerous (i.e., prohibitively many) evaluations of the
+constitutive model, which can produce an enormous computational cost in two-scale simulations.
+
+Copyright © 2016 John Wiley & Sons, Ltd.                       Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                           DOI: 10.1002/nme
+                                                                                                                 10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                         THE FINITE ELEMENT SQUARE REDUCED METHOD                                        869
+
+4.3. Computational demands for two-scale simulations
+In order to develop a practicable two-scale simulation method, the demands have to be well under-
+stood. A hypothetic but realistic example of a two-scale problem, which is representative for many
+applications, will be discussed in the following. Therefore, we assert N int D 300; 000 integration
+points on the structural or macroscopic domain .    N The number of displacement degrees of free-
+dom of the macroscopic problem is nearly negligible for the considered two-scale setting. On the
+microscale, Nint D 200; 000 integration points are assumed although this number could easily be
+higher. In addition, we assert 200,000 displacement degrees of freedom for the microscale problem.
+Then a modern six core workstation can solve one nonlinear load increment of the FE problem on
+the RVE level in approximately 5 min.
+   First, we illustrate the computational demands of the FE2 method for the model problem.
+Assuming four equilibrium iterations on the structural level for each load step and each RVE and a
+total of 50 load increments, a total of 6 mio. RVE-level iterations are required to solve the two-scale
+problem. This amounts to 500,000 h or 57 years of computation time on the assumed workstation. In
+order to solve the problem within 2 or 3 days, a reduction of the computation time by a factor of 104
+or higher is mandatory. In addition to the prohibitive computation time, the memory requirements of
+the FE2 problem are excessive. If only the stress tensor, the total and plastic strain tensor and one
+scalar hardening variable are stored, then approximately 8 TB of data would have to be stored in
+order to save a single snapshot of all RVE problems, which is the mere minimum of information
+that is required.
+   With respect to three-dimensional two-scale simulations, three aspects are considered as crucial in
+the following. First, a reduction of the computation time for the RVE in the order of 104 or (possibly)
+higher is required in order to be able to solve the two-scale problem in an acceptable time (here: two
+or three days of computation time). Second, the memory requirement has to be reduced by a factor
+104 -105 (equivalent to less than 1 GB of data per load increment). These first two requirements are
+approximately met by the pRBMOR in combination with a high-performance GPU implementation.
+   Third, the accuracy of the prediction has to be sufficient. While the first two requirements are
+easy to motivate and to verify, the accuracy is currently the most intricate to judge on. It is obvi-
+ous that the massive reductions required because of the anticipated computation time and memory
+savings cannot be achieved without some loss in accuracy, for example, with respect to the macro-
+scopic stress response predicted by the reduced order model (ROM). The difficulty in answering
+whether the ROM is sufficiently accurate is because of the nonlinearity and path-dependency of
+the local and, thus, global material response. A priori, it is not possible to give an indication for
+the accuracy in a mathematically rigorous way to the best of our knowledge. However, previous
+investigations (e.g., [45, 46]) have shown that the accuracy of the ROM for loadings that are not
+used in the pre-analysis stage is still acceptable. Here acceptable refers to the accuracy of the pre-
+dicted macroscopic stress N . Deviations in the norm of N below 10% are assumed acceptable.
+Errors in this order of magnitude can be considered sufficiently small when taking into account
+the uncertainty of the microscopic material parameters or the fluctuation of the microstructural
+geometry of real-world heterogeneous materials. In the current investigation, it is a priori assumed
+that the preliminary testing using selected load cases is sufficient to approve the desired accuracy
+of the ROM.
+
+4.4. Algorithmic stiffness operator for the pRBMOR
+In order to use the pRBMOR algorithm for the application in a FE2 -like environment, a lineariza-
+tion of the macroscopic stress tensor in terms of the algorithmic stiffness operator C      N a  CON a of the
+                                                      2
+effective material is required. While for the FE algorithm, its computation is straightforward but
+involves a large number of algebraic operations (even if a factorization of the stiffness matrix of the
+problem is given), the pRBMOR can provide the algorithmic linearization basically at no additional
+computational cost. In order to derive CON a , a perturbation of the macroscopic strain in the root finding
+problem (36) is considered:
+
+Copyright © 2016 John Wiley & Sons, Ltd.                          Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                              DOI: 10.1002/nme
+                                                                                                                   10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+870                                        F. FRITZEN AND M. HODAPP
+
+                                      82      3     2         39
+                                      ˆ   AO          @"N O >
+                                      ˆ
+                                      <6                       >
+                                  Š        0 7      6 @"N RO 7=
+                                O   O
+                              df D 0 D 46     7   O
+                                                CJ 46         7   d"ON:                                   (54)
+                                      ˆ 0 5           @"N  O 5>
+                                                               >
+                                      :̂                       ;
+                                           0          @"N  O
+
+For any perturbation d"ON, the equality has to hold, that is, the term in braces has to vanish.
+Consequently, the partial derivative of the plastic mode activity vector O can be expressed via
+
+                                               @ O
+                                                     D JOr1 A;
+                                                              O                                            (55)
+                                                @"NO
+with a symmetric matrix JOr . Practically, @"N  O can be computed by solving the low-dimensional
+linear system six times. The algorithmic cost associated with the solution of this linear system
+is negligible with respect to all other computations performed during the pRBMOR. Finally, the
+algorithmic tangent operator is
+
+                                                    @ O
+                                  CON a D CON  AOT       D CON  AOT JOr1 A:
+                                                                             O                             (56)
+                                                     @"ON
+
+Note that CON a is unconditionally symmetric, which is also an outcome of the variational formulation.
+
+4.5. FE2R implementation
+The implementation of the FE2R method involves two stages: the offline phase (Section 3.4) in
+which the modes are determined and the online phase. The offline phase is mandatory and needs
+to be performed before the two-scale simulations as it determines the reduced-order model. During
+the subsequent online phase, the actual two-scale problem is solved by using the reduced model to
+determine the effective stress N and the algorithmic tangent operator C  N a at each integration point
+of the structural problem. While the steps of the pre-analysis (or offline) phase have been discussed
+in previous works (e.g., [40, 45]), the online phase has not been discussed thus far. It consists of
+the modeling of the structural problem involving the geometry, the boundary conditions, and so on.
+Then a classical nonlinear FE implementation is used with the only difference of calling the reduced-
+order model (ROM) described in Section 3.1 instead of standard constitutive model. All steps of the
+offline and online phase are illustrated in Figure 4.
+   Most importantly, the calls to the ROM are frequent, that is, for each (macroscopic) integration
+point at each (macroscopic) equilibrium iteration. Hence, the algorithmic efficiency of the ROM is of
+utmost importance. Therefore, we use our recent GPU-accelerated version of the pRBMOR scheme
+for Nvidia graphic cards, which allows for rapid computations. In order to obtain further gains with
+respect to computational efficiency, we have adopted the idea of a reduced integration domain (RID)
+from the APHR method [28, 30]. More precisely, we select only a subdomain R ¨  for the
+evaluation of the driving forces  and r, O of the hardening matrices HO and H  O and of the stationary
+conditions (30), (31). In practice, only a subset of the integration points within the inelastic mate-
+rial was chosen heuristically, for example, by taking only every n-th integration point. Then the
+evaluation of the effective potential is pursued only on this reduced subset, and, thereby, an approx-
+imate effective potential is obtained. Because the computational effort for the algebraic operations
+(various matrix/vector operations) is linear in the number of integration points, a significant reduc-
+tion of the overall computation time can thus be achieved. Of course, the accuracy of the reduced
+system is not warranted by this heuristic reduced integration of the occurring functionals. How-
+ever, the authors have verified that a reduced number of integration points have a surprisingly low
+effect on the accuracy, if not too few integration points are chosen. For example, the RVE exam-
+ined in [46] contains approximately 1 mio. integration points within the inelastic phase. By using
+only every 128th integration point, computational savings on the order of 100 are found although
+the computational accuracy is essentially preserved.
+
+Copyright © 2016 John Wiley & Sons, Ltd.                            Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                                DOI: 10.1002/nme
+                                                                                                               10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                         THE FINITE ELEMENT SQUARE REDUCED METHOD                                      871
+
+
+
+
+                             Figure 4. FE2R overview: offline and online phase.
+
+   The implementation can be realized within arbitrary finite element codes. However, access to the
+graphics card of the system for the GPU accelerated implementation can come along with techni-
+cal issues. For our studies, an in-house finite element code was used for both the offline and the
+online computations. A Nvidia GTX Titan graphics card was used within our study (6 GB of mem-
+ory, 1536 CUDA cores). The finite element code for the two-scale problem is a classical nonlinear
+FE implementation besides the following modifications: first, the GPU has to be initialized in the
+beginning of the simulation. This initialization involves memory allocation and reading the relocal-
+ization operators into the GPU memory. Second, a specific material subroutine was written for the
+pRBMOR-based ROM that accesses the GPU [46]. These are all modifications that are required in
+order to use the pRBMOR technique on GPUs for multi-scale FE computations using the new FE2R
+method. Note that in comparison with the FE2 method, the FE2R method is rather straightforward
+to implement because of the much simpler storage mechanism (no hard disk access required), the
+missing need for massive parallelization of the individual RVE problems and other technical issues.
+
+
+                  5. TWO-SCALE FINITE ELEMENT SIMULATION RESULTS
+
+5.1. Considered microstructures
+We consider two different microstructures with two different types of nonlinear materials. For
+microstructure A, the viscoplastic model introduced by Fritzen and Leuschner [45] is used in com-
+bination with linear hardening (similar to aluminium; see also Example 1 in Section 2.2). The
+microstructure is the same as in [46]. It consists of a viscoplastic matrix reinforced by linear elastic
+short fibers (mimicking silicon carbide), see Figure 5. The fibers are oriented quasi-uni-directionally,
+and they make up for 10% of the total volume of the RVE. The RVE is periodic, and a rather fine
+spatial discretization using quadratic tetrahedra is used (1.275 mio. degrees of freedom, 1.05 mio.
+integration points within the matrix material). A reduced model consisting of 32 plastic modes and
+12 hardening modes was chosen based on seven pre-analysis computations. Two of the plastic modes
+are depicted in Figure 5.
+   A reduced integration domain considering only every 256th integration point was used, which
+led to additional speed-ups. It was verified in numerous numerical tests that the reduced integration
+induced only negligible differences in the macroscopic constitutive response. The material proper-
+ties of the matrix are Em =75 GPa, m =0.3, 0 =100 MPa, "P0 =0.1 s1 , n=10 and a linear hardening
+coefficient of 2000 MPa is chosen [46]. The linear elastic fibers have a Young’s modulus of 400 GPa
+and a Poisson ratio of 0.2.
+
+Copyright © 2016 John Wiley & Sons, Ltd.                        Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                            DOI: 10.1002/nme
+                                                                                                              10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+872                                        F. FRITZEN AND M. HODAPP
+
+
+
+
+Figure 5. Microstructure A consisting of a viscoplastic matrix and linear elastic fibers (10 vol.%); left:
+                          microstructure, middle, right: selected plastic modes.
+
+
+
+
+Figure 6. Microstructure B with a viscoplastic matrix with 20 voids (10 vol.%); left: FE model of the
+              microstructure, middle, right: selected plastic modes (plotted is k.˛/ .x/k).
+
+   Microstructure B (Figure 6) consists of a periodic arrangement of 20 equally sized, non-
+overlapping spherical voids (10 vol.% ). The finite element discretization has approximately 420,000
+degrees of freedom and 360,000 integration points (140,508 nodes; 90,940 quadratic elements). The
+viscoplastic material law with elastic domain introduced in Example 2 in Section 2.2 is used for
+this microstructure. The material parameters are E=75 GPa, =0.3, D =25 MPa, n=10, "P0 =0.01 s1 ,
+0 =100 MPa. A Voce-type-hardening law [63] with the hardening stress
+                                                                   
+                                                         h1  h 0
+                             h .q/ D h1 q C h1 1  exp          q                                   (57)
+                                                           h1
+
+is used. The parameters h1 =400 MPa, h0 =10,000 MPa, and h1 =100 MPa representing a strong
+initial hardening (with hardening slope h0 ) that quickly saturates to the asymptotic linear hardening
+modulus h1 are chosen. The mode-identification procedure was based on preanalysis data com-
+puted in 32 finite element simulations. The loading directions for these simulations were determined
+automatically by an algorithm similar to the one proposed in [58], which intends a homogeneous
+distribution of the angle with respect to the nearest neighbor for all loading directions. All of these
+simulations were performed at a constant macroscopic strain rate of 0.04 s1 and with a amplitude
+of 4% (in strain space). Multiple mode sets were identified in the snapshot POD. The FE2R method
+was used with a reduced basis containing 40 plastic modes and 12 hardening modes for the porous
+material (see also the accuracy discussion later). Every 192nd integration point was used in order to
+obtain the reduced integration domain. Two of the plastic strain modes are shown in Figure 6. The
+high degree of non-uniformity of the plastic strain modes is noteworthy in our opinion.
+
+5.2. Accuracy considerations
+While the pRBMOR for the fibrous material has been investigated in detail in [46], the considera-
+tion of the porous microstructure B in combination with the overstress type viscoplasticity model
+
+Copyright © 2016 John Wiley & Sons, Ltd.                       Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                           DOI: 10.1002/nme
+                                                                                                                             10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                           THE FINITE ELEMENT SQUARE REDUCED METHOD                                                   873
+
+requires a study with respect to the accuracy of the ROM. Therefore, an additional set of 32 loading
+directions was created. These directions were chosen such that they maximize the angle with respect
+to all directions considered in the prior training. Thereby, very heterogeneous simulation data can
+be generated. Based on the different mode ensembles for the porous material, we have computed
+the pRBMOR predictions for all 64 loadings (32 from the preanalysis and 32 from the validation).
+In order to judge on the error of the reduced prediction N RBMOR , we introduce for each loading path
+the error measures
+                                                 max kN FE .ti /  N RBMOR .ti /k
+                                                  ti
+                                     ıD                                               ;                               (58)
+                                                         max kN FE .ti /k
+                                                             ti
+
+
+                                          max kdev .N FE .ti /  N RBMOR .ti // k
+                                            ti
+                                   ı0 D                                                       ;                       (59)
+                                                         max kN FE .ti /k
+                                                              ti
+
+
+                                               max jtr .N FE .ti /  N RBMOR .ti //j
+                                                 ti
+                                    ıı D                                                  :                           (60)
+                                                          max kN FE .ti /k
+                                                              ti
+
+The 64 loading sets are subdivided into two sets. One contains the 32 loadings from the pre-analysis
+(set 1), the other (set 2) contains the additional validation computations. Then the maximum ımax
+and average error ıN over each of the two sets are computed for each number of modes and for each
+set. The results are stated in Table I. It is found that the pre-analysis data is captured accurately
+using only 32 plastic and 8 hardening modes. Further increase of the number of modes does barely
+contribute to the overall quality of the predictions. In particular, the number of hardening modes
+has a small influence on the overall error. However, an increase in the number of plastic modes
+does help to decrease the occurring errors considerably for set 2. The loadings in the latter cases are
+chosen such that they are maximizing the angular distance to the pre-analysis computations, that
+is, they represent worst-case scenarios for the testing. Additionally, all of these loadings feature a
+considerable volumetric strain, which was not considered in most simulations of the pre-analysis
+stage. Although the peak errors can reach a certain level, the mean error is sufficiently low when
+not using too few plastic modes (i.e., not less than 32 modes). Therefore, we decided on 40 plastic
+
+      Table I. Errors in the macroscopic stress response for microstructure B for various load cases as
+      a function of the number of modes; set 1: loadings considered in the preanalysis; set 2: validation
+                                             loading directions.
+
+        N                   16            24            32         32          32             40      40      40
+        M                   8              8            8          12          16             8       12      16
+        set 1, ımax [%]     23.9          17.6         14.2        15.2       15.3             8.05    7.85    7.70
+        set 1, ıN [%]      10.9            8.11         5.70        5.41       5.23            3.84    3.48    3.27
+        set 2, ımax [%]    23.34          27.9         24.9        24.9       20.1            16.8    16.8    18.0
+        set 2, ıN [%]       11.8          11.3         10.0         9.64       9.20            7.70    7.30    7.08
+                 0
+        set 1, ımax [%]     16.3          13.3         11.9        10.9       10.9             7.74    4.65    4.26
+               N 0
+        set 1, ı [%]         9.20          6.60         4.73        4.36       4.17            3.14    2.67    2.47
+                 0
+        set 2, ımax  [%]    19.9          17.5         16.5        15.9       13.9            14.4    13.5    12.1
+        set 2, ıN0 [%]       9.17          8.30         7.20        6.79       6.36            6.44    5.99    5.65
+                 ı
+        set 1, ımax  [%]    30.8          24.2         14.9        22.2       22.1             7.05   12.8    11.9
+        set 1, ıNı [%]     10.34           8.48         5.94        5.87       5.99            5.92    3.90    3.86
+                 ı
+        set 2, ımax [%]    32.7           42.7         37.7        38.6       30.7            23.5    21.8    24.8
+               N ı
+        set 2, ı [%]        12.6          12.7         11.7        11.5       11.5             7.05    6.90   7.15
+
+
+Copyright © 2016 John Wiley & Sons, Ltd.                                      Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                                          DOI: 10.1002/nme
+                                                                                                                10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+874                                        F. FRITZEN AND M. HODAPP
+
+
+
+
+                   Figure 7. Geometry and boundary conditions for the tensile specimen.
+
+
+modes and 12 hardening modes for the FE2R simulations with the porous material (microstructure
+B). We would like to emphasize that with only 40 strain modes (each representing a tensor field), we
+are able to provide rather accurate predictions for 64 loading directions, which are all significantly
+different one from another. This fact underlines the predictive character of the pRBMOR even for a
+rather low-dimensional reduced basis.
+
+
+5.3. Two-scale FE2R simulation
+In order to investigate the FE2R approach, a flat yet 3D specimen with variable geometry and multi-
+ple circular holes is considered (Figure 7). The boundary conditions were applied using prescribed
+displacements at the ends of the specimen. The total stretch of 1% is applied in 1 s. Although the
+global stretch is only 1%, the strain field is found to be highly heterogeneous with local maxima of
+up to 5% in norm. In order to investigate the sensitivity of the computational results with respect
+to the macroscopic mesh resolution, three different mesh densities (all consisting of fully integrated
+tri-linear hexahedral elements) were investigated: 832 elements (1900 nodes), 6504 elements (8965
+nodes), and 53 790 elements (65 597 nodes). All three discretizations were used in combination
+with both the fibrous material (microstructure A) and the porous material (microstructure B). The
+fibrous material was oriented such that the mean fiber axis was perpendicular to the planar surface
+of the specimen, while the coordinate system of the near isotropic porous material was aligned with
+the global system. The authors would like to point out that by using local material orientations, arbi-
+trary distributions of the orientation of the microstructure can be assigned to each integration point
+on the macroscopic scale (see [64] for an example with local-material orientations using the NTFA).
+Although the specimen geometry suggests the use of planar boundary conditions, the underlying
+3D microstructure induces a nonlinear, rate-dependent, and anisotropic overall response. Thus, the
+macroscopic problem is in fact 3D, which precludes the use of planar boundary conditions, and a
+full 3D analysis is required.
+   The effective force-displacement curve of the virtual two-scale experiment was extracted
+(Figure 8). It is found that the tensile force shows only a small dependency with respect to the
+mesh density on the macroscale (max. difference of 4% between 832 and 53 790 elements) for both
+microstructures.
+   In addition to the overall tensile force, the distribution of the local stress and strain fields is also
+investigated. The distribution of the von Mises equivalent stress N eq and of the pressure pN at the
+end of the simulation are shown for microstructures A and B in Figure 9. At first, the distribution
+is qualitatively similar for both microstructures. However, quantitative discrepancies are found, for
+example, because of the different hardening models and the different underlying microstructural
+geometry.
+   Considering the dissipative processes and the microstructural properties of the micro-
+heterogeneous materials, an additional quantity of interest can be identified in terms of the
+macroscopic dilatation
+
+                                                           N :
+                                               "Nvol D tr ."/                                           (61)
+
+Copyright © 2016 John Wiley & Sons, Ltd.                         Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                             DOI: 10.1002/nme
+                                                                                                                 10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                         THE FINITE ELEMENT SQUARE REDUCED METHOD                                        875
+
+
+
+
+Figure 8. Force displacement curves for the tensile specimen for the fibrous material (microstructure A; left)
+ and the porous material (microstructure B; right); all three discretization levels are shown for comparison.
+
+
+
+
+Figure 9. Distribution of the von Mises equivalent stress (left) and of the pressure (right) at the end of the
+simulation for the fibrous microstructure (top) and for the porous material (bottom) (finest macroscopic
+                              discretization using 53,790 elements is shown).
+
+
+The porous material (microstructure B) is compressible because of volume changes of the cavities
+while the fibrous material is basically incompressible. Hence, the distribution of the dilatation at
+the end of the simulation time is shown in Figure 10. Interestingly, a shear band from lower left
+to upper right part begins to form, which is characterized by an increased volumetric strain. The
+peak-volume change of the material is on the order of 3.5% with large parts of the tensile specimen
+seeing a dilatation of 1% or more. With respect to the volume change of 3.5% and more, we con-
+sider the effective linear elastic bulk modulus KN D48.2 GPa of the porous material. The observed
+volume changes would lead to an effective peak pressure pN of 1700 MPa in the absence of plas-
+tic compressibility. However, the absolute value of the pressure pN in the FE2R simulations did not
+exceed 80 MPa. Hence, most of the volume change must occur because of inelastic processes within
+the microstructure, that is, due to void growth. The pRBMOR is thus capable to capture the inelas-
+tic compressibility of heterogeneous materials, which is a field with a rich body of literature (see,
+e.g., [50, 65] among many). The pRBMOR approach can consider nonproportional loading paths,
+high pore volume fractions (here: 10 vol.%), and nonlinear isotropic and linear kinematic hardening
+without additional theoretical considerations. Remarkably, the pRBMOR can simulate the inelastic
+volume changes without being aware of the compressibility a priori. This emphasizes the predictive
+character of the method and its suitability to investigate and identify different physical phenomena.
+For comparison, the dilatation of material A with fiber reinforcement is found below 0.09%, which
+
+Copyright © 2016 John Wiley & Sons, Ltd.                          Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                              DOI: 10.1002/nme
+                                                                                                                   10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+876                                        F. FRITZEN AND M. HODAPP
+
+
+
+
+Figure 10. Dilatation of the effective material predicted by the two-scale simulation with the porous
+                                           microstructure B.
+
+                   Table II. Simulation time for both microstructures and for all three
+                   macroscopic discretization levels: total simulation time ttot , number of
+                   macroscopic equilibrium iterations nit , mean simulation time per load
+                   step in the reduced framework tNit (equivalent to on FE equilibrium
+                                       load step on the RVE level).
+
+                                    # elements   ttot [min]   nit [-]   tNit [ms]   Sest [-]
+                     micro-             832          37        78         4.3       125,000
+                     structure A      6504          288        80         4.2       128,000
+                     (fibrous)       53,790        2439        72         4.7       115,000
+                     micro-             832          72        92         7.1        92,000
+                     structure B      6504          556        97         6.6       100,000
+                     (porous)        53,790        4422        86         7.2        91,500
+
+
+is significantly smaller than the 3% found for the porous material given the same tensile loading.
+This is due to the near incompressibility of both phases constituting microstructure A.
+   The computational effort and the efficiency of the reduced basis approach are illustrated by
+consideration of the number of microscopic load increments that are solved in the course of the
+FE2R simulation and the required simulation time to solve one of these load increments tNit on RVE
+level using the GPU accelerated pRBMOR. This time is compared with our in-house finite ele-
+ment code, which was used to solve the RVE problems during the preanalysis (each load increment
+required approximately 9 min for the fibrous microstructure and approximately 11 min for the
+porous microstructure). Note that these numbers were attained using a highly tuned implementation
+involving a reduced-basis method and a GPU-accelerated iterative linear solver. For the FE2R sim-
+ulations using the pRBMOR method on the Nvidia GTX Titan GPU, we have considered 20 load
+increments. The computational cost in terms of overall simulation time ttot , number of macroscopic
+equilibrium iterations nit , and the mean simulation time per load step in the reduced framework tNit
+are summarized in Table II. Note that tNit is overestimated as the assembly and solution of the macro-
+scopic FE system, the disk I/O and so on are all contained in ttot in addition to the actual pRBMOR
+simulation time. The numbers are used to roughly estimate a speed-up Sest against standard FE2
+simulations (neglecting all of the, usually substantial, overhead for data storage and so on). This
+estimate is given in the last column of Table II. The numbers show that the pRBMOR with reduced-
+integration domain and GPU acceleration can achieve the speed-ups required for 3D multiscale
+simulations, that is, one nonlinear load step on RVE level is solved within a few milliseconds in the
+reduced framework (see tNit in Table II).
+
+                                   6. SUMMARY AND CONCLUSIONS
+
+In this contribution, the theoretical and algorithmic developments of recent works [45, 46] have
+been combined and extended in order to develop a novel two-scale simulation method called FE2R .
+
+Copyright © 2016 John Wiley & Sons, Ltd.                            Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                                DOI: 10.1002/nme
+                                                                                                              10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                         THE FINITE ELEMENT SQUARE REDUCED METHOD                                     877
+
+The pRBMOR approach is presented in Section 3.1 in detail. Several theoretical and algorithmic
+aspects are discussed in Section 3.2. These include an interpretation of the stationarity conditions
+in terms of state-dependent projections and a comparison of the pRBMOR to the APHR of David
+Ryckelynck [28, 30]. While the APHR can allow for more general models on the RVE level (large
+deformation, non-GSM-type materials), it provides significantly smaller computational gains than
+the pRBMOR method. The concept of the reduced integration domain (RID) of the APHR is
+identified as being (with some modifications) applicable to the pRBMOR approach.
+   The core of the paper is Section 4. It first describes the FE2 method [13, 14]. Based on computa-
+tional considerations for the FE2 method and a hypothetic two-scale problem, requirements for the
+savings in computation time and memory are postulated. Current model reduction methods cannot
+offer the required savings (>104 in computation time and >105 in memory) for the considered class
+of nonlinear material models. FFT-based methods are also considered, but, in our opinion, their
+storage requirements limit their applicability in nested two-scale simulations (see, e.g., [25] and the
+comparison in Section 4.2). Therefore, the pRBMOR method is chosen in order to accelerate the
+microstructural simulation: it offers a reduction in the memory requirements that is beyond the pos-
+tulated requirements and a reduction with respect to the computation time that is sufficient to meet
+the postulated demands. In order to be applicable to two-scale simulations, the pRBMOR scheme
+is equipped with an algorithmic tangent stiffness operator in Section 4.4. Interestingly, the algorith-
+mic stiffness can be computed basically without additional computational effort, which is another
+advantage over the FE2 and multiscale FFT method, where the tangent stiffness operator requires a
+substantial number of additional algebraic operations (Section 4.1).
+   The steps of the offline and online phase of the pRBMOR algorithm are then summarized in
+Section 4.5. The concept of a reduced-integration domain (RID) is included in the schematic rep-
+resentation. More precisely, only a subset of the integration points is used in order to evaluate the
+residual fO and the Jacobian JO . This further improves the computational efficiency of the pRBMOR
+without leading to a notable loss in accuracy. Remarkably, only a rather small number of integration
+points are required in order to provide accurate predictions, thus allowing for an acceleration of the
+pRBMOR scheme in the order of up to 100 for rather fine discretizations of the RVE.
+   The FE2R method is implemented into an in-house FE code. Only two changes are required: First,
+an initialization is required in which the reduced model is read into the memory of the workstation
+and GPU. Second, a specific material subroutine implementing the saddle-point problem for …         N  is
+required. The latter makes excessive use of the remarkable performance of modern graphics cards
+[46]. The resulting algorithm is used for the two-scale simulation of a 3D problem. Two different
+microstructures and different microscopic constitutive models are used in order to show the effi-
+ciency and generality of the chosen approach. The computational results show that the FE2R method
+using the GPU accelerated pRBMOR allows for realistic two-scale simulations with complex 3D
+microstructures at reasonable computing times. To the best of our knowledge, this is the first applica-
+tion of a 3D-nested FE method to realistic problem settings without the excessive use of large-scale
+computer clusters. Thereby, the new FE2R method offers new multiscale simulation capabilities to
+both academia and industry.
+   The pRBMOR algorithm appears rather complicated at first, and many individual parts need to
+be implemented. However, the potential structure of the GSM, which is the basis for the pRB-
+MOR method is the only requirement that has to be imposed on the constitutive modeling. Still the
+implementation is independent of the actual formulation of the thermodynamic potentials. In partic-
+ular, the pRBMOR algorithm and its implementation need to be written only once. Then all GSM
+that belong to the specified sub-class can be considered by only altering the implementation of the
+two potentials and   . This holds also true for the mode-identification procedure (Section 3.4),
+which can be implemented as an automated, unattended procedure that is basically independent of
+the considered RVE and constitutive model. Again, the identification procedure requires the GSM-
+type definition of the material depending only on          and   . This is a significant generalization
+with respect to the constitutive models over the NTFA [37, 38]. Additionally, the black-box charac-
+ter of the method is a nice feature that allows for many interesting applications at a rather modest
+investment once the initial coding is performed.
+
+Copyright © 2016 John Wiley & Sons, Ltd.                       Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                           DOI: 10.1002/nme
+                                                                                                                     10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+878                                         F. FRITZEN AND M. HODAPP
+
+
+   With respect to future developments, several important questions remain unanswered thus far:
+First and most importantly, online error estimators or indicators for the reduced model need to be
+developed in order to judge on the accuracy of the computational results. Second, a better under-
+standing of the effect of the reduced integration domain is required to exploit the algorithmic gains
+systematically. Third, the current mode-identification procedure could be extended to allow for a bet-
+ter reduced basis, possibly incorporating also the aforementioned error indicators. Lastly, extensions
+towards kinematically nonlinear problems are ultimately of interest. The latter require a thorough
+re-design of the approach and cannot be realized in terms of extensions of the current method but
+only through completely novel developments.
+   An interesting combination could be the use of FFT-based methods in the offline phase in order
+to identify the reduced order model. Here, significant speed-ups could be attained which would,
+for example, allow for more training computations and, thereby, for an improved accuracy due to
+a refined selection of the reduced basis: recently, it was found that even at a constant dimension
+of the reduced basis, significant accuracy improvements can be achieved when having more input
+data [58]. The authors think that the development of sophisticated error indicators and of refined
+algorithms for the offline phase are the most fundamental steps and should be addressed shortly.
+
+
+                                APPENDIX A: CONSTITUTIVE MODELS
+
+Example 1 – Nonlinear isotropic viscoplasticity with hardening
+A simple but important viscoplastic constitutive model is defined by [45]
+
+                                                                                 Zq
+                                  K
+                           p
+                      ."; " ; q/
+                              O D   .tr ."//2 C G kdev ."  "p /k2 C                  h .q/
+                                                                                          Q dq;
+                                                                                             Q               (A.1)
+                                  2
+                                                                                 0
+
+
+with the bulk and shear modulus K and G and the hardening stress h .q/. The driving forces are
+
+                                  D dev. / D  0 ;               r D h .q/:                              (A.2)
+
+The evolution of the inelastic variables is described by means of the dual-dissipation potential
+
+                                        r                    p                   !nC1
+                                           2 "P0 .0  r/       3=2 kdev ./k
+                          .; r/ D                                                      ;                   (A.3)
+                                            3 nC1                  0  r
+
+where 0 is the initial yield stress, "P0 is a reference strain rate and n is a viscosity exponent. The
+rates of the internal are
+                  r               p                   !nC1                             r
+        @           2 "P0 n         3=2 kdev ./k                  p  @                  3 n C 1 dev ./
+   qP D      D                                               ;     "P D      D qP                             :
+         @r           3nC1              0  r                           @                  2 n kdev ./k
+                                                                                                             (A.4)
+   Example 2 – Nonlinear isotropic viscoplasticity with offset
+Another important viscoplastic constitutive model is defined by the same free energy (A.1) and
+the same driving forces (A.2) as in the previous example. The dual-dissipation potential for a
+viscoplastic model with offset is defined by means of the additional function
+                                               p
+                                  '.; r/ D        3=2 kdev ./k  .0  r/ :                                (A.5)
+
+Positive values of ' lead to an evolution of the inelastic variables, that is, a classical overstress type
+plasticity model of Prezyna type is obtained from
+
+Copyright © 2016 John Wiley & Sons, Ltd.                             Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                                 DOI: 10.1002/nme
+                                                                                                                            10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                            THE FINITE ELEMENT SQUARE REDUCED METHOD                                                879
+
+                                             r                                     nC1
+                                                2 "P0 D    max ¹0; '.; r/º
+                               .; r/ D                                                 ;                        (A.6)
+                                                 3nC1              D
+
+with the constant drag stress D . The rates of the internal variables are then
+                   r                                                       r
+           @       2       max ¹0; '.; r/º n               p   @         3    dev ./
+     qP D       D      "P0                         ;        "P D        D       qP         :                      (A.7)
+            @r       3              D                             @         2 kdev ./k
+
+Other than in the first model, the material with offset behaves linear elastic for ' < 0, that is, an
+elastic domain exists in which the mechanical processes are reversible.
+
+
+                                                ACKNOWLEDGEMENTS
+The authors acknowledge the valuable input in the context of the CoSiMOR scientific network (funded by
+DFG grants FR-2702/4 and FR-2702/7). In particular, the discussions with David Ryckelynck regarding
+the APHR are acknowledged. Funding of this work in the context of the YIG Computer Aided Material
+Modeling from the Karlsruhe Institute of Technology (KIT) in the context of the Excellence Initiative
+of the German Research Foundation (DFG) is highly acknowledged. The supplementing funding via the
+DFG Emmy-Noether-Group EMMA – Efficient Methods for Mechanical Analysis (DFG FR2702/6) is also
+highly acknowledged.
+
+
+                                                      REFERENCES
+ 1. Voigt W. Lehrbuch der Kristallphysik. Teubner: Berlin, 1910.
+ 2. Reuss A. Berechnung der Fließgrenze von Mischkristallen auf Grund der Plastizitätsbedingung für Einkristalle.
+    Zeitschrift für Angewandte Mathematik und Mechanik 1929; 9(1):49–58.
+ 3. Eshelby JD. The determination of the elastic field of an ellipsoidal inclusion. Proceedings of the Royal Society of
+    London A 1957; 241:376–396.
+ 4. Hashin Z, Shtrikman S. A variational approach to the theory of the elastic behaviour of multiphase materials. Journal
+    of the Mechanics and Physics of Solids 1963; 11:127–140.
+ 5. Mori T, Tanaka K. Average stress in a matrix and average elastic energy of materials with misfitting inclusions. Acta
+    Metallurgica et Materialia 1973; 23:571–574.
+ 6. Ponte-Castañeda P. The effective mechanical properties of nonlinear isotropic composites. Journal of the Mechanics
+    and Physics of Solids 1991; 39(1):45–71.
+ 7. Ponte-Castañeda P. Second-order homogenization estimates for nonlinear composites incorporating field fluctua-
+    tions: I – theory. Journal of the Mechanics and Physics of Solids 2002; 50(4):737–757.
+ 8. Lahellec N, Suquet P. On the effective behavior of nonlinear inelastic composites: I. Incremental variational
+    principles. Journal of the Mechanics and Physics of Solids 2007; 55(9):1932 –1963.
+ 9. Lahellec N, Suquet P. On the effective behavior of nonlinear inelastic composites: II: A second-order procedure.
+    Journal of the Mechanics and Physics of Solids 2007; 55(9):1964 –1992.
+10. Bathe KJ. Finite Element Procedures. Prentice Hall: New Jersey, 1996.
+11. Zienkiewicz OC, Taylor RL, Zhu JZ. Finite Element Method (6. ed., repr. edn.) Butterworth-Heinemann: Oxford,
+    2006.
+12. Miehe C. Strain-driven homogenization of inelastic microstructures and composites based on an incremental
+    variational formulation. Journal for Numerical Methods in Engineering 2002; 55:1285–1322.
+13. Feyel F. Multiscale FE2 elastoviscoplastic analysis of composite structures. Computational Materials Science 1999;
+    16(1-4):344–354.
+14. Feyel F, Chaboche JL. {FE2} multiscale approach for modelling the elastoviscoplastic behaviour of long fibre SiC/Ti
+    composite materials. Computer Methods in Applied Mechanics and Engineering 2000; 183(3-4):309–330.
+15. Balzani D, Scheunemann L, Brands D, Schröder J. Construction of two- and three-dimensional statistically similar
+    RVEs for coupled micro-macro simulations. Computational Mechanics 2014; 54(5):1269–1284.
+16. Scheunemann L, Balzani D, Brands D, Schröder J. Design of 3D statistically similar representative volume elements
+    based on Minkowski functionals. Mechanics of Materials 2015:1–16. DOI: 10.1016/j.mechmat.2015.03.005.
+17. Moulinec H, Suquet P. A numerical method for computing the overall response of nonlinear composites with complex
+    microstructure. Computer Methods in Applied Mechanics and Engineering 1998; 157(1-2):69–94.
+18. Michel JC, Moulinec H, Suquet P. A computational scheme for linear and non-linear composites with arbitrary phase
+    contrast. International Journal for Numerical Methods in Engineering 2001; 52(52):139–160.
+19. Lebensohn RA. N-site modeling of a 3D viscoplastic polycrystal using fast fourier transform. Acta Materialia 2001;
+    49(14):2723–2737.
+20. Lee SB, Lebensohn RA, Rollett AD. Modeling the viscoplastic micromechanical response of two-phase materials
+    using fast fourier transforms. International Journal of Plasticity 2011; 27(5):707–727.
+
+Copyright © 2016 John Wiley & Sons, Ltd.                                Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                                   DOI: 10.1002/nme
+                                                                                                                              10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+880                                           F. FRITZEN AND M. HODAPP
+
+
+21. Lebensohn RA, Kanjarla AK, Eisenlohr P. An elasto-viscoplastic formulation based on fast fourier transforms for
+    the prediction of micromechanical fields in polycrystalline materials. International Journal of Plasticity 2012; 32-33:
+    59–69.
+22. Eisenlohr P, Diehl M, Lebensohn RA, Roters F. A spectral method solution to crystal elasto-viscoplasticity at finite
+    strains. International Journal of Plasticity 2013; 46:37–53.
+23. Kabel M, Böhlke T, Schneider M. Efficient fixed point and Newton–Krylov solvers for FFT-based homogenization
+    of elasticity at large deformations. Computational Mechanics 2014; 54(6):1497–1514.
+24. Kabel M, Merkert D, Schneider M. Use of composite voxels in FFT-based homogenization. Computer Methods in
+    Applied Mechanics and Engineering 2015; 294:168–188.
+25. Spahn J, Andrä H, Kabel M, Müller R. A multiscale approach for modeling progressive damage of composite mate-
+    rials using fast Fourier transforms. Computer Methods in Applied Mechanics and Engineering 2014; 268(0):871–
+    883.
+26. Barrault M, Maday Y, Nguyen NC, Patera AT. An ’empirical interpolation’ method: application to efficient reduced-
+    basis discretization of partial differential equations. Comptes Rendus Mathematique 2004; 339(9):667–672.
+27. Astrid P, Weiland S, Willcox K, Backx T. Missing point estimation in models described by proper orthogonal
+    decomposition. IEEE Transactions on Automatic Control 2008; 53(10):2237–2251.
+28. Ryckelynck D. Hyper-reduction of mechanical models involving internal variables. International Journal for
+    Numerical Methods in Engineering 2009; 77(1):75–89.
+29. Chinesta F, Ammar A, Cueto E. Recent advances and new challenges in the use of the proper generalized decom-
+    position for solving multidimensional models. Archives of Computational Methods in Engineering 2010; 17(4):
+    327–350.
+30. Ryckelynck D, Benziane DM. Multi-level a priori hyper reduction of mechanical models involving internal variables.
+    Computer Methods in Applied Mechanics and Engineering 2010; 199:1134–1142.
+31. Quarteroni A, Manzoni A, Negri F. Reduced Basis Methods for Partial Differential Equations, UNITEXT – La
+    Matematica per il 3+2, Vol. 92. Springer International Publishing: Cham, 2016.
+32. Yvonnet J, He QC. The reduced model multiscale method (R3M) for the non-linear homogenization of hyperelastic
+    media at finite strains. Journal of Computational Physics 2007; 223(1):341–368.
+33. Yvonnet J, Gonzalez D, He QC. Numerically explicit potentials for the homogenization of nonlinear elastic
+    heterogeneous materials. Computer Methods in Applied Mechanics and Engineering 2009; 198(33-36):2723–2737.
+34. Clément A, Soize C, Yvonnet J. Computational nonlinear stochastic homogenization using a nonconcurrent multi-
+    scale approach for hyperelastic heterogeneous microstructures analysis. International Journal for Numerical Methods
+    in Engineering 2012; 91(8):799–824.
+35. Temizer I, Zohdi TI. A numerical method for homogenization in non-linear elasticity. Computational Mechanics
+    2007; 40(2):281–298.
+36. Chaturantabut S, Sorensen D. Nonlinear model reduction via discrete empirical interpolation. SIAM Journal on
+    Scientific Computing 2010; 32(5):2737–2764.
+37. Michel JC, Suquet P. Nonuniform transformation field analysis. International Journal of Solids and Structures 2003;
+    40:6937–6955.
+38. Michel JC, Suquet P. Computational analysis of nonlinear composite structures using the nonuniform transformation
+    field analysis. Computer Methods in Applied Mechanics and Engineering 2004; 193:5477–5502.
+39. Roussette S, Michel JC, Suquet P. Nonuniform transformation field analysis of elastic-viscoplastic composites.
+    Composites Science and Technology 2009; 69:22–27.
+40. Fritzen F, Böhlke T. Three-dimensional finite element implementation of the nonuniform transformation field
+    analysis. International Journal for Numerical Methods in Engineering 2010; 84(7):803–829.
+41. Jiang T, Shao JF, Xu WY. A micromechanical analysis of elastoplastic behavior of porous materials. Mechanics
+    Research Communications 2011; 38(6):437–442.
+42. Fritzen F, Böhlke T. Nonuniform transformation field analysis of materials with morphological anisotropy.
+    Composites Science and Technology 2011; 71:433–442.
+43. Fritzen F, Böhlke T. Reduced basis homogenization of viscoelastic composites. Composites Science and Technology
+    2013; 76:84–91.
+44. Largenton R, Michel JC, Suquet P. Extension of the Nonuniform Transformation Field Analysis to linear viscoelastic
+    composites in the presence of aging and swelling. Mechanics of Materials 2014; 73(0):76–100.
+45. Fritzen F, Leuschner M. Reduced basis hybrid computational homogenization based on a mixed incremental
+    formulation. Computer Methods in Applied Mechanics and Engineering 2013; 260:143–154.
+46. Fritzen F, Hodapp M, Leuschner M. GPU accelerated computational homogenization based on a variational approach
+    in a reduced basis framework. Computer Methods in Applied Mechanics and Engineering 2014; 278:186–217.
+47. Germain P. The Method of Virtual Power in Continuum Mechanics. Part 2: Microstructure. SIAM Journal on Applied
+    Mathematics 1973; 25(3):556–575.
+48. Perić D. On a class of constitutive equations in viscoplasticity: Formulation and computational issues. International
+    Journal for Numerical Methods in Engineering 1993; 36(8):1365–1393.
+49. Halphen B, Nguyen QS. Sur les matériaux standards generalisés. Journal de Mécanique 1975; 14:39–63.
+50. Fritzen F, Forest S, Böhlke T, Kondo D, Kanit T. Computational homogenization of elasto-plastic porous metals.
+    International Journal of Plasticity 2012; 29:102–119.
+51. Coleman BD, Gurtin ME. Thermodynamics with internal state variables. The Journal of Chemical Physics 1967;
+    47:597–613.
+
+Copyright © 2016 John Wiley & Sons, Ltd.                                  Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                                     DOI: 10.1002/nme
+                                                                                                                           10970207, 2016, 10, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5188 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                           THE FINITE ELEMENT SQUARE REDUCED METHOD                                                881
+
+52. Ortiz L, Stainier L. The variational formulation of viscoplastic constitutive updates. Computer Methods in Applied
+    Mechanics and Engineering 1999; 171:419–444.
+53. Yang Q, Stainier L, Ortiz M. A variational formulation of the coupled thermo-mechanical boundary-value problem
+    for general dissipative solids. Journal of the Mechanics and Physics of Solids 2006; 54:401–424.
+54. Stainier L, Ortiz M. Study and validation of a variational theory of thermo-mechanical coupling in finite visco-
+    plasticity. International Journal of Solids and Structures 2010; 47:705–715.
+55. Dvorak GJ, Benveniste Y. On transformation strains and uniform fields in multiphase elastic media. Proceedings of
+    the Royal Society of London A 1992; 437(437):291–310.
+56. Dvorak GJ, Bahei-El-Din YA, Wafa AM. Implementation of the transformation field analysis. Computational
+    Mechanics 14 1994; 14:201–228.
+57. Fritzen F. Microstructural Modeling and Computational Homogenization of the Physically Linear and Nonlinear
+    Constitutive Behavior of Micro-Heterogeneous Materials, Schriftenreihe Kontinuumsmechanik im Maschinenbau 1.
+    KIT Scientific Publishing: Karlsruhe, 2011.
+58. Fritzen F, Leuschner M. Nonlinear reduced order homogenization of materials including cohesive interfaces.
+    Computational Mechanics 2015; 56(1):131–151.
+59. Zeman J, Vondrejc J, Novak J, Marek I. Accelerating a FFT-based solver for numerical homogenization of periodic
+    media by conjugate gradients. Journal of Computational Physics 2010; 229(21):8065–8071.
+60. Lahellec N, Michel JC, Moulinec H, Suquet P. Analysis of inhomogeneous materials at large strains using fast fourier
+    transforms. In IUTAM Symposium on Computational Mechanics of Solid Materials at Large Strains, Solid Mechanics
+    and Its Applications, Vol. 108, Miehe C (ed.). Springer Netherlands: Amsterdam, 2003; 247–258.
+61. Prakash A, Lebensohn RA. Simulation of micromechanical behavior of polycrystals: Finite elements versus fast
+    fourier transforms. Modelling and Simulation in Materials Science and Engineering 2009; 17(6).
+62. Johnson SG, Frigo M. A modified split-radix FFT with fewer arithmetic operations. IEEE Transactions on Signal
+    Processing 2007; 55(1):111–119.
+63. Voce E. A practical strain-hardening function. Metallurgia 1955; 51:219.
+64. Fritzen F, Böhlke T. Nonlinear homogenization using the nonuniform transformation field analysis. PAMM 2011;
+    11:519–522.
+65. Gurson AL. Continuum theory of ductile rupture by void nucleation and growth: Part I-yield criteria and flow rules
+    for porous ductile media. Journal for Engineering Materials and Technology 1977; 99:2–15.
+
+
+
+
+Copyright © 2016 John Wiley & Sons, Ltd.                                Int. J. Numer. Meth. Engng 2016; 107:853–881
+                                                                                                    DOI: 10.1002/nme
+

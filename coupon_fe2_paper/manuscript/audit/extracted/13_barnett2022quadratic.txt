@@ -1,0 +1,1346 @@
+                                                         Journal of Computational Physics 464 (2022) 111348
+
+
+
+                                                           Contents lists available at ScienceDirect
+
+
+                                               Journal of Computational Physics
+                                                                  www.elsevier.com/locate/jcp
+
+
+
+
+Quadratic approximation manifold for mitigating
+the Kolmogorov barrier in nonlinear projection-based model
+order reduction
+Joshua Barnett a,∗ , Charbel Farhat a,b,c
+a
+    Department of Mechanical Engineering, Stanford University, Stanford, CA 94305, United States of America
+b
+    Department of Aeronautics and Astronautics, Stanford University, Stanford, CA 94305, United States of America
+c
+    Institute for Computational and Mathematical Engineering, Stanford University, Stanford, CA 94305, United States of America
+
+
+
+a r t i c l e             i n f o                         a b s t r a c t
+
+Article history:                                          A quadratic approximation manifold is presented for performing nonlinear, projection-
+Received 18 February 2022                                 based, model order reduction (PMOR). It constitutes a departure from the traditional
+Received in revised form 23 May 2022                      aﬃne subspace approximation that is aimed at mitigating the Kolmogorov barrier for
+Accepted 27 May 2022
+                                                          nonlinear PMOR, particularly for convection-dominated transport problems. It builds on the
+Available online 31 May 2022
+                                                          data-driven approach underlying the traditional construction of projection-based reduced-
+Keywords:                                                 order models (PROMs); is application-independent; is linearization-free; and therefore
+Ahmed body                                                is robust for highly nonlinear problems. Most importantly, this approximation leads to
+Kolmogorov n-width                                        quadratic PROMs that deliver the same accuracy as their  √ traditional counterparts using
+Physics-based machine learning                            however a much smaller dimension – typically, n2 ∼ n1 , where n2 and n1 denote
+Model reduction                                           the dimensions of the quadratic and traditional PROMs, respectively. The computational
+Petrov-Galerkin                                           advantages of the proposed high-order approach to nonlinear PMOR over the traditional
+Quadratic manifold
+                                                          approach are highlighted for the detached-eddy simulation-based prediction of the Ahmed
+                                                          body turbulent wake ﬂow, which is a popular CFD benchmark problem in the automotive
+                                                          industry. For a ﬁxed accuracy level, these advantages include: a reduction of the total
+                                                          oﬄine computational cost by a factor greater than ﬁve; a reduction of its online wall clock
+                                                          time by a factor greater than 32; and a reduction of the wall clock time of the underlying
+                                                          high-dimensional model by a factor greater than two orders of magnitude.
+                                                                                                            © 2022 Elsevier Inc. All rights reserved.
+
+
+
+
+1. Introduction
+
+
+   Projection-based model order reduction (PMOR) is a mathematical technique for reducing the dimensionality N of a
+high-dimensional model (HDM) of interest through a subspace approximation ũ of the solution u ∈ R N associated with the
+HDM. Typically, ũ ∈ R N is an aﬃne approximation of the form ũ = Vq + uref , where V ∈ R N ×n is referred to in general
+as a right reduced-order basis (ROB), n  N, q ∈ Rn is known as the vector of generalized coordinates, and uref ∈ R N is
+a reference solution. Using this approximation and a projection that may or may not be orthogonal, PMOR transforms the
+HDM of interest into a lower dimensional computational model of dimension n  N known as a projection-based reduced-
+order model (PROM). The technique is becoming increasingly invaluable for many different forms of parametric applications
+
+
+
+    * Corresponding author.
+      E-mail address: jb0@stanford.edu (J. Barnett).
+
+https://doi.org/10.1016/j.jcp.2022.111348
+0021-9991/© 2022 Elsevier Inc. All rights reserved.
+J. Barnett and C. Farhat                                                              Journal of Computational Physics 464 (2022) 111348
+
+
+arising in computational structural dynamics (CSD) [1,2], multiscale modeling [3–6], computational ﬂuid dynamics (CFD)
+[7–9], uncertainty quantiﬁcation (UQ) [10], model predictive control (MPC) [11], optimization [12], and multidisciplinary
+design analysis and optimization (MDAO) [13]. It allows for the parsimonious representation of a large-scale, dynamically
+complex, and computationally intensive HDM. Hence, it is crucial for computations where real-time results are desired.
+    In the parlance of ﬁnite element (FE) modeling, PMOR is essentially a semi-discretization method with global shape and
+test functions. Given a parameterization of the HDM in a parameter space D , the shape functions are constructed a posteriori
+– that is, after some knowledge of the application of interest is discovered. The discovery is achieved by sampling D at some
+carefully selected parameter points and exercising the HDM at each sampled parameter point. Speciﬁcally, one or several
+solution snapshots are computed at each sampled parameter point and collected in a matrix S ∈ R N × N s , where N s denotes
+the total number of solution snapshots. Then, the matrix S is compressed to construct the ROB V ∈ R N ×n , where n ≤ N s , and
+often n  N s . For example, the compression can be obtained by performing the thin singular value decomposition (SVD) of
+S and truncating the orthogonal matrix (with respect to some metric) U ∈ R N × N associated with the nonzero left singular
+values of S – which spans the range of S – to the low dimension n  N: this sample compression approach leads to a
+PMOR method that is equivalent to the method of snapshots for proper orthogonal decomposition (POD) [14]. As for the
+global test functions, they can be chosen to be identical to the global shape functions, which leads to the construction of a
+left or test ROB W = V and that of a Galerkin PMOR method. Alternatively, the test functions can be constructed such that
+W ∈ R N ×n but W = V, in which case the resulting PMOR method is known as a Petrov-Galerkin PMOR method. For all these
+reasons, PMOR methods can be considered to be simulation-driven, or data-driven computational methods.
+    It follows that as discussed in [15], PMOR should beneﬁt from the rich history of development of semi-discretization
+methods. Hence, for elliptic (e.g. structural mechanics), parabolic (e.g. heat conduction), and second-order hyperbolic (e.g.
+second-order dynamical systems such as those arising in wave propagation and structural dynamics) partial differential
+equations (PDE)s, Galerkin PMOR is appropriate. For ﬁrst-order hyperoblic (e.g. convection-dominated turbulent ﬂow) PDEs
+however, Petrov-Galerkin PMOR is more appropriate if not essential [15].
+    Galerkin PMOR is matured for both linear and nonlinear problems, from all theoretical, algorithmic, and application
+viewpoints [16]. In comparison, Petrov-Galerkin PMOR is less advanced, although the beneﬁts of Petrov-Galerkin projection
+to numerical stability have been well established theoretically for linearized ﬁrst-order hyperoblic problems [17]; and nu-
+merically for nonlinear, convection-dominated, turbulent ﬂow problems [15]. For the latter problems, the state of the art
+is currently represented by the least squares Petrov-Galerkin (LSPG) method ﬁrst developed in [18] under the abbreviation
+GNAT (Gauss-Newton method with Approximated Tensors). The performance of LSPG in terms of robustness, accuracy, di-
+mensionality reduction, and most importantly, wall clock time reduction, has been most recently demonstrated in [19], for a
+very large-scale convection-dominated Reynolds-Averaged Navier-Stokes (RANS) application featuring a complex geometry;
+and in [15], for the Large Eddy Simulation (LES) of a compressible turbulent ﬂow.
+    During the last decade, nonlinear PMOR in general has beneﬁted from parallel advancements in hyperreduction meth-
+ods – that is, numerical approaches that approximate the computation of projected quantities to ensure a computational
+complexity that does not scale with the large dimension N of the underlying HDM. Speciﬁcally, the state of the art of the
+empirical interpolation method (EIM) [20] and its discrete counterpart (DEIM) [21] has been advanced (for example, see
+[22,23]); and the energy-conserving sampling and weighting (ECSW) hyperreduction method originally developed in [2] for
+the Galerkin PMOR of second-order dynamical systems has been extended in [24] to linear stochastic PROMs, and in [19], to
+nonlinear Petrov-Galerkin PROMs of ﬁrst-order hyperbolic problems such as convection-dominated turbulent ﬂow problems.
+    Despite the aforementioned advancements, the Kolmogorov barrier remains an outstanding issue for nonlinear PMOR,
+due to the common reliance of traditional PMOR on an aﬃne subspace approximation. The barrier is suggested by the slow
+decay of the Kolmogorov n-width [25] dn (M) associated with a subset M of a normed space. Speciﬁcally, dn (M) deﬁnes
+the worst-case error arising from the projection of points in M onto the best-possible linear space of small dimension
+n  N, represented in the case of PMOR by the right ROB V ∈ R N ×n . For certain types of linear PDEs, dn (M) decays as
+an exponential function of n, which allows achieving a minuscule projection error for even a modest size of n. For some
+hyperbolic PDEs however, the decay of dn (M) with n is signiﬁcantly slower, which is why the n-width is often referred to
+in the literature as a barrier to reducibility. For example, for convection-dominated PDEs dn (M) = O (n−1/2 ) [26].
+    In general, the number of points to sample in D in order to construct the right ROB V ∈ R N ×n – and therefore, the num-
+ber of solution snapshots N s – grows exponentially with the dimension N D of the parameter space D . Hence, while the
+n-width issue outlined above is independent of any parametric setting, it can be signiﬁcantly exacerbated in the presence
+of a high-dimensional parametric setting, which in the case of nonlinear, convection-dominated transport problems may
+lead to an unaffordable ROB V and associated PROM. Consequently, many attempts to overcome, or at least mitigate, the
+Kolmogorov barrier have been made in the literature. Most of them amount to abandoning the aﬃne (or linear) subspace
+approximation in favor of some form of nonlinear approximation. In the context of nonlinear, convection-dominated trans-
+port problems, these attempts include: the PMOR method based on most-appropriate local right ROBs [27], which essentially
+constructs a piece-wise aﬃne approximation ũ of the solution; PMOR approaches based on autoencoder-based approxima-
+tions – following the work pioneered in [28]; and a large number of alternative approaches for constructing a nonlinear
+approximation based on a nonlinear parametrization of an aﬃne space [29–31] – usually through a transformation of the
+underlying spatial domain. Many of these PMOR methods have demonstrated, to various degrees of success, the ability to
+achieve for the same level of accuracy, a lower dimension n than the traditional PMOR approach based on the standard
+aﬃne approximation. However, only the PMOR method based on most-appropriate local right ROBs [27] was demonstrated
+
+                                                              2
+J. Barnett and C. Farhat                                                              Journal of Computational Physics 464 (2022) 111348
+
+
+for nonlinear, convection-dominated problems in three dimensions, on complex (non tensor-product) geometries, and shown
+to reduce wall clock time by orders of magnitude while maintaining a high-level of accuracy for spatio-temporal quantities
+of interest (QoI)s. Speciﬁcally, the PMOR method based on a piece-wise aﬃne approximation of the solution was shown
+in [7] to perform in real-time on a laptop, for parametric steady-state RANS computations associated with the NASA Com-
+mon Research Model [32] and an HDM of dimension greater than N = 68 × 106 , in the transonic regime characterized by
+shocks, at high Reynolds number (Re = 5 × 106 ), and in a parameter space D of dimension N D = 4. Nevertheless, it is rea-
+sonable to expect this PMOR method to face increasing diﬃculties at delivering a similar performance for increasing values
+of N D .
+    For this reason, yet another nonlinear approximation approach is developed in this paper for mitigating the Kolmogorov
+n-width barrier in the context of highly nonlinear, convection-dominated, very high-dimensional computational models. Fol-
+lowing the observation noted above about the relationship between PMOR and semi-discretization, this paper proposes to
+construct a polynomial approximation ũ of degree p ≥ 2, fully develops the corresponding PMOR method for p = 2 – that is,
+the case of a quadratic approximation manifold – and tailors the hyperreduction method ECSW to suit this new approach to
+PMOR. To this end, it is ﬁrst noted that the idea of a PMOR method based on a quadratic approximation has recently been
+presented in [33] for the reduction of a special class of nonlinear structural dynamics models characterized by a constant
+mass matrix and a linear viscous damping. In this method, the construction of the quadratic approximation is simulation-
+free, in the sense that it is performed a priori, using linearization around an equilibrium position and the pre-computation
+of eigen modes of the linearized HDM of interest as well as their derivatives with respect to the generalized coordinates
+of the approximation. Consequently, the scope of applications of this quadratic PMOR method is limited to a special class
+of second-order dynamical systems, to those HDMs for which a suﬃcient number of eigenmodes is computable, and to
+those applications for which a modal analysis based on eigen vectors can deliver the desired level of accuracy. Hence, this
+scope excludes in particular convection-dominated ﬂow problems in general and large-scale CFD-based HDMs in particular
+(for example, see [34]). On the other hand, the approach proposed in this paper for constructing a quadratic approxima-
+tion ũ builds on the data-driven approach underlying the traditional construction of PROMs; is application-independent;
+is linearization-free and therefore is deemed to be more robust for highly nonlinear problems. Most importantly, if for a
+nonlinear, convection-dominated ﬂow problem a PMOR method equipped with the traditional aﬃne approximation delivers
+a certain level of accuracy using a PROM of dimension n1 , it delivers a similar level of accuracy when √   equipped with the
+proposed quadratic approximation manifold using a counterpart PROM of much smaller dimension n2 ∼ n1 .
+    Because the work reported in this paper is motivated by unsteady, convection-dominated, turbulent ﬂows and given the
+established track records for such problems of LSPG [7,9,15] and ECSW [19], the quadratic approximation manifold proposed
+in this paper is fully developed in the contexts of implicit time-discretization and LSPG equipped with ECSW. However, it
+is noted that the main contribution of this paper is equally applicable to the Galerkin framework for PMOR as well as
+second-order dynamical systems, including nonlinear structural dynamics HDMs with conﬁguration-dependent mass matri-
+ces, nonlinear damping forces, and conﬁguration-dependent external forces/moments. Furthermore, because the procedure
+proposed in this paper for constructing a quadratic approximation manifold is independent of any parametric setting and
+its relative merits in terms of wall clock time reduction for a desired level of accuracy can be assessed independently of any
+such setting, this procedure is presented, described, and evaluated in this paper without reference to any parameter space
+D – except time, which can always be interpreted as the parameter of a one-dimensional (1D) parameter space D .
+    To this end, the remainder of this paper is organized as follows. Section 2 provides a brief overview of nonlinear PMOR,
+incorporating a succint discussion of Galerkin and Petrov-Galerkin projections, hyperreduction, and the Kolmogorov barrier,
+to keep this paper as self-contained as possible. Section 3 ﬁrst introduces the idea of substituting the traditional aﬃne
+subspace approximation with a higher-order polynomial approximation of degree p, then fully develops the case p = 2.
+Speciﬁcally, this section describes in details the proposed computational procedure for constructing the quadratic approx-
+imation manifold, outlines a heuristic for determining its appropriate dimension, summarizes in the form of a numerical
+algorithm the overall computational procedure, and brieﬂy discusses the computational resources it requires. Section 4 de-
+lineates the impact of the proposed quadratic approximation manifold on various aspects of LSPG and ECSW. Section 5
+focuses on the RANS prediction of the convection-dominated turbulent ﬂow around the Ahmed body [35] and highlights
+the signiﬁcant impact of the proposed quadratic approximation manifold on the performance of LSPG equipped with ECSW,
+in terms of accuracy and wall clock time reduction for a given level of accuracy. Finally. Section 6 concludes this paper.
+
+2. Nonlinear projection-based model order reduction
+
+    Consider the nonlinear, semi-discrete, N-dimensional HDM written in ﬁrst-order form as
+
+        Mu̇ (t ) + f (u (t )) − g (t ) = 0
+                                                                                                                                    (1)
+                               u (0) = u0
+
+where t denotes time; a dot denotes a time-derivative; u(t ) ∈ R N denotes the semi-discrete solution vector associated with
+the HDM; M ∈ R N × N is a constant mass-like matrix; f (u(t )) ∈ R N is a nonlinear vector function representing a semi-
+discrete ﬂux or internal force vector; g(t ) ∈ R N is a nonlinear vector function representing a semi-discrete external force
+vector, source term, or the effect of some time-dependent boundary conditions; and u0 ∈ R N denotes an initial condition
+
+                                                              3
+J. Barnett and C. Farhat                                                                      Journal of Computational Physics 464 (2022) 111348
+
+
+for the semi-discrete solution vector. This HDM encompasses counterparts associated with nonlinear, semi-discrete, second-
+order dynamical systems characterized by a constant mass-like matrix but arbitrarily complex dissipative (damping) forces,
+which can be written as
+
+        MS v̈(t ) + fdiss          int
+                     S (v̇(t )) + fS (v (t )) − gS (t ) = 0
+                                                   v̇(0) = v̇0                                                                              (2)
+                                                              0
+                                                   v(0) = v
+
+Indeed, HDMs such as (2) can be rewritten in the ﬁrst-order form (1) using the change of variables u = [v̇ v] T , where the
+superscript T designates here and throughout the remainder of this paper the transpose.
+   Using the transformations described in [2], it can be shown that the HDM (1) also encompasses counterparts associated
+with semi-discrete second-order dynamical systems characterized by a conﬁguration-dependent mass-like matrix. Hence,
+even though all contributions of this paper are discussed in the context of the HDM (1), they are application-independent.
+
+2.1. Traditional nonlinear Galerkin and Petrov-Galerkin projection-based reduced-order models
+
+    Recall that the traditional aﬃne subspace approximation can be expressed as
+
+        ũ(t ) = Vq(t ) + uref                                                                                                              (3)
+
+In the context of a dynamical system, the reference solution uref is often chosen to represent the initial condition.
+In this work, the right ROB V is constructed as outlined in Section 1. First, the HDM is exercised – for example, in
+the simulation time-interval of interest t ∈ (0, T f ] – to collect a set of N s solution snapshots in the snapshot matrix
+                                  
+S = u1 , . . . , ui , . . . , u N s , where the subscript i designates the i-th solution snapshot. Then, S ∈ R N × N s is compressed using
+the thin SVD
+
+        S = US S YST
+
+where US ∈ R N ×k is the matrix of left singular vectors and spans the range of S; S ∈ Rk×k is the diagonal matrix of
+nonzero singular values σS,i , i ∈ {1, . . . , k}, stored in the order σS,1 ≥ σS,2 ≥ . . . σS,k > 0; YS ∈ R N s ×k is the matrix of right
+singular vectors; and k ≤ min ( N , N s ) denotes the rank of S. Finally, V ∈ R N ×n is identiﬁed with the ﬁrst n  N columns of
+US . It is well known that for a given n, V ∈ R N ×n is optimal in the sense that it is the solution to the optimization problem
+                                         2
+                                         
+        arg min S − XX T S
+              X∈R N ×n                     F
+
+where · F denotes the Frobenius norm. The dimension n of V is usually determined such that the ratio of the sum of the
+truncated and squared singular values, and that of all squared singular values, is such that
+
+          
+          n
+                σS2,i
+         i =1
+                         ≥ 1 − εS                                                                                                           (4)
+         
+         k
+                σS2, j
+         j =1
+
+where εS is a user-deﬁned tolerance.
+   Substituting (3) in (1) leads to the nonlinear, semi-discrete, time-dependent residual equation and its associated initial
+condition
+           
+        r ũ = r (Vq(t ) + uref , t ) = MVq̇(t ) + f (Vq(t ) + uref ) − g (t )
+                               Vq(0) + uref = u0
+
+The time-discretization of the ﬁrst of the above equations by a preferred implicit scheme leads at each time-step m + 1 to a
+nonlinear system of algebraic equations of the form
+                                                      
+        rm+1 (ũm+1 ) = rm+1 Vqm+1 + uref , t m+1 = 0                                                                                       (5)
+
+where rm+1 ∈ R N and the superscript m + 1 (or m) designates here and throughout the remainder of this paper a discrete
+quantity evaluated at time t m+1 (or t m ). The N-dimensional system (5) is overdetermined as it governs n  N unknowns
+– namely, the generalized coordinates of the subspace approximation (3) stored in qm+1 . Thus, the unknowns represented
+by the reduced-order vector qm+1 are constrained by enforcing the orthogonality of the discrete residual rm+1 to a left ROB
+W ∈ R N ×n , which can be written as
+
+                                                                      4
+J. Barnett and C. Farhat                                                                                               Journal of Computational Physics 464 (2022) 111348
+
+                                                            
+        W T rm+1 Vqm+1 + uref , t m+1 = 0                                                                                                                            (6)
+
+If W = V by choice, equation (6) above is a discrete, nonlinear Galerkin PROM associated with the HDM (1). If not, it is a
+Petrov-Galerkin counterpart. As already stated in Section 1, for HDMs grounded in non-elliptic PDEs, the Petrov-Galerkin
+projection offers freedom in choosing W to achieve, for example, numerical stability [17], or some notion of approximation
+optimality [18,9].
+   For the sake of generality and because the main focus of this work is on highly nonlinear, unsteady, convection-
+dominated problems (which are typically non-elliptic) discretized by an implicit scheme, a Petrov-Galerkin projection is
+assumed throughout the remainder of this paper. More speciﬁcally, the LSPG framework for PMOR is adopted for the rea-
+sons outlined in Section 1. In this case, at each time-step m + 1 and Gauss-Newton iteration  + 1, the left ROB is constructed
+as [18,9]
+
+        Wm+1,+1 = Jm+1, V                                                                                                                                          (7)
+
+where
+
+                      ∂ rm+1  m+1,   ∂ rm+1  m+1,
+        Jm+1, =              ũ     =         Vq     + uref ,                                      Jm+1, ∈ R N × N                                                 (8)
+                        ∂ ũ             ∂ ũ
+and solving the discrete, nonlinear PROM equation (6) becomes equivalent to solving the optimization problem (see [15] for
+a mathematical proof)
+                                                                            2
+        qm+1 = arg min rm+1 Vx + uref , t m+1 2                                                                                                                    (9)
+                           x∈Rn
+
+
+Remark 1. When Galerkin projection is justiﬁed – for example, for second-order dynamical systems or HDMs grounded in
+elliptic PDEs for which Jm+1 ∈ R N × N is always symmetric positive deﬁnite – Wm+1 = W = V, ∀m ≥ 0. In this case, it is
+shown in [15] that solving the discrete, nonlinear PROM equation (6) is equivalent to solving the optimization problem
+                                            − 1 m + 1                                 
+                                                                                          
+        qm+1 = arg min  Jm+1                            r             Vx + uref , t m+1 
+                           x∈Rn                                                              Jm+1
+
+
+2.2. Hyperreduction using ECSW
+
+    For many nonlinear problems of practical interest, the complexity of the solution of problem (6) – and for this matter,
+that of the processing of any nonlinear PROM – scales not only with the small dimension n of the PROM, but also with
+the large dimension N of the HDM. Hyperreduction [36] is one approach for eliminating this computational bottleneck. In
+this work, ECSW [2,37] is chosen for hyperreducing any constructed nonlinear PROM, because of its track record established
+in [2,37,19] for many different large-scale applications.
+    Let E = {ei } , i ∈ {1, . . . , N e } denote the set of N e = |E | mesh entities deﬁning the discretization of the computational
+domain underlying the semi-discrete HDM (1). For example, these entities may be elements in the case of FE modeling, or
+computational (primal or dual) cells in the case of ﬁnite volume (FV) modeling. In all cases, the discrete, nonlinear PROM (6)
+of dimension n can be written as
+                
+           +1 m +1 m +1
+                                                                                          
+        rm
+         n    q   ,t    = WT rm+1 Vqm+1 + uref , t m+1
+                                                                     T m +1                                
+                                       =                Le i W         re i       Le i + Vqm+1 + uref , t m+1                                                      (10)
+                                           e i ∈E
+
+where:
+
+  • the notation † [•] is used here and throughout the remainder of this paper to indicate that the quantity † is to be
+    multiplied
+               by the quantity
+                                m  • and
+                                         not that † is a function of •.
+  • rm  +1 L + Vqm+1 + u        , t  +1 ∈ Rde i represents the contribution of the individual mesh entity e to the discrete resid-
+     ei     e i            ref                                                                             i
+     ual rm+1 and de i denotes the number of dofs attached to e i .
+  • Lei ∈ {0, 1}dei × N is a Boolean matrix selecting the mesh entity e i to which dei dofs are attached.
+                  d     ×N
+  • Lei + ∈ {0, 1} ei +    is a Boolean matrix selecting the union of the mesh entity e i and its neighbors participating in the
+     same stencil of the chosen semi-discretization scheme, to which de i + dofs are attached.
+  • In the case of LSPG, the left ROB W is given in (7) and (8). In this case, W is independent of qm+1 and therefore
+     the notation of (10) is justiﬁed even in the context of LSPG. This is because from (7) and (8), it follows that when
+     the projected discrete residual (10) is expressed for qm+1,+1 , W is a function of qm+1, – which is independent of
+     qm+1,+1 .
+
+                                                                                                5
+J. Barnett and C. Farhat                                                                                        Journal of Computational Physics 464 (2022) 111348
+
+
+  The main idea underlying ECSW is to approximate a projected quantity such as (10) using a cubature approach whose
+complexity is independent of N, as follows
+                
+           +1 m +1 m +1
+                                                                                
+        rm
+         n    q   ,t    = WT rm+1 Vqm+1 + uref , t m+1
+                                                              T +1                            
+                                        ≈            ξei Lei W rm ei   Le i + Vqm+1 + uref , t m+1                                                          (11)
+                                            e i ∈E
+
+where E is a subset of E deﬁning a “reduced mesh” – that is, ne = E  N e = |E | – and interpretable as the set of points
+                                       
+of the cubature; and ξe1 , . . . , ξene is the set of positive, real-valued weights of the cubature approximation.
+    For implicit time-discretizations, the Jacobian with respect to ũ of the discrete, nonlinear PROM (6) of dimension n can
+be written as
+                
+           +1 m +1 m +1
+                                                                               ∂ rm+1  m+1                   
+        Jm
+         n    q   ,t    = WT Jm+1 qm+1 , t m+1 = WT                                       Vq      + uref , t m+1
+                                                                                    ∂ ũ
+                                                             T m +1         m +1               
+                                        =              Le i W Je i      Le i + Vq    + uref , t m+1
+                                            e i ∈E
+                                                        
+where Je im+1
+                    Le i + Vqm+1 + uref , t m+1 ∈ Rdei ×dei represents the contribution of the individual mesh entity e i to the discrete
+                                                                                                                                   
+Jacobian Jm+1 and de i denotes as before the number of dofs attached to e i . Since W T ∂ rm+1 /∂ ũ = ∂ W T rm+1 /∂ ũ (see jus-
+                                                             m+1
+                                                                                                          
+tiﬁcation provided
+                 min the ﬁfth
+                            bullet above), it follows that Jn   qm+1 , t m+1 is the Jacobian of the projected residual (10).
+            m+1    + 1 m+1
+Therefore, Jn    q    ,t     can be approximated using the same cubature rule as in (11), as follows
+
+                
+           +1 m +1 m +1
+                                                                            ∂ rm+1  m+1                   
+        Jm
+         n    q   ,t    = WT Jm+1 qm+1 , t m+1 = WT                                    Vq      + uref , t m+1
+                                                                                 ∂ ũ
+                                                              T +1                            
+                                        ≈            ξei Lei W Jm ei   Le i + Vqm+1 + uref , t m+1                                                          (12)
+                                            e i ∈E
+                                                                                                                                  
+   Speciﬁcally, ECSW computes the reduced mesh E and its associated set of weights ξe1 , . . . , ξene using a machine learn-
+ing approach. Essentially, this approach trains the approximation (11) – from which the counterpart approximation (12) can
+be derived – on a subset of the solution snapshots already collected in the snapshot matrix S, as described below.
+   Let C = [cle ] ∈ R N h × N e and d = [dl ] ∈ R N h be the matrix and vector deﬁned as follows
+                                                                          
+        cle = (Le W) T re Le+ VV T (ul − uref ) + uref , t l ,                        l = 1, . . . , N h
+                                                                                                                                                            (13)
+         dl =          cle ,                                                          l = 1, . . . , N h
+                e ∈E
+
+where N h ≤ N s denotes the size of the subset of the solution snapshots collected in S chosen for training the cubature
+approximation (11). Note that in (13) above:
+
+  • VV T (ul − uref ) is the orthogonal projection of the collected solution snapshot ul onto the subspace represented by V.
+     This emphasizes that the ECSW training is performed for the PROM and not HDM predictions, consistently with (11).
+  • C and d verify
+
+              C [ξ = 1] = d                                                                                                                                 (14)
+     where ξ ∈ R is the vector of weights of the cubature assuming that E = E and 1 ∈ R
+                           Ne                                                                                              Ne
+                                                                                                                                is the N e -long vector with
+     each entry equal to 1. This identity is a rewriting of (10) in matrix form.
+
+Then, ECSW can be simply described as relaxing (14) and deﬁning instead E and ξ as the solution of the optimization
+problem
+
+          min        ξ ref s.t .            Cξ − d 2 ≤ τ d 2                                                                                                (15)
+            Ne
+        ξ ∈R≥ 0
+
+where • 0 designates the 0 -norm of • and 0 < τ < 1 is a speciﬁed training tolerance. Unfortunately, the above minimiza-
+tion problem is combinatorially hard. For this reason, several alternative formulations of (15) were considered in [38] and
+the following nonnegative least squares approach
+
+        ξ = arg min             Cζ − d 22
+                         Ne                                                                                                                                 (16)
+                     ζ ∈R≥ 0
+
+
+                                                                                        6
+J. Barnett and C. Farhat                                                              Journal of Computational Physics 464 (2022) 111348
+
+
+equipped with the early termination criterion
+
+          Cξ − d ≤ τ d 2                                                                                                          (17)
+was found to be most practical and computationally eﬃcient. Due to (17), the solution of the optimization problem (16) is
+a sparse vector ξ characterized by a relatively small number of nonzero entries corresponding to the mesh entities deﬁning
+the reduced mesh E .
+   Finally, after ECSW has computed the reduced mesh E ⊂ E , the augmented counterpart E + is obtained by simply adding
+to E the neighbors to its mesh entities that participate in the same stencil of the chosen semi-discretization scheme and
+have not already been sampled in E .
+
+2.3. Kolmogorov n-width barrier to reducibility
+
+    The Kolmogorov n-width of a subspace M of dimension n is deﬁned as
+
+        dn (M) =             inf        sup   inf || y − yn ||Y                                                                   (18)
+                            Yn ⊆Y       y ∈M yn ∈Yn
+                        dim(Yn )≤n
+
+where Y is a linear subspace [39]. Effectively, the combination of the supremum and second inﬁmum determines the max-
+imum distance in a Y -norm between the lines y and yn when projecting points in M onto an n-dimensional subspace of
+Y . It is a useful concept for determining the extent to which, for a ﬁxed size n of the ROB, the traditional PROM approx-
+imation (3) can accurately represent the solution associated with a given HDM. It is equally useful concept for predicting
+computational eﬃciency, as for a hyperreduced nonlinear PROM (HPROM) whose underlying HDM is grounded in a PDE, the
+online solution time scales primarily with the dimension n of the PROM as well as with the size of the reduced mesh.
+    In the context of a PROM or HPROM whose underlying HDM is grounded in a PDE, the rate of convergence of the Kol-
+mogorov n-width depends on the mathematical type of the PDE. The most optimistic case corresponds to a subset of linear
+coercive problems: in this case, dn (M) ≤ C e −β n , where 0 < C < ∞ and β > 0 [40]. For such problems, very low-dimensional
+PROMs can deliver an acceptable accuracy. For an HDM grounded in a nonlinear     hyperbolic PDE, the decay of the n-width
+of an associated PROM may be much slower: in some cases, dn (M) ≤ 1/4 n−1/2 [26], which explains why for such HDMs
+the Kolmogorov n-width is often referred to in the literature as a barrier to reducibility. For example, for a discrete HDM of
+dimension greater than N = 17 × 106 of the convection-dominated turbulent ﬂow around the Ahmed body [35], which is
+a popular benchmark CFD problem in the automotive industry, an unsteady LSPG PROM – and therefore a PROM parame-
+terized by time only – based on the traditional global subspace approximation (3) requires a dimension n ≈ 600 to achieve
+suﬃcient accuracy [19]. On the other hand, an LSGP PROM based on a 100-subdomain partition of the solution manifold
+and the piece-wise aﬃne approximation approach proposed in [27] achieves the same level of accuracy using an average
+dimension n ≈ 11. However, as explained in Section 1, in the context of a high-dimensional parameter space D , an LSPG
+PROM based on the same piece-wise aﬃne approximation can be expected to require a much larger average dimension n
+and potentially be unafforable. For this reason, for nonlinear, convection-dominated, ﬁrst-order hyperbolic problems, there
+is a signiﬁcant interest in developing alternative, more eﬃcient nonlinear approximation manifolds for PMOR.
+
+3. Data-driven quadratic approximation manifold
+
+    The proposed data-driven, higher-order polynomial approximation manifold is a compromise between: on one extreme,
+the comprehensiveness of an arbitrarily nonlinear approximation manifold such as that based on a convolutional autoen-
+coder [28] and its potential for accuracy; and on another extreme, the computational eﬃciency of the training step of the
+simulation-free quadratic manifold approximation proposed for structural dynamics applications in [33]. The total oﬄine
+cost of its quadratic instance – deﬁned here as the computational cost associated with the construction/training of both
+the matrix coeﬃcients of the quadratic solution approximation and the reduced mesh needed for hyperreduction – is sim-
+ilar to if not less than that of the POD method based on the traditional aﬃne approximation (3). However, for a ﬁxed
+dimension n of the target nonlinear PROM, its accuracy is far superior. Furthermore, the proposed higher-order polynomial
+approximation manifold approach is amenable to a piece-wise implementation similar to that developed in [27], but such
+an implementation is work in progress.
+
+3.1. Higher-order polynomial approximation manifolds
+
+   Again, PMOR is essentially a semi-discretization method for PDEs based on global shape functions; it can be interpreted
+as a Ritz approximation method. Therefore, a natural approach for improving its performance for problems where the
+aﬃne approximation (3), which is a polynomial approximation of degree p = 1, is ineﬃcient is to consider a higher-order
+polynomial approximation of degree p ≥ 2. Such an approximation can be written as
+                    p                                
+        ũ(t ) =           G p −i +1 q⊗ p −i +1 (t ) + uref                                                                       (19)
+                   i =1
+
+                                                                  7
+J. Barnett and C. Farhat                                                                     Journal of Computational Physics 464 (2022) 111348
+
+
+where G j ∈ R N ×n , the superscript ⊗ j designates the j-fold Kronecker product, and therefore q⊗ j ∈ Rn . Observe that if G1
+                           j                                                                                         j
+
+
+is chosen to be the matrix V ∈ R N ×n that was previously referred to as the right ROB, the traditional aﬃne approximation (3)
+becomes the particular case of (19) corresponding to p = 1.                                                 
+    The present work focuses on the case p = 2 – that is, the solution approximation ũ(t ) = G2 q⊗2 (t ) + G1 q(t ) + uref .
+Following the aforementioned observation, G1 is set by design to G1 = V ∈ R N ×n and V is constructed using the same data-
+driven procedure – but not necessarily the same dimension – as in the case of the traditional aﬃne approximation (3). In
+this case, the approximation (19) with p = 2 can be rewritten using a notation closer to that of (3) as follows
+                                  
+        ũ(t ) = H q⊗2 (t ) + Vq(t ) + uref = H [q(t ) ⊗ q(t )] + Vq(t ) + uref                                                          (20)
+
+where H ∈ R N ×n and ⊗ represents the vectorized Kronecker product such that q ⊗ q ∈ Rn .
+                       2                                                                             2
+
+
+   It is noted here that an approximation of the form given in (20) has been recently used in [41] in a different context,
+namely, that of constructing a nonintrusive, projection-free, reduced-order model based on the notion of operator inference.
+Hence, both this work and the work presented earlier in [41] share the task of constructing numerically a coeﬃcient matrix
+H governing the quadratic term of a quadratic approximation. However, even with regards to this speciﬁc task, the global
+contexts, the numerical approaches, and most importantly, the exploitations of approximations of the form given in (20)
+for constructing surrogate models, and the types and performances of the surrogate models discussed here and in [41] are
+vastly different.
+
+3.2. Two-step construction of a quadratic approximation manifold
+
+   Here, a two-step approach is described for constructing the matrix H of the quadratic approximation (20).
+   In the ﬁrst step, the reference solution uref ∈ R N is chosen as usual and the matrix V ∈ R N ×n , where n  N, is con-
+structed as in the method of snapshots for POD [14] using however SVD for data compression – and as can be expected, a
+lower dimension n for the same level of accuracy.
+   In the second step, H ∈ R N ×n is determined such that for all solution snapshots collected in S ∈ R N × N s , the errors of
+                                 2
+
+
+the quadratic approximation (20) are minimized.
+   The two-step aspect of the approach outlined above for determining the matrix coeﬃcients of the quadratic solution
+approximation (20) offers the following advantages over an alternative approach where both V ∈ R N ×n and H ∈ R N ×n are
+                                                                                                                          2
+
+
+simultaneously determined:
+
+  • Full column rank and orthogonality of V – for example, V T V = I – which have been very convenient in the numerical
+    implementation of PMOR equipped with the traditional subspace approximation (3), at no additional computational
+    effort.
+  • Lower computational complexity due to the divide-and-conquer nature of the approach where: ﬁrst, V is computed;
+    and then, H is determined given V.
+
+   Whether V and H are determined as outlined above or simultaneously, the resulting construction of the quadratic ap-
+proximation manifold underlying (20) is data-driven. It is agnostic to the speciﬁc form of the nonlinear HDM and therefore
+applicable to the PMOR of any nonlinear HDM. Furthermore, as the structure of the nonlinear approximation term is pre-
+determined, H ∈ R N ×n can be computed row-by-row. Speciﬁcally, it is shown in Section 3.3 that each row of H can be
+                      2
+
+
+determined by solving an independent linear least squares problem. This way, H can be eﬃciently determined using fur-
+thermore embarrassingly parallel computations.
+
+3.3. Computation of the coeﬃcient matrix of the quadratic term of the approximation
+
+   For each solution snapshot ul collected in S ∈ R N × N s , let el ∈ R N denote the error associated with its orthogonal projec-
+tion on the subspace represented by V – that is,
+
+        el = ul − Vql − uref , l = 1, . . . , N s                                                                                        (21)
+
+If the vector of generalized coordinates ql is computed such that the corresponding error el is orthogonal to the subspace
+represented by V and if by construction V is orthogonal, it follows from (21) that
+
+        ql = V T (ul − uref ) , l = 1, . . . , N s                                                                                       (22)
+                                                                         N ×N s
+   Assembling all approximation errors (21) in the matrix E ∈ R                   and all vectors of generalized coordinates (22) in
+Q ∈ Rn × N s as follows
+      2
+
+
+                              
+         E = e1 . . . e N s
+                                                                                                                                       (23)
+        Q = q1 ⊗ q1 . . . q N s ⊗ q N s
+
+                                                                  8
+J. Barnett and C. Farhat                                                                                                         Journal of Computational Physics 464 (2022) 111348
+
+
+the second step of the two-step approach outlined in Section 3.2 for constructing the matrix H ∈ R N ×n can be written as
+                                                                                                                                                        2
+
+
+
+
+        H = arg        min                E − H Q      F
+                                                                                                                                                                             (24)
+                                 2
+                    H ∈R N ×n
+
+   Let [E]i ,1 and [H]i ,1 , i = 1, . . . , N, denote the row partitioning of each of E and H, respectively. Using this partitioning,
+the minimization problem (24) can be rewritten as
+                                      N
+                                             [E]i ,1 − [H ]i ,1 Q 2
+                                                                           2
+        H = arg        min                                                                                                                                                   (25)
+                               2
+                    H ∈R N ×n       i =1
+
+From (24) and (25), it follows that H can be computed row-by-row, by solving the following sequence of N independent
+minimization problems
+
+                                                      [E]i ,1 − [h ]i Q 2 ,
+                                                                               2
+        hi = [H]i ,1 = arg                min                                          i = 1, . . . , N                                                                      (26)
+                                     hi ∈R1×n
+                                                 2
+
+
+
+This distributed approach for computing the matrix H is preferred over its counterpart outlined in (24) because it is less
+computationally intensive – it incurs a sequence of smaller minimization problems; and furthermore, it can be implemented
+on a massively parallel computing system in an embarrassingly parallel manner.
+   Unfortunately, all optimization problems implied in (25) and (26) are susceptible to over-ﬁtting. For this reason, the
+solution approach (26) is modiﬁed to include a Tikhonov regularization [42] using the classical Tikhonov matrix  = α I,
+where α > 0 and I denotes the identity matrix. This leads to
+
+                                                      [E]i ,1 − [h ]i Q 2 + α [h ]i
+                                                                               2                     2
+        hi = [H]i ,1 = arg                min                                                        2
+                                                                                                       ,     i = 1, . . . , N                                                (27)
+                                     h ∈R1×n
+                                              2
+                                      i
+
+Note that by choice, the same regularization parameter α is used in (27) for all instances i = 1, . . . , N.
+    Depending on the combination of the number of collected solution snapshots N s and the target dimension of the
+PROM n, each regularized least squares problem in (27) can be underdetermined, square, or overdetermined. It is also
+ill-conditioned, at least for the following reason. Each column block q⊗      j = q j ⊗ q j of Q (23) contains n entries: how-
+                                                                                                                 2
+
+ever, due to symmetry, n(n − 1)/2 of these are repeated entries. This speciﬁc issue can be addressed by simply excluding
+all duplicate entries from the construction of Q to obtain in principle a redundancy-free matrix Q ∈ Rn(n+1)/2× N s . In this
+case, the corresponding entries in each row vector hi are also excluded from its deﬁnition to obtain a new row vector
+h̄i ∈ R1×n(n+1)/2 .
+    In general, it is preferrable that N s and n verify N s > n(n + 1)/2, so that each regularized least squares problem in (27)
+is overdetermined and can be solved using the non-truncated thin SVD of Q as follows
+                                                              nQ
+                                                                     ⎛                 ⎞
+                                                                            σQ2,l          y T [E]iT,1
+        Q = U Q Q Y T                ⇒              h̄iT =          ⎝                 ⎠    Q,l
+                                                                                                           uQ,l ,   i = 1, . . . , N                                         (28)
+                    Q
+                                                              l =1
+                                                                         σQ2,l + α 2          σQ,l
+
+where nQ is the dimension of Q – that is, the number of singular values σQ,l of Q, l ∈ {1, . . . , nQ } – and uQ,l and yQ,l are
+                                                      n(n+1)/2×nQ                          N ×nQ
+the l-th column vectors of UQ ∈ R                                         and YQ ∈ R s              , respectively [42].
+   The computation of the row matrices h̄iT , i = 1, . . . , N (28), depends on the choice of the parameter α determining
+the strength of the regularization. A reasonable value of this parameter can be found using the generalized cross-validation
+(GCV) method [43], as typically done for a Tikhonov regularization. In this work, α is speciﬁcally determined as follows. First,
+a real-valued parameter 0 < ω ≤ 1 is introduced to specify the length nsmp = ωnQ  of the vector α smp = {α1 , . . . , αnsmp } of
+                                                                                                                                                                             
+trial values of α . This vector consists of nsmp evenly spaced (in a logarithmic sense) entries in the interval                                                 σQ,n , σQ,1 of
+                                                                                                                                                                     Q
+
+singular values of Q stored in sorted order, from the smallest to the largest. Next, for each i-th degree of freedom (dof) of
+the HDM, i = 1, . . . , N, GCV is applied to compute a temporary value αi of the regularization parameter. Then, α is set to the
+mode of the sample – that is, the value α that occurs most often in the collection. While this approach may occasionally
+overregularize the least squares problems (27), it is computationally eﬃcient: in particular, it requires performing the thin
+SVD of Q only once.
+
+3.4. Heuristic for an appropriate dimension of the quadratic approximation manifold
+
+   Here and throughout the remainder of this paper, a PROM equipped with the traditional aﬃne approximation (3) is
+referred to as a traditional PROM, while a counterpart equipped with the quadratic approximation (20) is referred to as
+a quadratic PROM. Strictly speaking, this terminology is independent of the linearity or nonlinearity of the HDM and its
+associated PROM. In other words, a nonlinear PROM associated with a nonlinear HDM can be traditional, if the underlying
+
+                                                                                                9
+J. Barnett and C. Farhat                                                                    Journal of Computational Physics 464 (2022) 111348
+
+
+solution approximation is aﬃne or linear; or quadratic, if the underlying solution approximation is quadratic (and therefore
+nonlinear).
+   Recall and/or observe that:
+
+             • I1. For problems (27) to be overdetermined, the number N s of solution snapshots collected in S ∈ R N × N s and
+               the dimension n of the target quadratic PROM must satisfy N s > n(n + 1)/2. For parametric problems, N s is an
+               outcome of a parameter sampling procedure – preferrably, an adaptive one such as a greedy procedure based on
+               an errror indicator or estimator (for example, see [44]). In the particular case where only time is a parameter –
+               say an unsteady turbulent ﬂow or a nonlinear, structural dynamic computation – N s is often simply determined
+               by a non-adaptive sampling frequency.
+             • I2. In the two-step approach for constructing the quadratic approximation manifold underlying (20), V ∈ R N ×n is
+               constructed as in the case of the traditional subspace approximation (3); and therefore n is typically determined
+               using the singular value energy criterion (4) that depends on the tolerance εS (4).
+             • I3. For the same reference solution uref ∈ R N , the traditional subspace approximation (3) depends on Nn control
+               variables that deﬁne the right ROB V ∈ R N ×n and the approximation subspace it represents; but the quadratic
+               approximation (20) depends on Nn(n + 1)/2 + Nn control variables that deﬁne the rows h̄i ∈ R1×n(n+1)/2 , i =
+               1, . . . , N, and V ∈ R N ×n . Based on matching the numbers of control variables for both cases, it follows that for
+               a
+               √given nonlinear,
+                                     convection-dominated
+                                               √            problem, one can reasonably expect a quadratic PROM of dimension
+                   9 + 8n − 3 /2 < n (and         9 + 8n − 3 /2  n, if n ≥ 100) to deliver the same accuracy as that of a traditional
+               counterpart of dimension n.
+             • I4. The solution (28) of problems (27) is vulnerable to overregularization, which may lead to a loss of some
+               of the capacity of the Nn(n + 1)/2 control variables deﬁning h̄i ∈ R1×n(n+1)/2 , i = 1, . . . , N, to construct the
+               best possible quadratic approximation in the sense deﬁned in (24). This in turn can be interpreted as working
+               effectively with a number Nn (n + 1)/2 < Nn(n + 1)/2 of these control variables – or equivalently, with a
+               dimension n < n.
+
+   Based on the above reminders and observations, the following heuristic is proposed for selecting an appropriate dimen-
+sion n for a quadratic PROM:
+
+             • From item I2 above, set εS in (4) to its usual appropriate value for constructing a right ROB V for a traditional
+               PROM – say εS = 10−4 and therefore 1 −  √εS = 99.99% – and compute the corresponding ROB dimension ntra .
+             • From item I3 above, compute nqua =        9 + 8ntra − 3 /2, which assumes no overregularization of the least
+                squares problems (27).
+             • From item I4 above, set nqua = (1 + ζ )nqua , where 0 < ζ < 0.2, which attempts to correct for any overregular-
+               ization of the least squares problems (27) due to the choice α = α .
+             • Finally, to satisfy the constraint recalled in item I1 above, set
+                                           
+                           n = min nqua ,        1 + 8N s − 1 /2                                                                        (29)
+
+   The performance of the above heuristic depends on the parameter ζ . In general, the optimal value of this parameter
+depends on the method chosen for determining the regularization parameter α – in this case, GCV – and its speciﬁc
+implementation – in this case, through α . Hence, the heuristic described above is not meant to be the ﬁnal word on
+how to determine the dimension n of a quadratic PROM, but to provide an initial idea for how to approach this task. Its
+soundness is conﬁrmed by the numerical results reported in Section 5 for the prediction of the highly nonlinear, convection-
+dominated, turbulent ﬂow around and in the wake of the Ahmed body.
+
+3.5. Numerical algorithm and required computational resources
+
+    The overall computational procedure proposed in this paper for constructing a quadratic approximation manifold for the
+purpose of nonlinear PMOR is summarized in Algorithm 1 below.
+    The computational cost of Algorithm 1 has two main components: the computational cost associated with the construc-
+tion of the matrix V ∈ R N ×n – which is essentially the same as that associated with the construction of a right ROB for a
+traditional PROM (C1); and that associated with the construction of the row matrices h̄i ∈ R1×n(n+1)/2 , i = 1, . . . , N – which
+is speciﬁc to the construction of the proposed quadratic approximation manifold associated with a quadratic PROM (C2).
+The general conclusion, which is explained below, is that in the best case, C2 is a small fraction of C1 and therefore the
+total cost of the proposed approach for constructing a quadratic approximation manifold is comparable to that associated
+with the construction of a traditional subspace approximation; and in the worst case, C2 is comparable to C1 and therefore
+the total cost of the proposed approach for constructing a quadratic approximation manifold is about twice that associated
+with the construction of a traditional subspace approximation.
+    As already stated above, the SVD of the matrix Q ∈ Rn(n+1)/2× N s needs be performed only once. Its computational
+complexity is independent of the large dimension N of the HDM and therefore is negligible compared to the other com-
+
+                                                                   10
+J. Barnett and C. Farhat                                                                                    Journal of Computational Physics 464 (2022) 111348
+
+
+Algorithm 1 Computation of the coeﬃcient matrices of the quadratic approximation manifold (20).
+Input: solution snapshot matrix S ∈ R N × N s ; tolerance εS ; correction factor ζ ; regularization parameter α or parameter ω
+Output: dimension n; matrix V ∈ R N ×n ; matrix H ∈ R N ×n(n+1)/2
+  US S YST ← S                                                                                                                                Compute SVD
+  σS ← diag (S )                                                                                                                 σS ∈ Rk , k ≤ min ( N , N s )
+                                                           
+                                                           n             
+                                                                          k
+  ntra ← smallest n satisfying                        1−          σS,i           σS, j ≤ εS
+                                                           i =1           j =1
+                          
+  V ← u1√, . . . , untra                                                                                                        ui is the i-th column of US
+  nqua ←     9 + 8ntra − 3 /2
+  nqua ← (1 + ζ )nqua                                                                                                  See I4 in Section 3.4 for justiﬁcation
+                       √                               
+  n ← min nqua ,            1 + 8N s − 1 /2
+  Truncate V such that V ∈ R N ×n
+  Declare E ∈ R N × N s , Q ∈ Rn(n+1)/2× N s , H ∈ R N ×n(n+1)/2
+  for i ← 1 to N s do
+      qi = V T S[:, i ]
+      E[:, i ] ← S[:, i ] − Vqi − uref
+      Q[:, i ] ← unique(qi ⊗ qi )  unique removes duplicate values from the Kronecker product due to symmetry with respect to exchange of arguments
+  end for                                                              
+                      n(n+1)/2×nQ
+  Declare UQ ∈ R                  , Q ∈ RnQ ×nQ , YQ ∈ R N s ×nQ ← SVD Q                                                         Compute thin SVD
+  if α is not speciﬁed then
+      Declare α best ∈ R N
+      Declare nsmp ← ωnQ 
+     Declare α smp ∈ Rnsmp ← nsmp samples uniformly distributed in log scale, from the maximum to the minimum singular value of Q
+     for i ← 1 to N do
+         Declare G ∈ Rnsmp
+         for k ← 1 to nsmp do
+             G[k] ← GCV (α [k])                                                             See chapter 7 of [42] for details regarding the function GCV
+         end for
+         α [i ] ← α that corresponds to the minimum of the entries of G
+           best
+
+     end for
+     α ← most frequently selected value of the regularization parameter stored in α best
+  end if
+  for i ← 1 to N do
+     Declare hi ← 0
+     for l ← 1 to nQ do
+                                      
+                           σQ2,l           y T E[l,:] T
+                                            Q,l
+            hi +=                  2          σQ,l        uQ,l
+                        σQ2,l +α
+    end for
+     H[i , :] ← hi
+  end for
+
+
+
+                                                                              i = 1, . . . , N, requires the equivalent of two
+putational costs explained next. However, the computation of all rows h̄i (28),
+matrix-vector products per entry: its computational complexity scales as O NnQ ( N s + n(n + 1)) , where nQ denotes the
+number of singular values of Q.                                                                                     
+   On the other hand, the computational complexity of the SVD of the solution snapshots S scales as O 4N N s2 + 8N s3 [45].
+Noting that for large-scale HDMs N  N s and N  n, assuming that nQ ∼ n2 , and assuming furthermore that enough
+solution snapshots are collected so that the least squares problems (27) are overdetermined – that is, N s > n(n + 1)/2 –
+the complexity of the ﬁrst component C1 of the total computational cost of Algorithm 1 becomes O 4N N s2 and that of
+                                                                                             
+the second component C2 becomes O 2N N s n2 . Under these reasonable assumptions, computing the coeﬃcient matrix H
+of the quadratic term of the quadratic approximation (20) is signiﬁcantly cheaper than computing the matrix V needed for
+both constructions of traditional and quadratic PROMs. This conclusion holds true even when the computational overhead
+associated with the regularization of the least squares problems (27) using GCV to identify α is accounted for, as this
+computational cost is at most equal to that associated with computing the matrix H.
+    As for memory resources, the construction oﬄine of the quadratic approximation manifold requires in principle the
+storage of the matrices Q ∈ Rn(n+1)/2× N s and E ∈ R N × N s – which are needed to construct the matrix H – in addition to
+the storage requirements of the traditional subspace approximation. For large-scale HDMs, the storage requirement of Q ∈
+Rn(n+1)/2× N s is negligible. As for the matrix E, it does not necessarily need to be stored in practice. Since H is determined
+row-by-row as in (28), only [E]i ,1 needs be stored for computing h̄i , i = 1, . . . , N. Hence, for all practical purposes, only a
+buffer of any affordable size greater than n(n + 1)/2 is needed for storing E for the purpose of computing H. In summary,
+the proposed procedure for constructing oﬄine the quadratic approximation manifold can be implemented in an approach
+that has a slightly higher storage requirement than its counterpart for the traditional subspace approximation.
+
+Remark 2. For the sake of simplicity, the notation H is used throughout the remainder of this paper. However, all reported
+performance results and their discussion are for an implementation where H is represented by the N rows h̄i , i = 1, . . . , N,
+to avoid redundant calculations.
+
+                                                                                                  11
+J. Barnett and C. Farhat                                                                        Journal of Computational Physics 464 (2022) 111348
+
+
+4. Impact on LSPG and ECSW
+
+4.1. Impact on the projection-based model order reduction method LSPG
+
+   Here, the impact of the quadratic approximation (20) on the nonlinear PMOR method LSPG outlined in the ﬁrst part of
+Section 2.1 is highlighted.
+   To this end, the quadratic approximation (20) is substituted for the traditional aﬃne counterpart (3) in the expression of
+the PROM (6) of dimension n, which leads to
+                           ⎛                                            ⎞
+                           ⎜                                            ⎟
+                           ⎜              ⊗2                              ⎟
+          Wm+1 rm+1 ⎜H qm+1                        + Vqm+1 + uref , t m+1 ⎟ = 0
+                 T
+
+                           ⎝                                          ⎠
+                                                       
+                                          ũm+1 qm+1
+
+The ﬁrst-order Taylor approximation of the above nonlinear projected residual around the -th iterate solution qm+1, can
+be written as
+                                                                                                 
+          Wm+1,+1 rm+1,+1 ũm+1 qm+1, + qm+1,+1                        ≈ Wm+1,+1 rm+1,+1 ũ qm+1,
+                       T                                                                 T
+
+
+                                                                          ∂ ũ  m+1,
+                                 + Wm+1,+1 Jm+1, ũ qm+1,                              qm+1,+1
+                                           T
+                                                                                  q                                                         (30)
+                                                                            ∂q
+where
+                                 ⊗2
+                                      
+          ∂ ũ  m+1,   ∂ H qm+1,     + Vqm+1,
+                q      =                                                                                                                    (31)
+          ∂q                        ∂q
+A nice property of a nonlinear, polynomial approximation such as that written in (19) is that for any degree p, it is analyti-
+cally differentiable with respect to q. In particular, for p = 2, the derivative (31) has the following analytical expression
+                  ⊗2
+                       
+          ∂ H qm+1,                                        
+                                 = H qm+1, ⊗ I + I ⊗ qm+1,                                                                                (32)
+                     ∂q
+where I ∈ Rn×n is the identity matrix of dimension n. Hence, from (31) and (32), it follows that
+
+          ∂ ũ  m+1,                           
+                q      = H qm+1, ⊗ I + I ⊗ qm+1, + V                                                                                      (33)
+          ∂q
+and from (30) and (33), it follows that the left ROB for LSPG is given in this case by
+                                                                      
+          Wm+1,+1 = Jm+1, H qm+1, ⊗ I + I ⊗ qm+1, + V                                                                                   (34)
+
+    The comparison of (34) and (7) shows that in the case of the quadratic approximation
+                                                                                         (20), the left ROB of LSPG con-
+                                       m+1,+1
+tains one additional term – namely, Wadd       = Jm+1, H qm+1, ⊗ I + I ⊗ qm+1, . Regarding this term, it is noted here
+                                                                                                                                    
+that qm+1, ⊗ I + I ⊗ qm+1, ∈ Rn(n+1)/2×n is a sparse matrix and therefore the product H qm+1, ⊗ I + I ⊗ qm+1, should
+be
+ mperformed    using dense-sparse
+                                  matrix-matrix computations. Speciﬁcally, the number of nonzero entries of the matrix
+ q +1, ⊗ I + I ⊗ qm+1, grows as n2 and the evaluation at each Gauss-Newton iteration of the product of H and this sparse
+                       
+matrix requires O Nn2 operations (in the absence of hyperreduction and when redundant computations are avoided).
+   In summary, in the case of the quadratic PROM, the construction of Wm+1,+1 requires O (2N 3 n) operations whereas in
+the case of the traditional PROM, it requires O ( N 3 n) operations. Hyperreduction however eliminates the dependence on N
+from both aforementioned computational complexities which become quite reasonable.
+   From a storage perspective, it follows from (31) and (32) that the construction
+                                                                                     of the left ROB of LSPG (34) associated
+with the quadratic PROM requires the additional storage of the matrix Hq = H qm+1, ⊗ I + I ⊗ qm+1, ∈ R N ×n .
+
+4.2. Impact on the hyperreduction method ECSW
+
+   With regard to the impact of the quadratic approximation (20) on the hyperreduction method ECSW outlined in the
+second part of Section 2.1, two comments are noteworthy: one pertaining to the construction of the non negative least
+squares (NNLS) problem (16) and its early termination criterion (17); and one pertaining to the size of the resulting reduced
+mesh.
+   As highlighted in (13) and the ﬁrst bullet below that equation, it is important to perform the ECSW training for the
+PROM predictions and not those of its underlying HDM. In the case of the traditional aﬃne approximation, this is achieved
+
+                                                                             12
+J. Barnett and C. Farhat                                                                              Journal of Computational Physics 464 (2022) 111348
+
+
+by projecting the solution snapshots collected in the matrix S on the right ROB V; and constructing the matrix C and vector
+d deﬁning the least squares problem (16) and its early termination criterion (17) using the projected snapshots. In the case
+of the proposed quadratic approximation (20), the identiﬁcation of the vector of generalized coordinates qi associated with
+a solution snapshot ui can no longer be performed via projection onto a ROB. Instead, it requires the solution of a nonlinear
+problem of the form
+                          
+        δ i (qi ) = H q⊗
+                       i
+                         2
+                             + Vqi + uref − ui = 0
+
+using, for example, yet another Gauss-Newton procedure that can be summarized as follows
+
+            q0i = V T ui
+                           
+            1                  ∂δ i     +      
+        q+   = qi −                q        δ i qi
+         i
+                               ∂q i
+where the superscript  designates here too the -th iteration and the superscript + designates the Moore-Penrose inverse.
+Hence, for the same number N h of training solution snapshots, the computational cost associated with the setup of ECSW in
+the case of the proposed quadratic approximation manifold is higher than in the case of the traditional aﬃne approximation.
+However, as explained below, this speciﬁc potential cost increase is amply justiﬁed and rewarded.
+    As justiﬁed in Section 3.4, given a nonlinear, convection-dominated problem, a quadratic PROM can be expected to
+deliver a similar level of accuracy as a traditional PROM using however a smaller (and potentially much smaller) dimension
+n. Considering this and the fact that the number of cubature points required for approximating a d-dimensional integral
+function with p cubature points along each dimension grows as pd , it follows that one can reasonably expect ECSW to
+deliver in the context of the proposed quadratic approximation manifold a smaller to much smaller reduced mesh than in
+the context of the traditional subspace approximation. Assuming a constant ratio ne /n for both cases of the traditional aﬃne
+approximation and the quadratic approximation manifold, and in the limit of large values of ntra , the reduction factor in
+the size of the ECSW-generated reduced mesh brought in by the quadratic approximation manifold can be estimated by the
+ratio ntra /nqua , which, given the results of Section 3.4, leads to
+                     √
+         netra         ntra /2
+                 =                                                                                                                                (35)
+         nequa       (1 + ζ )
+Hence, the hyperreduction using ECSW of a quadratic PROM can be expected to deliver an even better computational
+eﬃciency than that of a traditional PROM. The numerical results reported in Section 5 for the prediction of the highly
+nonlinear, convection-dominated, turbulent ﬂow around and in the wake of the Ahmed body support this conclusion.
+
+5. Application
+
+    The proposed quadratic approximation manifold was implemented in the compressible ﬂow solver AERO-F, which is
+equipped with low-Mach preconditioning [46], and added to its nonlinear model reduction capabilities. In order to showcase
+the performance of this approximation manifold, it is applied here to the acceleration of the simulation of the Ahmed
+body turbulent wake ﬂow [35], which is a popular CFD benchmark problem in the automotive industry. The Ahmed body
+geometry can be described as an extruded rectangle, where the front (facing the free-stream velocity) is rounded to promote
+a separation-free ﬂow, the middle is a rectangular parallelepiped to promote a uniform ﬂow, and the rear is downward
+slanted at varying angles to promote the generation of the wake ﬂow of interest. Motivating factors for this geometry were
+the understanding of the dependence of the wake and experimentally measured drag on the slant angle, for the purpose
+of design optimization for fuel economy; and the generation of validation data for computational models [35]. Even in the
+absence of a parametric setting – except for time – this problem is suitable for assessing the performance of the quadratic
+approximation manifold proposed in this paper, because the ﬂow is modeled here using the detached-eddy simulation
+(DES) approach1 [47]. The unsteadiness of the wake ﬂow provides in this case a suﬃciently rich solution for observing the
+Kolmogorov barrier without resorting to further parameterization. Indeed, as already stated in Section 2.3, it was reported
+in [19] that for this unsteady viscous ﬂow problem, a global ROB of dimension roughly equal to 600 is needed to construct
+a PROM or HPROM that is reasonably accurate with respect to standard aerodynamic QoIs such as the time-history of the
+drag coeﬃcient [19].
+    Troughout this section, all PROMs are constructed using LSPG and hyperreduced using ECSW. A traditional LSPG PROM –
+that is, an LSPG PROM constructed using the traditional subspace approximation (3) – is simply referred to as a PROM – and
+an HPROM after hyperreduction; and any counterpart quadratic PROM constructed using LSPG and the proposed quadratic
+approximation (20) is referred to as a QPROM – and HQPROM after hyperreduction.
+
+
+ 1
+   DES is a modiﬁcation of a RANS model in which the model switches to a subgrid scale formulation in regions of the ﬂow that are ﬁne enough for large
+eddy simulation (LES) computations.
+
+
+                                                                         13
+J. Barnett and C. Farhat                                                                Journal of Computational Physics 464 (2022) 111348
+
+
+   All computations reported in this section are performed using AERO-F; and double-precision arithmetic on a Linux cluster
+where each node is conﬁgured with two Intel Xeon Gold 5118 processors clocked at 2.3 GHz and a total of 24 cores, and
+192 GB of memory. Speciﬁcally, any HDM, PROM, QROM, HPROM, or HQPROM is constructed using a third-order spatial
+approximation of the convective ﬂuxes; a second-order spatial approximation of the viscous ﬂuxes; and a second-order
+time-discretization. Each unsteady simulation is initialized using the solution of its quasi-steady-state counterpart.
+   For this application, the accuracy of each constructed HPROM or HQPROM is assessed by focusing on a given QoI and
+measuring the relative error of the prediction delivered by the HPROM or HQPROM with respect to that obtained using the
+underlying HDM, as follows
+                      !
+                                                  2
+                             Q oI (t ) − Q oI (t )
+                           t ∈T
+        REQoI =                   "                                                                                                (36)
+                                         Q oI (t )2
+                                  t ∈T
+
+where Q oI (t ) designates the QoI based on the reconstructed solution delivered by the HPROM or HQPROM, Q oI (t ) denotes
+its counterpart value based on the underlying HDM, and T = t ∈ {0, s, 2s, . . . } : t ≤ 2 × 10−1 s denotes the set of time-
+stamps associated with the collected, HDM-based, solution snapshots.
+
+5.1. High-dimensional CFD model
+
+    The slant angle is ﬁxed at 20◦ , the free-stream velocity is set to v ∞ = 60 m/s, and the free-stream angle of attack is
+set to 0◦ . In this case, the Reynolds number based on the body length as the length of reference is Re = 4.29 × 106 . The
+symmetry of the body with respect to the plane y = 0 m is accounted for: therefore, the computational ﬂuid domain is
+deﬁned as a rectangular parallelepiped aligned on one end with the plane of symmetry. It is discretized by a body-ﬁtted
+unstructured mesh with 17,017,090 tetrahedra and 2,890,434 vertices with de = 6 unknowns per vertex, which leads to a
+CFD HDM of dimension N = 17, 342, 604. Air is modeled as a perfect gas, adiabatic boundary conditions are applied to the
+wall boundary of the computational ﬂuid domain, and the DES model is equipped with Reichardt’s law of the wall. The
+simulation time-interval is set to [0, 2 × 10−1 ] s and time-discretization is performed using the second-order three-point
+backwards difference scheme with the ﬁxed dimensional time-step t = 8 × 10−5 s.
+    Using 10 nodes of the aforementioned Linux cluster and thus a total number of 240 cores, the HDM-based simulation
+requires 15.1 h wall clock time, which corresponds to 3.624 × 103 h CPU time. It predicts a time-averaged drag coeﬃcient
+c D = 0.262, where averaging is performed over the time-subinterval [5 × 10−2 , 2 × 10−1 ] s and t = 5 × 10−2 s corresponds
+to the time-instance after which all transient effects of the simulation have vanished. For reference, the experimental value
+                                                             exp
+of the time-averaged drag coeﬃcient reported in [35] is c D = 0.255. Therefore for this QoI, the HDM is predictive with a
+relative error of 2.75%.
+
+5.2. Nonlinear LSPG reduced-order models
+
+    For the purpose of PMOR, N s = 1, 251 solution snapshots are collected during the HDM-based simulation – speciﬁcally,
+at every other time-step of the simulation. Using these snapshots, a PROM and a QPROM are constructed as described in
+Section 2.1 and Section 3.2, respectively.
+    In the case of a PROM, the dimension n of the ROB is determined using the singular value energy threshold εS = 10−4
+(see (4)) – or equivalently, 1 − εS = 99.99% – which results in the relatively large value of n = 627.
+    In the case of an HQPROM, √ n is determined using
+                                                        the heuristic approach presented in Section 3.4. In this case, item I3
+in that section leads to nqua =    9 + 8 × 627 − 3 /2 ≈ 34. Next, setting in item I4 ζ = 0.15 to account for vulnerability to
+overregularization leads to nqua = (1 + 0.15)nqua ≈ 39. Then, applying (29) to satisfy the constraints recalled in item I1 gives
+                √                                  
+n = min 39,           1 + 8 × 1, 251 − 1 /2 = min (39, 44) = 39. Applying GCV with ω = 0.1 yields α /σQ,1 = 2.8 × 10−5 , where
+α is reported as a multiplier of the highest singular value of Q (see (28)) to highlight the strength of the regularization.
+
+5.3. Nonlinear LSPG hyperreduced reduced-order models and accuracy results
+
+    Next, ECSW is conﬁgured with the parallel variant of the NNLS algorithm of Lawson and Hanson [48] described in [38] to
+solve the convex optimization problem (16) equipped with the early termination criterion (17) and τ = 10−2 . Its application
+to the CFD mesh described in Section 5.1 produces for each ROB underlying the construction of the PROM or QPROM the
+reduced mesh needed for building the HPROM or HQPROM, respectively. The statistics of both reduced meshes computed
+using all 240 cores are summarized in Table 1 below. In this table, the reader can observe that using the same value of the
+training tolerance τ , ECSW produces an order of magnitude smaller reduced mesh when training is performed in the context
+of a QPROM, than when it is performed in that of a PROM. This result is consistent with the expectation set in Section 4.2,
+based on the fact that the number of cubature points required for approximating a d-dimensional integral function with
+p cubature points along each dimension grows as pd (here, n plays the role of d). Speciﬁcally, the estimator (35) predicts
+
+                                                                 14
+J. Barnett and C. Farhat                                                                              Journal of Computational Physics 464 (2022) 111348
+
+
+Table 1
+Application of ECSW conﬁgured with the parallel NNLS algorithm and τ = 10−2 to the reduction on 240 cores of the CFD mesh containing N e = 2, 890, 434
+vertices: case of a traditional PROM; and case of a quadratic PROM.
+
+  Computational model                 α /σQ,1                   n                  ne                  ne / N e (%)              NNLS solve time (h)
+  PROM → HPROM                        –                         627                7,389               0.26                      7.94
+  QPROM → HQPROM                      2.8 × 10−5                39                 544                 0.019                     0.0306
+
+
+
+
+Fig. 1. Ahmed body turbulent wake ﬂow problem – Iso-vorticity contours colored by the local Mach number and computed at t = 2 × 10−1 s by postpro-
+cessing the solutions obtained using: (a) the HDM; (b) the HPROM (n = 627); and (c) the HQPROM (n = 39).
+
+
+in this case a reduction factor of 15.4 for the size of the reduced mesh – that is, a little above the achieved factor of
+13.6 that can be deduced from the results reported in Table 1. The overprediction is to be expected considering that for a
+ﬁxed dimension of the PROM, ECSW tends to sample more elements in the case of a quadratic approximation manifold and
+therefore does not strictly satisfy the assumption of a constant ratio ne /n.
+   Note also that ECSW constructs the reduced mesh for the HQPROM in 1.84 mn – that is, 259 times faster than for the
+HPROM, underscoring a ﬁrst computational advantage of the quadratic approximation manifold proposed in this paper.
+   Then, the ﬂow simulation is repeated twice on 8 cores of a single node of the same Linux cluster: once using the HPROM;
+and once using the HQPROM.
+   Fig. 1 visualizes the iso-vorticity contours of the ﬂow computed at t = 2 × 10−1 s (the end of the simulation time-interval)
+by all three considered computational models. It shows that the three computed ﬁelds are largely indistinguishable.
+
+                                                                         15
+J. Barnett and C. Farhat                                                                            Journal of Computational Physics 464 (2022) 111348
+
+
+
+
+Fig. 2. Ahmed body turbulent wake ﬂow problem – Time-histories of the lift (a) and drag (b) coeﬃcients predicted using: the HDM; the HPROM; and the
+HQPROM.
+
+
+
+Table 2
+Ahmed body turbulent wake ﬂow problem – Relative errors associated with the predictions of the considered QoIs delivered by the HPROM and HQPROM.
+
+  Computational model             α /σQ,1               n               REc D (%)            REc L (%)             RE v x (%)             RE v z (%)
+  HPROM                           –                     627             0.24                 0.77                  0.83                   3.95
+  HQPROM                          2.8 × 10−5            39              0.10                 0.71                  0.54                   2.66
+
+
+
+
+   Whereas Fig. 1 focuses on a spatio-temporal QoI, each of Fig. 2 and Fig. 3 focuses on two scalar but time-dependent
+QoIs: the time-histories of the lift and drag coeﬃcients (Fig. 2), which are integral quantities; and those of the x- and
+z-components of the ﬂow velocity at a probe located along the wake of the ﬂow, normalized by the magnitude of the
+free-stream velocity v ∞ (Fig. 3), which are local QoIs (note that the x direction is in this case the main direction of the
+ﬂow). In both ﬁgures, the reader can observe that each of the HPROM and HQPROM delivers an excellent accuracy. This
+conclusion is supported by the computed relative errors reported in Table 2, which also reveal that strictly speaking, the
+HQPROM delivers for the considered QoIs slightly more accurate results than the HPROM.
+
+                                                                        16
+J. Barnett and C. Farhat                                                                              Journal of Computational Physics 464 (2022) 111348
+
+
+
+
+Fig. 3. Ahmed body turbulent wake ﬂow problem – Time-histories of v x / v ∞ (a) and v z / v ∞ (b) predicted using: the HDM; the HPROM; and the HQPROM.
+
+
+
+5.4. Performance results
+
+   Table 3 reports for each of the constructed HPROM and HQPROM the wall clock timings on 240 cores of the Linux cluster
+associated with the computation of the ROB V, that of the matrix H (using Algorithm 1 with ω = 0.1 and ζ = 0.15) in the
+case of the HQPROM, and the entire oﬄine computations. The results reported in this table show that:
+
+  • The cost associated with the computation of the ROB V is almost identical in both cases: this is expected since the two
+    ROBs share the same snapshot matrix and its SVD, and differ only in the truncation of the singular values and therefore
+    in size.
+  • In the case of the HQPROM, the cost associated with the computation of the matrix H is smaller than that associated
+    with the computation of the ROB V. As anticipated in Section 3.2, this is largely due to the embarrassingly parallel
+    method for computing H which, for this representative application, scales better on 240 cores than any parallel SVD
+    applied to the computation of V. It is noted that strictly speaking, the performance of Algorithm 1 depends on the
+    inputted value of ω (see Algorithm 1). Everything else being equal, the upper bound of the computational cost of this
+    algorithm is reached for ω = 1 (as in this case the largest number nsmp of trial values of α is explored by GCV), which
+
+                                                                         17
+J. Barnett and C. Farhat                                                                            Journal of Computational Physics 464 (2022) 111348
+
+
+Table 3
+Ahmed body turbulent wake ﬂow problem – oﬄine wall clock timings on 240 cores of a Linux cluster.
+
+  Computational            α /σQ,1                n               Wall clock time (s)           Wall clock time (s)             Wall clock time (s)
+  model                                                           (V)                           (H)                             (total oﬄine)
+  HPROM                    –                      627             1.01 × 103                    –                               3.25 × 104
+  HQPROM                   2.8 × 10−5             39              1.02 × 103                    5.75 × 102                      6.23 × 103
+
+
+
+
+Table 4
+Ahmed body turbulent wake ﬂow problem – online timings and speed-up factors.
+
+  Computational model             α /σQ,1               n              Wall clock time (s)           Speed-up factor               Speed-up factor
+  (number of cores)                                                                                  (wall clock time)             (CPU time)
+  HDM (240)                       –                     –              5.45 × 104                    –                             –
+  HPROM (8)                       –                     627            1.35 × 104                    4.04 × 100                    1.21 × 102
+  HQPROM (8)                      2.8 × 10−5            39             4.15 × 102                    1.31 × 102                    3.94 × 103
+
+
+
+
+    for this application leads to a similar value of α and to the wall clock timing of 7.03 × 102 s. Hence, even in this worst
+    case scenario, computing H for this application is faster than computing the ROB V.
+  • The total oﬄine cost, which, in addition to the costs mentioned above – as applicable – includes the cost of constructing
+    a reduced mesh using ECSW and I/O as well as interprocessor communication as needed, is ﬁve times smaller in the
+    case of the construction of the HQPROM. This is largely due to the much faster computation by ECSW of a reduced
+    mesh in the case of an HQPROM, as explained in Section 4.2 and shown in Table 1.
+
+   Table 4 reports for each constructed reduced-order model its online execution time on 8 cores of the same Linux clus-
+ter and its speed-up factors with respect to the execution time of the HDM given in Section 5.1. Because the HDM-based
+simulation is performed on 240 cores, two speed-up factors are reported for each constructed reduced-order model: one
+measured using wall clock timings; and another one measured using CPU timings. The ﬁrst speed-up factor is most impor-
+tant for time-critical applications. The second one is relevant for resource- as well as time-critical applications. In this table,
+the reader can observe that the HQPROM is more than 32 times faster than the HPROM (while, as shown in Section 5.3,
+delivering similar if not better accuracy). Consequently, while the HPROM delivers a speed-up factor of 4 only for wall clock
+time, the HQPROM delivers a speed-up factor of 131 by this measure. Using the CPU time measure however, the HPROM
+and HQPROM deliver speed-up factors of two orders and three orders of magnitude, respectively.
+
+
+6. Conclusions
+
+
+    Based on the results of its application to the solution of the Ahmed body turbulent wake ﬂow problem using a detached-
+eddy simulation model, whose solution is suﬃciently rich for observing the Kolmogorov barrier without resorting to
+parameterization beyond time, the quadratic approximation manifold proposed in this paper for constructing a quadratic
+projection-based reduced-order model (QPROM) can be characterized as follows. It is a departure from the traditional ap-
+proach for constructing a PROM based on the aﬃne subspace approximation. It delivers a QPROM that, after hyperreduction,
+achieves the same if not better solution accuracy than a traditional hyperreduced PROM (HPROM), using however: an order
+of magnitude smaller dimension; and an order of magnitude smaller reduced mesh for hyperreduction approximations. For
+the same training tolerance, the energy-conserving sampling and weighting (ECSW) hyperreduction method computes a
+reduced mesh for a QPROM two orders of magnitude faster than for a traditional PROM. For this reason, for this application
+and a ﬁxed level of accuracy, the total oﬄine computational cost associated with the construction of a hyperreduced QPROM
+(HQPROM) is ﬁve times smaller than that associated with the construction of a traditional HPROM, which greatly enhances
+the practicality of the proposed quadratic approximation approach. Most importantly, for the same level of accuracy, the
+HQPROM performs all online computations more than an order of magnitude faster than the HPROM. All these results
+demonstrate the potential of HQPROMs for mitigating the Kolmogorov barrier to model reduction for realistic, nonlinear,
+convection-dominated transport problems.
+    In principle, the quadratic manifold approximation proposed in this paper is extendible to a piece-wise quadratic formu-
+lation using the method of most-appropriate local right ROBs described in [27] – which by itself, is another approach for
+mitigating the Kolmogorov barrier to model reduction that was shown in [7,19] to be successful in three dimensions for
+realistic, three-dimensional, nonlinear, convection-dominated turbulent ﬂow problems. Hence, one may reasonably expect a
+piece-wise quadratic manifold approximation to be an even more effective approach for addressing the Kolmogorov barrier
+for nonlinear model reduction. The development of such an approximation is an on-going work that the authors hope to
+report on soon, separately.
+
+                                                                        18
+J. Barnett and C. Farhat                                                                                  Journal of Computational Physics 464 (2022) 111348
+
+
+CRediT authorship contribution statement
+
+   Joshua Barnett: Conceptualization, Formal analysis, Investigation, Methodology, Software, Validation, Visualization, Writ-
+ing – original draft. Charbel Farhat: Conceptualization, Formal analysis, Funding acquisition, Resources, Supervision, Writing
+– review & editing.
+
+Declaration of competing interest
+
+   The authors declare that they have no known competing ﬁnancial interests or personal relationships that could have
+appeared to inﬂuence the work reported in this paper.
+
+Acknowledgements
+
+   The authors acknowledge the support by the Air Force Oﬃce of Scientiﬁc Research under Grant FA9550-20-1-0358 and
+Grant FA9550-22-1-0004.
+
+References
+
+ [1] Bart Besselink, Umut Tabak, Agnieszka Lutowska, Nathan Van de Wouw, H. Nijmeijer, Daniel J. Rixen, M.E. Hochstenbach, W.H.A. Schilders, A com-
+     parison of model reduction techniques from structural dynamics, numerical mathematics and systems and control, J. Sound Vib. 332 (19) (2013)
+     4403–4422.
+ [2] Charbel Farhat, Philip Avery, Todd Chapman, Julien Cortial, Dimensional reduction of nonlinear ﬁnite element dynamic models with ﬁnite rotations
+     and energy-based mesh sampling and weighting for computational eﬃciency, Int. J. Numer. Methods Eng. 98 (9) (2014) 625–662.
+ [3] J.A. Hernández, Javier Oliver, Alfredo Edmundo Huespe, M.A. Caicedo, J.C. Cante, High-performance model reduction techniques in computational
+     multiscale homogenization, Comput. Methods Appl. Mech. Eng. 276 (2014) 149–189.
+ [4] Mohammadreza Ghasemi, Yanfang Yang, Eduardo Gildin, Yalchin Efendiev, Victor Calo, Fast multiscale reservoir simulations using pod-deim model
+     reduction, in: SPE Reservoir Simulation Symposium, OnePetro, 2015.
+ [5] Mario Ohlberger, Stephan Rave, Felix Schindler, Model reduction for multiscale lithium-ion battery simulation, in: Numerical Mathematics and Ad-
+     vanced Applications ENUMATH 2015, Springer, 2016, pp. 317–331.
+ [6] Matthew J. Zahr, Philip Avery, Charbel Farhat, A multilevel projection-based model order reduction framework for nonlinear dynamic multiscale prob-
+     lems in structural and solid mechanics, Int. J. Numer. Methods Eng. 112 (8) (2017) 855–881.
+ [7] Kyle Washabaugh, David Amsallem, Matthew Zahr, Charbel Farhat, Nonlinear model reduction for cfd problems using local reduced-order bases, in:
+     42nd AIAA Fluid Dynamics Conference and Exhibit, 2012, p. 2686.
+ [8] Andrew R. Crowell, Jack J. McNamara, Model reduction of computational aerothermodynamics for hypersonic aerothermoelasticity, AIAA J. 50 (1) (2012)
+     74–84.
+ [9] Kevin Carlberg, Charbel Farhat, Julien Cortial, David Amsallem, The gnat method for nonlinear model reduction: effective implementation and applica-
+     tion to computational ﬂuid dynamics and turbulent ﬂows, J. Comput. Phys. 242 (2013) 623–647.
+[10] Christian Soize, Charbel Farhat, A nonparametric probabilistic approach for quantifying uncertainties in low-dimensional and high-dimensional nonlin-
+     ear models, Int. J. Numer. Methods Eng. 109 (6) (2017) 837–888.
+[11] Yongsheng Ou, Eugenio Schuster, Model predictive control of parabolic pde systems with Dirichlet boundary conditions via Galerkin model reduction,
+     in: 2009 American Control Conference, IEEE, 2009, pp. 1–7.
+[12] Gil Ho Yoon, Structural topology optimization for frequency response problem using model reduction schemes, Comput. Methods Appl. Mech. Eng.
+     199 (25–28) (2010) 1744–1763.
+[13] Gabriele Boncoraglio, Charbel Farhat, Charbel Bou-Mosleh, Model reduction framework with a new take on active subspaces for optimization problems
+     with linearized ﬂuid-structure interaction constraints, Int. J. Numer. Methods Eng. 122 (19) (2021) 5450–5481.
+[14] Lawrence Sirovich, Turbulence and the dynamics of coherent structures. I. Coherent structures, Q. Appl. Math. 45 (3) (1987) 561–571.
+[15] Sebastian Grimberg, Charbel Farhat, Noah Youkilis, On the stability of projection-based model order reduction for convection-dominated laminar and
+     turbulent ﬂows, J. Comput. Phys. 419 (2020) 109681.
+[16] Athanasios C. Antoulas, Danny C. Sorensen, Serkan Gugercin, A survey of model reduction methods for large-scale systems, Technical report, 2000.
+[17] David Amsallem, Charbel Farhat, Stabilization of projection-based reduced-order models, Int. J. Numer. Methods Eng. 91 (4) (2012) 358–377.
+[18] Kevin Carlberg, Charbel Bou-Mosleh, Charbel Farhat, Eﬃcient non-linear model reduction via a least-squares Petrov–Galerkin projection and compres-
+     sive tensor approximations, Int. J. Numer. Methods Eng. 86 (2) (2011) 155–181.
+[19] Sebastian Grimberg, Charbel Farhat, Radek Tezaur, Charbel Bou-Mosleh, Mesh sampling and weighting for the hyperreduction of nonlinear Petrov–
+     Galerkin reduced-order models with local reduced-order bases, Int. J. Numer. Methods Eng. 122 (7) (2021) 1846–1874.
+[20] Maxime Barrault, Yvon Maday, Ngoc Cuong Nguyen, Anthony T. Patera, An ‘empirical interpolation’ method: application to eﬃcient reduced-basis
+     discretization of partial differential equations, C. R. Math. 339 (9) (2004) 667–672.
+[21] Saifon Chaturantabut, Danny C. Sorensen, Nonlinear model reduction via discrete empirical interpolation, SIAM J. Sci. Comput. 32 (5) (2010) 2737–2764.
+[22] Harbir Antil, Matthias Heinkenschloss, Danny C. Sorensen, Application of the discrete empirical interpolation method to reduced order modeling of
+     nonlinear and parametric systems, in: Reduced Order Methods for Modeling and Computational Reduction, Springer, 2014, pp. 101–136.
+[23] Jan S. Hesthaven, Gianluigi Rozza, Benjamin Stamm, The empirical interpolation method, in: Certiﬁed Reduced Basis Methods for Parametrized Partial
+     Differential Equations, Springer, 2016, pp. 67–85.
+[24] Charbel Farhat, Radek Tezaur, Todd Chapman, Philip Avery, Christian Soize, Feasible probabilistic learning method for model-form uncertainty quantiﬁ-
+     cation in vibration analysis, AIAA J. 57 (11) (2019) 4978–4991.
+[25] A. Pinkus, n-Widths in Approximation Theory, A Series of Modern Surveys in Mathematics, vol. 7, Springer, Berlin, 1985.
+[26] Constantin Greif, Karsten Urban, Decay of the Kolmogorov n-width for wave problems, Appl. Math. Lett. 96 (2019) 216–222.
+[27] David Amsallem, Matthew J. Zahr, Charbel Farhat, Nonlinear model order reduction based on local reduced-order bases, Int. J. Numer. Methods Eng.
+     92 (10) (2012) 891–916.
+[28] Kookjin Lee, Kevin T. Carlberg, Model reduction of dynamical systems on nonlinear manifolds using deep convolutional autoencoders, J. Comput. Phys.
+     404 (2020) 108973.
+[29] Gerrit Welper, Interpolation of functions with parameter dependent jumps by transformed snapshots, SIAM J. Sci. Comput. 39 (4) (2017) A1225–A1250.
+
+
+                                                                            19
+J. Barnett and C. Farhat                                                                                 Journal of Computational Physics 464 (2022) 111348
+
+
+[30] Nicolas Cagniart, Yvon Maday, Benjamin Stamm, Model order reduction for problems with large convection effects, in: Contributions to Partial Differ-
+     ential Equations and Applications, Springer, 2019, pp. 131–150.
+[31] Felix Black, Philipp Schulze, Benjamin Unger, Projection-based model reduction with dynamically transformed modes, ESAIM: Math. Model. Numer.
+     Anal. 54 (6) (2020) 2011–2043.
+[32] Melissa B. Rivers, Ashley Dittberner, Experimental investigations of the nasa common research model, J. Aircr. 51 (4) (2014) 1183–1193.
+[33] Shobhit Jain, Paolo Tiso, Johannes B. Rutzmoser, Daniel J. Rixen, A quadratic manifold for model order reduction of nonlinear structural dynamics,
+     Comput. Struct. 188 (2017) 80–94.
+[34] Dan Xie, Min Xu, Earl H. Dowell, Proper orthogonal decomposition reduced-order model for nonlinear aeroelastic oscillations, AIAA J. 52 (2) (2014)
+     229–241.
+[35] Syed R. Ahmed, G. Ramm, G. Faltin, Some salient features of the time-averaged ground vehicle wake, SAE Transact. (1984) 473–503.
+[36] David Ryckelynck, A priori hyperreduction method: an adaptive approach, J. Comput. Phys. 202 (1) (2005) 346–366.
+[37] Charbel Farhat, Todd Chapman, Philip Avery, Structure-preserving, stability, and accuracy properties of the energy-conserving sampling and weighting
+     method for the hyper reduction of nonlinear ﬁnite element dynamic models, Int. J. Numer. Methods Eng. 102 (5) (2015) 1077–1110.
+[38] Todd Chapman, Philip Avery, Pat Collins, Charbel Farhat, Accelerated mesh sampling for the hyper reduction of nonlinear computational models, Int. J.
+     Numer. Methods Eng. 109 (12) (2017) 1623–1654.
+[39] Benjamin Unger, Serkan Gugercin, Kolmogorov n-widths for linear dynamical systems, Adv. Comput. Math. 45 (5) (2019) 2273–2286.
+[40] Annalisa Buffa, Yvon Maday, Anthony T. Patera, Christophe Prud’homme, Gabriel Turinici, A priori convergence of the greedy algorithm for the
+     parametrized reduced basis method, ESAIM: Math. Model. Numer. Anal. 46 (3) (2012) 595–603.
+[41] Shane A. McQuarrie, Cheng Huang, Karen E. Willcox, Data-driven reduced-order models via regularised operator inference for a single-injector com-
+     bustion process, J. R. Soc. N. Z. 51 (2) (2021) 194–211.
+[42] Per Christian Hansen, Rank-Deﬁcient and Discrete Ill-Posed Problems: Numerical Aspects of Linear Inversion, SIAM, 1998.
+[43] Gene H. Golub, Michael Heath, Grace Wahba, Generalized cross-validation as a method for choosing a good ridge parameter, Technometrics 21 (2)
+     (1979) 215–223.
+[44] Arthur Paul-Dubois-Taine, David Amsallem, An adaptive and eﬃcient greedy procedure for the optimal training of parametric reduced-order models,
+     Int. J. Numer. Methods Eng. 102 (5) (2015) 1262–1292.
+[45] Gene H. Golub, Charles F. Van Loan, Matrix Computations, 3rd edition, 1996.
+[46] Eli Turkel, Review of preconditioning methods for ﬂuid dynamics, Appl. Numer. Math. 12 (1–3) (1993) 257–284.
+[47] M. Strelets, Detached Eddy simulation of massively separated ﬂows, in: 39th Aerospace Sciences Meeting and Exhibit, 2001, p. 879.
+[48] Charles L. Lawson, Richard J. Hanson, Solving Least Squares Problems, SIAM, 1995.
+
+
+
+
+                                                                           20
+

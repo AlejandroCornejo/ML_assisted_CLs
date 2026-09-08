@@ -1,0 +1,1469 @@
+                                              Benchmarks for physics-informed data-driven hyperelasticity
+                                              Vahidullah Tac1 , Kevin Linka2 , Francisco Sahli-Costabal3 , Ellen Kuhl2 and Adrian
+                                                                               Buganza Tepole1,4
+                                                        1
+                                                        School of Mechanical Engineering, Purdue University, West Lafayette, USA
+                                                        2
+                                                        Department of Mechanical Engineering, Stanford University, Stanford, USA
+                                             3
+                                               Department of Mechanical Engineering, Pontifica Universidad Catolica de Chile, Santiago, Chile
+                                                   4
+                                                     Weldon School of Biomedical Engineering, Purdue University, West Lafayette, USA
+arXiv:2301.10714v1 [cs.CE] 20 Jan 2023
+
+
+
+
+                                         Abstract
+                                         Data-driven methods have changed the way we understand and model materials. However,
+                                         while providing unmatched flexibility, these methods have limitations such as reduced capac-
+                                         ity to extrapolate, overfitting, and violation of physics constraints. Recent developments have
+                                         led to modeling frameworks that automatically satisfy these requirements. Here we review,
+                                         extend, and compare three promising data-driven methods: Constitutive Artificial Neural
+                                         Networks (CANN), Input Convex Neural Networks (ICNN), and Neural Ordinary Differen-
+                                         tial Equations (NODE). Our formulation expands the strain energy potentials in terms of
+                                         sums of convex non-decreasing functions of invariants and linear combinations of these. The
+                                         expansion of the energy is shared across all three methods and guarantees the automatic sat-
+                                         isfaction of objectivity and polyconvexity, essential within the context of hyperelasticity. To
+                                         benchmark the methods, we train them against rubber and skin stress-strain data. All three
+                                         approaches capture the data almost perfectly, without overfitting, and have some capacity
+                                         to extrapolate. Interestingly, the methods find different energy functions even though the
+                                         prediction on the stress data is nearly identical. The most notable differences are observed
+                                         in the second derivatives, which could impact performance of numerical solvers. On the rich
+                                         set of data used in these benchmarks, the models show the anticipated trade-off between
+                                         number of parameters and accuracy. Overall, CANN, ICNN and NODE retain the flexibility
+                                         and accuracy of other data-driven methods without compromising on the physics. These
+                                         methods are thus ideal options to model arbitrary hyperelastic material behavior.
+                                         Keywords: Physics-informed Machine Learning, Polyconvexity, Nonlinear mechanics,
+                                         Neural networks, Constitutive models
+
+
+                                         Introduction
+                                             The frontier of biomedical engineering applications such as personalized surgery requires
+                                         accurate mathematical models of material-specific behavior [1]. Similarly, human-engineered
+                                         systems based on soft materials also necessitate predictive simulations with high precision
+                                         [2]. The materials for these applications are extremely nonlinear and undergo large deforma-
+                                         tions, e.g. rubber and skin. Yet, despite decades of effort developing constitutive equations
+                                         for these materials, there still isn’t a definitive model for them due to inherent limitations
+                                         of expert-constructed models [3]. Traditional material modeling restricts the prediction of
+
+                                         Preprint submitted to Arxiv                                                            January 26, 2023
+the mechanical response to a narrow set of functional terms, making it nearly impossible to
+fully capture the data. On the other hand, data-driven methods such as neural networks are
+universal approximators that can fit mechanical behavior data of complex response almost
+perfectly [4, 5]. Data-driven methods, on the other hand, have their own drawbacks. Most
+importantly, considering the response of rubbers and many biological materials as hyper-
+elastic, the mechanical response is fully specified by a scalar potential that has to satisfy
+the conditions of objectivity and polyconvexity [6]. These physics constraints are crucial
+for enabling robust large-scale simulations, extrapolate from data, and avoid over-fitting [7].
+Yet, off-the-shelf machine learning tools cannot a priori satisfy these conditions. We review
+and refine three very recent developments in physics-informed machine learning that aim at
+embedding the objectivity and polyconvexity constraints as part of the formulation such that
+they can be satisfied a priori. The methods we consider are three: Constitutive Artificial
+Neural Netwokrs (CANN) [8], Neural Ordinary Differential Equations (NODE) [9], and Input
+Convex Neural Networks (ICNN) [10, 11].
+    Characterizing nonlinear materials like rubber and skin involves testing them under a wide
+set of deformation modes such as uniaxial, biaxial, shear, and sometimes triaxial deformation.
+The resulting data collected from these tests are stress-strain curves. The direct approach to
+leverage machine learning on these data is to directly map between strains and stresses [12].
+One problem with this strategy is that objectivity is not preserved. One way of fixing this
+issue has been to augment the data with superimposed arbitrary rotations [13, 10]. This solu-
+tion does not fully guarantee objectivity, although, as the space of rotations is sampled more
+and more thoroughly the constraint is more closely satisfied. For closed-form constitutive
+models, fulfilling objectivity has not been a major hurdle. Experts develop strain energies
+in terms of invariants of the deformation to satisfy objectivity by default [14, 15]. Machine
+learning methods along these lines have also been proposed [16, 17, 18, 19]. The challenge of
+imposing polyconvexity in data-driven methods is more difficult to address. Polyconvexity of
+the strain energy (with additional growth conditions) is a sufficient condition for the existence
+of solutions for boundary value problems in hyperelasticity [20]. Polyconvexity is a flexible
+framework, compatible with unstable material behavior like buckling. This is in contrast with
+more restrictive notions like convexity of the strain energy with respect to the deformation
+gradient, which can violate objectivity [21]. Laxer conditions such as rank-one convexity are
+weaker than polyconvexity and not sufficient for the existence of global minimizers of the
+strain energy [22]. Many expert models are based on the notion of polyconvexity (but there
+are also many examples of popular models which might violate this condition [23]). Different
+notions of convexity have been considered within data-driven frameworks, but the majority
+have opted for adding the constraint as a penalty through the loss function [17].
+    CANNs are a new method for automated model discovery that borrow their architec-
+ture from traditional feed-forward neural networks but use activation functions that preserve
+convexity. They also prune the connections between the inputs and subsequent nodes such
+that the final result is a polyconvex strain energy [8]. ICNNs also build convex functions of
+invariant inputs using specific activation functions and non-negative weights [24, 25]. NODEs
+tackle the problem differently by leveraging the monotonicity of trajectories of ordinary differ-
+ential equations (ODEs) in a single variable to interpolate monotic functions associated with
+derivatives of a strain energy rather than the energy directly [9]. Unlike other approaches,
+CANNs, ICNNs, and NODEs have physics at the core of the formulation to generate consti-
+
+                                               2
+tutive models that satisfy objectivity and polyconvexity a priori. Yet, there is a gap in our
+understanding of how these different methods perform on benchmark datasets, and a general
+need to benchmark machine learning methods in computational mechanics [26, 27].
+    Rubber modeling was the center of attention for large deformation hyperelasticity in
+the past century, with tens of constitutive models proposed [28]. Recently, advances in
+soft robotics has renewed the interest in developing improved high-fidelity simulations of
+soft robots made of rubbers and other elastomers. For example, applications that aim at
+produce complex motion such as tentacle grippers, walking soft robots, and rehabilitation
+soft exoskeletons [29], all require precise modeling of the material response.
+    Soft tissues made of collagen have remarkable mechanical properties. They show exponential-
+like stress-strain response and anisotropy. These nonlinearities allow tissues like skin to
+protect us against environmental harm while allowing interaction and movement [30]. The
+development of constitutive models for soft tissues, and skin in particular, dates to the semi-
+nal work by Lanir and Fung [31, 32], and has resulted in a long list of strain energy functions
+proposed over the past five decades [3]. New models are being proposed even today [33, 34].
+Despite the rich literature on skin and soft tissue modeling, the complexity of the material re-
+sponse in these materials has prevented the emergence of a categorically superior constitutive
+model.
+    The manuscript is organized as follows. In the Methods section we first review the basic
+equations that describe the mechanical behavior of hyperelastic materials with emphasis on
+strain energy function expansions that satisfy objectivity and polyconvexity requirements.
+Then, we show how CANN, ICNN and NODE architectures can be used to create material
+models within the considered families of elastic potentials. After training the three methods
+to datasets on rubber and skin, the Results section explores in detail the ability of the models
+to interpolate and extrapolate, their robustness with respect to model initialization, the
+regularity of second derivatives of the energy, and the trade-off between number of parameters
+and model accuracy. We finally discuss the results in the context of other data-driven efforts
+for computational mechanics.
+
+Methods
+Polyconvex strain energy density functions
+    Consider a motion 𝜑, the gradient F = ∇𝜑 contains all the local information about the
+deformation. Within the framework of hyperelasticity, the strain energy function 𝜓(F) fully
+defines the material response. Polyconvexity implies that the energy 𝜓(F) can be expressed as
+                                            ˆ
+a convex function in the extended domain 𝜓(F,    cof F, det F). Intuitively, this extended domain
+covers different modes of deformation: F measures changes in length, cof F changes in area,
+and 𝐽 = det F changes in volume. It is difficult to work directly with the deformation gradient
+and its cofactors as inputs to the strain energy. Instead, the right Cauchy-Green deformation
+tensor C = F> F is used because it does not contain information about superimposed rigid
+
+
+
+
+                                               3
+        (a) Constitutive Artificial Neural Networks                               (b) Neural Ordinary Differential Equations
+
+                                        (◦)                                                            Neural ODE 1
+                           (◦) 1
+                                     exp(◦)                                                𝑥 1 | 𝜔=0                  𝑥1 | 𝜔=1
+               𝐼1 − 3                                                             𝐼1 − 3                                         𝜕𝜓/𝜕𝐼1
+
+
+
+
+                                                                                                       𝑥1
+                                        (◦)
+                           (◦) 2
+                                     exp(◦)                                                                  𝜔
+    F                                                𝜓(F)                F                                                                P(F)
+                                        (◦)                                                            Neural ODE 2
+                           (◦) 1
+                                     exp(◦)          P(F)                                  𝑥 2 | 𝜔=0                  𝑥2 | 𝜔=1
+               𝐼2 − 3                                                             𝐼2 − 3                                         𝜕𝜓/𝜕𝐼2
+
+
+
+
+                                                                                                       𝑥2
+                 ..        (◦) 2
+                                        (◦)
+                                                                                    ..
+                            ..       exp(◦)
+                                        ..
+                                                                                                             𝜔
+                                                                                                             ..
+                                                     (c) Input Convex Neural Networks
+
+
+                                                                                     softplus(◦)
+                                                            softplus(◦)
+                                                                                     softplus(◦)
+                                              𝐼1 − 3
+                                                                                     softplus(◦)
+                                                            softplus(◦)
+                                                                             ..      softplus(◦)
+                                    F                                                                       𝜓(F)
+                                                                                     softplus(◦)
+                                                            softplus(◦)
+                                                                                     softplus(◦)            P(F)
+                                              𝐼2 − 3
+                                                ..          softplus(◦)
+                                                                                     softplus(◦)
+
+                                                                ..                   softplus(◦)
+                                                                                           ..
+
+Figure 1: Diagram depicting the training and inference processes of the deep neural network material model.
+
+
+body rotations. Furthermore, objectivity is enforced by working with the invariants
+
+                                          𝐼1 = tr C = C : I
+                                               1                   
+                                          𝐼2 =     (tr C) 2 − tr C2
+                                               2                                                                                          (1)
+                                          𝐼3 = 𝐽 2 = det C
+                                          𝐼4𝑎 = C : a0 ⊗ a0 , 𝐼4𝑠 = C : s0 ⊗ s0 .
+     The last two invariants in eq.(1) are only relevant for transversely anisotropic materials
+and depend on the deformation of two material unit vectors a0 , s0 . For soft tissues, the vectors
+a0 , s0 represent collagen fiber bundle orientations. Furthermore, for nearly incompressible
+materials such as rubbers and skin, the split between volumetric and isochoric parts is often
+used. The isochoric part of the deformation is F̄ = 𝐽 −1/3 F, with the corresponding deformation
+
+
+
+
+                                                                     4
+tensor C̄ = F̄> F̄. The isochoric invariants follow
+
+                                    𝐼¯1 = 𝐽 −2/3 𝐼1
+                                    𝐼¯2 = 𝐽 −4/3 𝐼2                                             (2)
+                                               −2/3                    −2/3
+                                    𝐼¯4𝑎 = 𝐽          𝐼4𝑎 , 𝐼¯4𝑠 = 𝐽          𝐼4𝑠 .
+   Based on the split between the isochoric and volumetric parts of the deformation, the
+energy can be additively decomposed into
+
+                                  𝜓 = 𝜓iso ( 𝐼¯1 , 𝐼¯2 , 𝐼¯4𝑎 , 𝐼¯4𝑠 ) + 𝜓vol (𝐽) .             (3)
+      For polyconvexity to be satisfied in this additive split, one requirement is convexity of
+𝜓vol and growth conditions 𝜓vol → ∞ as 𝐽 → 0 or 𝐽 → ∞. In the case of fully incompressible
+materials, the volumetric part of the strain energy is replaced by 𝑝(𝐽 − 1), where 𝑝 is a
+Lagrange multiplier field that enforces 𝐽 = 1. In simple loading cases such as uniaxial or
+biaxial deformation, 𝑝 can be directly determined from boundary conditions. In addition,
+for incompressible behavior the isochoric part of the energy becomes a function of the original
+invariants defined in eq. (1).
+      To ensure polyconvexity of 𝜓iso , recall that this condition implies a function 𝜓ˆ convex on
+(F, cof F, det F). The invariant 𝐼1 is convex in F, while 𝐼2 is convex in cof F. The anisotropic
+invariants 𝐼4𝑎 , 𝐼4𝑠 are also convex on F. Moreover, the isochoric split preserves polyconvexity
+of 𝐼¯1 , 𝐼¯4𝑎 , 𝐼¯4𝑠 , and a simple scaling with a power of 𝐽 is enough to maintain polyconvexity of
+𝐼¯2 . Thus, a sufficient large family of polyconvex functions has the form
+
+                      𝜓 = 𝜓1 ( 𝐼¯1 ) + 𝜓2 ( 𝐼¯2 ) + 𝜓4𝑎 ( 𝐼¯4𝑎 ) + 𝜓4𝑠 ( 𝐼¯4𝑠 ) + 𝜓𝑣𝑜𝑙 (𝐽) ,    (4)
+    with each of the 𝜓𝑖 a convex non decreasing function of its argument, while, as mentioned
+previously, 𝜓vol has to be convex and grow to infinity appropriately with changes in 𝐽. Again,
+for incompressibility, the last term in (4) is replaced with the Lagrange multiplier constraint,
+and the 𝜓𝑖 terms can be considered as functions of the invariants in eq. (1).
+
+Stress predictions from a strain energy potential
+    Given a strain energy function, the second Piola-Kirchhoff stress follows from the standard
+Coleman-Noll procedure [6],
+                                              𝜕𝜓
+                                                  .S=2                                 (5)
+                                              𝜕C
+   Other stress tensors can be easily obtained with push-forward operations, for instance
+the nominal or first Piola-Kirchhoff stress P = FS, or the Cauchy stress 𝜎 = 𝐽 −1 FSF> ,
+which appear in the strong form of linear momentum balance in the reference or deformed
+configurations respectively. Since the energy is in terms of the invariants, computing the
+
+
+
+
+                                                          5
+stress requires the standard derivatives
+                              𝜕𝐼1
+                                   =I
+                              𝜕C
+                              𝜕𝐼2 1
+                                   = (𝐼1 I − C)
+                              𝜕C 2                                                         (6)
+                              𝜕𝐼3         −1
+                                   = 𝐼3 C
+                              𝜕C
+                              𝜕𝐼4𝑎                 𝜕𝐼4𝑠
+                                    = a0 ⊗ a0 ,         = s0 ⊗ s0 .
+                               𝜕C                   𝜕C
+   The same derivatives as in eq. (6) apply to the the derivatives of the isochoric invariants
+with respect to C̄. However, when using the split into volumetric and isochoric parts, we
+need the projection
+                                                                
+                             𝜕 C̄          −2 /3      1       −1
+                                  =P=𝐽             I− C⊗C           .                      (7)
+                             𝜕C                       3
+   The tensor I in eq.(7) denotes the fourth order identity. Bringing it all together, the
+second Piola-Kirchhoff stress takes the form
+                                     𝜕𝜓    𝜕𝜓
+                              S=2       =2      : P + Svol = S̄ : P + Svol ,                      (8)
+                                     𝜕C    𝜕 C̄
+   with
+                        𝜕𝜓1       𝜕𝜓2 ¯                     𝜕𝜓4𝑎               𝜕𝜓4𝑠
+               S̄ = 2         I+2       ( 𝐼1 I − C̄−1 ) + 2        a0 ⊗ a0 + 2        s0 ⊗ s0 .   (9)
+                        𝜕 𝐼¯1     𝜕 𝐼¯2                     𝜕 𝐼¯4𝑎             𝜕 𝐼¯4𝑠
+    It is possible to extend eq. (4) to capture even a wider class of materials. Convex
+linear combinations of the invariants maintain polyconvexity with respect to F. Therefore,
+in addition to the invariants in eq.(1) or their isochoric counterparts eq.(2), we can consider
+the mixed invariants
+
+                                 𝐾𝑖 𝑗 = 𝛼𝑖 𝑗 𝐼𝑖 + (1 − 𝛼𝑖 𝑗 )𝐼 𝑗 ,                       (10)
+   and the corresponding isochoric versions 𝐾¯𝑖 𝑗 . The family of strain energies considering
+these mixed terms has the following structure
+                               ∑︁              ∑︁
+                          𝜓=      𝜓𝑖 ( 𝐼¯𝑖 ) +    𝜓𝑖 𝑗 ( 𝐾¯𝑖 𝑗 ) + 𝜓𝑣𝑜𝑙 (𝐽) .            (11)
+   The expression for S̄ in this more general case is analogous to eq. (9) but with additional
+terms to account for the 𝜓𝑖 𝑗 contributions.
+
+Uniaxial, pure shear, and biaxial loading
+    For the specific case of isotropic uniaxial deformation of a perfectly incompressible mate-
+rial, the deformation depends on the single stretch 𝜆, and the stress in the direction of the
+applied stretch is
+                                                            
+                                             −2    𝜕𝜓 1 𝜕𝜓
+                                  𝑃 = 2(𝜆 − 𝜆 )       +         .                          (12)
+                                                   𝜕𝐼1 𝜆 𝜕𝐼2
+
+                                                       6
+    For pure shear deformation of a wide but thin specimen, the nominal stress in the direction
+of the applied stretch 𝜆 is
+                                                         
+                                            −3    𝜕𝜓 𝜕𝜓
+                                𝑃 = 2(𝜆 − 𝜆 )        +       .                             (13)
+                                                  𝜕𝐼1 𝜕𝐼2
+    The third loading case of interest for thin incompressible isotropic materials is equibiaxial
+tension defined by the stretch 𝜆. For this loading, the nominal stress in the two principal
+directions of applied stretch is the same and equal to
+                                                               
+                                             −5    𝜕𝜓     2 𝜕𝜓
+                                 𝑃 = 2(𝜆 − 𝜆 )         +𝜆         .                          (14)
+                                                   𝜕𝐼1      𝜕𝐼2
+   Lastly we consider an incompressible transversely anisotropic material under arbitrary
+biaxial loading specified by the two stretches 𝜆 𝑥 , 𝜆 𝑦 . Without loss of generality we set
+a0 = [1, 0, 0], s0 = [0, 1, 0]. The in plane nominal stresses are
+                             𝜕𝜓       𝜕𝜓                   𝜕𝜓
+                        𝑃𝑥𝑥 =    𝜆𝑥 +     (𝐼1𝜆 𝑥 − 𝜆3𝑥 ) +      𝜆 𝑥 − 𝑝𝜆−𝑥 1
+                             𝜕𝐼1      𝜕𝐼2                  𝜕𝐼4𝑎
+                                                                                            (15)
+                             𝜕𝜓       𝜕𝜓                    𝜕𝜓
+                      𝑃 𝑦𝑦 =     𝜆𝑦 +     (𝐼1𝜆 𝑦 − 𝜆3𝑦 ) +      𝜆 𝑦 − 𝑝𝜆−𝑦 1 ,
+                             𝜕𝐼1      𝜕𝐼2                  𝜕𝐼4𝑠
+   with the pressure Lagrange multiplier solved from the plane stress condition
+                                   𝜕𝜓 2 𝜕𝜓
+                                 𝑝=   𝜆 +     (𝐼1𝜆2𝑧 − 𝜆4𝑧 ) ,                              (16)
+                                   𝜕𝐼1 𝑧 𝜕𝐼2
+   and the normal stretch obtained from the incompressibility constraint
+                                                       1
+                                             𝜆𝑧 =           .                               (17)
+                                                     𝜆𝑥 𝜆 𝑦
+
+CANN models
+   To construct convex non-decreasing functions to represent the energy in eq. (11), one
+way is to borrow from the architecture of feed forward neural networks but using only convex
+non-decreasing activation functions on a polynomial expansion. The method is illustrated in
+Fig. 1a. Starting from F, the invariants eq.(1) are computed in a pre-processing step. For
+ease of implementation and to improve the optimization step during model training, consider
+the normalized invariants
+
+                                          𝐼ˆ𝑖 = (𝐼𝑖 − 𝑎𝑖 )/𝑏𝑖                               (18)
+    where 𝑎 1 = 𝑎 2 = 3, 𝑎 4𝑎 = 𝑎 4𝑠 = 1, and 𝑏𝑖 is a normalizing constant such that the range
+of 𝐼ˆ𝑖 is approximately [0, 3]. Note that in the case of full incompressibility as assumed
+from now on, the normalized invariants strictly satisfy 𝐼ˆ𝑖 ≥ 0. For compressible or nearly
+incompressible materials, simply replace 𝐼𝑖 with the isochoric counterpart 𝐼¯𝑖 in eq.(18). For
+the mixed invariants, the normalized version is
+
+                                    𝐾ˆ𝑖 𝑗 = 𝛼𝑖 𝑗 𝐼ˆ𝑖 + (1 − 𝛼𝑖 𝑗 ) 𝐼ˆ𝑗 ,                    (19)
+
+
+                                                     7
+   which also satisfies 𝐾ˆ𝑖 𝑗 ≥ 0 as along as 𝛼𝑖 𝑗 ∈ [0, 1]. For the general case including
+anisotropy, the strain energy can be summarized as
+                        ∑︁                          ∑︁
+             𝜓CANN =        𝜓𝑖,𝑎𝑏              +          𝜓𝑖 𝑗,𝑎𝑏
+                           𝑖,𝑎,𝑏                                    𝑖, 𝑗,𝑎,𝑏,𝑖≠ 𝑗
+                           ∑︁                                           ∑︁                                               (20)
+                       =           𝑔𝑖,𝑎𝑏 𝑓𝑏 (𝑤 𝑖,𝑎𝑏 𝑃𝑎 ( 𝐼ˆ𝑖 )) +                   𝑔𝑖 𝑗,𝑎𝑏 𝑓𝑏 (𝑤 𝑖,𝑎𝑏 𝑃𝑎 ( 𝐾ˆ𝑖 𝑗 )) ,
+                           𝑖,𝑎,𝑏                                    𝑖, 𝑗,𝑎,𝑏,𝑖≠ 𝑗
+
+   where 𝑃𝑎 (𝑥) = 𝑥 𝑎 is a basic polynomial expansion with 𝑎 ∈ {1, 2, 3} in our implementation,
+ 𝑓𝑏 (◦) is the activation function choice in our case either identity 𝑓1 (𝑥) = 𝑥 or exponential
+ 𝑓2 (𝑥) = exp(𝑥) − 1. The notation is the same for the mixed invariants. The weights 𝑔𝑖,𝑎𝑏 ,
+𝑤 𝑖,𝑎𝑏 , 𝑔𝑖 𝑗,𝑎𝑏 , 𝑤 𝑖 𝑗,𝑎𝑏 are the trainable parameters of the model and need to be non-negative to
+maintain the convex non-decreasing output.
+       For the rubber examples below, we only use the two main invariants 𝐼ˆ1 , 𝐼ˆ2 . For the skin
+example we have two ansatz. The simpler model includes contributions from 𝐼ˆ1 , 𝐼ˆ2 , 𝐾ˆ4𝑎 4𝑠 .
+The second option for the skin examples takes inputs 𝐼ˆ1 , 𝐼ˆ2 , 𝐾ˆ1 2 , 𝐾ˆ1 4𝑎 , 𝐾ˆ1 4𝑠 , 𝐾ˆ4𝑎 4𝑠 .
+       Our choice of polynomials and activation functions guarantee the interpolation of convex
+non-decreasing functions of the inputs 𝐼ˆ𝑖 , 𝐾ˆ𝑖 𝑗 in the domain 𝐼ˆ𝑖 , 𝐾ˆ𝑖 𝑗 ≥ 0 provided that only non-
+negative weights are used which is easy to enforce. The non-negative condition on the domain,
+𝐼ˆ𝑖 , 𝐾ˆ𝑖 𝑗 ≥ 0, is trivially satisfied for incompressible materials, and satisfied for compressible or
+nearly incompressible materials if the isochoric invariants are used in eq. (18). Thus, CANNs
+a priori result in polyconvex strain energy functions.
+
+ICNN models
+    This algorithm also relies on building convex functions of the normalized invariants and
+linear combinations of them. Let 𝑋 be the input to the first layer, and Z𝑖−1 the output of
+layer 𝑖 − 1. Then, for layer 𝑖 the output is
+
+                        Z𝑖 = softplus2 (exp(W>
+                                             𝑧,𝑖 )Z𝑖−1 + 𝑋 exp(W𝑥,𝑖 ) + b𝑖 ) ,                                           (21)
+   parameterized by the weights W𝑧,𝑖 , W𝑥,𝑖 and biases b𝑖 . For the first layer we have
+
+                                      Z1 = softplus2 (𝑋 exp(W𝑥,1 ) + b1 ) ,                                              (22)
+   while for the last layer
+
+                                   𝑍𝑛 = exp(W>
+                                             𝑧,𝑛 )Z𝑛−1 + 𝑋 exp(𝑊𝑥,𝑛 ) + b𝑛 .                                             (23)
+    This architecture retains convexity because softplus2 (◦) is a convex non-decreasing func-
+tion evaluated on linear combinations of the original input and the intermediate layer outputs
+using non-negative weights (enforced with the exp(◦) function). Therefore, ICNNs can be
+used to create convex non-decreasing functions of the same normalized invariants 𝐼ˆ𝑖 and nor-
+malized mixed invariants 𝐾ˆ𝑖 𝑗 defined in eqs. (18),(19) for the CANN models. The general
+expansion is
+                                       ∑︁              ∑︁
+                              𝜓ICNN =     𝜓𝑖 ( 𝐼ˆ𝑖 ) +    𝜓𝑖 𝑗 ( 𝐾ˆ𝑖 𝑗 ) .                (24)
+                                                   𝑖                𝑖, 𝑗, 𝑖≠ 𝑗
+
+
+                                                            8
+    Similarly to the CANNs, for the rubber examples using ICNNs we only consider two
+functions 𝜓1 ( 𝐼ˆ1 ), 𝜓2 ( 𝐼ˆ2 ). For the anisotropic examples we have two models. The simpler
+one uses three functions 𝜓1 ( 𝐼ˆ1 ), 𝜓2 ( 𝐼ˆ2 ), 𝜓4𝑎 4𝑠 ( 𝐾ˆ4𝑎 4𝑠 ). The second anisotropic model also
+includes the mixed terms 𝜓1 4𝑎 ( 𝐾ˆ1 4𝑎 ), 𝜓1 4𝑠 ( 𝐾ˆ1 4𝑠 ), 𝜓1 2 ( 𝐾ˆ1 2 ).
+
+NODE models
+    In contrast to the two previous methods, NODEs avoid interpolation of the energy and
+interpolate the derivative functions directly. In the end, the derivatives with respect to the
+invariants are the ones that enter the definition of the stress, see eq. (9). Consider the
+normalized invariant 𝐼ˆ𝑖 , the NODE is a feed-forward neural network with weights W and
+biases b that define the function 𝑓 (◦) of the ODE
+                              𝑑𝑦𝑖 (𝜔)
+                                      = 𝑓 (𝑦𝑖 , 𝜔) , 𝑦𝑖 (0) = 𝐼ˆ𝑖 ,                     (25)
+                                𝑑𝜔
+  where 𝜔 is a pseudo-time auxiliary variable. The output of interest is the solution of the
+ODE at a fixed pseudo-time. In this implementation we choose 𝜔 = 1,
+                                                 𝜕𝜓
+                                                       = 𝑦𝑖 (1) .                                (26)
+                                                 𝜕 𝐼ˆ𝑖
+    Note that the output is directly the derivative of the strain energy. The key observation
+is that trajectories of ODEs do not intersect, thus for two initial conditions 𝑦𝑖(𝑎) (0) ≥ 𝑦𝑖(𝑏) (0),
+the ensuing trajectories continue to satisfy 𝑦𝑖(𝑎) (𝜔) ≥ 𝑦𝑖(𝑏) (𝜔). This implies
+
+                             𝜕𝜓                𝜕𝜓
+                                             ≥                 ⇐⇒ 𝐼ˆ1(𝑎) ≥ 𝐼ˆ1(𝑏) .              (27)
+                               ˆ
+                             𝜕 𝐼𝑖 𝐼ˆ = 𝐼ˆ(𝑎)     ˆ
+                                               𝜕 𝐼𝑖 𝐼ˆ = 𝐼ˆ(𝑏)
+                                  1   1              1   1
+
+   The monotonicity of the output eq.(27) is equivalent to convexity of the underlying 𝜓.
+For the mixed invariants, the NODE defines the derivative
+                                               𝜕𝜓
+                                                      = 𝑦𝑖 𝑗 (1) ,                               (28)
+                                              𝜕 𝐾ˆ𝑖 𝑗
+   for an ODE analogous to eq. (25). Therefore, when using NODE models we do not
+recover an analytical expression for 𝜓NODE . Nevertheless, the energy can be integrated if
+needed
+                                     ∑︁ ∫ 𝜕𝜓 ∑︁ ∫            𝜕𝜓
+                           𝜓NODE =                 +                                  (29)
+                                         𝐼ˆ𝑖 𝜕 𝐼ˆ𝑖
+                                             𝑖
+                                                              ˆ𝑖 𝑗
+                                                      𝐾ˆ𝑖 𝑗 𝜕 𝐾
+                                                             𝑖, 𝑗 𝑖≠ 𝑗
+
+    along a given trajectory over 𝐼ˆ𝑖 , 𝐾ˆ𝑖 𝑗 . Even though convexity of 𝜓NODE with respect to the
+invariants is ensured by eq.(27), to construct convex non-decreasing functions the additional
+restriction of zero biases b = 0 is applied. With this last correction, the energy 𝜓NODE is
+automatically polyconvex.
+
+
+
+
+                                                         9
+Benchmark datasets and test cases
+    We consider two datasets in this study, a classicall rubber dataset including uniaxial
+tension (UT), pure shear (PS), and equibiaxial tension (ET) nominal stress-stretch data
+from [8]. The other dataset is from porcine skin and consists of three biaxial tests: strip
+biaxial in the 𝑥 direction (SX), i.e. 𝜆 𝑥 = 𝜆 is applied and the orthogonal direction is kept at
+𝜆 𝑦 = 1, strip biaxial in 𝑦 direction (SY), and equibiaxial tension (EB). Data from the skin
+data comes from [7], and is also nominal stress-stretch data.
+
+Results
+Performance on rubber dataset
+    The rubber dataset contains three mechanical tests as described in the Methods Section.
+To test the ability of the data-driven methods to extrapolate we trained first against one of
+the three tests and compared against the other two. Results are depicted in the first three
+columns of Fig. 2. Not surprisingly, all three methods perfectly capture the loading curve on
+which they are trained on (Fig 2a,f,k). However, the methods have difficulty extrapolating.
+Depending on which test was used for training, the performance on the validation data varies.
+When trained on uniaxial data, predictions on the other two tests are inaccurate, with stiffer
+predictions in all cases compared to the data (Fig 2e,i). The ICNN trained on pure-shear data
+is still able to capture the response in biaxial and uniaxial loading (Fig 2c,g). In contrast, the
+CANN model trained on PS data can predict UT and ET data up to an intermediate stretch
+after which the prediction exponential increases and diverges from the data. The NODE
+trained on PS data performs well on the UT dataset but not on the ET dataset. Equibiaxial
+training appears to be the best for extrapolating for all three methods. The prediction for
+ET data matches closely the experiments, see Fig.2f, and the predictions for uniaxial and
+pure shear qualitatively match the observed response albeit with some error (Fig.2b,j). To
+verify that the methods are indeed able to capture the entire response of the material, the
+last column of Fig. 2 shows predictions when CANN, NODE, ICNN models are trained on
+all data at once. All three methods flawlessly interpolate the entire dataset (Fig.2d,h,l).
+    Results in Fig. 2 are representative, yet, they correspond to single fit from the CANN,
+NODE and ICNN models. To show the robust performance of the data-driven methods, we
+repeat the training 50 times and compute 𝑅 2 values for each trained model. The 𝑅 2 values
+are shown in Fig. 4 in a layout analogous to the representative training Fig. 2. The 𝑅 2
+values confirm the previous observations from Fig. 2. For uniaxial training, 𝑅 2 values on UT
+data are approximately one always (Fig. 4a) but there is little predictive performance on the
+other two tests (Fig. 4e,i). For PS training we confirm that NODE and ICNN are able to
+capture the PS response (Fig. 4k), the UT response (Fig. 4c), but not the ET data (Fig.
+4g). CANN models can capture the pure shear response just as well (Fig. 4k), but unable to
+extrapolate to the other two loading cases (Fig. 4c,g). With 50 instances of model fitting, we
+can confidently state that equibiaxial tests are indeed the ones that allow the three machine
+learning models to better extrapolate to other loading cases. 𝑅 2 values in Fig. 4b,f,j are
+always greater than 0.656, with narrow standard deviations. Fig. 4d,h,l also confirms that
+when trained on all data at once, CANN, ICNN and NODE have no trouble fitting the data,
+achieving 𝑅 2 on average 0.971, 0.997, 0.997 for each of the methods respectively.
+
+
+                                               10
+                                       UT training                          ET training                           PS training           UT+ET+PS training
+                         7                                    7                                     7                                7
+ UT test prediction
+
+                      stress [kPa]   (a)                                  (b)                                   (c)                              (d)
+
+
+
+
+                                                           stress [kPa]
+
+
+
+
+                                                                                                 stress [kPa]
+
+
+
+
+                                                                                                                                  stress [kPa]
+                         0                                    0                                     0                                0
+                          1                stretch [-] 8       1                stretch [-] 8        1            stretch [-] 8       1                stretch [-] 8
+                         3                                    3                                     3                                3
+ ET test prediction
+
+
+
+
+                                     (e)                                  (f)                                   (g)                              (h)
+                      stress [kPa]
+
+
+
+
+                                                           stress [kPa]
+
+
+
+
+                                                                                                 stress [kPa]
+
+
+
+
+                                                                                                                                  stress [kPa]
+                         0                                    0                                     0                                0
+                          1                stretch [-] 5       1                stretch [-] 5        1            stretch [-] 5       1                stretch [-] 5
+                         2                                    2                                     2                                2
+ PS test prediction
+
+
+
+
+                                     (i)                                  (j)                                   (k)                              (l)
+                      stress [kPa]
+
+
+
+
+                                                           stress [kPa]
+
+
+
+
+                                                                                                 stress [kPa]
+
+
+
+
+                                                                                                                                  stress [kPa]
+                         0                                    0                                     0                                0
+                          1                stretch [-] 5       1                stretch [-] 5        1            stretch [-] 5       1                stretch [-] 5
+
+                                                             Data                   CANN                  NODE            ICNN
+Figure 2: Performance of CANN, NODE and ICNN moddels on rubber nominal stress-stretch data. Trained
+on uniaxial tension (UT), models are compared against UT data (a) but also against equibiaxial tension
+(ET) data (e) and pure shear (PS) data (i). Trained on ET, models are evaluated on UT, ET, PS data (b,f,j)
+respectively. Similarly, trained on PS data, comparison against UT, ET, PS curves (c,g,k). All three models
+can capture all three datasets when trained on all data simultaneously (d,h,l).
+
+
+Performance on skin dataset
+     The anisotropy of skin leads to poorer capacity of the three algorithms for extrapolation.
+Trained with either strip biaxial in 𝑥, strip biaxial 𝑦, or equibiaxial tension, the three methods
+can capture the response they are trained on but unable to extrapolate, as illustrated in the
+first three columns of Fig. 3. To capture the transversely anisotropic response of skin, the
+number of parameters and flexibility of the functional space available to the three data-
+driven methods enables them to produce complex response, but at the same time it leads
+to unconstrained and poor predictions outside of the training region. For instance, trained
+on SX data, predictions under SX loading are remarkably accurate (Fig. 3a), but CANN
+models tend to predict stiffer responses in EB and SY loading (Fig. 3e,i); NODE predics
+stiffer response in SY loading (Fig. 3i) but accurate response in EB loading (Fig. 3e), and
+ICNN performs well in EB loading (Fig. 3e) but predicts soft response compared to the
+data in SY loading (Fig. 3i). To verify if the models are able to capture the entire dataset
+we trained CANN, NODE, ICNN modes with all the data simultaneously and show the
+
+                                                                                            11
+ UT test prediction          UT training          ET training               PS training   UT+ET+PS training
+
+                           (a)                  (b)                       (c)                         (d)
+                      1                    1                         1                    1
+                      𝑅2
+
+
+
+
+                                           𝑅2
+
+
+
+
+                                                                     𝑅2
+
+
+
+
+                                                                                          𝑅2
+                      0                    0                         0                    0
+ ET test prediction
+
+
+
+
+                           (e)                  (f)                       (g)                         (h)
+                      1                    1                         1                    1
+                      𝑅2
+
+
+
+
+                                           𝑅2
+
+
+
+
+                                                                     𝑅2
+
+
+
+
+                                                                                          𝑅2
+                      0                    0                         0                    0
+ PS test prediction
+
+
+
+
+                           (i)                  (j)                       (k)                         (l)
+                      1                    1                         1                    1
+                      𝑅2
+
+
+
+
+                                           𝑅2
+
+
+
+
+                                                                     𝑅2
+
+
+
+
+                                                                                          𝑅2
+                      0                    0                         0                    0
+
+                                                  CANN          ICNN            NODE
+Figure 3: Performance of the data-driven constitutive models in terms of average 𝑅 2 values from XX train-
+ing with different initialization. CANN, NODE and ICNN moddels trained on uniaxial tension (UT) are
+compared against UT data (a), equibiaxial tension (ET) data (e), and pure shear (PS) data (i). Trained on
+ET, models are evaluated on UT, ET, PS data (b,f,j) respectively. Trained on PS data, comparison is done
+against UT, ET, PS curves (c,g,k). All three models have 𝑅 2 values near one for all data when trained on
+all data simultaneously (d,h,l).
+
+
+fits in Fig. 3d,h,l. All three methods can capture the response when trained on all data,
+however, fits are not perfect compared to the individual test fitting in Fig. 3a,f,k. The poorer
+performance in the simultaneous fitting is consistent between all three methods and suggests
+that the data themselves might be inconsistent with the assumption of hyperelasticity, that
+there are experimental errors, or that the functional space available to the data-driven models
+needs to be even richer.
+    A more quantitative analysis of the performance is reported in Fig. 5, which shows 𝑅 2
+values computed after 10 instances of model training with different, random initialization.
+Just as observed in the representative fits of Fig. 3, the 𝑅 2 scores on the loading used for
+training are near one (Fig. 5a,f,k), but they are low or even near zero for the validation cases
+(Fig. 5b,c,e,g,i,j). Surprisingly, there is still some information from the equibiaxial test (Fig.
+5f) that is useful for extrapolation to the strip biaxial loading cases (Fig. 5b,j). Training on
+the strip biaxial tests, SY has no information for the SX or EB data (Fig. 5c,g), whereas SX
+
+                                                                12
+                                        SX training                         EB training                           SY training            SX+EB+SY training
+                      0.4                                 0.4                                 0.4                                0.4
+ SX test prediction
+
+                       stress [kPa]   (a)                                 (b)                                   (c)                              (d)
+
+
+
+
+                                                           stress [kPa]
+
+
+
+
+                                                                                                 stress [kPa]
+
+
+
+
+                                                                                                                                  stress [kPa]
+                        0                                0                      0                     0
+                         1               stretch [-] 1.25 1     stretch [-] 1.25 1    stretch [-] 1.25 1    stretch [-] 1.25
+                      0.6                              0.6                    0.6                   0.6
+ EB test prediction
+
+
+
+
+                                      (e)                   (f)                    (g)                   (h)
+                       stress [kPa]
+
+
+
+
+                                                           stress [kPa]
+
+
+
+
+                                                                                                 stress [kPa]
+
+
+
+
+                                                                                                                                  stress [kPa]
+                        0                                   0                                   0                                  0
+                         1                  stretch [-] 1.14 1                  stretch [-] 1.14 1                 stretch [-] 1.14 1     stretch [-] 1.14
+                      0.6                                 0.6                                 0.6                                0.6
+ SY test prediction
+
+
+
+
+                                      (i)                                 (j)                                   (k)                   (l)
+                       stress [kPa]
+
+
+
+
+                                                           stress [kPa]
+
+
+
+
+                                                                                                 stress [kPa]
+
+
+
+
+                                                                                                                                  stress [kPa]
+                          0                                 0                                   0                                 0
+                           1                stretch [-] 1.16 1                  stretch [-] 1.16 1                stretch [-] 1.16 1               stretch [-] 1.16
+
+                                                    Data 𝑃11                     CANN 𝑃11                       NODE 𝑃11         ICNN 𝑃11
+                                                    Data 𝑃22                     CANN 𝑃22                       NODE 𝑃22         ICNN 𝑃22
+Figure 4: Performance of CANN, NODE and ICNN models against the skin mechanics dataset. Trained on
+strip 𝑥 (SX) data, the three models were compared to SX (a), equibiaxial (EB) (e) and strip 𝑦 (SY) data (i).
+Trained on EB data, comparison to SX, EB, SY data is shown in (b,f,j). Trained on SY data, comparison to
+SX, EB, SY is shoin in (c,g,k). Trained on all data simultaneously, the three methods can capture SX (d),
+EB(h) and SY response (l).
+
+
+training does lead to some 𝑅 2 > 0 for EB (Fig. 5e) but not SY data (Fig. 5i). The methods
+are able to consistently interpolate the entire data from all three tests regardless of random
+initialization (Fig. 5d,h,l).
+
+Regularity of second derivatives
+    Thus far we have focused on the performance of the data-driven models to capture stress-
+stretch data, which directly relates to strain energy derivatives. However, using these highly
+nonlinear model in large scale physics solvers, either implicit dynamics or equilibrium, re-
+quires computation of second derivatives of the energy. Therefore, even though second deriva-
+tives are not related to any data, we are interested in the regularity of the second derivatives
+for CANN, ICNN and NODE models.
+    For the rubber benchmark the models are based on the interpolation of two functions
+𝜕𝜓(𝐼1 )/𝜕𝐼1 , 𝜕𝜓(𝐼2 )/𝜕𝐼2 . Fig. 6 shows the second derivatives 𝜕 2 𝜓(𝐼1 )/𝜕𝐼12 , 𝜕 2 𝜓(𝐼2 )/𝜕𝐼22 with
+
+                                                                                            13
+ SX test prediction          SX training          EB training               SY training   SX+EB+SY training
+
+                           (a)                  (b)                       (c)                  (d)
+                      1                    1                         1                    1
+                      𝑅2
+
+
+
+
+                                           𝑅2
+
+
+
+
+                                                                     𝑅2
+
+
+
+
+                                                                                          𝑅2
+                      0                    0                         0                    0
+ EB test prediction
+
+
+
+
+                           (e)                  (f)                       (g)                  (h)
+                      1                    1                         1                    1
+                      𝑅2
+
+
+
+
+                                           𝑅2
+
+
+
+
+                                                                     𝑅2
+
+
+
+
+                                                                                          𝑅2
+                      0                    0                         0                    0
+ SY test prediction
+
+
+
+
+                           (i)                  (j)                       (k)                  (l)
+                      1                    1                         1                    1
+                      𝑅2
+
+
+
+
+                                           𝑅2
+
+
+
+
+                                                                     𝑅2
+
+
+
+
+                                                                                          𝑅2
+                      0                    0                         0                    0
+
+                                                  CANN          ICNN            NODE
+Figure 5: Performance of the data-driven methods on the skin dataset in terms of 𝑅 2 scores for data from
+three type of tests: strip biaxial 𝑥 (SX), equibiaxial (EB), strip biaxial in 𝑦 direction (SY). Trained on SX
+data (a), the models are tested agains EB (e) and SY (i) data. Trained on EB data (f), the models are tested
+on SX (b) and SY (j) loading. When trained on SY data (k), the models cannot capture SX (c) or EB (g)
+response. When trained on all data simultaneously, CANN, ICNN, and NODE models can capture all three
+types of loading: SX (d), EB (h), SY (l).
+
+
+the same layout as Fig. 2 and Fig. 4. It is surprising that even though all three methods
+capture the stress data quite well, they differ substantially in terms of their second derivatives.
+This reflects that there are many strain energy functions 𝜓(𝐼1 , 𝐼2 ) that are polyconvex and
+that can capture the stress-stretch data under uniaxial, pure shear, and equibiaxial loading.
+The CANN, ICNN and NODE are suited to capture different functions within the large space
+of functions available to each method. The consistent trend in Fig. 6 is that the CANN
+models lead often to exponential second derivatives because one of the two key activation
+functions is the exponential. In contrast, the NODE model is the one with the smallest
+second derivatives in all cases. For all the three methods, the second derivatives are smooth
+functions.
+     For the skin benchmark, there are more functions being interpolated by the three data-
+driven frameworks. As a result, Fig. 7 shows the second derivatives 𝜕 2 𝜓/𝜕𝐼12 , 𝜕 2 𝜓/𝜕𝐼22 ,
+𝜕 2 𝜓/𝜕𝐼42𝑎 , and 𝜕 2 𝜓/𝜕𝐼42𝑏 . Consistent with the rubber data NODE second derivatives are the
+
+                                                                14
+                     UT training                  ET training                     PS training             UT+ET+PS training
+
+           1 (a)
+        𝜕 2 Ψ/𝜕𝐼𝑖2                      1 (b)                           1 (c)                           1 (d)
+
+
+
+
+                                     𝜕 2 Ψ/𝜕𝐼𝑖2
+
+
+
+
+                                                                     𝜕 2 Ψ/𝜕𝐼𝑖2
+
+
+
+
+                                                                                                     𝜕 2 Ψ/𝜕𝐼𝑖2
+ CANN
+
+
+
+
+           0                            0                               0                               0
+                 0       𝐼𝑖    100            0       𝐼𝑖       100            0        𝐼𝑖      100            0   𝐼𝑖   100
+           1 (e)                        1 (f)                           1 (g)                           1 (h)
+        𝜕 2 Ψ/𝜕𝐼𝑖2
+
+
+
+
+                                     𝜕 2 Ψ/𝜕𝐼𝑖2
+
+
+
+
+                                                                     𝜕 2 Ψ/𝜕𝐼𝑖2
+
+
+
+
+                                                                                                     𝜕 2 Ψ/𝜕𝐼𝑖2
+ ICNN
+
+
+
+
+           0                            0                               0                               0
+                 0       𝐼𝑖    100            0       𝐼𝑖       100            0        𝐼𝑖      100            0   𝐼𝑖   100
+           1 (i)                        1 (j)                           1 (k)                           1 (l)
+        𝜕 2 Ψ/𝜕𝐼𝑖2
+
+
+
+
+                                     𝜕 2 Ψ/𝜕𝐼𝑖2
+
+
+
+
+                                                                     𝜕 2 Ψ/𝜕𝐼𝑖2
+
+
+
+
+                                                                                                     𝜕 2 Ψ/𝜕𝐼𝑖2
+ NODE
+
+
+
+
+           0                            0                               0                               0
+                 0       𝐼𝑖    100            0       𝐼𝑖       100            0        𝐼𝑖      100            0   𝐼𝑖   100
+
+                                                           𝜕 2 Ψ/𝜕𝐼12             𝜕 2 Ψ/𝜕𝐼22
+Figure 6: Second derivatives of strain energy functions predicted by the data-driven models trained with
+rubber data. Training with UT only, predictions are done for CANN (a), ICNN (e) and NODE (i) models.
+Similarly, second derivatives for the three methods are shown for ET training only (b,f,j), PS training only
+(c,g,k) and tained against all data (d,h,l).
+
+
+smallest out of the three methods. The second derivatives might increase for some initial
+range of deformation but tend to smaller values toward the end of the testing ranges (Fig. 7i-
+l). The CANN (Fig. 7a-d) and ICNN methods ((Fig. 7e-h) have increasing second derivatives
+over the range of the invariants. Also similar to the rubber benchmark, here we see that even
+though all three methods perform similarly on the stress-stretch predictions (see Fig. 3),
+they do so by interpolating different functions 𝜓(𝐼1 , 𝐼2 , 𝐼4𝑎 , 𝐼4𝑠 ).
+
+Model efficiency
+   A key question and common criticism of data-driven models, particularly neural network-
+based models, is that increasing the number of trainable parameters logically allows the
+methods to capture the limited data better and better, but at the risk of over-fitting. The
+polyconvexity constraint, enforced exactly for CANN, ICNN and NODE models, prevents
+nonphysical extrapolation, much like expert models. On the other hand, expert models and
+some non-parametric data-driven methods [35] are generally very efficient and capture the
+data reasonably well with very few parameters. We test how efficiently can the data-driven
+
+                                                                 15
+                     SX training                 EB training                      SY training           SX+EB+SY training
+
+        20
+        𝜕 2 Ψ/𝜕𝐼𝑖2             (a) 20                      (b) 20                              (c) 20                 (d)
+
+
+
+
+                                    𝜕 2 Ψ/𝜕𝐼𝑖2
+
+
+
+
+                                                                    𝜕 2 Ψ/𝜕𝐼𝑖2
+
+
+
+
+                                                                                                   𝜕 2 Ψ/𝜕𝐼𝑖2
+ CANN
+
+
+
+
+           0                           0                               0                              0
+                 0       𝐼𝑖    3             0       𝐼𝑖     3                0         𝐼𝑖      3            0    𝐼𝑖   3
+        20                     (e) 20                       (f) 20                             (g) 20                 (h)
+        𝜕 2 Ψ/𝜕𝐼𝑖2
+
+
+
+
+                                    𝜕 2 Ψ/𝜕𝐼𝑖2
+
+
+
+
+                                                                    𝜕 2 Ψ/𝜕𝐼𝑖2
+
+
+
+
+                                                                                                   𝜕 2 Ψ/𝜕𝐼𝑖2
+ ICNN
+
+
+
+
+           0                           0                               0                              0
+                 0       𝐼𝑖    3             0       𝐼𝑖     3                0         𝐼𝑖      3            0    𝐼𝑖   3
+        20                     (i) 20                       (j) 20                             (k) 20                 (l)
+        𝜕 2 Ψ/𝜕𝐼𝑖2
+
+
+
+
+                                    𝜕 2 Ψ/𝜕𝐼𝑖2
+
+
+
+
+                                                                    𝜕 2 Ψ/𝜕𝐼𝑖2
+
+
+
+
+                                                                                                   𝜕 2 Ψ/𝜕𝐼𝑖2
+ NODE
+
+
+
+
+           0                           0                               0                              0
+                 0       𝐼𝑖    3             0       𝐼𝑖     3                0         𝐼𝑖      3            0    𝐼𝑖   3
+
+                                   𝜕 2 Ψ/𝜕𝐼12          𝜕 2 Ψ/𝜕𝐼22                𝜕 2 Ψ/𝜕𝐼42𝑎       𝜕 2 Ψ/𝜕𝐼42𝑠
+Figure 7: Second derivatives of strain energy when trained with skin data. CANN predictions (a-d), ICNN
+predictions (e-h), and NODE predictions (d-l). Columns correspond to the data used in training. First three
+columns correspond to either SX, EB, or SY data only. Last column shows predictions when models are
+trained on all data simultaneously.
+
+
+models interpolate the data, i.e. we ask how does the error decrease as a function of the
+number of trainable parameters.
+    Fig. 8 shows the efficiency plots for the rubber benchmark. The structure of the CANN
+model is between that of a neural network and an expert model. As a result, there is a
+single point for the CANN model for each of the plots in Fig. 8. For ICNN and NODE
+models, the error decays with increasing number of parameters, as expected. When there are
+52 trainable parameters, the NODE and ICNN show similar performance in all the training
+cases. However, the drop in the error is more pronounced for the ICNN compared to the
+NODE framework. This suggests that the NODE model can capture the data well even with
+very few parameters.
+    The efficiency trends are not preserved for the anisotropic skin data as shown in Fig. 9.
+In this case, in order to explore the effect of the number of parameters on the accuracy of the
+methods we follow two strategies: reducing the ansatz by interpolating only the functions in
+(4), or using the full expansion (11) but changing the number of trainable parameters. For the
+
+
+                                                                16
+                    (a) UT training           (b) ET training           (c) PS training    (d) UT+ET+PS training
+
+                                      0.05                      0.03
+MAE [KPa]
+
+                                                                                          0.1
+            10−1
+                                      0.02
+                                                                0.02
+                                      0.01                                                0.03
+            10−2
+                   10   Params. 52           10   Params. 52           10   Params. 52           10   Params. 52
+
+                                                  CANN      ICNN            NODE
+
+Figure 8: Model efficiency for the rubber dataset depicted in terms of mean absolute error (MAE) against
+number of trainable parameters. Columns correspond to the type of data used for training: UT (a), ET (b),
+PS (c), or all data used simultaneously during training (d). Note that for the CANN model the number of
+parameters is fixed and a single point is shown for the CANN model in each panel. The ICNN and NODE
+are neural network-based models and the number of trainable parameters increases with number of layers
+and layer depth.
+
+
+CANN model, which has a fixed number of parameters when considering either (4) or (11),
+we observe that the full ansatz has lower errors than the reduced one for all training cases.
+The flexibility of the framework increases by including the mixed terms, which helps with
+capturing the data better. This is consistent with the development of mixed invariant terms
+in popular closed-form constitutive equations such as the Gasser-Ogden-Holzapfel model [36].
+The ICNN and NODE also show decreasing errors when going from the reduced model (4)
+to the model including mixed invariants (11). The improvement is much more pronounced
+for the NODE model compared to the ICNN one. In contrast to the rubber dataset, for skin,
+increasing the number of parameters of the neural networks used in the NODE models leads
+to a large decrease in error. The ICNN model error decreases only slightly with increasing
+number of parameters. At the upper end of the range considered, i.e. approaching 200
+parameters, both ICNN and NODE perform similarly. The most efficient of the methods
+for skin data is the CANN, which achieves the lowest errors with the lowest number of
+parameters.
+
+Discussion
+    This manuscript analyzes the performance of three data-driven methods for isotropic and
+anisotropic hyperelastic materials that automatically satisfy objectivity and polyconvexity of
+the strain energy. Traditional closed-form models rely on selecting few functional terms to
+capture the response of a material in a parsimonious way with few parameters to fit. Closed-
+form expressions are an elegant solution but also have the major downside of sacrificing
+accuracy. Data-driven methods have the flexibility to perfectly interpolate data. However,
+a paucity in their adoption is the difficulty to guarantee basic physics constraints that are
+front and center in the design of expert models [15, 37]. Objectivity and polyconvexity are
+the key requirements to represent realistic materials. The CANN, ICNN, and NODE models
+studied here are constructed in such a way that they a priori satisfy these essential physics
+
+                                                           17
+                 (a) SX training         (b) EB training         (c) SY training    (d) SX+EB+SY training
+                                                                                   100
+MAE [Pa]
+
+
+           10                      10                      10
+           5
+                                                                                   10
+           2                       1                       1
+                13   Params. 200        13   Params. 200        13   Params. 200         13   Params. 200
+
+                     CANN (full ansatz)          ICNN (full ansatz)        NODE (full ansatz)
+                     CANN (red. ansatz)         ICNN (red. ansatz)         NODE (red. ansatz)
+
+Figure 9: CANN, ICNN and NODE model efficiency for the skin benchmark shown as mean absolute er-
+ror (MAE) against number of trainable parameters and model complexity. For each of the three models,
+two ansatz are used: a reduced expansion based on ((4), or a full expansion (??). Plots show efficiency
+corresponding to different training cases: SX (a), EB (b), SY (c), or all data simultaneously (d).
+
+
+constraints. Therefore, these three methods have the potential to revolutionize modeling and
+simulation of highly nonlinear materials. We show that the three methods can interpolate
+rubber and skin benchmark datasets for isotropic and anisotropic hyperelasticity. They
+capture the data almost perfectly and have some capacity to extrapolate when trained on
+part of the data. The second derivatives are smooth, which is needed for equilibrium and
+implicit dynamic solvers. The models show the expected trade-off between accuracy and
+number of parameters. Overall, either of the three modeling frameworks is suitable for fully
+data-driven material modeling.
+    The methods we analyze here stand in contrast to other recent developments in data-
+driven computational mechanics. The most obvious way of leveraging machine learning tools
+is to directly interpolate strain-stress data. There are methods along those lines developed in
+recent years [38]. One limitation of these approaches is the inability to extrapolate. Another
+problem of dealing with stress data is that objectivity and polyconvexity are not satisfied a
+priori. Data-driven models that capture the strain energy function are more similar to expert
+models [18]. CANN, ICNN and NODE fall on this category. For the data-driven models that
+interpolate the strain energy, one option to impose polyconvexity is through the loss function.
+These methods have had some success but have to carefully balance between imposing the
+constraint or achieving a higher accuracy [7, 39]. Another approach is to select the best
+model out of a wide library of available models [40]. CANN, ICNN and NODE models have
+been recently developed to automatically satisfy polyconvexity which is a sufficient condition
+for the solution of boundary value problems in hyperelasticty. The original version of these
+methods was introduced in recent publications [10, 41, 8]. However, benchmarking of the
+original formulations is challenging because different expansions of the energy were used in
+each case. In this work we have re-formulated the methods such that the same invariants
+and energy terms are used consistently across the three models. With this implementation
+we show that, because the constraints are embedded in the methods, there is no trade-off
+between model accuracy and enforcing the physics. The three methods can get accurate
+
+
+                                                      18
+representation of the data, show positive second derivatives of the energy with respect to the
+invariants, and perform robustly even with random initialization.
+    The ideas behind each method are different and this translates into slight differences
+in their performance. CANN leverages the structure of feed-forward neural networks but
+uses a fixed number of available terms. Fitting a CANN involves finding the weights of
+the different terms. As a result, CANNs produce parsimonious models but are inherently
+limited by the number of functional terms. Despite the fixed structure, CANNS perform
+well on the benchmark datasets of this study. ICNNs rely on building convex functions
+by using nested linear combinations of convex non-decreasing functions in every layer of an
+otherwise conventional feed-forward neural network structure. NODEs deal directly with the
+energy derivative functions and leverage monotonicity of ODEs to get monotonic derivative
+functions (which implies convex functions). Because ICNNs and NODEs have an inner
+structure that resembles standard neural networks, they have more freedom to adjust the
+number parameters by changing the number of layers or the depth within a layer. The
+efficiency plots reflect the trade-off between accuracy and number of parameters. As the
+number of parameters increases, the difference between NODE and ICNN models vanishes.
+Thus, all three methods can accurately and efficiently capture the data.
+    The other notable difference between the methods is in the prediction of second derivatives
+of the strain energy. CANN and ICNN models tend to predict increasing second derivative
+functions. The NODE, in contrast with the other two methods, tends to predict smaller or
+vanishing second derivatives towards the end of the training region. This difference likely
+stems from the fact that ODEs have fixed points. In other words, the derivative predictions
+converge to a single value, consequently producing vanishing second derivatives. In all cases
+the second derivatives are smooth functions which is ideal for equilibrium and implicit dy-
+namic solvers [9]. This is in contrast with other data-driven methods that require additional
+regularization of the derivatives [42]. Another strategy to work with the derivatives of the
+energy but avoid solving an ODE would be to explore integrable neural networks [43].
+    The methods we benchmark here are have been designed to capture hyperelasticity. Even
+within the context of hyperelastic materials, the expansion of the energy can be done in
+different ways, potentially giving access to even wider classes of behavior [44]. More complex
+material response beyond hyperelasticity can also benefit from the flexibility of data-driven
+methods. There is still a gap in the development of physics-informed machine learning
+methods for dissipative materials such as plasticity and viscoelasticity [45]. There have
+been data-driven methods in this direction, but without a complete set of built-in physics
+constraints [46, 47]. Therefore, this is a central area for future work that can leverage the
+three existing frameworks reviewed and refined here. A second extension that is needed is
+modeling uncertainty in the material response. This is particularly relevant to biological
+tissue [1]. Neural network-based frameworks can capture perfectly the response of a single
+material and can easily retrained with new data, but a fully Bayesian approach would allow
+deeper understanding of population distribution. For example, it would allow us to model
+how skin properties change with age, sex, or ethnicity. A Bayesian framework would also
+allow monitoring of epistemic uncertainty to guide data collection and produce trustworthy
+simulations. The third item we want to highlight is the extension to multi-modality data.
+The three methods we explore are still based on stress-stretch data. In contrast, some
+expert models are built around the idea of microstructure modeling, multiscale simulations,
+
+                                              19
+or micromechanics arguments [36]. These ideas have started to permeate intro data-driven
+modeling [48, 49]. Alternatively, inferring material behavior from full-field displacements and
+global force data without relying on stress-stretch pairs has also gained attention recently
+[50, 51]. Physics-informed machine learning methods that can build on CANN, ICNN or
+NODE frameworks but also leverage images of the tissue microstructure or information about
+material composition are a natural next step.
+
+Conclusions
+    We present three fully data-driven and physics-constrained methods for nonlinear mate-
+rial modeling: CANNs, ICNNs, and NODEs. The methods capture hyperelastic material
+response perfectly on benchmark datasets of rubber and skin under three different loading
+cases. Evaluating their capacity to extrapolate, their efficiency, and the regularity of their
+second derivatives, we conclude that even though the methods have different features, they
+all have comparable low errors which decay with parameter and model complexity, have
+smooth second derivatives, and have some capacity to extrapolate. In summary, these meth-
+ods hold the key for high-fidelity modeling of arbitrary material behavior without the need to
+select closed-form expressions. Code and data are available with this submission and we are
+confident that these resources complement our detailed analysis and will favor the ongoing
+development and refinement of data-driven computational mechanics.
+
+Acknowledgements
+   This work was supported by the National Institute of Arthritis and Musculoskeletal and
+Skin Diseases, National Institutes of Health, United States under award R01AR074525.
+
+Supplementary information
+   The code associated with this publication is available at https://github.com/tajtac/
+hypermodelcomp.
+
+References
+ [1] T. Lee, S. Y. Turin, A. K. Gosain, I. Bilionis, A. B. Tepole, Propagation of mate-
+     rial behavior uncertainty in a nonlinear finite element model of reconstructive surgery,
+     Biomechanics and Modeling in Mechanobiology 17 (2018) 1857–1873.
+
+ [2] C. Duriez, T. Bieze, Soft robot modeling, simulation and control in real-time, in: Soft
+     Robotics: Trends, Applications and Challenges, Springer, 2017, pp. 103–109.
+
+ [3] G. Limbert, Skin Biophysics: From Experimental Characterisation to Advanced Mod-
+     elling, volume 22, Springer, 2019.
+
+ [4] M. Leshno, V. Y. Lin, A. Pinkus, S. Schocken, Multilayer feedforward networks with
+     a nonpolynomial activation function can approximate any function, Neural networks 6
+     (1993) 861–867.
+
+
+                                              20
+ [5] G. C. Peng, M. Alber, A. B. Tepole, W. R. Cannon, S. De, S. Dura-Bernal, K. Garikipati,
+     G. Karniadakis, W. W. Lytton, P. Perdikaris, et al., Multiscale modeling meets machine
+     learning: What can we learn?, Archives of Computational Methods in Engineering
+     (2020) 1–21.
+
+ [6] J. E. Marsden, T. J. Hughes, Mathematical foundations of elasticity, Courier Corpora-
+     tion, 1994.
+
+ [7] V. Tac, V. D. Sree, M. K. Rausch, A. B. Tepole, Data-driven modeling of the mechanical
+     behavior of anisotropic soft biological tissue, Engineering with Computers 38 (2022)
+     4167–4182.
+
+ [8] K. Linka, E. Kuhl, A new family of constitutive artificial neural networks towards
+     automated model discovery, Computer Methods in Applied Mechanics and Engineering
+     403 (2023) 115731.
+
+ [9] V. Tac, F. Sahli Costabal, A. B. Tepole, Data-driven tissue mechanics with polyconvex
+     neural ordinary differential equations, Computer Methods in Applied Mechanics and
+     Engineering 398 (2022) 115248.
+
+[10] D. K. Klein, M. Fernández, R. J. Martin, P. Neff, O. Weeger, Polyconvex anisotropic
+     hyperelasticity with neural networks, Journal of the Mechanics and Physics of Solids
+     159 (2022) 104703.
+
+[11] B. Amos, L. Xu, J. Z. Kolter, Input convex neural networks, in: International Conference
+     on Machine Learning, PMLR, pp. 146–155.
+
+[12] J. Ghaboussi, D. Sidarta, New nested adaptive neural networks (nann) for constitutive
+     modeling, Computers and Geotechnics 22 (1998) 29–52.
+
+[13] Y. Heider, K. Wang, W. Sun, So (3)-invariance of informed-graph-based deep neural
+     network for anisotropic elastoplastic materials, Computer Methods in Applied Mechanics
+     and Engineering 363 (2020) 112875.
+
+[14] G. A. Holzapfel, Nonlinear Solid Mechanics; A Continuum Approach for Engineering,
+     John Wiley & Sons, LTD, 2000.
+
+[15] A. E. Ehret, M. Itskov, A polyconvex hyperelastic model for fiber-reinforced materials
+     in application to soft tissues, Journal of Materials Science 42 (2007) 8853–8863.
+
+[16] X. Zhang, K. Garikipati, Machine learning materials physics: Multi-resolution neural
+     networks learn the free energy and nonlinear elastic response of evolving microstructures,
+     Computer Methods in Applied Mechanics and Engineering 372 (2020) 113362.
+
+[17] N. N. Vlassis, R. Ma, W. Sun, Geometric deep learning for computational mechanics part
+     i: Anisotropic hyperelasticity, Computer Methods in Applied Mechanics and Engineering
+     371 (2020) 113299.
+
+
+
+                                              21
+[18] M. Liu, L. Liang, W. Sun, A generic physics-informed neural network-based consti-
+     tutive model for soft biological tissues, Computer Methods in Applied Mechanics and
+     Engineering 372 (2020).
+
+[19] J. N. Fuhg, N. Bouklas, R. E. Jones, Learning hyperelastic anisotropy from data via a
+     tensor basis neural network, arXiv preprint arXiv:2204.04529 (2022).
+
+[20] J. M. Ball, Convexity conditions and existence theorems in nonlinear elasticity, Archive
+     for rational mechanics and Analysis 63 (1976) 337–403.
+
+[21] J. Schröder, Anisotropic polyconvex energies, in: Poly-, quasi-and rank-one convexity
+     in applied mechanics, Springer, 2010, pp. 53–105.
+
+[22] J. Schröder, P. Neff, Invariant formulation of hyperelastic transverse isotropy based on
+     polyconvex free energy functions, International journal of solids and structures 40 (2003)
+     401–445.
+
+[23] D. Y. Gao, P. Neff, I. Roventa, C. Thiel, On the convexity of nonlinear elastic energies
+     in the right cauchy-green tensor, Journal of Elasticity 127 (2017) 303–308.
+
+[24] F. As’ ad, P. Avery, C. Farhat, A mechanics-informed artificial neural network approach
+     in data-driven constitutive modeling, International Journal for Numerical Methods in
+     Engineering 123 (2022) 2738–2759.
+
+[25] P. Chen, J. Guilleminot, Polyconvex neural networks for hyperelastic constitutive mod-
+     els: A rectification approach, Mechanics Research Communications 125 (2022) 103993.
+
+[26] E. Lejeune, Mechanical mnist: A benchmark dataset for mechanical metamodels, Ex-
+     treme Mechanics Letters 36 (2020) 100659.
+
+[27] H. Kobeissi, S. Mohammadzadeh, E. Lejeune, Enhancing mechanical metamodels with
+     a generative model-based augmented training dataset, Journal of Biomechanical Engi-
+     neering 144 (2022) 121002.
+
+[28] H. Dal, K. Açıkgöz, Y. Badienia, On the performance of isotropic hyperelastic consti-
+     tutive models for rubber-like materials: a state of the art review, Applied Mechanics
+     Reviews 73 (2021).
+
+[29] D. Rus, M. T. Tolley, Design, fabrication and control of soft robots, Nature 521 (2015)
+     467–475.
+
+[30] J. W. Jor, M. D. Parker, A. J. Taberner, M. P. Nash, P. M. Nielsen, Computational
+     and experimental characterization of skin mechanics: identifying current challenges and
+     future directions, Wiley Interdisciplinary Reviews: Systems Biology and Medicine 5
+     (2013) 539–556.
+
+[31] Y. Lanir, Y. Fung, Two-dimensional mechanical properties of rabbit skin—ii. experi-
+     mental results, Journal of biomechanics 7 (1974) 171–182.
+
+
+                                              22
+[32] Y. Lanir, Constitutive equations for fibrous connective tissues, Journal of biomechanics
+     16 (1983) 1–12.
+
+[33] J. D. Toaquiza Tubon, O. Moreno-Flores, V. D. Sree, A. B. Tepole, Anisotropic damage
+     model for collagenous tissues and its application to model fracture and needle insertion
+     mechanics, Biomechanics and Modeling in Mechanobiology 21 (2022) 1–16.
+
+[34] S. Chen, A. Nı́ Annaidh, S. Roccabianca, A microstructurally inspired constitutive
+     model for skin mechanics, Biomechanics and modeling in mechanobiology 19 (2020)
+     275–289.
+
+[35] J. N. Fuhg, N. Bouklas, On physics-informed data-driven isotropic and anisotropic
+     constitutive models through probabilistic machine learning and space-filling sampling,
+     Computer Methods in Applied Mechanics and Engineering 394 (2022) 114915.
+
+[36] T. C. Gasser, R. W. Ogden, G. A. Holzapfel, Hyperelastic modelling of arterial layers
+     with distributed collagen fibre orientations, Journal of the royal society interface 3 (2005)
+     15–35.
+
+[37] J. N. Fuhg, C. M. Hamel, K. Johnson, R. Jones, N. Bouklas, Modular machine learning-
+     based elastoplasticity: Generalization in the context of limited data, 2022.
+
+[38] T. Kirchdoerfer, M. Ortiz, Data-driven computational mechanics, Computer Methods
+     in Applied Mechanics and Engineering 304 (2016) 81–101.
+
+[39] A. Ghaderi, V. Morovati, R. Dargazany, A Physics-Informed Assembly of Feed-Forward
+     Neural Network Engines to Predict Inelasticity in Cross-Linked Polymers, Polymers 12
+     (2020) 2628.
+
+[40] M. Flaschel, S. Kumar, L. De Lorenzis, Automated discovery of generalized standard
+     material models with euclid, Computer Methods in Applied Mechanics and Engineering
+     405 (2023) 115867.
+
+[41] V. Tac, F. S. Costabal, A. B. Tepole, Automatically polyconvex strain energy functions
+     using neural ordinary differential equations, arXiv preprint arXiv:2110.03774 (2021).
+
+[42] N. N. Vlassis, W. Sun, Sobolev training of thermodynamic-informed neural networks
+     for interpretable elasto-plasticity models with level set hardening, Computer Methods
+     in Applied Mechanics and Engineering 377 (2021).
+
+[43] G. H. Teichert, A. Natarajan, A. Van der Ven, K. Garikipati, Machine learning materials
+     physics: Integrable deep neural networks enable scale bridging by learning free energy
+     functions, Computer Methods in Applied Mechanics and Engineering 353 (2019) 201–
+     216.
+
+[44] D. J. Steigmann, On isotropic, frame-invariant, polyconvex strain-energy functions,
+     Quarterly Journal of Mechanics and Applied Mathematics 56 (2003) 483–491.
+
+
+
+                                               23
+[45] W. Zhang, G. Sommer, J. A. Niestrawska, G. A. Holzapfel, D. Nordsletten, The effects
+     of viscoelasticity on residual strain in aortic soft tissues, Acta Biomaterialia 140 (2022)
+     398–411.
+
+[46] K. Xu, A. M. Tartakovsky, J. Burghardt, E. Darve, Learning viscoelasticity models from
+     indirect data using deep neural networks, Computer Methods in Applied Mechanics and
+     Engineering 387 (2021) 114124.
+
+[47] G. Chen, Recurrent neural networks (RNNs) learn the constitutive law of viscoelasticity,
+     Computational Mechanics 67 (2021) 1009–1019.
+
+[48] G. A. Holzapfel, K. Linka, S. Sherifova, C. J. Cyron, Predictive constitutive modelling
+     of arteries by deep learning, Journal of the Royal Society Interface 18 (2021) 20210411.
+
+[49] Y. Leng, S. Calve, A. B. Tepole, Predicting the mechanical properties of fibrin using
+     neural networks trained on discrete fiber network data, arXiv preprint arXiv:2101.11712
+     (2021).
+
+[50] M. Flaschel, S. Kumar, L. De Lorenzis, Unsupervised discovery of interpretable hypere-
+     lastic constitutive laws, Computer Methods in Applied Mechanics and Engineering 381
+     (2021) 113852.
+
+[51] C.-T. Chen, G. X. Gu, Learning hidden elasticity with deep neural networks, Proceed-
+     ings of the National Academy of Sciences 118 (2021) e2102721118.
+
+
+
+
+                                              24
+

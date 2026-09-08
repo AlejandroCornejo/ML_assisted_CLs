@@ -1,0 +1,1479 @@
+                                        Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+
+                                                            Contents lists available at ScienceDirect
+
+
+                                             Comput. Methods Appl. Mech. Engrg.
+                                                    journal homepage: www.elsevier.com/locate/cma
+
+
+
+
+Can KAN CANs? Input-convex Kolmogorov-Arnold Networks
+(KANs) as hyperelastic constitutive artificial neural networks
+(CANs)
+Prakash Thakolkaran a ,∗,1 , Yaqi Guo a ,1 , Shivam Saini a , Mathias Peirlinck b ,
+Benjamin Alheit a,b , Siddhant Kumar a ,∗
+a
+    Department of Materials Science and Engineering, Delft University of Technology, 2628 CD Delft, The Netherlands
+b
+    Department of Biomechanical Engineering, Delft University of Technology, 2628 CD Delft, The Netherlands
+
+
+
+ARTICLE                  INFO                             ABSTRACT
+
+Dataset link: https://github.com/mmc-group/I              Traditional constitutive models rely on hand-crafted parametric forms with limited expressivity
+CKANs/                                                    and generalizability, while neural network-based models can capture complex material behavior
+Keywords:
+                                                          but often lack interpretability. To balance these trade-offs, we present monotonic Input-Convex
+Constitutive modeling                                     Kolmogorov-Arnold Networks (ICKANs) for learning polyconvex hyperelastic constitutive laws.
+Unsupervised learning                                     ICKANs leverage the Kolmogorov-Arnold representation, decomposing the model into composi-
+Hyperelasticity                                           tions of trainable univariate spline-based activation functions for rich expressivity. We introduce
+Kolmogorov-arnold network                                 trainable monotonic input-convex splines within the KAN architecture, ensuring physically
+Convexity                                                 admissible polyconvex models for isotropic compressible hyperelasticity. The resulting models
+                                                          are both compact and interpretable, enabling explicit extraction of analytical constitutive
+                                                          relationships through a monotonic input-convex symbolic regression technique. Through un-
+                                                          supervised training on full-field strain data and limited global force measurements, ICKANs
+                                                          accurately capture nonlinear stress–strain behavior across diverse strain states. Finite element
+                                                          simulations of unseen geometries with trained ICKAN hyperelastic constitutive models confirm
+                                                          the framework’s robustness and generalization capability.
+
+
+
+
+1. Introduction
+
+    Constitutive modeling of material behavior has traditionally relied on a priori hand-crafted parametric models, with model
+parameters iteratively calibrated using simple experimental data, such as tension or torsion tests. However, this approach poses
+challenges in limited generalization of the constitutive model beyond the calibration data and relies on an inefficient, time-
+consuming trial-and-error process of hand-crafting such parametric models. In recent years, machine learning (ML) and data-driven
+techniques have revolutionized traditional phenomenological constitutive modeling approaches. Rather than relying on hand-
+crafted parametric models, these methods extract patterns directly from experimental or multiscale simulation data, enabling the
+efficient development of physically-consistent, accurate, and generalizable constitutive models [1,2]. Among the modern data-driven
+approaches, several categories exist, each with its own advantages and limitations. Here, we provide a brief and non-exhaustive
+review of recent representative works (see [1] for detailed review) to identify existing gaps and highlight the motivation for this
+study.
+
+
+     ∗ Corresponding authors.
+         E-mail addresses: P.Thakolkaran@tudelft.nl (P. Thakolkaran), Sid.Kumar@tudelft.nl (S. Kumar).
+     1   Equal contributions.
+
+https://doi.org/10.1016/j.cma.2025.118089
+Received 11 March 2025; Received in revised form 10 May 2025; Accepted 10 May 2025
+Available online 29 May 2025
+0045-7825/© 2025 The Authors.            Published              by    Elsevier   B.V.   This    is   an   open   access   article   under   the   CC   BY   license
+(http://creativecommons.org/licenses/by/4.0/).
+P. Thakolkaran et al.                                                                  Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+    The model-free approaches [3–10] rely on a large catalog of stress–strain pairs and avoid potential errors arising from modeling
+assumption. In this method, when a new strain query is made, the closest stress–strain pair from the existing dataset is identified,
+subject to physical compatibility constraints. However, it struggles with poor generalization to stress–strain states beyond the
+available dataset, lacks the ability to correct for measurement noise, and requires a large amount of data.
+    In contrast, model-based approaches aim to learn physically admissible and consistent surrogate mappings of stress–strain data
+using various modeling techniques. These methods strive to enhance generalizability, correct for measurement noise, and achieve
+accurate predictions with minimal data. However, among model-based approaches, state-of-the-art techniques span a broad spectrum
+in terms of interpretability (i.e., understanding how and why a model makes a certain prediction), generalizability (i.e., extending
+beyond training data), and model expressivity (i.e., the ability to approximate diverse data distributions and constitutive behaviors).
+    On one end of the spectrum are techniques based on sparse and symbolic regression. Sparse regression techniques [11–17]
+assume a large catalog of hand-crafted candidate functions and use deterministic or Bayesian methods to select a subset, creating
+parsimonious and interpretable constitutive models. Symbolic regression techniques [18–23] explore permutation and combination
+of mathematical operations on input data to yield an analytical model that best fits the data. While these approaches offer high
+interpretability and generalizability as well as analytically verifiable compliance with physical laws, their expressive power is
+inherently constrained by the predefined set of candidate functions and mathematical operations.
+    On the other end of the spectrum are techniques based on Gaussian process regression (GPR) and neural networks (NNs)
+which are uninterpretable and black-box in nature, but offer higher expressivity. GPR is particularly well-suited for constitutive
+modeling [24–27] in the low-data regime but encounters computational scaling bottlenecks as the amount of data increases.
+Neural networks (NNs) as constitutive models overcome this bottleneck by leveraging scalable, highly parameterized architectures
+(ranging from thousands to millions of trainable parameters) while providing significantly greater expressivity than GPR. NN-based
+constitutive models have been successfully developed for a wide range of material behaviors — from hyperelasticity [28,29],
+viscoelasticity [30], and plasticity [31] to multi-physics phenomena [32,33]. These models employ diverse architectures, including
+recurrent neural networks [34], long short-term memory networks, hypernetworks [35], neural ordinary differential equations [36],
+sparse networks with interpretable hidden features [37], Bayesian neural networks [38], probabilistic diffusion fields [39], and many
+more; see [1] for an exhaustive review.
+    To strike a balance between interpretability and expressivity – in the general ML setting and independent of constitutive modeling
+– Kolmogorov-Arnold Networks (KANs) [40] have recently emerged as a novel NN architecture. The Kolmogorov-Arnold representation
+theorem [41] states that any multivariate continuous function on a bounded domain can be written as a finite composition of
+continuous univariate functions and the binary operation of addition. KANs take advantage of the Kolmogorov-Arnold representation
+theorem to break down high-dimensional functions into simpler univariate functions. Like standard multi-layer perceptrons (MLPs),
+KANs are fully connected networks. However, they differ in a key way. MLPs learn by adjusting weights and biases, with fixed
+activation functions providing nonlinearity. In contrast, in KANs, the activation functions themselves are trainable parameters,
+which allows the network to directly learn the nonlinear transformations. Since their introduction, KANs have gained significant
+attention and have been extended to solving forward and inverse problems as well as operator learning for partial differential
+equations [42–46]. In this paper, we first address the question of how KANs can be adapted for constitutive modeling, focusing on
+hyperelasticity?
+    A major challenge in adapting NNs, including KANs, for constitutive modeling is their high expressivity — an advantage that
+enables them to capture complex material behavior but, if left unchecked, can lead to unphysical predictions of constitutive behavior.
+To address this, significant efforts have been made to incorporate physical knowledge into NN architectures, constraining them
+to the subspace of physically admissible constitutive models and mitigating their tendency to overfit or produce non-physical
+responses. In the context of hyperelasticity, physical admissibility conditions include, for example, (poly)convexity of the strain
+energy density, objectivity, and zero stress at zero deformation [28]. Several recent studies have tackled this challenge using various
+adaptations of the input-convex neural network (ICNN) architecture [47] for modeling hyperelastic strain energy densities [48–53].
+The ICNN architecture is based on adapting a vanilla MLP architecture to ensure that the output is convex with respect to the
+input values, which aligns well with the (poly)convexity requirements of a hyperelastic strain energy density. However, the ICNN
+architecture is not directly applicable to KANs due to fundamental differences in their formulation. We note that an independent
+study by Abdolazizi et al. [54] has also proposed using KANs as hyperelastic constitutive NNs. In contrast to our approach, the
+KAN models presented by Abdolazizi et al. [54] are not input-convex and thus do not satisfy the (poly-)convexity requirements of
+hyperelasticity. Additionally, their approach was limited to supervised training using only stress–strain pairs. As discussed below,
+unsupervised training and physically admissible generalization is not feasible without enforcing (poly-)convexity. In this study, we
+explore how to build a monotonic Input-Convex KAN (ICKAN) architecture, thereby enabling physically admissible KANs-based hyperelastic
+constitutive models for balanced interpretability and expressivity.
+    Another challenging aspect of hyperelastic constitutive NNs is their training. While training on labeled stress–strain pairs from
+multiscale simulations is straightforward (commonly done using Sobolev training; see e.g., [18]), most common experimental setups
+(e.g., uniaxial or biaxial tension and torsion tests) fail to sufficiently probe the high-dimensional stress–strain space required to train
+highly parameterized NNs. Additionally, full-field experimental tests using digital image correlation (DIC) provide strain fields but
+only boundary-averaged projections of stress tensors (i.e., reaction forces). Training constitutive NNs on full-field strain fields and
+reaction forces without explicit stress labels presents an unsupervised learning challenge.2 Here, we address the question of how to
+train ICKAN-based hyperelastic constitutive models in an unsupervised manner.
+
+
+   2 In a typical DIC setup, although the strain field is discretized at thousands-to-millions of points, only one or two reaction forces can be measured. As a
+
+result, reaction forces act as a regularization rather than serving as direct labels for supervised training.
+
+
+                                                                              2
+P. Thakolkaran et al.                                                                        Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+    To tackle this challenge, we previously introduced the NN-EUCLID framework [48], demonstrating that NN-based hyperelastic
+constitutive NNs can be trained without stress data, relying solely on strain fields and global force measurements–quantities readily
+available through mechanical testing and DIC. Without stress labels, the learning process is guided by a physics-motivated loss
+function based on the conservation of linear momentum. NN-EUCLID builds upon the earlier EUCLID framework [11–16] for
+unsupervised model discovery via sparse regression, as well as the Virtual Fields Method [55,56] for unsupervised calibration of
+parametric constitutive models. We note that the Equilibrium Gap Method (EGM) [57] and NN-EUCLID are closely related to the
+Virtual Fields Method (VFM), with EGM being a special case where local ansatz functions are used for the virtual fields. NN-EUCLID
+employs neural networks to model the constitutive behavior, while using the same ansatz functions for the virtual fields as in
+EGM, thereby offering a more flexible and modeling-bias-free approach to constitutive modeling. The validity of NN-EUCLID has
+been further supported by experimental studies conducted by Jailin et al. [53] and Meng et al. [51]. Here, we demonstrate that
+ICKAN-based hyperelastic constitutive models are compatible with NN-EUCLID for unsupervised training, thereby paving the way
+for their application in realistic experimental settings. Notably, we demonstrate that monotonicity and input-convexity in ICKANs
+are essential for addressing the ill-posedness of unsupervised training—without them, the method fails.
+
+2. Modeling hyperelasticity using ICKANs
+
+2.1. Hyperelasticity preliminaries
+
+   For hyperelastic materials, the constitutive model is characterized by a strain energy density function 𝑊 (𝑭 ), from which both
+the first Piola–Kirchhoff stress 𝑷 (𝑭 ), and the incremental tangent modulus C(𝑭 ), are derived:
+               𝜕𝑊 (𝑭 )           𝜕𝑷 (𝑭 )
+        𝑷 (𝑭 ) =       , C(𝑭 ) =         , ∀ 𝑭 ∈ GL+ (3).                                                                        (1)
+                 𝜕𝑭                𝜕𝑭
+Here, GL+ (3) denotes the set of all invertible second-order tensors with positive determinants. The constitutive modeling task is
+to choose an appropriate form of 𝑊 (𝑭 ) that not only captures the material response accurately but also satisfies key physical and
+thermodynamic requirements. These requirements include:
+
+    • Stress-free undeformed configuration: In the undeformed state, the stress must vanish:
+
+               𝑷 (𝑭 = 𝑰) = 𝟎.                                                                                                                                  (2)
+
+    • Objectivity: The strain energy density must be objective, i.e,
+
+               𝑊 (𝑹𝑭 ) = 𝑊 (𝑭 ),          ∀ 𝑭 ∈ GL+ (3),          𝑹 ∈ SO(3),                                                                                   (3)
+
+      where SO(3) is the group of all 3D rotation matrices. Note that objectivity implies compatibility with the balance of angular
+      momentum.
+    • Polyconvexity: Material stability is ensured if 𝑊 (𝑭 ) satisfies the quasiconvexity condition [58–60]:
+
+                    𝑊 (𝑭̄ + ∇𝒘) d𝑉 ≥             𝑊 (𝑭̄ ) d𝑉 ,     ∀  ⊂ R3 , 𝑭̄ ∈ GL+ (3), 𝒘 ∈ 𝐶0∞ (),                                                        (4)
+               ∫                           ∫
+       with 𝒘 vanishing on 𝜕. However, direct enforcement of quasiconvexity is generally impractical [61]. Instead, polyconvexity
+       is preferred over quasiconvexity because it offers a more analytically tractable condition and given that polyconvexity
+       inherently implies quasiconvexity. The strain energy density is polyconvex if and only if there exists a convex function
+        ∶ R3×3 × R3×3 × R → R such that
+
+               𝑊 (𝑭 ) = (𝑭 , Cof 𝑭 , det 𝑭 ).                                                                                                                 (5)
+
+
+2.2. Hyperelastic model ansatz
+
+   For the scope of this study, we consider isotropic compressible hyperelasticity. Incorporating the aforementioned physical
+constraints, we propose the following ansatz for the strain energy density function:
+        𝑊 (𝑭 ) = 𝑊ICKAN (𝐾1 , 𝐾2 , 𝐾3 ) + 𝑊 0 ,
+                 ⏟⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏟⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏟ ⏟⏟⏟
+                                                      Energy
+                        monotonic input-convex       correction                                                                                                (6)
+                          KAN-based model
+                                                                √
+                with        𝐾1 = (𝐼̃1 − 3),        𝐾2 = (𝐼2∗ − 3 3),       𝐾3 = (𝐽 − 1)2 .
+
+Here, 𝑊ICKAN represents a monotonic Input-Convex Kolmogorov-Arnold Network (ICKAN) with the trainable parameter set . The
+architecture of ICKAN is discussed in detail in Section 2.3. To model isotropic compressible hyperelasticity, we use deviatoric and
+volumetric invariants, i.e.,
+        deviatoric invariants ∶             𝐼̃1 = 𝐽 −2∕3 𝐼1 ,
+                                                            𝐼2∗ = (𝐼̃2 )3∕2 = (𝐽 −4∕3 𝐼2 )3∕2 ,
+                                                           1∕2
+                                                                                                                                                               (7)
+        volumetric invariant ∶              𝐽 = det(𝑭 ) = 𝐼3 ,
+
+                                                                                   3
+P. Thakolkaran et al.                                                                          Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+where
+                                      1[                  ]
+         𝐼1 = tr(𝑪),           𝐼2 =      tr(𝑪)2 − tr(𝑪 2 ) ,           𝐼3 = det(𝑪)                                                                               (8)
+                                      2
+represent the principal invariants of the right Cauchy–Green deformation tensor 𝑪 = 𝑭 𝑇 𝑭 . 𝑊 0 is a constant scalar correction such
+that the energy density vanishes at zero deformation (𝑭 = 𝑰), i.e.,
+
+         𝑊 (𝑰) = 0             ⟹           𝑊 0 = − 𝑊ICKAN (0, 0, 0).                                                                                            (9)
+
+Note that the energy correction 𝑊 0 is updated during each iteration of the training (discussed later in Section 3). While we consider
+hyperelastic models with invariants-based inputs here, models based on other inputs such as principal stretches are also possible;
+see [30].
+   The first Piola–Kirchhoff stress and tangent modulus are given by (from (1))
+                      𝜕𝑊ICKAN (𝐾1 , 𝐾2 , 𝐾3 )
+         𝑃𝑖𝑗 (𝑭 ) =                                                                                                                                             (10)
+                                   𝜕𝐹𝑖𝑗
+and
+                   𝜕𝑃𝑖𝑗 (𝑭 )        𝜕 2 𝑊ICKAN (𝐾1 , 𝐾2 , 𝐾3 )
+         C𝑖𝑗𝑘𝑙 =               =                                  ,                                                                                             (11)
+                      𝜕𝐹𝑘𝑙                  𝜕𝐹𝑖𝑗 𝜕𝐹𝑘𝑙
+respectively. Here, we use the Einstein index notation over the subscripts.
+   We now discuss how this ansatz satisfies the previously mentioned physical constraints.
+
+      • Stress-free undeformed configuration: The inputs (𝐾1 , 𝐾2 , 𝐾3 ) in (6) are the modified version of the invariants obtained by
+        appropriately shifting – and in some cases squaring – such that both their values and their derivatives with respect to 𝑭
+        vanish in the undeformed state (𝑭 = 𝑰), i.e.,
+                𝜕𝐾1 ||                     𝜕𝐾2 ||                     𝜕𝐾3 ||
+                          = 𝟎,                       = 𝟎,                       = 𝟎.                                                                            (12)
+                𝜕𝑭 ||𝑭 =𝑰                  𝜕𝑭 ||𝑭 =𝑰                  𝜕𝑭 ||𝑭 =𝑰
+       Consequently, the first Piola–Kirchhoff stress vanishes identically at undeformed state:
+                             𝜕𝑊ICKAN (0, 0, 0) 𝜕𝐾 |       𝜕𝑊ICKAN (0, 0, 0) 𝜕𝐾 |       𝜕𝑊ICKAN (0, 0, 0) 𝜕𝐾3 |
+                                                  1|                            2|                              |
+               𝑷 (𝑰) =                             |     +                       |     +                              =𝟎                                        (13)
+                                   𝜕𝐾1          𝜕𝑭 |𝑭 =𝑰         𝜕𝐾2          𝜕𝑭 |𝑭 =𝑰         𝜕𝐾3          𝜕𝑭 ||𝑭 =𝑰
+
+      • Objectivity: Since the model ansatz (6) is a function of 𝐾1 , 𝐾2 , and 𝐾3 which are in turn function of invariants of 𝑪, it is
+        objective by construction.
+      • Polyconvexity: The invariant 𝐼̃1 and equivalently, 𝐾1 are polyconvex in 𝑭 . 𝐾3 = (𝐽 − 1)2 is polyconvex in 𝑭 . We note that 𝐼̃2 is
+        not polyconvex in 𝑭 , as previously shown by Hartmann and Neff [62] and Klein et al. [63]. To this end, we use the modified
+        second invariant 𝐼2∗ and equivalently 𝐾2 , which is polyconvex in 𝑭 (see [62] for proof). In summary, the inputs (𝐾1 , 𝐾2 , 𝐾3 )
+        are polyconvex in 𝑭 . If 𝑊ICKAN is convex and monotonically non-decreasing in (𝐾1 , 𝐾2 , 𝐾3 ), then the overall strain energy
+        density 𝑊 (𝑭 ) is polyconvex in 𝑭 [64]. In the subsequent section, we present the monotonic input-convex architecture for
+        KANs to satisfy this physical constraint.
+
+2.3. Monotonic input-convex Kolmogorov-Arnold network (ICKAN)
+
+    The model architecture of 𝑊ICKAN is based on the Kolmogorov-Arnold representation theorem, which states that any multivariate
+continuous function on a bounded domain can be expressed as a sum of univariate continuous functions. In its simplest form, a
+multivariate function 𝑓 (𝑥1 , … , 𝑥𝑛 ) can be written as a sum of activations of univariate functions. KANs extend this principle to
+deeper and wider architectures, enabling the approximation of more complex multivariate functions. Fig. 1 presents a schematic of
+the ICKAN architecture, which is discussed in the following sections.
+   We consider a multi-layer KAN with 𝑅 layers. For the 𝑟th layer of the KAN, let 𝒛(𝑟) ∈ R𝑛𝑟 be the (𝑛𝑟 )-dimensional output. For
+each layer, the output is obtained as [40]
+                              [𝑛                                                      ]
+                               ∑𝑟−1         (       )       𝑛𝑟−1
+                                                            ∑                (       ) 𝑇
+       KAN layer:     𝒛(𝑟) =        𝜙𝑟−1,1,𝑗 𝑧(𝑟−1)
+                                              𝑗       , … ,      𝜙 𝑟−1,𝑛𝑟 ,𝑗  𝑧(𝑟−1)
+                                                                               𝑗         ,                                      (14)
+                                          𝑗=1                              𝑗=1                   𝑛𝑟 ×1
+                                                                                       𝑛
+where 𝒛(𝑟−1) is the output of the previous layer. Here, {𝜙𝑟−1,𝑖,𝑗 }𝑖=1
+                                                                    𝑟
+                                                                        are 𝑛𝑟 trainable univariate functions of the 𝑟th layer transforming
+the 𝑗th-dimension of the layer input, i.e., 𝑧(𝑟−1)
+                                             𝑗     . Summing all the   activations  𝜙𝑟−1,𝑖,𝑗 (⋅) over 𝑗 ∈ {1, … , 𝑛𝑟−1 } yields the 𝑖th-dimension
+of the layer output, i.e., 𝑧(𝑟)
+                            𝑖 . The choice of the univariate activations 𝜙𝑟−1,𝑖,𝑗 (⋅) can be arbitrary. However, to ensure input-convexity,
+special considerations apply on the choice of 𝜙𝑟−1,𝑖,𝑗 (⋅). For the following discussion, we omit the subscripts on 𝜙(⋅) for brevity, while
+implicitly assuming that all 𝜙 functions are independent and have their own trainable parameters.
+    To ensure monotonic input-convexity, we follow the principles that (i) non-negative sum of convex functions are convex, (ii)
+convex non-decreasing composition of a convex function is convex [47,65], (iii) non-negative sum of monotonically non-decreasing
+
+                                                                                           4
+P. Thakolkaran et al.                                                                     Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+
+
+
+Fig. 1. Imposing monotonicity and convexity constraints on the trainable B-splines of 𝑊ICKAN . (a) A B-spline with unconstrained control points (red), illustrating
+how the spline curve is constructed. The natural domain of definition for the B-spline is indicated by the shaded gray area. (b) The resulting B-spline curve
+after enforcing both monotonicity and convexity constraints, with linear extrapolation applied at both endpoints to ensure consistent behavior beyond the spline
+domain. (c) Uniform B-spline basis functions of order 𝑘 = 3. (d) Schematic representation of a vanilla KAN model using unconstrained trainable B-splines, where
+activation functions remain unrestricted. (e) The ICKAN model, incorporating convexity and monotonicity constraints on the trainable B-spline-based activation
+functions. These constraints ensure a physically consistent strain energy density. The insets at each activation node illustrate the univariate activation functions
+used within the respective networks.
+
+
+
+
+functions is monotonically non-decreasing, and (iv) the composition of monotonically non-decreasing functions is monotonically
+non-decreasing. A sufficient condition to ensure monotonic input-convexity is that each KAN layer is convex and non-decreasing.
+Consequently, from (14), each univariate function 𝜙 must be convex and non-decreasing.
+   We use uniform B-splines as a choice for univariate activation function, i.e.,
+
+        𝜙(𝑥) = 𝑔(𝑤𝑠 )𝜓(𝑥)                                                                                                                                     (15)
+
+for a scalar input 𝑥. Here, 𝑤𝑠 ∈ R is a trainable scalar weight and 𝑔 ∶ R → R+ is a non-negative function. This ensures that as
+long as 𝜓 is convex and non-decreasing, 𝜙 remains convex and non-decreasing, while allowing for a trainable scaling parameter to
+alter the magnitude of the activations. Here, we choose 𝑔(⋅) = log(1 + exp(𝑥)), i.e., the softplus function. The trainable univariate
+function 𝜓(𝑥) is a convex and non-decreasing uniform B-spline of order 𝑘 and a linear combination of 𝑛𝑏 piecewise polynomial basis
+functions 𝐵𝑖,𝑘 (𝑥):
+                 𝑛𝑏                           𝑛𝑏
+                 ∑                            ∑
+        𝜓(𝑥) =          𝑐𝑖 𝐵𝑖,𝑘 (𝑥),   with          𝐵𝑖,𝑘 (𝑥) = 1   for   𝑥 ∈ [𝑥min , 𝑥max ].                                                                 (16)
+                 𝑖=1                           𝑖=1
+
+Here, 𝑐𝑖 is the control point associated with the corresponding basis functions 𝐵𝑖,𝑘 . [𝑥min , 𝑥max ], is natural definition domain of the
+B-spline curve where zeroth-order consistency is satisfied, i.e., constant functions can represented exactly. The learning process
+                                          𝑛𝑏
+involves training the control points {𝑐𝑖 }𝑖=1 (along with the scaling weight 𝑤𝑠 ), for each univariate function 𝜙(⋅) (recall we dropped
+the subscripts for brevity).
+     To define the 𝑘th-order B-spline basis functions (illustrated in Fig. 1c) for each 𝜙, we consider a set of 𝑚𝑏 = (𝑘 + 𝑛𝑏 + 1) knots:
+     𝑚𝑏
+{𝑡𝑖 }𝑖=1 and recursively use the algorithm introduced by De Boor [66] as follows:
+
+                                                                                  5
+P. Thakolkaran et al.                                                                                  Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+    Zero-order basis function (𝑘 = 0):
+                  {
+                   1, if 𝑡𝑖 ≤ 𝑥 < 𝑡𝑖+1 ,
+       𝐵𝑖,0 (𝑥) =                                                                                                                                                       (17)
+                   0, otherwise.
+    Recursive definition for higher orders (𝑘 > 0):
+                   𝑥 − 𝑡𝑖                𝑡𝑖+𝑘+1 − 𝑥
+        𝐵𝑖,𝑘 (𝑥) =        𝐵      (𝑥) +              𝐵        (𝑥).                                                                                                       (18)
+                 𝑡𝑖+𝑘 − 𝑡𝑖 𝑖,𝑘−1       𝑡𝑖+𝑘+1 − 𝑡𝑖+1 𝑖+1,𝑘−1
+    For the special case of a uniform B-spline, the knots are equally spaced, i.e.,
+
+        𝑡𝑖+2 − 𝑡𝑖+1 = 𝑡𝑖+1 − 𝑡𝑖 ,   ∀ 𝑖 ∈ [1, 𝑚𝑏 − 2].                                                                                                                  (19)
+
+We choose the knots by uniformly discretizing a range of pre-defined (as a hyperparameter) univariate inputs of 𝜙(𝑥).
+  For a uniform B-spline to be convex and monotonically non-decreasing, the control points must satisfy the following condition:
+
+        𝑐𝑖+2 − 𝑐𝑖+1 ≥ 𝑐𝑖+1 − 𝑐𝑖 ≥ 0,        ∀ 𝑖 ∈ [1, 𝑛𝑏 − 2].                                                                                                          (20)
+
+The proof is provided in Appendix A.1. We note that the convexity and non-decreasing monotonicity of a uniform B-spline curve
+depends entirely on the control points and is independent of the knot spacing. This result follows from the convex hull property of
+B-splines: since the B-spline is contained in the convex hull of its control points, the control points must form a convex set and be
+non-decreasing for the B-spline curve. The implementation of the convexity and non-decreasing constraints are outlined in Appendix
+A.2.
+    The construction in (20) only guarantees convexity and non-decreasing monotonicity in the natural definition domain of the
+B-spline. The range of the knots are chosen to be sufficiently large for any reasonable data distribution relevant to hyperelasticity.
+Nevertheless, for extreme input data (e.g., exceptionally large strains), we extend the B-spline beyond its natural domain by
+maintaining a constant slope at its endpoints to preserve these properties; see Fig. 1b for a schematic and Appendix A.3 for
+implementation details. To ensure that the spline domain encompasses the expected input range, we set the knots’ range during
+initialization. This update is done only once and remains fixed throughout training and inference (more details in Appendix B).
+    In summary, the ICKAN architecture for isotropic compressible hyperelasticity can be described as follows:
+
+
+                        𝐈𝐧𝐩𝐮𝐭 𝐥𝐚𝐲𝐞𝐫 ∶   𝑭,                                                                                                                             (21a)
+                                                   [                                                         √                ]𝑇
+                                         (0)                    −2∕3                     −4∕3      3∕2
+               𝐈𝐧𝐯𝐚𝐫𝐢𝐚𝐧𝐭𝐬 𝐥𝐚𝐲𝐞𝐫 ∶       𝒛      = 𝐾1 = 𝐽                𝐼1 − 3, 𝐾2 = (𝐽          𝐼2 )      − 3 3, 𝐾3 = (𝐽 − 1)2 ,                                      (21b)
+                                                   [ 𝑛0∑           ( )        ∑   𝑛0
+                                                                                        ( )]𝑇
+               𝐅𝐢𝐫𝐬𝐭 𝐊𝐀𝐍 𝐥𝐚𝐲𝐞𝐫 ∶        𝒛(1) =               𝜙0,1,𝑗 𝑧(0)
+                                                                     𝑗   , …,   𝜙0,𝑛1 ,𝑗 𝑧(0)
+                                                                                          𝑗   ,                                                                        (21c)
+                                                       𝑗=1                       𝑗=1
+
+                             ⋮
+                                                   [𝑛                                                       ]
+                                                    ∑ 𝑟−1            (       )      𝑛𝑟−1
+                                                                                    ∑              (       ) 𝑇
+                                         (𝑟)                           (𝑟−1)                         (𝑟−1)
+                 𝑟𝐭𝐡 𝐊𝐀𝐍 𝐥𝐚𝐲𝐞𝐫 ∶        𝒛      =             𝜙𝑟−1,1,𝑗 𝑧𝑗       , …,      𝜙𝑟−1,𝑛𝑟 ,𝑗 𝑧𝑗         ,                                                      (21d)
+                                                       𝑗=1                             𝑗=1
+
+                             ⋮
+                                                                    𝑛𝑅−1
+                                                                    ∑              (       )
+                     𝐎𝐮𝐭𝐩𝐮𝐭 𝐥𝐚𝐲𝐞𝐫 ∶     𝑊ICKAN = 𝒛(𝑅) =                   𝜙𝑅−1,1,𝑗 𝑧(𝑅−1)
+                                                                                     𝑗                                                                                 (21e)
+                                                                    𝑗=1
+                                           {                                                                                      }
+        𝐓𝐫𝐚𝐢𝐧𝐚𝐛𝐥𝐞 𝐩𝐚𝐫𝐚𝐦𝐞𝐭𝐞𝐫𝐬 ∶           = {𝑐𝑘(𝑟,𝑖,𝑗) ∶ 𝑘 = 1, … , 𝑛𝑏 }, 𝑤(𝑟,𝑖,𝑗)
+                                                                           𝑠       ∶ 𝑟 = 1, … , 𝑅; 𝑖 = 1, … , 𝑛𝑟 ; 𝑗 = 1, … , 𝑛𝑟−1 .                                   (21f)
+
+Table C.2 provides a summary of all the architectural hyperparameters.
+
+3. Unsupervised training of ICKANs
+
+   Instead of training the ICKAN model on labeled stress–strain pairs, we train the model on full-field displacement/strain-fields and
+global force data which are realistically available through mechanical testing and DIC techniques. To achieve this, we extend our
+previously introduced NN-based constitutive modeling framework, NN-EUCLID [48], to ICKANs. Here, we provide a brief review of
+NN-EUCLID in the context of ICKANs. Fig. 2 illustrates a schematic overview of the ICKAN and its unsupervised training framework.
+   Consider a hyperelastic specimen undergoing quasi-static deformation in a two-dimensional reference domain 𝛺 ⊂ R2 . The
+specimen is designed with a complex geometry (for example, a plate with a hole) to induce diverse and heterogeneous strain states,
+while the material itself is assumed to be homogeneous and isotropic. Without loss of generality, we assume plane strain conditions.
+   Boundary conditions are applied such that Dirichlet conditions are enforced on 𝜕𝛺𝑢 ⊂ 𝜕𝛺 and Neumann conditions on the
+remainder, 𝜕𝛺𝑡 = 𝜕𝛺 ⧵ 𝜕𝛺𝑢 . For simplicity, our analysis focuses on displacement-controlled loading (i.e., Dirichlet boundary
+conditions), while noting that applied forces in load-controlled scenarios are equivalent to reaction forces under displacement
+control. The dataset comprises of 𝑛𝑡 snapshots of displacement measurements,
+            {                                       }
+        = 𝒖𝑎,𝑡 ∈ R2 ∶ 𝑎 = 1, … , 𝑛𝑛 ; 𝑡 = 1, … , 𝑛𝑡 ,                                                                            (22)
+
+                                                                                       6
+P. Thakolkaran et al.                                                                    Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+
+
+
+Fig. 2. Schematic overview of the unsupervised deep learning approach for hyperelastic constitutive modeling using ICKANs. In (a) and (b), pointwise
+measurements of displacements and reaction forces are acquired from a hyperelastic specimen under quasi-static deformation using a DIC setup. These data,
+together with a finite element mesh of the domain (c), are used to reconstruct continuous displacement and strain fields (d,e). The physics-consistent ICKAN-based
+constitutive model (f) then predicts the corresponding stress fields at the quadrature points of each element (g) given the strains. The computed stress fields
+serve to calculate both the internal and external nodal forces (h). By employing the weak form of the conservation of linear momentum, the residual forces
+are minimized—applied pointwise for free degrees of freedom and in an aggregated manner for fixed degrees of freedom corresponding to each set of Dirichlet
+constraints with measured reaction forces. This iterative optimization process refines the parameters of the ICKAN-based constitutive models.
+
+
+
+
+recorded at 𝑛𝑛 reference points
+           {                     }
+       = 𝑿 𝑎 ∈ 𝛺 ∶ 𝑎 = 1, … , 𝑛𝑛 .                                                                                                                         (23)
+
+Additionally, for each snapshot, 𝑛𝛽 reaction forces
+      { 𝛽,𝑡                              }
+       𝑅 ∶ 𝛽 = 1, … , 𝑛𝛽 ; 𝑡 = 1, … , 𝑛𝑡                                                                                                                    (24)
+
+are measured at selected Dirichlet boundaries (e.g., using load cells). For brevity, the superscript (⋅)𝑡 is omitted in the subsequent
+discussion, although the numerical procedure is applied independently to every snapshot.
+    Given these limited measurements, the primary goal is to infer the constitutive model 𝑊 (𝑭 ) governing the stress–strain response.
+    To reconstruct the displacement field, the reference domain  is discretized using linear triangular elements (each with a single
+quadrature point at its barycenter), yielding the approximation
+                 𝑛𝑛
+                 ∑
+        𝒖(𝑿) =          𝑁 𝑎 (𝑿) 𝒖𝑎 .                                                                                                                        (25)
+                 𝑎=1
+
+Here, 𝑁 𝑎 ∶ 𝛺 → R represents the shape function associated with node 𝑿 𝑎 . The corresponding deformation gradient field is
+approximated as
+                         𝑛𝑛
+                         ∑
+        𝑭 (𝑿) = 𝑰 +            𝒖𝑎 ⊗ ∇𝑁 𝑎 (𝑿),                                                                                                               (26)
+                         𝑎=1
+
+where 𝑰 is the identity matrix, and ∇ denotes the gradient operator with respect to the reference coordinates.
+   As outlined in [11,48], we leverage the conservation of linear momentum to guide the learning of the constitutive model, which
+eliminates the need of stress labels. Assuming quasi-static loading and negligible body forces, the weak form of the linear momentum
+balance in the reference domain 𝛺 is given by
+
+             𝑷 ∶ ∇𝒗 d𝑉 −               𝒕̂ ⋅ 𝒗 d𝑆 = 0   ∀ admissible 𝒗 ,                                                                                     (27)
+        ∫𝛺                      ∫𝜕𝛺𝑡
+
+where 𝒕̂ denotes the prescribed tractions and 𝒗 is a test function that vanishes on the Dirichlet boundary 𝜕𝛺𝑢 . The weak formulation
+is preferred over the strong form, as it avoids the need for second derivatives, which are sensitive to noise.
+    Let  = {(𝑎, 𝑖) ∶ 𝑎 = 1, … , 𝑛𝑛 ; 𝑖 = 1, 2} denote the set of displacement degrees of freedom, which we partition into:
+
+    • free : unconstrained degrees of freedom,
+
+                                                                                7
+P. Thakolkaran et al.                                                                                    Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+    • fix
+       𝛽
+           (with 𝛽 = 1, … , 𝑛𝛽 ): degrees of freedom under Dirichlet constraints that contribute to the observed reaction force 𝑅𝛽 .
+
+    Approximating the test function by
+                     𝑛𝑛                                                           𝑛
+                     ∑                                                            ⋃
+                                                                                  𝛽
+        𝒗(𝑿) =             𝑁 𝑎 (𝑿) 𝒗𝑎 ,       with       𝑣𝑎𝑖 = 0     ∀ (𝑎, 𝑖) ∈         fix
+                                                                                         𝛽 ,                                                                              (28)
+                     𝑎=1                                                          𝛽=1
+
+the weak form (27) reduces to
+        𝑛𝑛
+        ∑
+               𝑣𝑎𝑖 𝑓𝑖𝑎 = 0 ,       with   𝑓𝑖𝑎 =         𝑃 ∇ 𝑁 𝑎 d𝑉 −          𝑡̂ 𝑁 𝑎 d𝑆 .                                                                                 (29)
+                                                    ∫𝛺 𝑖𝑗 𝑗             ∫𝜕𝛺𝑡 𝑖
+         𝑎=1
+                                                    ⏟⏞⏞⏞⏞⏞⏞⏞⏞⏟⏞⏞⏞⏞⏞⏞⏞⏞⏟ ⏟⏞⏞⏞⏞⏞⏟⏞⏞⏞⏞⏞⏟
+                                                      internal force        external force
+
+Here, the integrals are computed using numerical quadrature over the same discretization and mesh as (25). Since the test functions
+are arbitrary, the force residual must vanish at every free degree of freedom,
+
+        𝑓𝑖𝑎 = 0       ∀ (𝑎, 𝑖) ∈ free .                                                                                                                                  (30)
+
+   At the fixed degrees of freedom, the internal and external forces are counteracted by the reaction force imposed by the Dirichlet
+constraints. Since point-wise reaction forces cannot be measured experimentally, they are assumed to be unavailable. Instead, only
+the total reaction forces integrated over the boundary segments are known. As a result, the global force balance for each measured
+reaction force is expressed as
+          ∑
+                𝑓𝑖𝑎 = 𝑅𝛽     ∀     𝛽 = 1, … , 𝑛𝛽 ,                                                                              (31)
+        (𝑎,𝑖)∈fix
+               𝛽
+
+where the summation is carried out over all point-wise forces associated with the degrees of freedom in the 𝛽th Dirichlet constraint,
+denoted as fix
+              𝛽
+                . As noted earlier, the superscript (⋅)𝑡 has been omitted for brevity, but the above force balance conditions apply to
+all data snapshots at 𝑡 = 1, … , 𝑛𝑡 .
+    Our goal is then to learn the constitutive model 𝑊 (𝑭 ) in (6) (with 𝑷 (𝑭 ) given by (10)), now parameterized by the monotonic
+input-convex Kolmogorov–Arnold network 𝑊ICKAN , such that the displacement and reaction force data satisfy the physics-based
+constraints (30) and (31). We formulate the inverse problem as the minimization of the force balance residuals [48] with respect
+to the trainable parameters of the ICKAN:
+                        [                        𝑛𝛽 (                       ]
+                    ∑𝑛𝑡
+                             ∑        ( 𝑎,𝑡 )2   ∑           ∑           )2
+                                                       𝛽,𝑡           𝑎,𝑡
+        ← arg min                     𝑓𝑖      +      𝑅 −          𝑓𝑖         .                                                   (32)
+                       
+                             𝑡=1    (𝑎,𝑖) ∈ free              𝛽=1             (𝑎,𝑖) ∈ fix
+                                                                                        𝛽
+                                    ⏟⏞⏞⏞⏞⏞⏞⏞⏞⏞⏟⏞⏞⏞⏞⏞⏞⏞⏞⏞⏟      ⏟⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏟⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏟
+                                   free degrees of freedom
+                                                                     fixed degrees of freedom
+
+This optimization is performed via gradient-based minimization, enabled by automatic differentiation (see Table C.2 for details on
+the optimizer and related hyperparameters).
+
+4. Results
+
+4.1. Numerical benchmarks
+
+   To evaluate the ICKAN-based constitutive models, we use the dataset provided by Thakolkaran et al. [48], which emulates a
+digital image correlation (DIC) experiment by simulating a hyperelastic square plate with a hole under plane-strain conditions using
+the finite element method (FEM); see Fig. 3a for schematic. The specimen is subjected to displacement-controlled asymmetric biaxial
+tension, with symmetry enforced along the bottom and left boundaries and loading parameter 𝛿. This configuration yields diverse
+and heterogeneous strain states, making the data ideal for training a generalizable constitutive model from a single experiment;
+hence, the specimen is termed the training specimen.
+   The dataset includes synthetic data corresponding to several well-established material models:
+
+    1. Neo-Hookean (NH) model:
+
+                   𝑊 (𝑭 ) = 0.5(𝐼̃1 − 3) + 1.5(𝐽 − 1)2 .                                                                                                                  (33)
+
+    2. Isihara (IH) model [67]:
+
+                   𝑊 (𝑭 ) = 0.5(𝐼̃1 − 3) + (𝐼̃2 − 3) + (𝐼̃1 − 3)2 + 1.5(𝐽 − 1)2 .                                                                                         (34)
+
+    3. Haines-Wilson (HW) model [68]:
+
+                   𝑊 (𝑭 ) = 0.5(𝐼̃1 − 3) + (𝐼̃2 − 3) + 0.7(𝐼̃1 − 3)(𝐼̃2 − 3) + 0.2(𝐼̃1 − 3)3 + 1.5(𝐽 − 1)2 .                                                              (35)
+
+
+                                                                                               8
+P. Thakolkaran et al.                                                                     Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+
+
+
+Fig. 3. (a) Training specimen: A square plate with a hole in the bottom-left corner is subjected to displacement-controlled asymmetric biaxial tension. The
+resulting dataset (noisy full-field displacements and reaction forces) is used to train the ICKAN-based constitutive models. (b) Validation specimen: A square plate
+containing two asymmetric elliptical holes is subjected to displacement-controlled uniaxial tension. This geometry is employed solely for validation, and no data
+from these experiments enter the training process. All lengths and displacements are normalized by the side length of the undeformed specimen. The parameters
+used to generate the data can be found in Table C.2.
+Source: Figures adapted from [48].
+
+
+
+
+    4. Gent-Thomas (GT) model [69]:
+
+                 𝑊 (𝑭 ) = 0.5(𝐼̃1 − 3) + log(𝐼̃2 ∕3) + 1.5(𝐽 − 1)2 .                                                                                          (36)
+
+    5. Arruda-Boyce (AB) model [70]:
+                               [                (          )]
+                          √             √          sinh 𝛽𝑐
+              𝑊 (𝑭 ) = 2.5 𝑁𝑐 𝛽𝑐 𝜆𝑐 − 𝑁𝑐 log                  − 𝑐AB + 1.5(𝐽 − 1)2 ,                                             (37)
+                                                     𝛽𝑐
+                   √                ( √ )
+       where 𝜆𝑐 = 𝐼̃1 ∕3, 𝛽𝑐 = −1 𝜆𝑐 ∕ 𝑁𝑐 , and −1 denotes the inverse Langevin function. Here, 𝑁𝑐 = 28 represents the number
+       of polymeric chain segments, and 𝑐AB ≈ 3.7910 offsets the energy density to zero at 𝑭 = 𝑰, since the Arruda-Boyce formulation
+       does not inherently satisfy this condition.
+    6. Ogden (OG) model [71]:
+                       𝜇 ( ̃𝜂 ̃𝜂 ̃𝜂       )
+              𝑊 (𝑭 ) =    𝜆 + 𝜆2 + 𝜆3 − 3 + 1.5(𝐽 − 1)2 , with 𝜆̃𝑘 = 𝐽 −1∕3 𝜆𝑘 , 𝑘 = 1, 2, 3,                                   (38)
+                       𝜂 1
+        where 𝜆1 , 𝜆2 , 𝜆3 are the principal stretches and 𝜇 = 𝜂 = 1.3.
+
+   Note that the models given in Eqs. (34)–(36) are not polyconvex, as they involve the modified invariant 𝐼̃2 , which does
+not fulfill ellipticity. For discussions on the polyconvexity of the Ogden model, we refer the reader to the work of Hartmann
+and Neff [62]. These models are included as they are commonly used in literature and provide a representative benchmark for
+evaluating constitutive modeling approaches. Additionally, without loss of generality, all physical quantities in the material models
+are considered as non-dimensionalized.
+   For benchmarking purposes, the ICKAN-based model is trained to approximate these material laws using the NN-EUCLID loss
+described in (32). Additional details regarding hyperparameters and the training algorithm are provided in Appendix C.
+   Considering that real-world DIC measurements contain noise, artificial noise has been added to the displacement data. The noise
+level, determined by the pixel resolution of the imaging system, remains constant for each degree of freedom across all load steps.
+Specifically, the displacement data is modeled as
+              fem,𝑎,𝑡
+        𝑢𝑎,𝑡
+         𝑖 = 𝑢𝑖       + 𝜀𝑎,𝑡
+                         𝑖 ,      with    𝜀𝑎,𝑡        2
+                                           𝑖 ∼  (0, 𝜎𝑢 )      ∀ (𝑎, 𝑖) ∈ , 𝑡 ∈ 1, … , 𝑛𝑡 .                                                                  (39)
+
+Here, 𝑢fem,𝑎,𝑡
+        𝑖      represents the FEM-computed displacement, while 𝜀𝑎,𝑡𝑖 is sampled from a normal distribution with zero mean and
+standard deviation 𝜎𝑢 . Following [11,12,48], two noise levels are considered (normalized by specimen length): 𝜎𝑢 = 10−4 (low
+noise) and 𝜎𝑢 = 10−3 (high noise), which emulate the noise levels representative of modern DIC setups.
+    We use pre-processed synthetic datasets from Thakolkaran et al. [48], where the displacement fields were already denoised
+following standard DIC post-processing routines. As described in that work, kernel ridge regression (KRR) was used for spatial
+denoising. To enhance data efficiency, the denoised displacements on the high-resolution mesh with 63,601 nodes are projected
+onto a coarser mesh with 𝑛𝑛 = 1441 nodes, which serve as the training dataset for the ICKAN models.
+
+                                                                                 9
+P. Thakolkaran et al.                                                                               Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+
+
+
+                                                                                √
+Fig. 4. Two-dimensional projections of the strain invariants (𝐼̃1 − 3), (𝐼2∗ − 3 3), and (𝐽 − 1)2 for all elements in the training specimen (Fig. 3a) across all load
+steps, shown for (a) Arruda-Boyce (37) and (b) Isihara (34) benchmarks. The figure also includes the strain invariants of the validation specimen (Fig. 3b) across
+all elements and load steps, along with those corresponding to the six evaluation deformation paths (40). All data presented are derived from the ground-truth
+model without noise, including the strain invariants of the validation specimen.
+
+
+
+
+4.2. Accuracy and generalizability beyond the training data
+
+   We train 𝑛𝑒 ICKAN models with identical architectures, each trained independently with different random initializations to
+mitigate bad local minima in the optimized model parameters. We choose the model whose final loss (as defined in (32)) is the
+lowest loss in the ensemble; the others are discarded.
+   For each benchmark problem (Eqs. (33)–(38)), the performance of the ICKAN-based constitutive models is evaluated against the
+corresponding ground truth along six deformation paths:
+
+                       ⎡1 + 𝛾   0    0⎤                       ⎡ 1       0       0⎤                 ⎡1 + 𝛾     0     0⎤
+                                                              ⎢ 1+𝛾               ⎥
+        𝑭   UT
+                 (𝛾) = ⎢ 0      1    0⎥ ,    𝑭     UC
+                                                        (𝛾) = ⎢ 0       1       0⎥ ,    𝑭 BT (𝛾) = ⎢ 0       1+𝛾    0⎥ ,
+                       ⎢              ⎥                       ⎢ 0                                  ⎢                 ⎥
+                       ⎣ 0      0    1⎦                       ⎣         0       1⎥⎦                ⎣ 0        0     1⎦
+                                                                                                                                                                     (40)
+                     ⎡ 1            0       0⎤                     ⎡1       𝛾    0⎤                 ⎡1 + 𝛾    0     0⎤
+                     ⎢ 1+𝛾                   ⎥                                                      ⎢                 ⎥
+                                                        𝑭 SS (𝛾) = ⎢0            0⎥ ,
+              BC                                                                                               1
+             𝑭 (𝛾) = ⎢ 0             1
+                                            0⎥ ,                            1            𝑭 PS (𝛾) = ⎢ 0             0⎥ ,
+                     ⎢
+                                    1+𝛾
+                                             ⎥                     ⎢              ⎥                 ⎢ 0
+                                                                                                              1+𝛾
+                     ⎣ 0            0       1⎦                     ⎣0       0    1⎦                 ⎣         0     1⎥⎦
+
+where 𝛾 ∈ [0, 2] denotes the loading parameter for UT, BT, and BC, and 𝛾 ∈ [0, 1] for UC, SS, and PS (as these three cases already
+involve significant extrapolation; as shown in Fig. 4). These deformation paths are used solely for evaluation and not for training. The
+abbreviations used are as follows — UT: uniaxial tension, UC: uniaxial compression, BT: biaxial tension, BC: biaxial compression, SS:
+simple shear, PS: pure shear. Note that, while the uniaxial tension load case represents a uniaxial strain state, it induces a multiaxial
+stress state.
+    Figs. 5–6 and 9–10 (low noise) and Figs. 7–8 and 11–12 (high noise) confirm that both the ICKAN-based strain energy density as
+well as corresponding stress predictions closely match the ground truth across all benchmarks, deformation paths, and noise levels.
+This verifies the generalizability of the trained constitutive models. We observe that in some cases the predictions start to deteriorate
+
+                                                                                            10
+P. Thakolkaran et al.                                                        Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+at larger strains. However, the issue can be addressed by conducting additional experiments (and include them as training data) or
+using specimens with a larger diversity in strain states to improve generalizability.
+    We highlight that the monotonic input-convex architecture of KANs guarantees learning physically admissible models. In Ap-
+pendix D, we demonstrate the performance of vanilla KANs without monotonicity and input-convexity. We observe poor prediction
+accuracies for both strain energy densities and stresses relative to their monotonic input-convex variants. In addition, we observe
+non-physical behaviors such as negative stiffness and fictitious material instabilities without monotonicity and input-convexity in
+the KAN architecture.
+    We further validate the ICKAN-based constitutive models by deploying them within a finite element simulation framework.
+Linear triangular elements and a Newton–Raphson nonlinear solver are employed, with element-level stress and tangent modulus
+computed via automatic differentiation from Eqs. (10) and (11). Since tangent stiffness calculations require the energy density to
+be at least twice differentiable, the splines must have a minimum order of 𝑘 = 3 to ensure adequate smoothness. In this work,
+we use splines of order 𝑘 = 5. These simulations were carried out using a custom in-house finite element solver implemented in
+Python. To assess generalization beyond the training domain, a validation specimen with a more complex geometry—featuring
+two asymmetric elliptical holes and subjected to quasi-static uniaxial loading—is considered (see Fig. 3b). The lowest-loss ICKAN
+models (for each material model, respectively), selected from the ensemble as described above and trained on high-noise data, are
+used in these simulations. As shown in Fig. 13, the finite element solutions for two representative ground-truth models (Isihara
+(34) and Arruda-Boyce (37), respectively) exhibit excellent agreement with those obtained using the ICKAN-based models. This is
+a strong indication that the ICKAN approach is not overfitting to the training data but instead captures the underlying constitutive
+behavior in a generalizable form. Quantitatively, this is supported by high goodness-of-fit 𝑅2 scores: greater than 0.99 for Isihara and
+greater than 0.95 for Arruda-Boyce in the high-noise case, for element-wise strain invariants and close matching of reaction forces.
+Remarkably, the strain states of this validation specimen are completely different from that of the training specimen — as shown
+in Fig. 4; yet the ICKANs show excellent generalization capability to these unseen strain states. In Appendix E, we also provide a
+comparative analysis of the ICKAN framework with the EUCLID approach of Flaschel et al. [11].
+
+4.3. Interpretability
+
+    One advantage of ICKANs over ICNNs and other black-box neural networks is the enhanced interpretability they offer in
+constitutive modeling. This interpretability manifests in two key aspects.
+    (i) Due to the highly nonlinear and expressive nature of the activations – enabled by trainable splines – only a few layers
+with a small number of dimensions are required in KANs. Consequently, each activation function in ICKANs can be plotted and
+interpreted individually; see the insets of Fig. 1d and e. In contrast, ICNNs and similar classical models rely on less expressive
+nonlinear activations (e.g., rectified linear unit or softplus), which necessitate many more linear layers with higher dimensionality
+to achieve comparable performance. This results in a significantly larger number of parameters and reduced interpretability.
+    (ii) The Kolmogorov-Arnold representation allows the network architecture to be decomposed into univariate activation
+functions. This decomposition enables the extraction of analytical expressions at each activation node using symbolic regression,
+which can then be sequentially assembled across the entire network to form an analytical expression for the entire constitutive
+model. Such a univariate decomposition is not possible with ICNNs and similar models, thereby limiting their capacity for symbolic
+interpretation.
+    To quantitatively demonstrate the latter aspect, we extract the symbolic expression of the strain energy density from the trained
+ICKAN model via symbolic regression at each activation node of the network independently. These expressions are derived using
+a small library of univariate symbolic functions: {𝑥, exp(𝑥), log(1 + exp(𝑥)), log(1 + exp(𝑥))2 , log(1 + exp(𝑥))3 , log(1 + exp(𝑥))4 }. Each
+candidate function in the library is purposefully chosen to be convex and non-decreasing. In Appendix F, we introduce a monotonic
+input-convex symbolic regression strategy that ensures that the symbolic approximation of the general ICKAN-based hyperelastic
+model remains polyconvex.
+    Table 1 presents the symbolic expressions of the strain energy densities obtained from the ICKANs for both low- and high-noise
+cases. We overlay the predictions of the symbolic models in each plot of Figs. 5–12 for comparison with the true and ICKAN-based
+strain energy density and stress. In general, the symbolic regression models closely match the ICKAN predictions, and in some cases,
+they even provide a slightly better fit at higher strains. Implementation details of the monotonic input-convex symbolic regression
+are provided in Appendix F. Limitations of symbolic interpretation: Expectedly, in a few cases, the symbolic models show a deterioration
+in the prediction of strain energy densities and stresses relative to the trained ICKAN models. This can be attributed to the limited
+expressivity of the chosen function library for symbolic regression and the compounding errors from fitting a symbolic expression
+to already fitted splines of the ICKAN.
+
+5. Conclusion
+
+    We introduced monotonic Input-Convex Kolmogorov–Arnold Networks (ICKANs) for learning hyperelastic constitutive laws. By
+integrating convexity and monotonicity constraints directly into the KAN architecture, our approach guarantees that the predicted
+strain energy density satisfies polyconvexity. At the same time, the use of trainable spline-based activation functions allows for a
+compact and interpretable representation of the constitutive model. We further demonstrated that ICKANs can be trained in an
+unsupervised manner on realistically measurable data in the form of strain fields and global reaction forces.
+
+                                                                     11
+P. Thakolkaran et al.                                                                 Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+
+
+
+Fig. 5. Strain energy density 𝑊 (𝑭 (𝛾)) predictions for the deformation paths in (40), evaluated under low noise (𝜎𝑢 = 10−4 ). Results are shown for the best
+ICKAN-based constitutive model in the ensemble, the model obtained through symbolic regression of the ICKAN, as well as for the hidden true model, for the
+NH (33), IH (34), and HW (35) benchmarks.
+
+
+
+
+                                                                             12
+P. Thakolkaran et al.                                                                 Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+
+
+
+Fig. 6. Strain energy density 𝑊 (𝑭 (𝛾)) predictions for the deformation paths in (40), evaluated under low noise (𝜎𝑢 = 10−4 ). Results are shown for the best
+ICKAN-based constitutive model in the ensemble, the model obtained through symbolic regression of the ICKAN, as well as for the hidden true model, for the
+GT (36), AB (37), and OG (38) benchmarks.
+
+
+
+
+                                                                             13
+P. Thakolkaran et al.                                                                  Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+
+
+
+Fig. 7. Strain energy density 𝑊 (𝑭 (𝛾)) predictions for the deformation paths in (40), evaluated under high noise (𝜎𝑢 = 10−3 ). Results are shown for the best
+ICKAN-based constitutive model in the ensemble, the model obtained through symbolic regression of the ICKAN, as well as for the hidden true model, for the
+NH (33), IH (34), and HW (35) benchmarks.
+
+
+
+
+                                                                             14
+P. Thakolkaran et al.                                                                  Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+
+
+
+Fig. 8. Strain energy density 𝑊 (𝑭 (𝛾)) predictions for the deformation paths in (40), evaluated under high noise (𝜎𝑢 = 10−3 ). Results are shown for the best
+ICKAN-based constitutive model in the ensemble, the model obtained through symbolic regression of the ICKAN, as well as for the hidden true model, for the
+GT (36), AB (37), and OG (38) benchmarks.
+
+
+
+
+                                                                             15
+P. Thakolkaran et al.                                                                  Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+
+
+
+Fig. 9. Predicted first Piola–Kirchhoff stress 𝑷 (𝑭 (𝛾)) components along the deformation paths specified in (40) for the low noise case (𝜎𝑢 = 10−4 ). The best
+ICKAN-based constitutive model is shown for the NH (33), IH (34), and HW (35) benchmarks, the model obtained through symbolic regression of the ICKAN,
+alongside the response of the true (hidden) model for comparison.
+
+
+
+
+                                                                              16
+P. Thakolkaran et al.                                                                   Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+
+
+
+Fig. 10. Predicted first Piola–Kirchhoff stress 𝑷 (𝑭 (𝛾)) components along the deformation paths specified in (40) for the low noise case (𝜎𝑢 = 10−4 ). The best
+ICKAN-based constitutive model is shown for the GT (36), AB (37), and OG (38) benchmarks, the model obtained through symbolic regression of the ICKAN,
+alongside the response of the true (hidden) model for comparison.
+
+
+
+
+                                                                              17
+P. Thakolkaran et al.                                                                   Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+
+
+
+Fig. 11. Predicted first Piola–Kirchhoff stress 𝑷 (𝑭 (𝛾)) components along the deformation paths specified in (40) for the high noise case (𝜎𝑢 = 10−3 ). The best
+ICKAN-based constitutive model is shown for the NH (33), IH (34), and HW (35) benchmarks, the model obtained through symbolic regression of the ICKAN,
+alongside the response of the true (hidden) model for comparison.
+
+
+
+
+                                                                               18
+P. Thakolkaran et al.                                                                   Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+
+
+
+Fig. 12. Predicted first Piola–Kirchhoff stress 𝑷 (𝑭 (𝛾)) components along the deformation paths specified in (40) for the high noise case (𝜎𝑢 = 10−3 ). The best
+ICKAN-based constitutive model is shown for the GT (36), AB (37), and OG (38) benchmarks, the model obtained through symbolic regression of the ICKAN,
+alongside the response of the true (hidden) model for comparison.
+
+
+
+
+                                                                               19
+P. Thakolkaran et al.                                                                      Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+                         Table 1
+                         Strain energy density of the (true) hidden and discovered symbolic expressions by the ICKAN-based material
+                         models for different noise levels 𝜎𝑢 . Note that the symbolic expressions do not satisfy 𝑊 (𝑭 = 𝑰) = 0; this can
+                         be manually fixed by re-introducing the energy correction term 𝑊 0 (see (9)). However, they do satisfy the
+                         condition 𝑃 (𝑭 = 𝑰) = 0 identically (see (13)).
+                           Model        Noise        Strain energy density (W)
+                           NH2 (33)     Truth        0.5(𝐼̃1 − 3) + 1.5(𝐽 − 1)2
+                                        𝜎 = 10−4     0.5201𝐾1 + 1.4969𝐾3
+                                        𝜎 = 10−3     0.5395𝐾1 + 1.4986𝐾3
+                           IH (34)      Truth        0.5(𝐼̃1 − 3) + (𝐼̃2 − 3) + (𝐼̃1 − 3)2 + 1.5(𝐽 − 1)2
+                                        𝜎 = 10−4     0.35𝐾1 + 1.49𝐾3 + 0.004 log(3568 exp(4.23𝐾2 ) + 1)2 + 0.004 log(22.43 exp(3.3𝐾1 ) + 1)3
+                                        𝜎 = 10−3     0.31𝐾1 + 1.48𝐾3 + 0.004 log(3568 exp(4.30𝐾2 ) + 1)2 + 0.009 log(10.16 exp(2.5𝐾1 ) + 1)3
+                           HW (35)      Truth        0.5(𝐼̃1 − 3) + (𝐼̃2 − 3) + 0.7(𝐼̃1 − 3)(𝐼̃2 − 3) + 0.2(𝐼̃1 − 3)3 + 1.5(𝐽 − 1)2
+                                        𝜎 = 10−4     0.43𝐾2 + 1.48𝐾3 + 0.69 log(0.57 exp(1.04𝐾1 ) + 1)2 + 0.008 log(6.64 exp(1.90𝐾1 ) + 1)3
+                                        𝜎 = 10−3     0.42𝐾2 + 1.49𝐾3 + 0.88 log(0.57 exp(1.04𝐾1 ) + 1)2 + 0.591 log(0.57 exp(1.04𝐾1 ) + 1)2
+                           GT (36)      Truth        0.5(𝐼̃1 − 3) + log(𝐼̃2 ∕3) + 1.5(𝐽 − 1)2
+                                        𝜎 = 10−4     0.65𝐾1 + 0.03𝐾2 + 0.44𝐾3 + 1.58 log(35.20 exp(0.69𝐾3 ) + 1)
+                                        𝜎 = 10−3     0.62𝐾1 + 0.04𝐾2 + 0.78𝐾3 + 1.09 log(16.45 exp(0.72𝐾3 ) + 1)
+                           AB (37)      Truth        Refer to (37)
+                                        𝜎 = 10−4     1.1959𝐾1 + 0.0533𝐾2 + 1.4905𝐾3
+                                        𝜎 = 10 −3    1.0861𝐾1 + 0.1140𝐾2 + 1.4790𝐾3
+                           OG (38)      Truth        Refer to (38)
+                                        𝜎 = 10−4     0.76𝐾1 + 0.001𝐾2 + 0.84𝐾3 + 1.09 log(13.46 exp(0.66𝐾3 ) + 1)
+                                        𝜎 = 10−3     0.69𝐾1 + 0.042𝐾2 + 1.35𝐾3 + 0.23 log(17.64 exp(0.73𝐾3 ) + 1)
+
+
+
+
+Fig. 13. Comparison of FEM for the validation specimen (see Fig. 3b) between the ground-truth and ICKAN-based constitutive model for the Isihara benchmark
+(34) (a–c) and the Arruda-Boyce benchmark (37) (d–f) (trained on high noise data). (a & d) Deformed shape of the validation specimen, with colors indicating
+displacement magnitude, as obtained from both the ground-truth (left) and ICKAN-based (right) simulations. (b & e) Comparison of the reaction force on the
+top surface plotted against the loading parameter 𝛾 (left) and the trained ICKAN-model illustrated with the in-built plotting functionality (right) (c & f) Parity
+plot of the first strain invariant 𝐼̃1 (left) and the determinant 𝐽 (right) predicted by the ICKAN model versus the ground-truth values, with the gray dashed line
+representing perfect agreement (zero intercept, unit slope) and the 𝑅2 value indicating accuracy.
+
+
+
+
+                                                                                 20
+P. Thakolkaran et al.                                                                     Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+    Extensive numerical experiments demonstrated that the ICKAN-based models accurately capture the nonlinear stress–strain
+behavior of hyperelastic materials, even under varying levels of noise in the data. The predicted strain energy densities and
+first Piola–Kirchhoff stresses closely match the ground truth for numerous material models across multiple deformation paths.
+Furthermore, finite element simulations on a validation specimen with a complex geometry confirmed the generalization capability
+of our method, as the ICKAN-based constitutive models produced robust and physically consistent results.
+    Our findings indicate that the ICKAN framework successfully overcomes key limitations of ICNN-based models by combining
+physical consistency with enhanced interpretability and efficiency. Future work will explore extending the framework to model
+additional material behaviors such as viscoelasticity and plasticity, as well as integrating uncertainty quantification to further bolster
+model reliability in real-world applications. Additionally, the ICKAN approach can be applied to any machine learning task that
+ICNNs, as introduced by Amos et al. [47], can address, thereby benefiting the broader machine learning community.
+
+CRediT authorship contribution statement
+
+   Prakash Thakolkaran: Writing – review & editing, Writing – original draft, Visualization, Validation, Software, Methodology,
+Investigation, Formal analysis, Data curation, Conceptualization. Yaqi Guo: Writing – review & editing, Writing – original draft,
+Visualization, Validation, Software, Methodology, Investigation, Formal analysis, Data curation, Conceptualization. Shivam Saini:
+Validation, Software, Methodology, Investigation. Mathias Peirlinck: Supervision. Benjamin Alheit: Methodology. Siddhant
+Kumar: Writing – review & editing, Validation, Supervision, Methodology, Investigation, Formal analysis, Conceptualization.
+
+Declaration of competing interest
+
+    The authors declare that they have no known competing financial interests or personal relationships that could have appeared
+to influence the work reported in this paper.
+
+Acknowledgment
+
+    Y. Guo sincerely thanks Dr. Ye Ji and Chenghuai Lin (MSc.) for their insightful discussions on convex B-splines.
+
+Appendix A. Details on enforcing convexity and monotonicity
+
+
+
+A.1. Proof of the non-decreasing convexity condition
+
+    The derivative of a spline basis function can be computed as [72]:
+        𝑑𝐵𝑖,𝑘 (𝑥)            𝑘                       𝑘
+                     =            𝐵      (𝑥) −              𝐵        (𝑥).                                                                                 (A.1)
+            𝑑𝑥           𝑡𝑖+𝑘 − 𝑡𝑖 𝑖,𝑘−1       𝑡𝑖+𝑘+1 − 𝑡𝑖+1 𝑖+1,𝑘−1
+This implies that
+                𝑛𝑏               (                                                    )
+        𝑑𝜓(𝑥) ∑                          𝑘                        𝑘
+             =     𝑐𝑖                          𝐵𝑖,𝑘−1 (𝑥) −               𝐵𝑖+1,𝑘−1 (𝑥)
+         𝑑𝑥    𝑖=1
+                                     𝑡𝑖+𝑘 − 𝑡𝑖              𝑡𝑖+𝑘+1 − 𝑡𝑖+1
+                         𝑛𝑏 −1                              𝑛𝑏
+                         ∑      𝑐𝑖+1                       ∑       𝑐𝑖
+                 =𝑘                       𝐵𝑖+1,𝑘−1 (𝑥) − 𝑘                 𝐵        (𝑥)                                                                   (A.2)
+                             𝑡
+                         𝑖=0 𝑖+𝑘+1
+                                   − 𝑡𝑖+1                      𝑡
+                                                           𝑖=1 𝑖+𝑘+1
+                                                                     − 𝑡𝑖+1 𝑖+1,𝑘−1
+                                              𝑛𝑏 −1
+                        𝑘𝑐1                   ∑ 𝑐𝑖+1 − 𝑐𝑖                            𝑘𝑐𝑛𝑏
+                 =             𝐵1,𝑘−1 (𝑥) + 𝑘                   𝐵𝑖+1,𝑘−1 (𝑥) −                  𝐵          (𝑥)
+                     𝑡𝑘+1 − 𝑡1                      𝑡
+                                               𝑖=1 𝑖+𝑘+1
+                                                         − 𝑡𝑖+1                𝑡𝑛𝑏 +𝑘+1 − 𝑡𝑛𝑏 +1 𝑛𝑏 +1,𝑘−1
+
+Note that by definition of the basis functions, the first and last terms are zero. For uniform B-splines, the knots are equally spaced
+by interval 𝑠 = 𝑡𝑖+1 − 𝑡𝑖 > 0, for 𝑖 ∈ [1, 𝑛𝑏 − 1]. Hence the first order derivative can be simplified as
+                  𝑛𝑏 −1
+        𝑑𝜓(𝑥)   1 ∑(          )
+              =         𝑐 − 𝑐𝑖 𝐵𝑖+1,𝑘−1 (𝑥).                                                                                                              (A.3)
+         𝑑𝑥     𝑠 𝑖=1 𝑖+1
+
+Since basis functions are by definition non-negative, the non-decreasing requirement
+        𝑑𝜓(𝑥)
+              ≥0                                                                                                                                          (A.4)
+         𝑑𝑥
+leads to
+
+        𝑐𝑖+1 − 𝑐𝑖 ≥ 0,               ∀𝑖 ∈ [1, 𝑛𝑏 − 1].                                                                                                    (A.5)
+
+
+                                                                                     21
+P. Thakolkaran et al.                                                                   Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+   The second-order derivative of the basis function is:
+                                 (                                                  )
+       𝑑 2 𝐵𝑖,𝑘 (𝑥)        𝑘           𝑘−1                     𝑘−1
+                    =                         𝐵𝑖,𝑘−2 (𝑥) −              𝐵𝑖+1,𝑘−2 (𝑥) −
+           𝑑𝑥2         𝑡𝑖+𝑘 − 𝑡𝑖 𝑡𝑖+𝑘−1 − 𝑡𝑖                𝑡𝑖+𝑘 − 𝑡𝑖+1
+                                   (                                                      )
+                          𝑘             𝑘−1                         𝑘−1                                                                                 (A.6)
+                                                𝐵𝑖+1,𝑘−2 (𝑥) −                𝐵𝑖+2,𝑘−2 (𝑥)
+                    𝑡𝑖+𝑘+1 − 𝑡𝑖+1 𝑡𝑖+𝑘 − 𝑡𝑖+1                   𝑡𝑖+𝑘+1 − 𝑡𝑖+2
+                        1 (                                           )
+                    =       𝐵𝑖,𝑘−2 (𝑥) − 2𝐵𝑖+1,𝑘−2 (𝑥) + 𝐵𝑖+2,𝑘−2 (𝑥) .
+                       𝑠2
+Substituting this into 𝜓(𝑥) and considering the definition of the basis functions, we have:
+                  𝑛𝑏
+       𝑑 2 𝜓(𝑥) ∑       𝑑 2 𝐵𝑖,𝑘 (𝑥)
+               =     𝑐𝑖
+         𝑑𝑥2     𝑖=1        𝑑𝑥2
+                     (𝑛 −2                          𝑛𝑏 −1                      𝑛𝑏
+                                                                                                 )
+                  1 ∑                               ∑                         ∑
+                        𝑏
+               =              𝑐𝑖+2 𝐵𝑖+2,𝑘−2 (𝑥) − 2       𝑐𝑖+1 𝐵𝑖+2,𝑘−2 (𝑥) +     𝑐𝑖 𝐵𝑖+2,𝑘−2 (𝑥)                                                       (A.7)
+                 𝑠2 𝑖=−1                             𝑖=0                      𝑖=1
+                     (𝑛 −1                                      )
+                  1 ∑
+                        𝑏
+               =             (𝑐𝑖+2 − 2𝑐𝑖+1 + 𝑐𝑖 )𝐵𝑖+2,𝑘−2 (𝑥) .
+                 𝑠2 𝑖=1
+    Convexity condition requires
+       𝑑 2 𝜓(𝑥)
+                ≥ 0.                                                                                                                                    (A.8)
+         𝑑𝑥2
+Since 𝐵𝑖+2,𝑘−2 (𝑥) ≥ 0, convexity is ensured if:
+
+        𝑐𝑖+2 − 2𝑐𝑖+1 + 𝑐𝑖 ≥ 0,       ∀𝑖 ∈ [1, 𝑛𝑏 − 2].                                                                                                  (A.9)
+
+
+A.2. Implementation of convexity and monotonicity constraints
+
+                 𝑏     𝑛                                                                                            𝑏                   𝑛
+   Let 𝐩 = {𝑝𝑖 }𝑖=1 be a sequence of randomly initialized coefficients, A sequence of convex coefficients 𝐜 = {𝑐𝑖 }𝑖=1 can be derived
+from 𝐩 through the following steps:
+                                {
+               𝑛𝑏                  𝑝1 ,           if 𝑖 = 1,
+      𝐡 = {ℎ𝑖 }𝑖=1 , with ℎ𝑖 =
+                                   max(0, 𝑝𝑖 ), otherwise,
+                                {
+               𝑛𝑏                 ℎ ,          if 𝑖 = 1,
+      𝐝 = {𝑑𝑖 }𝑖=1 , with 𝑑𝑖 = ∑1𝑖                                                                                             (A.10)
+                                        ℎ
+                                     𝑖=2 𝑗 ,   otherwise,
+
+                   𝑛                       ∑
+                                           𝑖
+                  𝑏
+        𝐜 = {𝑐𝑖 }𝑖=1 ,      with    𝑐𝑖 =         𝑑𝑗 .
+                                           𝑗=1
+                𝑏 𝑛                                                                     𝑏               𝑛
+Since 𝐝 = {𝑑𝑖 }𝑖=2 is the cumulative sum of a sequence of non-negative values 𝐡 = {ℎ𝑖 }𝑖=2 , it follows that:
+
+        𝑐𝑖+1 − 𝑐𝑖 = 𝑑𝑖+1 ≥ 𝑑𝑖 = 𝑐𝑖 − 𝑐𝑖−1 ≥ 0,          ∀𝑖 ∈ [2, 𝑛𝑏 − 1].                                                                             (A.11)
+                            𝑛𝑏
+Thus, the sequence 𝐜 = {𝑐𝑖 }𝑖=1 is non-decreasing and convex.
+   This algorithm enforces a hard constraint on the coefficients, ensuring convexity by construction. Consequently, backpropagation
+can be performed efficiently during training without introducing additional computational overhead.
+
+A.3. Linear extrapolation at the endpoints
+
+   As illustrated in Fig. 1b, convexity cannot be guaranteed outside the B-spline domain [𝑡𝑘+1 , 𝑡𝑚𝑏 −𝑘 ]. To smoothly extend the curve
+𝜓(𝑥) beyond these boundaries, we apply a linear extrapolation that preserves the local behavior at the endpoints.
+   For the left endpoint at 𝑥 = 𝑡𝑘+1 , choose two sample points using a small offset 1 ≫ 𝜀 > 0:
+
+        𝑥0 = 𝑡𝑘+1 ,        𝑥1 = 𝑡𝑘+1 + 𝜀.                                                                                                             (A.12)
+
+Evaluating the curve at these points gives:
+
+        𝑦0 = 𝜓(𝑥0 ),        𝑦1 = 𝜓(𝑥1 ).                                                                                                              (A.13)
+
+We fit a linear function of the form:
+
+        𝜓left (𝑥) = 𝑎left (𝑥 − 𝑡𝑘+1 ) + 𝑏left .                                                                                                       (A.14)
+
+Using the finite difference approximation, the coefficients are determined as:
+                  𝑦1 − 𝑦0   𝜓(𝑡𝑘+1 + 𝜀) − 𝜓(𝑡𝑘+1 )
+        𝑎left =           =                        ,           𝑏left = 𝜓(𝑡𝑘+1 ).                                                                      (A.15)
+                     𝜀                𝜀
+
+                                                                                   22
+P. Thakolkaran et al.                                                                        Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+Thus, for 𝑥 < 𝑡𝑘+1 , the extrapolated curve is given by
+                  𝜓(𝑡𝑘+1 + 𝜀) − 𝜓(𝑡𝑘+1 )
+        𝜓left (𝑥) =                      (𝑥 − 𝑡𝑘+1 ) + 𝜓(𝑡𝑘+1 ).                                                                                           (A.16)
+                            𝜀
+    Similarly, for the right endpoint at 𝑥 = 𝑡𝑚𝑏 −𝑘 , extrapolation function can be evaluated as:
+                        𝜓(𝑡𝑚𝑏 −𝑘 ) − 𝜓(𝑡𝑚𝑏 −𝑘 − 𝜀)
+        𝜓right (𝑥) =                    (𝑥 − 𝑡𝑚𝑏 −𝑘 ) + 𝜓(𝑡𝑚𝑏 −𝑘 ), 𝑥 > 𝑡𝑚𝑏 −𝑘 .                                                                           (A.17)
+                            𝜀
+    By applying the above linear extrapolation at both endpoints, the extended B-spline curve 𝜓(𝑥)
+                                                                                              ̄    is defined as
+                      𝜓(𝑡   +𝜀)−𝜓(𝑡   )
+               ⎧ 𝑘+1            𝑘+1
+                                      (𝑥 − 𝑡𝑘+1 ) + 𝜓(𝑡𝑘+1 ),          𝑥 < 𝑡𝑘+1 ,
+                           𝜀
+               ⎪
+        𝜓(𝑥)
+        ̄    = ⎨𝜓(𝑥),                                                  𝑡𝑘+1 ≤ 𝑥 ≤ 𝑡𝑚𝑏 −𝑘 ,                                                                 (A.18)
+               ⎪ 𝜓(𝑡𝑚𝑏 −𝑘 )−𝜓(𝑡𝑚𝑏 −𝑘 −𝜀)
+               ⎩             𝜀
+                                         (𝑥 − 𝑡 𝑚𝑏 −𝑘 ) + 𝜓(𝑡 𝑚𝑏 −𝑘 ), 𝑥 > 𝑡𝑚𝑏 −𝑘 .
+
+This approach ensures a smooth extension of the B-spline, preserving both function continuity (𝐶 0 ) and first-order smoothness (𝐶 1 )
+at the boundaries, thereby maintaining local shape consistency. Note that while we can ensure physical consistency for 𝑊 outside
+the spline domain using linear extrapolation, it may not be the most ideal solution and could hinder generalization.
+
+Appendix B. ICKAN spline grid initialization
+
+    In our ICKAN implementation, the natural definition domain bounds of the splines are set during the initialization phase to
+ensure they cover the expected range of input values.
+    This process begins by constructing dummy inputs in the form of 𝒛(0) —with each dimension’s values set in the sufficiently large
+range of [−5, 25] discretized along 100 uniformly spaced points. These dummy inputs are passed through the first KAN layer (𝑟 = 1)
+and the outputs, i.e., 𝒛(1) , are recorded. The range of values for 𝑧(1)
+                                                                     𝑗 (with 𝑗 ∈ {1, … , 𝑛0 }) is computed, which is then set as the
+natural definition domain for 𝜙0,𝑖,𝑗 for all 𝑖 ∈ {1, … , 𝑛1 }.
+    Similar to the previous step, the new range of values for each dimension of 𝒛(1) is set to the respective natural definition domains
+and new dummy inputs are created for the second KAN layer (𝑟 = 2). The process is then subsequently repeated for the following
+layers in a similar fashion.
+    Once this initialization step is complete for all KAN layers, the bounds remains fixed and are not updated during training or
+inference.
+
+Appendix C. Training details
+
+    The Algorithm 1 (adapted from NN-EUCLID [48]) summarizes the unsupervised training of the ICKAN-based constitutive models.
+All parameters used for data generation and training are found in Table C.2.
+
+
+
+Appendix D. Learning material models without convexity constraints
+
+   Figs. D.14–D.15 illustrate the constitutive response for three representative benchmarks when the ICKAN model in (6) is replaced
+with a standard KAN without the convexity and monotonicity constraints while maintaining the same network architecture. We kept
+the initial update of the knot range (outlined in Appendix B). Here, we included the bias function in the construction of the univariate
+function to improve the learning (as originally suggested for KANs by Liu et al. [40]), i.e.,
+
+        𝜙(𝑥) = 𝑤𝑏 𝑏(𝑥) + 𝑤𝑠 𝜓(𝑥),                                                                                                                            (D.1)
+
+where 𝑏(𝑥) = 𝑥(1 + exp (−𝑥))−1 is the SiLU activation [73] and 𝑤𝑏 is a trainable scalar weight. Note that we did not perform any
+other hyperparameter tuning in this case.
+
+Appendix E. Comparison with EUCLID
+
+    Flaschel et al. [11] have previously introduced the EUCLID framework for discovering interpretable and analytical hyperelastic
+models via sparse (linear) regression on a large catalog of candidate functions in an unsupervised setting. Since the candidate
+functions are predefined, EUCLID inherently provides interpretable models. However, its expressivity may be limited by the chosen
+set of functions used for sparse regression.
+    Here, we compare the vanilla EUCLID framework with ICKANs. The EUCLID implementation used in this work is directly adapted
+from [11] (code available at: github.com/EUCLID-code/EUCLID-hyperelasticity). In consultation with the authors of Flaschel et al.
+[11], we changed the penalty parameter 𝜆𝑝 therein from 0.0001 to 0.0125 to adapt the implementation to our data. For details such
+as the methodology, hyperparameters, and the catalog of candidate functions, please refer to Flaschel et al. [11].
+    The results in Fig. E.16 demonstrate that both the EUCLID framework [11] and ICKAN perform well in capturing the underlying
+constitutive behavior for the IH (34) and AB (37) benchmarks under high noise conditions. EUCLID discovers physically meaningful
+and compact strain energy formulations by operating within a predefined functional basis, which promotes interpretability but can
+
+                                                                                23
+P. Thakolkaran et al.                                                                    Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+
+
+
+Fig. D.14. Strain energy density 𝑊 (𝑭 (𝛾)) predictions for the deformation paths in (40), evaluated under high noise (𝜎𝑢 = 10−3 ). Results are shown for a vanilla
+KAN-based model, as well as for the hidden true model, for the NH (33), IH (34), and HW (35) benchmarks.
+
+
+
+
+                                                                               24
+P. Thakolkaran et al.                                                                  Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+
+
+
+Fig. D.15. Predicted first Piola–Kirchhoff stress 𝑷 (𝑭 (𝛾)) components along the deformation paths specified in (40) for the high noise case (𝜎𝑢 = 10−3 ). The
+response of a trained vanilla KAN-based model is shown for the NH (33), IH (34), and HW (35) benchmarks, alongside the response of the true (hidden) model
+for comparison.
+
+
+
+
+                                                                             25
+P. Thakolkaran et al.                                                        Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+
+Algorithm 1 Unsupervised training of the ICKAN-based constitutive models
+ 1: Input: Point-wise displacement data  = {𝒖𝑎,𝑡 ∈ R2 ∶ 𝑎 = 1, … , 𝑛𝑛 ; 𝑡 = 1, … , 𝑛𝑡 }
+ 2: Input: Global reaction forces {𝑅𝛽,𝑡 ∶ 𝛽 = 1, … , 𝑛𝛽 ; 𝑡 = 1, … , 𝑛𝑡 }
+ 3: Randomly initialize ICKAN parameters: .
+ 4: Initialize learning rate scheduler
+ 5: Initialize Adam optimizer with parameters  and learning rate scheduler
+ 6: for 𝑒 = 1, … , 𝑛𝑒 do                                                                                                    ⊳ Training epochs
+ 7:      Loss: 𝓁 ← 0                                                                                       ⊳ Initialize loss for current epoch
+ 8:      for 𝑡 = 1, … , 𝑛𝑡 do                                                                                        ⊳ Iterate over snapshots
+ 9:         for each element in mesh do
+10:             𝑊 0 ← 𝑊ICKAN |𝑭 =𝑰                                                                                                     ⊳ see (9)
+11:              𝑊 ← 𝑊ICKAN + 𝑊 0                                                                                                      ⊳ see (6)
+12:             𝑷 ← 𝜕𝑊  𝜕𝑭
+                                                                                                                                       ⊳ see (10)
+13:          end for
+14:          for 𝑎 = 1, … , 𝑛𝑎 do
+15:             for 𝑖 = 1, 2 do
+16:                  Compute force 𝑓𝑖𝑎,𝑡 using (29)
+17:             end for
+18:          end for
+19:          for (𝑎, 𝑖) ∈ free do
+                           (     )2
+20:             𝓁 ← 𝓁 + 𝑓𝑖𝑎,𝑡                                                       ⊳ force balance at free degrees of freedom; see (32)
+21:          end for
+22:          for 𝛽 = 1, … , 𝑛𝛽 do
+23:             𝑟𝛽,𝑡 ← 0
+24:             for (𝑎, 𝑖) ∈ fix
+                                𝛽
+                                    do
+25:             𝑟𝛽,𝑡 ← 𝑟𝛽,𝑡 + 𝑓𝑖𝑎,𝑡                                                                                   ⊳ see (32)
+26:          end for
+                      ( 𝛽,𝑡         )2
+27:          𝓁 ← 𝓁 + 𝑅 − 𝑟𝛽,𝑡                                              ⊳ force balance at fixed degrees of freedom; see (32)
+28:       end for
+29:    end for
+30:    Compute gradients 𝜕𝓁∕𝜕 using automatic differentiation
+31:    Update  with Adam optimizer using gradients 𝜕𝓁∕𝜕.
+32:    Update learning rate with learning rate scheduler based on epoch number 𝑒
+33: end for
+34: Output: Trained ICKAN model 𝑊 ICKAN
+                                       
+
+
+
+
+limit expressivity in more complex settings. In contrast, ICKANs begin with a highly expressive KAN-based architecture capable of
+fitting intricate stress–strain responses, and subsequently distills interpretable expressions through symbolic regression. For both
+benchmarks, the models obtained from EUCLID and ICKAN show strong agreement with the ground truth responses. These results
+highlight the complementary nature of the two approaches — EUCLID provides interpretable models by design, while ICKAN
+achieves accuracy-first learning with interpretability introduced in a post-processing stage.
+
+Appendix F. Monotonic input-convex symbolic regression
+
+    To improve the interpretability of the learned ICKAN constitutive models, symbolic regression is applied to analytically
+approximate the trained univariate activation functions individually. The symbolic expressions of each activation are then assembled
+across the entire network to obtain a symbolic expression of the whole constitutive model. Here, we adapt the symbolic framework
+of Liu et al. [40] to enable monotonic input-convex symbolic regression and, thereby, obtain symbolic polyconvex hyperelastic
+models.
+    Given a trained univariate function mapping from layer 𝑟 to layer 𝑟+1, the activation function 𝜙𝑟,𝑖,𝑗 is approximated by searching
+for the best symbolic representation 𝜙̂ 𝑟,𝑖,𝑗 from a candidate function library . In the subsequent discussion, we drop the subscripts
+on 𝜙 for the sake of brevity.
+    For a given candidate function 𝑓 ∈  that is convex and non-decreasing, we construct an approximation ansatz of the form:
+        ̂
+        𝜙(𝑥) = 𝑐𝑓 (𝑎𝑥 + 𝑏) + 𝑑,     with   𝑎 ≥ 0 and 𝑐 ≥ 0,                                                                                  (F.1)
+
+where 𝑎, 𝑏, 𝑐, 𝑑 are scalar fitting parameters. The convex and non-decreasing constraint on 𝑓 and along with 𝑎 ≥ 0 and 𝑐 ≥ 0 ensure
+that 𝜙̂ is convex and non-decreasing. Consequently, this guarantees that the ICKAN’s symbolic model is monotonic and input-convex
+and the resulting hyperelastic strain energy density is polyconvex.
+
+                                                                       26
+P. Thakolkaran et al.                                                                     Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+                Table C.2
+                List of parameters and hyperparameters used for the data generation and benchmarks.
+                  Parameter                                                                    Notation                 Value
+                  Training specimen:
+                     Number of nodes in mesh for FEM-based data generation                     –                        63,601
+                     Number of nodes in data available for learning                            𝑛𝑛                       1441
+                     Number of reaction force constraints                                      𝑛𝛽                       4
+                     Number of data snapshots for NH, GT                                       𝑛𝑡                       3
+                     Number of data snapshots for IH, HW                                       𝑛𝑡                       8
+                     Number of data snapshots for AB                                           𝑛𝑡                       10
+                     Number of data snapshots for OG                                           𝑛𝑡                       6
+                     Loading parameter for NH, GT, IH, HW                                      𝛿                        {0.1 × 𝑡 ∶ 𝑡 = 1, … , 𝑛𝑡 }
+                     Loading parameter for AB, OG                                              𝛿                        {0.05 × 𝑡 ∶ 𝑡 = 1, … , 𝑛𝑡 }
+                  Validation specimen:
+                     Number of nodes in the mesh                                               –                        4908
+                     Loading parameter                                                         𝛿                        {0.01 × 𝑡 ∶ 𝑡 = 1, … , 100}
+                  ICKAN hyperparameters:
+                     Order of B-splines                                                        𝑘                        5
+                     Number of coefficients per trainable activations                          𝑛𝑏                       17
+                     Number of knots                                                           𝑚𝑏                       23
+                     Number of hidden layers                                                   𝑅−1                      1
+                     Number of trainable activations in hidden layer (𝑅 − 1)                   𝑛0 × 𝑛𝑅−1                3×2=6
+                     Number of trainable activations in output layer (𝑅)                       𝑛𝑅−1 × 𝑛𝑅                2×1=2
+                     Number of trained ICKAN models                                            𝑛𝑒                       10
+                     Optimizer                                                                 –                        Adam
+                     Epochs                                                                    –                        1000
+                     Learning rate scheduler                                                   –                        Cyclic
+                     Base learning rate                                                        –                        0.001
+                     Maximum learning rate                                                     –                        0.1
+                     Learning rate scheduler steps                                             –                        50
+                     Symbolic regression balance parameter                                     𝜆sym                     0.8
+
+
+
+
+    The parameters 𝑎, 𝑏, 𝑐, 𝑑 are obtained by numerically fitting 𝜙̂ to the splines-based 𝜙 as
+                                   ∑
+                                   𝑛
+        𝑎, 𝑏, 𝑐, 𝑑 ← arg min              ̂ 𝑖 ) − 𝜙(𝑥𝑖 )‖2
+                                         ‖𝜙(𝑥                  s.t.    𝑎 ≥ 0 and 𝑐 ≥ 0.                                                                   (F.2)
+                         𝑎,𝑏,𝑐,𝑑
+                                   𝑖=1
+
+Here, the functions 𝜙̂ and 𝜙 are evaluated at 𝑛 = 100 points for the purpose of fitting. The parameters 𝑎 and 𝑏 are determined via
+iterative grid search in the range [0, 10] and [−10, 10] respectively, while 𝑐 and 𝑑 are obtained through linear regression in each
+iteration.
+    In this study, we choose the function library as
+
+         = {𝑥, exp(𝑥), log(1 + exp(𝑥)), log(1 + exp(𝑥))2 , log(1 + exp(𝑥))3 , log(1 + exp(𝑥))4 }          with    𝑥 ∈ R,                                 (F.3)
+
+where all the candidate functions are convex and non-decreasing.
+  To select the optimal symbolic function 𝑓 from the library , the following loss function and selection criterion is used:
+
+        𝑓 ← arg min 𝜆sym complexity + (1 − 𝜆sym )fit ,                                                                                                  (F.4)
+                  𝑓 ∈
+
+where 𝜆sym ∈ [0, 1] is a scalar hyperparameter. fit quantifies the approximation error due to 𝑓 using the goodness-of-fit 𝑅2 score,
+defined as
+
+        fit = log2 (1 + 10−5 − 𝑅2 (𝜙,
+                                    ̂ 𝜙)),                                                                                                                (F.5)
+
+while complexity penalizes the complexity of 𝑓 (i.e., promotes parsimony) by assigning numerical weights to different expressions:
+
+                      ⎧1           if     𝑓 (𝑥) = 𝑥,
+                      ⎪
+        complexity = ⎨2           if     𝑓 (𝑥) = exp(𝑥),                                                                                                 (F.6)
+                      ⎪
+                      ⎩2           if     𝑓 (𝑥) = log(1 + exp(𝑥))𝑛 ,   where 𝑛 ∈ 1, 2, 3, 4.
+The parameter 𝜆sym is tunable (see Table C.2 for chosen value), which allows for a balance between simplicity and accuracy.
+
+Data and code availability
+
+    The data and codes generated in the current study are freely available at https://github.com/mmc-group/ICKANs/.
+
+
+
+                                                                                 27
+P. Thakolkaran et al.                                                                     Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+
+
+
+Fig. E.16. Predicted first Piola–Kirchhoff stress 𝑷 (𝑭 (𝛾)) components along the deformation paths specified in (40) for the high noise case (𝜎𝑢 = 10−3 ). The best
+ICKAN-based constitutive model is shown for the IH (34) and AB (37) benchmarks, and the model obtained through EUCLID, alongside the response of the true
+(hidden) model for comparison.
+
+
+
+
+References
+
+
+ [1] J.N. Fuhg, G. Anantha Padmanabha, N. Bouklas, B. Bahmani, W. Sun, N.N. Vlassis, M. Flaschel, P. Carrara, L. De Lorenzis, A review on data-driven
+     constitutive laws for solids, Arch. Comput. Methods Eng. (2024) http://dx.doi.org/10.1007/s11831-024-10196-2.
+ [2] S. Kumar, D.M. Kochmann, What machine learning can do for computational solid mechanics, in: Current Trends and Open Problems in Computational
+     Mechanics, Springer, 2022, pp. 275–285, http://dx.doi.org/10.1007/978-3-030-87312-7_27.
+
+
+                                                                                28
+P. Thakolkaran et al.                                                                     Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+ [3] T. Kirchdoerfer, M. Ortiz, Data-driven computational mechanics, Comput. Methods Appl. Mech. Engrg. 304 (2016) 81–101, http://dx.doi.org/10.1016/j.
+     cma.2016.02.001, URL: https://www.sciencedirect.com/science/article/pii/S0045782516300238.
+ [4] T. Kirchdoerfer, M. Ortiz, Data-driven computing in dynamics, Internat. J. Numer. Methods Engrg. 113 (11) (2018) 1697–1710, http://dx.doi.org/10.1002/
+     nme.5716, URL: https://onlinelibrary.wiley.com/doi/10.1002/nme.5716.
+ [5] R. Eggersmann, T. Kirchdoerfer, S. Reese, L. Stainier, M. Ortiz, Model-free data-driven inelasticity, Comput. Methods Appl. Mech. Engrg. 350 (2019) 81–99,
+     http://dx.doi.org/10.1016/j.cma.2019.02.016, URL: https://linkinghub.elsevier.com/retrieve/pii/S0045782519300878.
+ [6] R. Ibañez, D. Borzacchiello, J.V. Aguado, E. Abisset-Chavanne, E. Cueto, P. Ladeveze, F. Chinesta, Data-driven non-linear elasticity: constitutive manifold
+     construction and problem discretization, Comput. Mech. 60 (5) (2017) 813–826, http://dx.doi.org/10.1007/s00466-017-1440-1, URL: http://link.springer.
+     com/10.1007/s00466-017-1440-1.
+ [7] S. Conti, S. Müller, M. Ortiz, Data-driven problems in elasticity, Arch. Ration. Mech. Anal. 229 (1) (2018) 79–123, http://dx.doi.org/10.1007/s00205-017-
+     1214-0, URL: http://link.springer.com/10.1007/s00205-017-1214-0.
+ [8] L.T.K. Nguyen, M.-A. Keip, A data-driven approach to nonlinear elasticity, Comput. Struct. 194 (2018) 97–115, http://dx.doi.org/10.1016/j.compstruc.
+     2017.07.031, URL: https://linkinghub.elsevier.com/retrieve/pii/S0045794917301311.
+ [9] P. Carrara, L. De Lorenzis, L. Stainier, M. Ortiz, Data-driven fracture mechanics, Comput. Methods Appl. Mech. Engrg. 372 (2020) 113390, http:
+     //dx.doi.org/10.1016/j.cma.2020.113390, URL: https://linkinghub.elsevier.com/retrieve/pii/S0045782520305752.
+[10] K. Karapiperis, M. Ortiz, J. Andrade, Data-driven nonlocal mechanics: Discovering the internal length scales of materials, Comput. Methods Appl. Mech.
+     Engrg. 386 (2021) 114039, http://dx.doi.org/10.1016/j.cma.2021.114039, URL: https://linkinghub.elsevier.com/retrieve/pii/S0045782521003704.
+[11] M. Flaschel, S. Kumar, L. De Lorenzis, Unsupervised discovery of interpretable hyperelastic constitutive laws, Comput. Methods Appl. Mech. Engrg. 381
+     (2021) 113852, http://dx.doi.org/10.1016/j.cma.2021.113852, URL: https://linkinghub.elsevier.com/retrieve/pii/S0045782521001894.
+[12] A. Joshi, P. Thakolkaran, Y. Zheng, M. Escande, M. Flaschel, L. De Lorenzis, S. Kumar, Bayesian-EUCLID: Discovering hyperelastic material laws with
+     uncertainties, Comput. Methods Appl. Mech. Engrg. 398 (2022) 115225, URL: http://dx.doi.org/10.1016/j.cma.2022.115225.
+[13] M. Flaschel, S. Kumar, L. De Lorenzis, Discovering plasticity models without stress data, Npj Comput. Mater. 8 (1) (2022) 91, URL: http://dx.doi.org/10.
+     1038/s41524-022-00752-4.
+[14] M. Flaschel, S. Kumar, L. De Lorenzis, Automated discovery of generalized standard material models with EUCLID, Comput. Methods Appl. Mech. Engrg.
+     405 (2023) 115867, http://dx.doi.org/10.1016/j.cma.2022.115867.
+[15] M. Flaschel, H. Yu, N. Reiter, J. Hinrichsen, S. Budday, P. Steinmann, S. Kumar, L. De Lorenzis, Automated discovery of interpretable hyperelastic material
+     models for human brain tissue with EUCLID, J. Mech. Phys. Solids 180 (2023) 105404, http://dx.doi.org/10.1016/j.jmps.2023.105404.
+[16] E. Marino, M. Flaschel, S. Kumar, L. De Lorenzis, Automated identification of linear viscoelastic constitutive laws with EUCLID, Mech. Mater. 181 (2023)
+     104643, http://dx.doi.org/10.1016/j.mechmat.2023.104643.
+[17] Z. Wang, J. Estrada, E. Arruda, K. Garikipati, Inference of deformation mechanisms and constitutive response of soft material surrogates of biological
+     tissue by full-field characterization and data-driven variational system identification, J. Mech. Phys. Solids 153 (2021) 104474, http://dx.doi.org/10.1016/
+     j.jmps.2021.104474.
+[18] B. Bahmani, W. Sun, Physics-constrained symbolic model discovery for polyconvex incompressible hyperelastic materials, Internat. J. Numer. Methods
+     Engrg. 125 (15) (2024) http://dx.doi.org/10.1002/nme.7473.
+[19] B. Bahmani, H.S. Suh, W. Sun, Discovering interpretable elastoplasticity models via the neural polynomial method enabled symbolic regressions, Comput.
+     Methods Appl. Mech. Engrg. 422 (2024) 116827, http://dx.doi.org/10.1016/j.cma.2024.116827.
+[20] N.N. Phan, W. Sun, J.D. Clayton, HYDRA: Symbolic feature engineering of overparameterized Eulerian hyperelasticity models for fast inference time,
+     Comput. Methods Appl. Mech. Engrg. 437 (2025) 117792, http://dx.doi.org/10.1016/j.cma.2025.117792.
+[21] J. Hou, X. Chen, T. Wu, E. Kuhl, X. Wang, Automated data-driven discovery of material models based on symbolic regression: A case study on the human
+     brain cortex, Acta Biomater. 188 (2024) 276–296, http://dx.doi.org/10.1016/j.actbio.2024.09.005.
+[22] R. Abdusalamov, M. Hillgärtner, M. Itskov, Hyperelastic material modelling using symbolic regression, PAMM 22 (1) (2023) http://dx.doi.org/10.1002/
+     pamm.202200263.
+[23] G. Kissas, S. Mishra, E. Chatzi, L. De Lorenzis, The language of hyperelastic materials, Comput. Methods Appl. Mech. Engrg. 428 (2024) 117053,
+     http://dx.doi.org/10.1016/j.cma.2024.117053.
+[24] K. Upadhyay, J.N. Fuhg, N. Bouklas, K.T. Ramesh, Physics-informed data-driven discovery of constitutive models with application to strain-rate-sensitive
+     soft materials, Comput. Mech. (2024) http://dx.doi.org/10.1007/s00466-024-02497-x.
+[25] I. Rocha, P. Kerfriden, F. van der Meer, On-the-fly construction of surrogate constitutive models for concurrent multiscale mechanical analysis through
+     probabilistic machine learning, J. Comput. Phys.: X 9 (2021) 100083, http://dx.doi.org/10.1016/j.jcpx.2020.100083, URL: https://www.sciencedirect.com/
+     science/article/pii/S2590055220300354.
+[26] J.N. Fuhg, M. Marino, N. Bouklas, Local approximate Gaussian process regression for data-driven constitutive models: development and comparison with
+     neural networks, Comput. Methods Appl. Mech. Engrg. 388 (2022) 114217, http://dx.doi.org/10.1016/j.cma.2021.114217, URL: https://www.sciencedirect.
+     com/science/article/pii/S004578252100548X.
+[27] A. Aggarwal, B.S. Jensen, S. Pant, C.-H. Lee, Strain energy density as a gaussian process and its utilization in stochastic finite element analysis: application
+     to planar soft tissues, Comput. Methods Appl. Mech. Engrg. 404 (2023) 115812, http://dx.doi.org/10.1016/j.cma.2022.115812.
+[28] L. Linden, D.K. Klein, K.A. Kalina, J. Brummund, O. Weeger, M. Kästner, Neural networks meet hyperelasticity: A guide to enforcing physics, J. Mech.
+     Phys. Solids 179 (2023) 105363, http://dx.doi.org/10.1016/j.jmps.2023.105363.
+[29] N.N. Vlassis, R. Ma, W. Sun, Geometric deep learning for computational mechanics part I: anisotropic hyperelasticity, Comput. Methods Appl. Mech. Engrg.
+     371 (2020) 113299, http://dx.doi.org/10.1016/j.cma.2020.113299.
+[30] K.P. Abdolazizi, K. Linka, C.J. Cyron, Viscoelastic constitutive artificial neural networks (vcanns) – a framework for data-driven anisotropic nonlinear finite
+     viscoelasticity, J. Comput. Phys. 499 (2024) 112704, http://dx.doi.org/10.1016/j.jcp.2023.112704.
+[31] C. Bonatti, D. Mohr, One for all: Universal material model based on minimal state-space neural networks, Sci. Adv. 7 (26) (2021) http://dx.doi.org/10.
+     1126/sciadv.abf3658.
+[32] D.K. Klein, R. Ortigosa, J. Martínez-Frutos, O. Weeger, Nonlinear electro-elastic finite element analysis with neural network constitutive models, Comput.
+     Methods Appl. Mech. Engrg. 425 (2024) 116910, http://dx.doi.org/10.1016/j.cma.2024.116910.
+[33] K.A. Kalina, P. Gebhart, J. Brummund, L. Linden, W. Sun, M. Kästner, Neural network-based multiscale modeling of finite strain magneto-elasticity with
+     relaxed convexity criteria, Comput. Methods Appl. Mech. Engrg. 421 (2024) 116739, http://dx.doi.org/10.1016/j.cma.2023.116739.
+[34] M. Mozaffar, R. Bostanabad, W. Chen, K. Ehmann, J. Cao, M.A. Bessa, Deep learning predicts path-dependent plasticity, Proc. Natl. Acad. Sci. 116 (52)
+     (2019) 26414–26420, http://dx.doi.org/10.1073/pnas.1911815116.
+[35] L. Zheng, D.M. Kochmann, S. Kumar, HyperCAN: Hypernetwork-driven deep parameterized constitutive models for metamaterials, Extrem. Mech. Lett. 72
+     (2024) 102243, http://dx.doi.org/10.1016/j.eml.2024.102243.
+[36] V. Taç, F. Sahli Costabal, A.B. Tepole, Data-driven tissue mechanics with polyconvex neural ordinary differential equations, Comput. Methods Appl. Mech.
+     Engrg. 398 (2022) 115248, http://dx.doi.org/10.1016/j.cma.2022.115248.
+[37] K. Linka, E. Kuhl, A new family of constitutive artificial neural networks towards automated model discovery, Comput. Methods Appl. Mech. Engrg. 403
+     (2023) 115731, http://dx.doi.org/10.1016/j.cma.2022.115731.
+
+
+                                                                                29
+P. Thakolkaran et al.                                                                     Computer Methods in Applied Mechanics and Engineering 443 (2025) 118089
+
+[38] K. Linka, G.A. Holzapfel, E. Kuhl, Discovering uncertainty: Bayesian constitutive artificial neural networks, Comput. Methods Appl. Mech. Engrg. 433
+     (2025) 117517, http://dx.doi.org/10.1016/j.cma.2024.117517.
+[39] V. Taç, M.K. Rausch, I. Bilionis, F. Sahli Costabal, A.B. Tepole, Generative hyperelasticity with physics-informed probabilistic diffusion fields, Eng. Comput.
+     41 (1) (2024) 51–69, http://dx.doi.org/10.1007/s00366-024-01984-2.
+[40] Z. Liu, Y. Wang, S. Vaidya, F. Ruehle, J. Halverson, M. Soljačić, T.Y. Hou, M. Tegmark, Kan: Kolmogorov–Arnold networks, 2024, arXiv preprint
+     arXiv:2404.19756. URL: https://arxiv.org/abs/2404.19756.
+[41] J. Schmidt-Hieber, The Kolmogorov–Arnold representation theorem revisited, Neural Netw. 137 (2021) 119–126.
+[42] S. Patra, S. Panda, B.K. Parida, M. Arya, K. Jacobs, D.I. Bondar, A. Sen, Physics informed Kolmogorov–Arnold neural networks for dynamical analysis via
+     efficent-kan and wav-kan, 2024, arXiv preprint arXiv:2407.18373.
+[43] D.W. Abueidda, P. Pantidis, M.E. Mobasher, DeepOKAN: Deep operator network based on Kolmogorov Arnold networks for mechanics problems, Comput.
+     Methods Appl. Mech. Engrg. 436 (2025) 117699, http://dx.doi.org/10.1016/j.cma.2024.117699, URL: https://www.sciencedirect.com/science/article/pii/
+     S0045782524009538.
+[44] Y. Wang, J. Sun, J. Bai, C. Anitescu, M.S. Eshaghi, X. Zhuang, T. Rabczuk, Y. Liu, Kolmogorov–Arnold-informed neural network: A physics-informed deep
+     learning framework for solving forward and inverse problems based on Kolmogorov–Arnold networks, Comput. Methods Appl. Mech. Engrg. 433 (2025)
+     117518, http://dx.doi.org/10.1016/j.cma.2024.117518, URL: https://www.sciencedirect.com/science/article/pii/S0045782524007722.
+[45] Z. Gao, G.E. Karniadakis, Scalable Bayesian physics-informed Kolmogorov–Arnold networks, 2025, http://dx.doi.org/10.48550/ARXIV.2501.08501, URL:
+     https://arxiv.org/abs/2501.08501.
+[46] J.D. Toscano, L.-L. Wang, G.E. Karniadakis, KKANs: Kurkova–Kolmogorov–Arnold networks and their learning dynamics, 2024, http://dx.doi.org/10.48550/
+     ARXIV.2412.16738, URL: https://arxiv.org/abs/2412.16738.
+[47] B. Amos, L. Xu, J.Z. Kolter, Input convex neural networks, in: Proceedings of the 34th International Conference on Machine Learning, in: Proceedings of
+     Machine Learning Research, vol. 70, PMLR, 2017, pp. 146–155, URL: https://proceedings.mlr.press/v70/amos17b.html.
+[48] P. Thakolkaran, A. Joshi, Y. Zheng, M. Flaschel, L. De Lorenzis, S. Kumar, NN-EUCLID: Deep-learning hyperelasticity without stress data, J. Mech. Phys.
+     Solids 169 (2022) 105076, http://dx.doi.org/10.1016/j.jmps.2022.105076.
+[49] F. As’ad, P. Avery, C. Farhat, A mechanics-informed artificial neural network approach in data-driven constitutive modeling, Internat. J. Numer. Methods
+     Engrg. 123 (12) (2022) 2738–2759, http://dx.doi.org/10.1002/nme.6957, URL: https://onlinelibrary.wiley.com/doi/abs/10.1002/nme.6957. arXiv:https:
+     //onlinelibrary.wiley.com/doi/pdf/10.1002/nme.6957.
+[50] D.K. Klein, M. Fernández, R.J. Martin, P. Neff, O. Weeger, Polyconvex anisotropic hyperelasticity with neural networks, J. Mech. Phys. Solids 159 (2022)
+     104703, URL: http://dx.doi.org/10.1016/j.jmps.2021.104703.
+[51] S. Meng, A.A.K. Yousefi, S. Avril, Machine-learning-based virtual fields method: Application to anisotropic hyperelasticity, Comput. Methods Appl. Mech.
+     Engrg. 434 (2025) 117580, http://dx.doi.org/10.1016/j.cma.2024.117580.
+[52] R. Shi, H. Yang, J. Chen, K. Hackl, S. Avril, Y. He, Deep learning without stress data on the discovery of multi-regional hyperelastic properties, Comput.
+     Mech. (2025) http://dx.doi.org/10.1007/s00466-024-02591-0.
+[53] C. Jailin, A. Benady, R. Legroux, E. Baranger, Experimental learning of a hyperelastic behavior with a physics-augmented neural network, Exp. Mech. 64
+     (9) (2024) 1465–1481, http://dx.doi.org/10.1007/s11340-024-01106-5.
+[54] K.P. Abdolazizi, R.C. Aydin, C.J. Cyron, K. Linka, Constitutive Kolmogorov–Arnold networks (CKANs): Combining accuracy and interpretability in
+     data-driven material modeling, 2025, http://dx.doi.org/10.48550/ARXIV.2502.05682, URL: https://arxiv.org/abs/2502.05682.
+[55] M. Grédiac, F. Pierron, S. Avril, E. Toussaint, The virtual fields method for extracting constitutive parameters from full-field measurements: a review,
+     Strain 42 (4) (2006) 233–253, http://dx.doi.org/10.1111/j.1475-1305.2006.tb01504.x.
+[56] F. Pierron, M. Grédiac, The Virtual Fields Method: Extracting Constitutive Mechanical Parameters from Full-field Deformation Measurements, Springer New
+     York, 2012, http://dx.doi.org/10.1007/978-1-4614-1824-5.
+[57] D. Claire, F. Hild, S. Roux, A finite element formulation to identify damage fields: the equilibrium gap method, Internat. J. Numer. Methods Engrg. 61
+     (2) (2004) 189–208, URL: http://dx.doi.org/10.1002/nme.1057.
+[58] J.M. Ball, Convexity conditions and existence theorems in nonlinear elasticity, Arch. Ration. Mech. Anal. 63 (4) (1976) 337–403, http://dx.doi.org/10.
+     1007/BF00279992, URL: http://link.springer.com/10.1007/BF00279992.
+[59] J. Schröder, Anisotropie polyconvex energies, in: CISM International Centre for Mechanical Sciences, Springer Vienna, 2010, pp. 53–105, http://dx.doi.
+     org/10.1007/978-3-7091-0174-2_3.
+[60] C.B. Morrey, Quasi-convexity and the lower semicontinuity of multiple integrals, Pacific J. Math. 2 (1) (1952) 25–53, http://dx.doi.org/10.2140/pjm.1952.
+     2.25.
+[61] S. Kumar, A. Vidyasagar, D.M. Kochmann, An assessment of numerical techniques to find energy-minimizing microstructures associated with nonconvex
+     potentials, Internat. J. Numer. Methods Engrg. 121 (7) (2019) 1595–1628, http://dx.doi.org/10.1002/nme.6280.
+[62] S. Hartmann, P. Neff, Polyconvexity of generalized polynomial-type hyperelastic strain energy functions for near-incompressibility, Int. J. Solids Struct. 40
+     (11) (2003) 2767–2791, http://dx.doi.org/10.1016/S0020-7683(03)00086-6, URL: https://www.sciencedirect.com/science/article/pii/S0020768303000866.
+[63] D.K. Klein, R. Ortigosa, J. Martínez-Frutos, O. Weeger, Finite electro-elasticity with physics-augmented neural networks, Comput. Methods Appl. Mech.
+     Engrg. 400 (2022) 115501, URL: http://dx.doi.org/10.1016/j.cma.2022.115501.
+[64] D. Balzani, P. Neff, J. Schröder, G.A. Holzapfel, A polyconvex framework for soft biological tissues. Adjustment to experimental data, Int. J. Solids Struct.
+     43 (20) (2006) 6052–6070.
+[65] S. Boyd, L. Vandenberghe, Convex Optimization, Cambridge University Press, 2004.
+[66] C. De Boor, On calculating with B-splines, J. Approx. Theory 6 (1) (1972) 50–62.
+[67] A. Isihara, N. Hashitsume, M. Tatibana, Statistical theory of rubber-like elasticity. IV. (Two-dimensional stretching), J. Chem. Phys. 19 (12) (1951)
+     1508–1512, http://dx.doi.org/10.1063/1.1748111, URL: https://aip.scitation.org/doi/10.1063/1.1748111. Publisher: American Institute of Physics.
+[68] D.W. Haines, W.D. Wilson, Strain-energy density function for rubberlike materials, J. Mech. Phys. Solids 27 (4) (1979) 345–360, http://dx.doi.org/10.
+     1016/0022-5096(79)90034-6, URL: https://www.sciencedirect.com/science/article/pii/0022509679900346.
+[69] A.N. Gent, A.G. Thomas, Forms for the stored (strain) energy function for vulcanized rubber, J. Polym. Sci. 28 (118) (1958) 625–628, http://dx.doi.org/
+     10.1002/pol.1958.1202811814, _eprint: https://onlinelibrary.wiley.com/doi/pdf/10.1002/pol.1958.1202811814. URL: https://onlinelibrary.wiley.com/doi/
+     abs/10.1002/pol.1958.1202811814.
+[70] E.M. Arruda, M.C. Boyce, A three-dimensional constitutive model for the large stretch behavior of rubber elastic materials, J. Mech. Phys. Solids 41 (2)
+     (1993) 389–412, http://dx.doi.org/10.1016/0022-5096(93)90013-6, URL: https://www.sciencedirect.com/science/article/pii/0022509693900136.
+[71] R.W. Ogden, R. Hill, Large deformation isotropic elasticity – on the correlation of theory and experiment for incompressible rubberlike solids, Proc. R. Soc.
+     A 326 (1567) (1972) 565–584, http://dx.doi.org/10.1098/rspa.1972.0026, URL: https://royalsocietypublishing.org/doi/10.1098/rspa.1972.0026. Publisher:
+     Royal Society.
+[72] K.R. Butterfield, The computation of all the derivatives of a B-spline basis, IMA J. Appl. Math. 17 (1) (1976) 15–25, URL: http://dx.doi.org/10.1093/
+     imamat/17.1.15.
+[73] S. Elfwing, E. Uchibe, K. Doya, Sigmoid-weighted linear units for neural network function approximation in reinforcement learning, Neural Netw. 107
+     (2018) 3–11, URL: http://dx.doi.org/10.1016/j.neunet.2017.12.012.
+
+
+
+                                                                                30
+

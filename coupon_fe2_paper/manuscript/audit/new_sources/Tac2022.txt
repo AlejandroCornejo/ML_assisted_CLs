@@ -1,0 +1,810 @@
+                                       Available online at www.sciencedirect.com
+                                                   ScienceDirect
+
+                                   Comput. Methods Appl. Mech. Engrg. 398 (2022) 115248
+                                                                                                                www.elsevier.com/locate/cma
+
+
+
+
+       Data-driven tissue mechanics with polyconvex neural ordinary
+                           differential equations
+                  Vahidullah Taca , Francisco Sahli Costabalb ,∗, Adrian B. Tepolea,c ,∗∗
+                               a School of Mechanical Engineering, Purdue University, West Lafayette, IN, USA
+b Department of Mechanical and Metallurgical Engineering, School of Engineering, Institute for Biological and Medical Engineering, Schools of
+
+                  Engineering, Medicine and Biological Sciences, Pontificia Universidad Catolica de Chile, Santiago, Chile
+                          c Weldon School of Biomedical Engineering, Purdue University, West Lafayette, IN, USA
+
+                           Received 29 January 2022; received in revised form 5 May 2022; accepted 16 June 2022
+                                                       Available online 13 July 2022
+
+
+
+
+Graphical Abstract
+
+
+
+
+Abstract
+   Data-driven methods are becoming an essential part of computational mechanics due to their advantages over traditional
+material modeling. Deep neural networks are able to learn complex material response without the constraints of closed-form
+models. However, data-driven approaches do not a priori satisfy physics-based mathematical requirements such as polyconvexity,
+a condition needed for the existence of minimizers for boundary value problems in elasticity. In this study, we use a
+recent class of neural networks, neural ordinary differential equations (N-ODEs), to develop data-driven material models that
+automatically satisfy polyconvexity of the strain energy. We take advantage of the properties of ordinary differential equations
+to create monotonic functions that approximate the derivatives of the strain energy with respect to deformation invariants. The
+monotonicity of the derivatives guarantees the convexity of the energy. The N-ODE material model is able to capture synthetic
+
+ ∗ Corresponding author.
+∗∗ Corresponding author at: School of Mechanical Engineering, Purdue University, West Lafayette, IN, USA.
+    E-mail address: abuganza@purdue.edu (A.B. Tepole).
+
+https://doi.org/10.1016/j.cma.2022.115248
+0045-7825/© 2022 Elsevier B.V. All rights reserved.
+V. Tac, F.S. Costabal and A.B. Tepole                        Computer Methods in Applied Mechanics and Engineering 398 (2022) 115248
+
+data generated from closed-form material models, and it outperforms conventional models when tested against experimental
+data on skin, a highly nonlinear and anisotropic material. We also showcase the use of the N-ODE material model in finite
+element simulations of reconstructive surgery. The framework is general and can be used to model a large class of materials,
+especially biological soft tissues. We therefore expect our methodology to further enable data-driven methods in computational
+mechanics.
+© 2022 Elsevier B.V. All rights reserved.
+
+
+Keywords: Machine learning; Constitutive modeling; Nonlinear finite elements; Skin mechanics
+
+
+
+
+1. Introduction
+    The past two decades have witnessed the emergence of data-driven models for describing various engineering
+systems and physical phenomena in wide ranging applications, from improving medical diagnosis [1], to weather
+forecasting [2], energetic material property prediction [3], and turbulence modeling [4]. Data-driven methods such
+as deep neural networks are becoming popular in materials science and materials engineering in applications such
+as fatigue life prediction [5], identification of material parameters [6], systems identification [7], and constitutive
+modeling [8–12].
+    The notion of a free energy function, and the definition of the stress by differentiation of the free energy
+with respect to the deformation lies at the core of nonlinear elasticity, from hyperelastic to energy dissipating
+materials [13]. The stress, in turn, has to be a strongly elliptic function of the deformation gradient in order to
+satisfy the existence of traveling waves with real wave speeds [14]. For hyperelastic materials, Morrey showed that
+there exists a deformation field that minimizes the total potential energy if the strain energy density is a quasiconvex
+function of the deformation gradient F with some additional growth conditions on this function [15]. In practice,
+it is difficult to check the quasiconvexity condition. Instead, Ball showed that a reasonable requirement is the
+polyconvexity of the strain energy density [16]. Polyconvexity implies quasiconvexity and is a stronger requirement
+than quasiconvexity. Yet, it is still flexible enough to capture realistic materials. Convexity of the strain energy
+density with respect to F would also guarantee the existence of minimizers for potential energy functionals, but
+convexity with respect to F is not compatible with large deformation elasticity; this condition is too strong [17].
+For example, convexity with respect to F is not compatible with the principle of frame indifference. Traditionally,
+material model development has relied on expressing the strain energy as an explicit and differentiable analytical
+function of the deformation [18–20]. The notion of polyconvexity has been an important factor in the development
+of these closed-form material models [21]. In particular, advances in modeling of soft tissue material behavior has
+prompted the development of nonlinear and anisotropic strain energies that satisfy polyconvexity [22].
+    Selection of an appropriate expert-constructed material model for a specific material usually requires advanced
+expertise and significant trial and error. There are a large number of models in the literature designed to fit different
+families of materials. Even in specific fields such as skin mechanics there is no consensus on the choice of a
+material model [23–25]. Furthermore, the analytical form of the strain energy function may be too restrictive for
+many applications, resulting in poor prediction performance. Sensitivity with respect to parameters is another issue,
+for instance when exponential models are used [26].
+    A recent trend in material modeling has been the use of deep neural networks to describe either the strain
+energy or its derivatives [9,12,27,28]. Neural networks of sufficient complexity can be used to learn, reproduce and
+predict the behavior of any elastic material, which resolves many issues of expert-constructed models. However,
+the convexity of the strain energy function in data-driven frameworks is usually ignored or enforced with additional
+loss terms [9,12,27]. Using this approach does not guarantee the convexity of the strain energy. The penalty terms
+will push the solution space to resemble that of a convex function in the training region. However, even if convexity
+checks are satisfied exactly on all the training points, there is no guarantee that convexity extends outside the training
+points, or beyond the boundaries of the training region. Furthermore, adding loss terms to ensure convexity adds
+to the nonlinearity of the loss space which makes finding the global minimum a daunting task. These loss terms
+also result in lengthy calculations during training and may limit the flexibility of the neural networks. Thus, there
+is a need for data-driven methods that automatically satisfy the polyconvexity requirements but can still capture the
+behavior of any material.
+                                                                     2
+V. Tac, F.S. Costabal and A.B. Tepole                       Computer Methods in Applied Mechanics and Engineering 398 (2022) 115248
+
+
+
+
+Fig. 1. Workflow of the training and inference processes in the N-ODE material model (left), continuous transformation of the hidden state
+in the N-ODE from modified invariants H(0) = Ji , to the derivatives of the strain energy H(1) = Ψi (right).
+
+
+
+   In this study we use a new type of neural networks known as neural ordinary differential equations (N-ODE) [29]
+to estimate the derivatives of the strain energy function with respect to invariants of deformation. Polyconvexity
+of the strain energy is automatically satisfied in our formulation. We train the N-ODEs using synthetic as well as
+experimental stress–stretch data from porcine skin biaxial experiments obtained from [12]. Finally, we demonstrate
+the applicability of the N-ODE material model in finite element simulations. The diagram in Fig. 1 shows an
+overview of our methodology.
+
+2. Materials and methods
+2.1. Construction of polyconvex strain energy functions
+
+   As mentioned previously, we seek to satisfy the polyconvexity of the strain energy function since it is compatible
+with large deformation hyperelasticity and, with additional growth conditions on the strain energy, guarantees the
+existence of minimizers for the total potential energy [16,17,22,30]. A function Ψ (F) is polyconvex in F if there is a
+function Ψ̂ with Ψ (F) = Ψ̂ (F, cofF, detF) such that Ψ̂ is convex on the extended domain formed by F, cofF, detF.
+Constructing general functions that satisfy this requirement can be challenging, but a sufficiently flexible subset of
+polyconvex functions of F can be obtained through an additive decomposition [31]
+       Ψ (F) = ΨF (F) + Ψcof (cofF) + Ψdet (detF)                                                                                     (1)
+with ΨF , Ψcof , Ψdet each a convex function. Furthermore, to guarantee objectivity of the strain energy, Ψ is usually
+not expressed as a function of the full deformation gradient but instead of the right Cauchy Green deformation
+C = F⊤ F. In that case the following form of the strain energy will retain polyconvexity with respect to F,
+       Ψ (F) = Ψ I1 (I1 ) + Ψ I2 (I2 ) + Ψ J (J )                                                                                     (2)
+provided Ψ I1 , Ψ I2 are convex non-decreasing
+                                    √            functions of their respective arguments [31], with I1 , I2 the first two
+invariants of C, and J = detF = detC. The reason why constructing a function based on (2) yields polyconvex
+functions as expressed in (1) is because the invariants I1 , I2 of C are convex non-decreasing functions of F and
+cofF, respectively. Explicitly, the invariants of C, I1 , I2 , are related to F, cof F,
+     I1 = tr (C) = C : I,                                                                                   (3)
+                       1 2
+     I2 = tr (cof C) = [I1 − tr (C2 )].                                                                     (4)
+                       2
+  To consider anisotropy, additional pseudo-invariants need to be considered. A popular option is I4v = C : V0 ,
+where V0 = v0 ⊗ v0 is a structural tensor defined by the anisotropy direction v0 , which usually corresponds to
+                                                                    3
+V. Tac, F.S. Costabal and A.B. Tepole                      Computer Methods in Applied Mechanics and Engineering 398 (2022) 115248
+
+a fiber orientation in soft tissue in the reference configuration. It can be shown that I4v is a convex function
+of F. Consequently, we can include additional terms that depend on I4v in the strain energy function retaining
+polyconvexity while including the effects of anisotropy. We consider two different fiber directions I4v and I4w ,
+corresponding to the vectors v0 and w0 in the reference configuration. Lastly, we note that since I1 , I4v , I4w are
+convex functions of F, and I2 is convex with respect to cofF, we can compose convex non-decreasing functions of
+linear combinations of these invariants and retain polyconvexity [22,31,32]. Here, we propose the following general
+form of the strain energy function:
+       Ψ (F) = Ψ I1 (I1 ) + Ψ I2 (I2 ) + Ψ I4v (I4v ) + Ψ I4w (I4w ) +
+         ∑
+             Ψ Ii ,I j αi j Ii + (1 − αi j )I j + Ψ J (J )
+                      (                        )
+                                                                                                                              (5)
+            j>i
+
+where the second to last term includes convex non-decreasing functions of all possible linear combinations of the
+invariants introduced so far. The weights αi j are restricted to the interval (0, 1). We could include additional terms
+depending on the specific application, for instance, anisotropic invariants that are convex with respect to cofF, such
+as I5v = tr(cofCV0 ), can be added to this framework.
+   Turning the attention back to (5), each of the Ψ Ii and Ψ Ii ,I j needs to be convex non-decreasing. This is equivalent
+to the derivatives dΨ Ii /d Ii being monotonic functions, with dΨ Ii /d Ii ≥ 0 in the domain of Ii . In the next section
+we show how to leverage N-ODEs to generate monotonic derivative functions and thus polyconvex strain energies.
+
+2.2. Neural ordinary differential equations
+
+   We are interested in finding functions that create monotonic maps between inputs x and outputs y. N-ODEs are
+a novel architecture of neural networks that generalizes some successful models, such as residual networks [33].
+The key idea is to replace the number of discrete layers of classical neural networks by a continuous transformation
+of the hidden state by a learnable function. In this sense, the concept of depth of the neural network is replaced by
+time. This results in the construction of an ordinary differential equation system:
+      ∂H(t)
+             = f (H(t), t; θ)                                                                                       (6)
+        ∂t
+Here H(t) represents the hidden state of the neural network. The function f (·; θ ) is represented by a fully-connected
+neural network with trainable parameters θ . The relationship between the input and the output for this model can
+be obtained by integrating the system in an arbitrary interval of time:
+                       ∫ 1
+      H(1) = H(0) +        f (H(t), t; θ )dt                                                                        (7)
+                           0
+Here, we assign the input to the initial condition x = H(0) and the output to the final state y = H(1).
+   We know from ordinary differential equation analysis that the solution trajectories never intersect each other in
+the state space, as illustrated in Fig. 3. Intersection of trajectories would imply that for a given point in the state
+space there is more than one value for the rate of change f (H(t)), which contravenes the definition of the ordinary
+differential equation system. In one-dimensional case, this condition implies that for two different trajectories H1 (t)
+and H2 (t):
+       H2 (0) ≥ H1 (0) ⇐⇒ H2 (1) ≥ H1 (1)                                                                                     (8)
+       H2 (0) < H1 (0) ⇐⇒ H2 (1) < H1 (1)                                                                                     (9)
+These conditions can be succinctly written in terms of the input x = H(0) and output y = H(1) of the neural
+ordinary differential equations as:
+       (y2 − y1 )(x2 − x1 ) ≥ 0                                                                                              (10)
+which correspond exactly to the requirements for a monotonic function. To satisfy the polyconvexity requirements,
+we also need to ensure that these functions are non-negative in the domain of the input. To achieve this property,
+we need to ensure that
+     ∫ 1
+         f (H(t))dt ≥ max{0, −Hmin }, H(0) = Hmin                                                            (11)
+        0
+                                                                   4
+V. Tac, F.S. Costabal and A.B. Tepole                  Computer Methods in Applied Mechanics and Engineering 398 (2022) 115248
+
+where Hmin is lowest possible value of the input. Although there are multiple ways to satisfy this condition, here
+we focus on the simplest case, where Hmin = 0 and f (0) = 0. This particular scenario can be achieved by shifting
+the inputs and removing all the bias parameters from the neural network that approximates f and setting the initial
+condition of the ODE as H (0) = 0. In this case, the neural network that approximates the right-hand side of the
+ordinary differential equation can be written as:
+       f (x) = Wn h(...W2 h(W1 x))                                                                                        (12)
+where h(·) is a non-linear activation function applied element-wise, n is the depth of the network and Wi are the
+learnable parameters. With this setup, we have shown that the functions approximated by one-dimensional N-ODEs
+are monotonic and non-negative, and suitable to construct polyconvex strain energy functions.
+
+Anisotropic, hyperelastic, and fully incompressible materials
+
+   To demonstrate the potential of the proposed framework, we will attempt to learn an anisotropic, hyperelastic and
+incompressible materials. We have introduced the strain energy, Ψ , which is a function of the right Cauchy–Green
+deformation tensor, C, and two material direction vectors, v0 and w0 . For incompressible materials, the last term
+of the strain energy, Ψ J , is replaced by the constraint p(J − 1) with p a Lagrange multiplier. Furthermore, in the
+case of hyperelastic materials the free energy has no other contribution. The second Piola–Kirchhoff stress tensor,
+S, follows from the Doyle–Erickson formula by differentiating the strain energy Ψ with respect to C [34],
+             ∂Ψ       ∂Ψ         ∂Ψ                  ∂Ψ            ∂Ψ
+       S=2       =2        I+2        (I1 I − C) + 2       V0 + 2       W0 + pC−1 .                             (13)
+             ∂C       ∂ I1       ∂ I2                ∂ I4v        ∂ I4w
+   Often times in finite element packages, the Cauchy stress, σ , is used, which can be obtained via a push forward
+operation. To solve the equilibrium equations we also need the elasticity tensor:
+             ∂S
+       C=2       .                                                                                                 (14)
+             ∂C
+   The full expansion of the elasticity tensor is shown in the Supplement. Also note that if the finite element
+implementation is done in the deformed configuration, the spatial version of the elasticity tensor, c, can be obtained
+via a push forward operation.
+   Therefore, given N-ODEs describing the strain energy derivatives, these functions can be used directly to
+determine the stress for a given deformation by evaluating (13). For nonlinear finite element simulations, evaluation
+of the tangent (14) requires the second derivatives of the strain energy, which in our case involves taking derivatives
+of the N-ODEs with respect to their inputs.
+
+Data-driven polyconvex constitutive models using neural ordinary differential equations
+
+   We have shown that N-ODEs produce monotonic functions. We therefore use this tool to build the derivatives of
+the terms in Eq. (5), i.e. ∂Ψ I1 /∂ I1 , ∂Ψ I2 /∂ I2 , etc. as illustrated in Fig. 1. To guarantee that the partial derivatives
+with respect to the invariants are consistent with a unique potential, we use N-ODEs to interpolate the derivatives
+of the individual contributions to the energy listed in Eq. (5). For instance, for the terms in Eq. (5) that depend
+on a single invariant, a N-ODE is used to capture dΨ Ii (Ii )/d Ii each. For terms that depend on pairs of invariants,
+consider the change of variable Ji j = αi j I1 + (1 − αi j )I j , then, a N-ODE is used to capture the derivative function
+dΨ Ii ,I j (Ji j )/d Ji j . By producing monotonic non-negative derivative functions, we guarantee that the underlying strain
+energy terms are convex non-decreasing functions of the invariants (or linear combinations of them), which in turn
+guarantees polyconvexity of the energy with respect to F. A total of 10 N-ODEs are used, each corresponding
+to a derivative of the strain energy terms in Eq. (5). The partial derivatives ∂Ψ Ii /∂ Ii are assembled consistently
+from the derivatives dΨ Ii (Ii )/d Ii and dΨ Ii ,I j (Ji j )/d Ji j . An extended discussion of how the predicted derivatives
+are consistent with an underlying potential is presented in the Supplemental material. The architecture of each of
+the N-ODEs is the same and summarized in Table 1.
+   While the monotonicity condition is guaranteed directly by using N-ODEs, to satisfy the non-negative conditions,
+∂Ψ Ii /∂ Ii ≥ 0, we first note that I1 , I2 ≥ 3 for an incompressible material [31]. For these invariants, setting shifted
+invariants J1 = I1 − 3, J2 = I2 − 3 as inputs to the N-ODE and setting biases to zero gives the initial condition
+                                                              5
+V. Tac, F.S. Costabal and A.B. Tepole                         Computer Methods in Applied Mechanics and Engineering 398 (2022) 115248
+
+                           Table 1
+                           Neural network architecture.
+                            Layer                         Number of nodes                Activation function
+                            Input                         1                              None
+                            Hidden layer 1                5                              tanh
+                            Hidden layer 2                5                              tanh
+                            Output                        1                              Linear
+
+
+
+H (0) = 0. A single non-negative bias is added after the evaluation of each of these two N-ODEs, i.e. H1 , H2 for
+∂Ψ I1 /∂ I1 , ∂Ψ I2 /∂ I2 , resulting in ∂Ψ I1 /∂ I1 , ∂Ψ I2 /∂ I2 ≥ 0 at J1 = 0, J2 = 0. In this way, the functions Ψ I1 , Ψ I2
+are convex non-decreasing with a minimum of H1 , H2 at I1 = 3, I2 = 3, which allows us to capture polyconvex
+models such as Mooney–Rivlin and neo-Hookean. We remark that this formulation can be extended to compressible
+materials using modified version of I1 , I2 . Namely, the usual split of the deformation gradient into isochoric and
+volumetric parts results in the isochoric invariant I¯1 ≥ 3, such that I¯1 is polyconvex with respect to F [31]. The
+isochoric invariant I¯2 is not polyconvex with respect to F. However, dividing by an appropriate power of J , one
+can obtain modified invariants Iˆ2 ≥ 3 which are polyconvex [31].
+   For the anisotropic terms, the domain of the input is I4v , I4w ≥ 0, with I4v = I4w = 1 for the identity map.
+We set shifted invariants J4v = I4v − 1, J4w = I4w − 1 as the inputs of the N-ODEs and remove all biases to get
+∂Ψ I4v /∂ I4v , ∂Ψ I4w /∂ I4w ≥ 0, and ∂Ψ I4v /∂ I4v , ∂Ψ I4w /∂ I4w = 0 for I4v , I4w = 1. For the mixed terms in eq (5) we
+also set all biases to zero, but, additionally, we check if the output of the N-ODE is non-negative otherwise it is set
+to zero.
+   The N-ODE framework outlined here is general, it will always produce monotonic derivative functions and thus
+convex functions of the invariants. Specifying the minimum of the energy and the stress-free state can be achieved
+in variety of ways and we show one convenient solution. Note also that it is possible to incorporate anisotropic
+compression terms by considering the invariants I5v = cof C : v0 ⊗ v0 and I5w = cof C : w0 ⊗ w0 , which are
+convex with respect to cofF and represent area changes orthogonal to the fibers [22,32]. Extension to compressible
+materials is also straightforward. Lastly, even though we focus on hyperelasticity, polyconvex strain energies can
+be used as building blocks to describe dissipative mechanisms.
+
+Model calibration and verification
+   The training and validation data for the N-ODEs are taken from biaxial tests on porcine skin. The data
+corresponds to five experimental protocols described in Table 2. In this case, the experiments are described in
+terms of the principal stretches of the deformation gradient:
+             λx x
+           ⎡                ⎤
+                    0     0
+      F = ⎣ 0 λ yy 0 ⎦                                                                                     (15)
+              0     0 λzz
+With the assumption of plane stress incompressible behavior, J = λx x λ yy λzz = 1 leads to λzz = 1/λx x λ yy plus a
+boundary condition to evaluate the pressure Lagrange multiplier p.
+   We also test the N-ODE against synthetic data generated using four popular analytical models summarized in
+the next subsection.
+   Training is performed with the ADAM optimization algorithm (with a step size of 1.e−4, β1 = 0.9, β2 = 0.999,
+ϵ = 1.e−8) in 100 000 epochs with a batch size of 100. Training is performed with JAX high-performance
+computing library for Python [35].
+
+Holzapfel–Gasser–Ogden (HGO)
+   The HGO material model proposed in [19] assumes there are two families of fibers that contribute to the energy
+through an exponential term. The strain energy is,
+       Ψ (C, v0 , w0 ) = Ψiso (C) + Ψaniso (C, v0 , w0 ) + p(J − 1),                                                            (16)
+with dependence on two anisotropy directions v0 , w0 ,
+                              k1 ∑ {
+      Ψaniso (C, v0 , w0 ) =             exp k2 (Ii − 1)2 − 1 .
+                                            [            ]   }
+                                                                                                                                (17)
+                             2k2 i=4v,4w
+                                                                     6
+V. Tac, F.S. Costabal and A.B. Tepole                      Computer Methods in Applied Mechanics and Engineering 398 (2022) 115248
+
+                           Table 2
+                           Biaxial experimental protocols. λx and λ y represent the stretches imposed in the
+                           x and y directions and σz is the stress in the z direction. The parameter λ
+                           is monotonically increased during the experiments to stretch the tissue. The last
+                           component of the deformation gradient is directly obtained from the incompressible
+                           constraint, while the vanishing normal stress is imposed as the necessary boundary
+                           condition to solve for the pressure p.
+                            Loading                       λx x                   λ yy                   σzz
+                                                          √
+                            Off-x                           λ                    λ
+                                                                                 √                      0
+                            Off-y                         λ                        λ                    0
+                            Equibiaxial                   λ                      λ                      0
+                            Strip-x                       λ                      1                      0
+                            Strip-y                       1                      λ                      0
+
+
+
+The parameters controlling the anisotropic contribution are k1 , k2 . The strain invariants I4v , I4w are the same as
+defined in Eq. (4). The isotropic contribution depends on the first invariant, I1 , and is that of a neo-Hookean solid
+       Ψiso (C) = µ(I1 − 3) ,                                                                                                (18)
+with parameter µ. The incompressibility constraint is imposed through the Lagrange multiplier p.
+
+Gasser–Ogden–Holzapfel (GOH)
+   The GOH material model was initially proposed to model arterial walls [18]. It is an extension to the HGO
+model which considers a single fiber family but incorporates fiber dispersion. Since then, it has been used to model
+other soft tissues including skin. The strain energy density function in this model
+       Ψ (C, v0 ) = Ψiso (C) + Ψaniso (C, v0 ) + p(J − 1) ,                                                                  (19)
+where
+       Ψiso (C) = µ(I1 − 3) ,                                                                                                (20)
+                          k1 [
+                               ex p k2 E 2 − 1 ,
+                                   (      )   ]
+       Ψaniso (C, v0 ) =                                                                                                     (21)
+                         4k2
+and
+        E = [κ I1 + (1 − 3κ)I4v − 1] .                                                                                       (22)
+   The parameters are the same as those used in the HGO model, except for the fiber dispersion parameter κ. The
+strain invariants, I1 and I4v are the same as defined in (4), with the single anisotropy direction v0 .
+
+Generalized Mooney Rivlin (MR)
+   Originally, the MR models were proposed to capture the mechanical response of rubber-like materials in large
+strains [36,37]. There are a number of different formulations for MR models, here we use
+       Ψ (λ) = C10 (I1 − 3) + C01 (I2 − 3) + C20 (I1 − 3)2 + p(J − 1),                                                       (23)
+   parameterized by C10 , C01 , C20 .
+
+Fung-type models
+    The strain energy function proposed by Fung et al. was one of the first models of soft tissue to capture the strain-
+stiffening anisotropy of collagenous tissue [20]. Unlike the previous material models, the strain energy proposed by
+Fung et al. is directly in terms of the Green–Lagrange strain, E = (C − I)/2,
+                c1
+       Ψ (C) =     exp(a1 E x2x + a2 E yy
+                                       2
+                                          + 2a4 E x x E yy ) (2D Fung)                                              (24)
+                 2
+with parameters a1 , a2 , a4 , c1 . Note that Eq. (24) is a model of a two-dimensional material. However, since its
+original development, many generalizations of the model have been developed that extend its functionality to the
+                                                                   7
+V. Tac, F.S. Costabal and A.B. Tepole                          Computer Methods in Applied Mechanics and Engineering 398 (2022) 115248
+
+
+
+
+Fig. 2. Input space of the N-ODE in (a) λx x − λ yy space, I1 − I2 space, and (c) I1 − I2 − I4v space. Points in the input space where testing is
+not feasible are shown with grey markers, whereas feasible points are in shades of blue. The points are sampled from a uniform distribution
+within λx x , λ yy ∈ [0.7, 1.5]. The boundary of the feasible region is marked by the uniaxial tests in x and y directions in λx x − λ yy space
+in (a). The map to the space of invariants is nonlinear and condenses the points into a narrow cone in the I1 − I2 space in (b). Including
+anisotropy, the input domain for the data-driven models continues to show how evenly space points in the λx x − λ yy space are nonlinearly
+mapped to the domain of the N-ODEs. (For interpretation of the references to color in this figure legend, the reader is referred to the web
+version of this article.)
+
+
+
+third dimension. One such generalization is due to [38,39]
+               c1
+      Ψ (C) =       exp(a1 E x2x + a2 E yy
+                                         2         2
+                                            + a3 E zz  + 2a4 E x x E yy + 2a5 E yy E zz
+                2
+         +2a6 E x x E zz + a7 E x2y + a8 E yz
+                                           2
+                                              + a9 E x2z ) (3D Fung)                                                                       (25)
+with parameters c1 and a1 − a9 . In this text we use the 2D formulation for demonstration of convexity in Fig. 5
+and 3D formulation for all other comparisons.
+
+Finite element implementation
+    A major motivation for the data-driven framework described here is to make it readily usable in large scale
+finite element simulations and realistic applications. Since the N-ODEs directly encode energy derivatives, it is
+straightforward to implement the N-ODE material model through the UANISOHYPER subroutine in the commercial
+finite element package Abaqus. The implementation is available in the Github link at the end.
+
+3. Results
+   The model should estimate the stresses for arbitrary deformations of the material. In experimental mechanics of
+thin specimens such as skin, the most appropriate method to quantify material behavior is through biaxial tests in
+terms of the principal stretches, λx x , λ yy . However, as outlined above, the model inputs are the invariants of the
+right Cauchy–Green deformation tensor, Ii . In Fig. 2a we show how the input space for biaxial experiments maps
+into the input space of the N-ODEs, Fig. 2b,c. The protocols in Table 2 are shown as curves in 2a, the scatter
+points in shades of blue denote deformations in the feasible region of λx x − λ yy space, and the scatter points in
+gray denote infeasible regions. Points colored gray are not achievable during the testing of thin specimens like skin
+because they correspond to a compressive state under which thin membranes would buckle. The boundary between
+the feasible and infeasible regions are uniaxial tests in the x and y directions.
+   The same points from Fig. 2a are mapped into the invariant space. A projection onto the space I1 − I2 is depicted
+in Fig. 2b, and a projection onto I1 − I2 − I4v is shown in Fig. 2c. The space I1 , I2 corresponds to the input space
+for the isotropic material behavior. The equibiaxial loading protocol falls in the middle of the feasible region in
+the λx x − λ yy space, but it is at the boundary of the I1 − I2 space. The uniaxial loading cases, which determine
+the boundary of the feasible region in λx x − λ yy space also continue to bound the feasible domain in the I1 − I2
+space. Even though the testing points in Fig. 2a are evenly distributed in λx x − λ yy space, they form a narrow cone
+in the I1 − I2 space. The map is highly nonlinear. Since the material model is a function of the invariants, the
+performance of data-driven models depends on sampling the invariant space, which is not necessarily achieved by
+simply covering evenly spaced points in λx x − λ yy space.
+                                                                       8
+V. Tac, F.S. Costabal and A.B. Tepole                          Computer Methods in Applied Mechanics and Engineering 398 (2022) 115248
+
+
+
+
+Fig. 3. An illustration of how the N-ODE maps points in the input space to partial derivatives of the strain energy. Time evolution of (a)
+J1 to ∂Ψ /∂ I1 , (b) J2 to ∂Ψ /∂ I2 , (c) J4v to ∂Ψ /∂ I4v and (d) J4w to ∂Ψ /∂ I4w , and, (e) the shape of the resulting functions ∂Ψ /∂ Ii . The
+notation Ji is used to denote shifted invariants as inputs to the N-ODE in order to satisfy the initial condition H (0) = 0, which is one
+solution to achieve non-negative derivatives with a vanishing stress at the identity map.
+
+
+
+    In Fig. 3 we illustrate the principle behind the N-ODE map. Points from the input space (translated invariants
+Ji , i.e. J1 = I1 − 3) are integrated in time based on the neural network, which encodes the right-hand side of an
+ODE. The partial derivatives of the strain energy function are defined as the solution of a N-ODE at the fictitious
+time t = 1. Only the mappings for the invariants J1 , J2 , J4v and J4w are shown in Fig. 3a–d. The monotonicity
+of the transformation is evident in these figures, it follows from the fact that curves originating at different initial
+condition never intersect as they are integrated in time. Fig. 3e represents the direct relationship between input and
+output without the pseudo-time axis.
+
+Comparisons against synthetic data
+
+    We start by training the N-ODE material model with synthetic stress–stretch data generated from the four closed-
+form analytical models introduced in Section 2.2. We plot the training data as well as the predictions of the N-ODE
+for each of the four cases in Fig. 4. Even though the analytical models have each a completely different functional
+form, the same N-ODE architecture is capable of replicating the different synthetic datasets with high accuracy.
+The average absolute error is small in all cases. The highest error occurs for the 3D Fung model, this is partly
+due to the fact that the Fung model is not guaranteed to be polyconvex, which makes it impossible for the NODE
+to capture its response in regions where convexity is not satisfied. An example later on clarifies this further. The
+best fit of the N-ODE is for the Mooney–Rivlin material. Among the four synthetic datasets, the Mooney–Rivlin
+is the least nonlinear. The other three analytical models include an exponential term that describes a rapid strain
+stiffening typical of soft tissues. Concomitantly, the exponential term in these models poses challenges for model
+calibration due to the extreme sensitivity to parameters [26]. We also note that training takes on the order of 6 min
+on an Apple M1 CPU for each of the synthetic data sets.
+                                                                        9
+V. Tac, F.S. Costabal and A.B. Tepole                    Computer Methods in Applied Mechanics and Engineering 398 (2022) 115248
+
+
+
+
+Fig. 4. Synthetic training data and N-ODE predictions using (a) GOH, (b) Mooney Rivlin, (c) HGO and (d) 3D Fung type material models.
+The N-ODE is able to interpolate synthetic data from closed-form constitutive equations.
+
+
+
+   Next, we demonstrate how the N-ODE automatically satisfies polyconvexity of the strain energy. We train the
+N-ODE material model with synthetic data from GOH and Fung models. We show in Figs. 5a, c the predicted
+contours of strain energy of the two analytical models and the corresponding N-ODE approximations are in Figs. 5b,
+d. GOH is an inherently convex model [18], which is reflected in the contour of the energy as a function of the
+Green Lagrange strain components for parameters µ = 0.0102, k1 = 0.513, k2 = 59.1, κ = 0.271, θ = 1.57.
+(Fig. 5a). Naturally, the N-ODE trained with this model also predicts a convex function (Fig. 5b). The Fung
+model, on the other hand, is known to exhibit non-convex behavior for some choice of parameters, for instance
+c1 = 0.00241, a1 = −1.75, a2 = −21.5, a4 = 49.8. The N-ODE model cannot interpolate these data, it can only
+find a convex approximation as seen in Fig. 5d.
+
+Performance on experimental data
+
+   The primary objective of developing N-ODE material models is being able to capture experimental data without
+the restrictions of closed-form energy functions. The experimental data for this example consists of data from five
+biaxial tests as described in Table 2, performed on porcine skin specimens. We divide the data in two sets, train
+the data on three of the biaxial test data and validate against the remaining biaxial test data as shown in Fig. 6.
+   The N-ODE reproduces the training data almost identically, with an average error of 0.012 MPa in the worst case
+scenario. The error in the validation tests is naturally higher than in the training set, but it is still in a reasonable
+range with average errors 0.088 MPa for off-x and 0.019 MPa for off-y data.
+   In Fig. 7, we train both the N-ODE and the four analytical models with data from a different porcine skin
+specimen subjected to same loading as described in Table 2. Similarly to before, we split the data into training
+and validation sets. The maximum principal stress predictions, σmp , from each of the analytical models as well as
+the N-ODE model are plotted as the graph of a surface over the λx x , λ yy plane (Fig. 7a–e). The experimental data
+are plotted as curves colored based on the absolute error between these curves and the predicted response surface.
+Fig. 7f shows a box plot of the error distribution for each model. None of the analytical models are capable of
+capturing the behavior of the material in the training set, whereas the N-ODE replicates the behavior in that region
+flawlessly. Errors naturally increase overall in the validation set. Yet, even in the validation set, the N-ODE has the
+                                                                 10
+V. Tac, F.S. Costabal and A.B. Tepole                        Computer Methods in Applied Mechanics and Engineering 398 (2022) 115248
+
+
+
+
+Fig. 5. Strain energy contours for synthetic data generated using (a) GOH and (c) 2D Fung type material models and (b), (d) the predictions
+of the N-ODE after training on these datasets, respectively. The training region corresponded to tensile biaxial deformations, as indicated,
+while the shaded region was not included during learning. When fed non-convex data, the N-ODE still produces a polyconvex output because
+it is built in the formulation.
+
+
+
+lowest median errors. Note also that under high equibiaxial stretches, the stresses in GOH, HGO and Fung models
+increase to unreasonably high values. This is due to the exponential form of these analytical models. The N-ODE,
+on the other hand, maintains convexity but does not infer an exponential growth beyond the training region.
+    Table 3 summarizes the performances of the five models from another series of tests. In each row of Table 3 we
+train the models on the first 80% of the loading path and test against the remaining 20%. The average error from
+the validation test is shown in the Table. In other words, these tests are done to measure the ability of each of the
+models to extrapolate away from the training region, toward larger deformations. The last row in Table 3 contains
+the average of the errors among the five individual tests. The N-ODE has the lowest error in three of the five cases
+and has the lowest average error over the five tests, at 0.048 MPa. The second best performing model, GOH, has
+                                                                    11
+V. Tac, F.S. Costabal and A.B. Tepole                        Computer Methods in Applied Mechanics and Engineering 398 (2022) 115248
+
+                            Table 3
+                            Mean absolute error, in MPa, for the validation set for the 4 analytical models and
+                            the N-ODE. Training/fitting is performed with the first 80% of data points of each
+                            loading protocol while the last 20% are held for validation.
+                             Protocol           GOH          MR           HGO           3D Fung         N-ODE
+                             Off-x              0.083        0.114        0.245         0.246           0.009
+                             Off-y              0.010        0.024        0.071         0.123           0.062
+                             Equibiaxial        0.037        0.100        0.141         0.035           0.031
+                             Strip-x            0.056        0.123        0.051         0.133           0.098
+                             Strip-y            0.120        0.095        0.051         0.194           0.038
+                             Average            0.062        0.091        0.112         0.146           0.048
+
+
+
+
+Fig. 6. Predictions of the N-ODE material model after training on porcine data. Test results from (a) equibiaxial, (b) Strip-x and (c) Strip-y
+testing protocols were used for training while (d) Off-x and (e) Off-y test results were reserved for validation.
+
+
+
+32% higher error relative to the N-ODE model. The Supplemental material shows one additional example in which
+we compare a much simpler N-ODE against the GOH model.
+
+Finite element simulations
+
+  The results from finite element simulations in Abaqus for a range of geometries and loading scenarios using the
+N-ODE material model are showcased here.
+                                                                     12
+V. Tac, F.S. Costabal and A.B. Tepole                       Computer Methods in Applied Mechanics and Engineering 398 (2022) 115248
+
+
+
+
+Fig. 7. Surfaces of maximum principal stress (σ M P ) and curves with the experimental data colored based on error for (a) GOH, (b) Mooney
+Rivlin, (c) HGO, (d) Fung and (e) N-ODE. Box plots of error distribution for the five models (f). (For interpretation of the references to
+color in this figure legend, the reader is referred to the web version of this article.)
+
+
+                                                                   13
+V. Tac, F.S. Costabal and A.B. Tepole                         Computer Methods in Applied Mechanics and Engineering 398 (2022) 115248
+
+
+
+
+Fig. 8. Finite element simulations using the N-ODE material model. Boundary conditions on the undeformed geometry are shown in the
+first column, deformed geometry in the second column, and contours of σx x and σ yy on the deformed geometry are depicted in the last two
+columns for (a) uniaxial tension, (b) shearing and stretching, (c) torsional loading scenarios. The material is anisotropic, with the directions
+of anisotropy depicted as quiver plots in the reference geometries. The red vector field corresponds to the stiffer orientation v0 , while the
+black vector field corresponds to w0 . (For interpretation of the references to color in this figure legend, the reader is referred to the web
+version of this article.)
+
+
+
+   First, three basic loading scenarios were applied to a 5 × 5 cm specimen as shown in Fig. 8 For a simple uniaxial
+tension test in the x direction, unconstrained in y the resulting stresses match the analytical evaluation (see Fig. 6,
+indicating that the subroutine is functioning as desired (Fig. 8a).
+   In Fig. 8b the left side of the specimen is held fixed while the right side is displaced both in x and y directions,
+whereas in 8c a torsional loading is applied. For the shearing deformation we see a band of stress for the σx x
+component, and concentration of the σ yy component at the corners but otherwise fairly uniform and small σ yy stresses
+since the upper and bottom surfaces are unconstrained. When a torque is applied in Fig. 8c, stress concentrations
+develop in the corners where there is the most deformations as expected from the clamping condition on the
+boundary. In all cases the simulations converged quadratically, demonstrating that the N-ODE model can be used
+as a constitutive equation in stable, nonlinear finite element simulations. Solution of the three models in Fig. 8 take
+roughly 31 s, 49 s and 2 min 35 s, respectively. The same problems take 14 s, 17 s and 1 min 2 s when the GOH
+material model is used instead.
+   Next, we performed tissue expansion simulations on 10 × 10 × 0.3 cm3 a patch of skin (Fig. 9a). A rectangular
+expander of dimensions 8 × 8 cm2 underneath the skin is modeled by the fluid cavity feature in Abaqus. The
+expander is inflated to 20, 30 and 40 cm3 resulting in the strain contours shown in Fig. 8b and c.
+   Lastly, a surgical operation was simulated on the scalp of a cancer patient with a patient specific geometry
+reported in [40]. Figs. 10a–e show the model during various stages of surgery. Fig. 10a shows the initial geometry
+                                                                      14
+V. Tac, F.S. Costabal and A.B. Tepole                      Computer Methods in Applied Mechanics and Engineering 398 (2022) 115248
+
+
+
+
+Fig. 9. Finite element simulations of tissue expansion using the N-ODE material model in UANISOHYPER. Model setup (a), and contours
+of strain (b and c) on the deformed geometry after the expander is inflated to 20, 40 and 60 cm3 , respectively.
+
+
+
+
+Fig. 10. Virtual surgery finite element model performed in Abaqus using the N-ODE material model through the user defined UANISOHYPER
+subroutine. Initial geometry of the scalp (a), contours of maximum principal stress on the deformed geometry after the lower sutures are
+completed (b), and as the upper sutures are stretched to close the wound by 30%, 60% and 100% (c–e), respectively. Photographs of the
+scalp of the patient before the surgery (f) and after the surgery superimposed with contours of maximum principal stress (g).
+
+
+
+of the model, Fig. 10b–e show contours of maximum principal stress on the deformed geometry when the sutures
+near the ear are completed, and when the sutures on top of the cranium are brought together. Fig. 10f shows a photo
+of the patient’s scalp prior to surgery and Fig. 10g a post-operative photo of the same region with the predicted
+contours of maximum principal stress superimposed.
+
+4. Discussion
+   In this paper we present the first automatically polyconvex data-driven framework for constitutive modeling of
+nonlinear anisotropic materials. Most proposed methods either do not impose convexity or rely on additional loss
+terms to penalize deviation from convexity during model training [12,41].
+   Our approach is general enough to approximate a large class of material models. Although there might be
+polyconvex strain energy functions that are not captured by our solution, they might not be needed in practice.
+                                                                  15
+V. Tac, F.S. Costabal and A.B. Tepole               Computer Methods in Applied Mechanics and Engineering 398 (2022) 115248
+
+In general, our approach can represent any degree of non-linearity for a given invariant and reproduce certain types
+of interactions between invariants. We could arbitrarily increase the complexity of the model by adding second order
+interactions (i.e. Ii + I j + Ik ) and by composing the resulting strain energy function with other convex non-decreasing
+functions. If we do this multiple times, we could create deep networks to approximate an even larger class of strain
+energy functions. However, from what we have seen in our experiments, the capacity of the functions presented in
+this work is enough to model the behavior of highly nonlinear and anisotropic materials, e.g. soft tissues.
+   The proposed framework is based on the principal invariants of the right Cauchy Green deformation tensor,
+which is commonplace in the development of anisotropic polyconvex strain energies [21]. However, it could be
+reformulated for a different set of basic invariants such as the principal stretches [42], or the invariants of the right
+stretch tensor [43,44]. Specifically for anisotropy, we have restricted our attention to the pseudo-invariants I4v and
+I4w , which are polyconvex functions of the deformation that measure the square of the stretch along the directions
+v0 and w0 . Other anisotropic pseudo-invariants are possible. For example, as discussed in the Methods section,
+I5v = cofC : v0 ⊗ v0 and I5w = cofC : w0 ⊗ w0 are also polyconvex functions that can be used to capture energy
+associated with compression of the anisotropy directions [31]. We did not consider terms such as I5v , I5w because
+our data consisted of biaxial tests and because it is common to assume that fibers in soft tissues do not contribute
+to the energy under compression [19]. Incorporating additional directions of anisotropy, for instance based on some
+fiber probability distribution [45,46], would be straightforward. The results with only two directions were already
+satisfactory and we did not include additional anisotropic pseudo-invariants for that reason.
+   Alternative conditions of convexity have been considered in the literature. Among them, convexity of the strain
+energy with respect to C is often sought in constitutive models [41,47]. However, the conditions under which
+convexity with respect to C guarantees global minimizers to boundary value problems in nonlinear elasticity is not
+fully elucidated, see for example the recent work by Gao et al. [48]. As pointed out in [49] and [50], convexity
+with respect to C and polyconvexity with respect to F are not equivalent. Thus, in this work we focused on the
+condition of polyconvexity established by Ball [16].
+   Although the proposed approach works excellently for the cases we tested, we acknowledge that there are
+alternatives to arrive at similar results. For example, any invertible neural network architecture should work because
+a function that possess an inverse in one-dimensions is monotonic. N-ODEs are an elegant and efficient solution
+to this problem, because the gradient can be computed with a system of ODEs rather than back-propagation,
+which can be expensive for a deep neural network. We also note that there are other architectures to guarantee
+convexity of functions based on similar principles [51]. We think our method has two main advantages: first, one
+can directly incorporate domain knowledge by selecting the terms and interactions that are relevant rather than
+using all possible inputs (strain invariants and combinations). This approach also adds interpretability, as each of
+the fitted functions can be inspected and compared to existing models. Second, by approximating derivatives of the
+strain energy function rather than the strain energy function itself, we decrease the degree of differentiability of
+the neural network and can employ simpler activation functions, such as ReLU. Alternative methods to deal with
+the issues of differentiability are integrable neural networks or regularization terms during model training [41,52].
+Even though we do not have direct access to the strain energy function, the fact that the derivative functions are all
+one-dimensional enables the use of standard quadrature rules to efficiently integrate the strain energy if needed.
+   Lastly, we remark that in this paper we have focused on incompressible, and hyperelastic behavior. This is not a
+limitation of the framework but simply the application explored in detail here. The framework produces polyconvex
+strain energies applicable to a much wider set of problems. For example, consideration of compressible behavior
+would require a suitable volumetric strain energy function which can also be data-driven and convex. An example of
+a compressible material is given in the Supplement. Modeling of viscoelastic materials or elastoplastic deformations
+can also be formulated using data-driven polyconvex strain energies [53–55].
+
+Conclusions
+   We present a data-driven framework to construct automatically polyconvex strain energy functions. The
+formulation is based on N-ODEs. We showcase the framework by using it to model the nonlinear, anisotropic,
+hyperelastic, and incompressible behavior of skin. The data-driven framework outperforms closed-form constitutive
+models. Our results foment the appeal of data-driven methods to better capture experimental material response
+without the constraints of analytical expressions for the strain energy while still satisfying the basic requirements
+of physically realistic models, i.e. the notion of polyconvexity. Additionally, the formulation is invariant and allows
+                                                           16
+V. Tac, F.S. Costabal and A.B. Tepole                         Computer Methods in Applied Mechanics and Engineering 398 (2022) 115248
+
+for the efficient computation of the second derivatives of the strain energy, which further enables the use of our
+data-driven framework in finite element simulations. We therefore anticipate that this work will further cement the
+use of data-driven methods in computational mechanics.
+
+Declaration of competing interest
+   The authors declare that they have no known competing financial interests or personal relationships that could
+have appeared to influence the work reported in this paper.
+
+Acknowledgment
+  This work was supported by the National Institute of Arthritis and Musculoskeletal and Skin Diseases of the
+National Institute of Health under award R01AR074525.
+
+Appendix A. Supplementary data
+  Supplementary material related to this article can be found online at https://doi.org/10.1016/j.cma.2022.115248.
+Code associated with this publication is available at a Github repository https://github.com/tajtac/NODE v2.
+
+References
+ [1] J. Ma, F. Wu, J. Zhu, D. Xu, D. Kong, A pre-trained convolutional neural network based method for thyroid nodule diagnosis,
+     Ultrasonics 73 (2017) 221–230.
+ [2] P. Guhathakurta, Long-range monsoon rainfall prediction of 2005 for the districts and sub-division Kerala with artificial neural network,
+     Current Sci. 90 (6) (2006) 773–779.
+ [3] A.D. Casey, S.F. Son, I. Bilionis, B.C. Barnes, Prediction of energetic material properties from electronic structure using 3D
+     convolutional neural networks, J. Chem. Inf. Model. 60 (10) (2020) 4457–4473.
+ [4] K. Duraisamy, G. Iaccarino, H. Xiao, Turbulence modeling in the age of data, Annu. Rev. Fluid Mech. 51 (1) (2019) 357–377.
+ [5] J. Lee, D. Almond, B. Harris, The use of neural networks for the prediction of fatigue lives of composite materials, Composites A
+     30 (10) (1999) 1159–1169.
+ [6] L. Lu, M. Dao, P. Kumar, U. Ramamurty, G.E. Karniadakis, S. Suresh, Extraction of mechanical properties of materials through deep
+     learning from instrumented indentation, Proc. Natl. Acad. Sci. USA 117 (3) (2020) 7052–7062.
+ [7] Z. Wang, X. Huan, K. Garikipati, Variational system identification of the partial differential equations governing microstructure evolution
+     in materials: Inference over sparse and spatially unrelated data, Comput. Methods Appl. Mech. Engrg. 377 (2021) 113706.
+ [8] B.A. Le, J. Yvonnet, Q.-C. He, Computational homogenization of nonlinear elastic materials using neural networks, Internat. J. Numer.
+     Methods Engrg. 104 (12) (2015) 1061–1084.
+ [9] M. Liu, L. Liang, W. Sun, A generic physics-informed neural network-based constitutive model for soft biological tissues, Comput.
+     Methods Appl. Mech. Engrg. 372 (2020).
+[10] G.C. Peng, M. Alber, A.B. Tepole, W.R. Cannon, S. De, S. Dura-Bernal, K. Garikipati, G. Karniadakis, W.W. Lytton, P. Perdikaris,
+     et al., Multiscale modeling meets machine learning: What can we learn? Arch. Comput. Methods Eng. (2020) 1–21.
+[11] X. Zhang, K. Garikipati, Machine learning materials physics: Multi-resolution neural networks learn the free energy and nonlinear
+     elastic response of evolving microstructures, Comput. Methods Appl. Mech. Engrg. 372 (2020) 113362.
+[12] V. Tac, V.D. Sree, M.K. Rausch, A.B. Tepole, Data-driven modeling of the mechanical behavior of anisotropic soft biological tissue,
+     2021, arXiv preprint arXiv:2107.05388.
+[13] J.E. Marsden, T.J. Hughes, Mathematical Foundations of Elasticity, Courier Corporation, 1994.
+[14] E. Kuhl, H. Askes, P. Steinmann, An illustration of the equivalence of the loss of ellipticity conditions in spatial and material settings
+     of hyperelasticity, Eur. J. Mech. A Solids 25 (2) (2006) 199–214.
+[15] C.B. Morrey Jr., Quasi-convexity and the lower semicontinuity of multiple integrals., Pacific J. Math. 2 (1) (1952) 25–53.
+[16] J.M. Ball, Convexity conditions and existence theorems in nonlinear elasticity, Arch. Ration. Mech. Anal. 63 (4) (1976) 337–403.
+[17] F. Rindler, Calculus of Variations, Vol. 5, Springer, 2018.
+[18] T.C. Gasser, R.W. Ogden, G.A. Holzapfel, Hyperelastic modelling of arterial layers with distributed collagen fibre orientations, J. R.
+     Soc. Interface 3 (6) (2005) 15–35.
+[19] G.A. Holzapfel, T.C. Gasser, R.W. Ogden, A new constitutive framework for arterial wall mechanics and a comparative study of
+     material models, J. Elasticity 61 (2000) 1–48.
+[20] Y.C. Fung, F. Fronek, P. Patitucci, Pseudoelasticity of arteries and the choice of its mathematical expression, Am. J. Physiol. 237 (5)
+     (1979) H620–H631.
+[21] G. Chagnon, M. Rebouah, D. Favier, Hyperelastic energy densities for soft biological tissues: a review, J. Elasticity 120 (2) (2015)
+     129–160.
+[22] A.E. Ehret, M. Itskov, A polyconvex hyperelastic model for fiber-reinforced materials in application to soft tissues, J. Mater. Sci. 42
+     (21) (2007) 8853–8863.
+[23] G. Limbert, Skin Biophysics: From Experimental Characterisation to Advanced Modelling, Vol. 22, Springer, 2019.
+                                                                      17
+V. Tac, F.S. Costabal and A.B. Tepole                         Computer Methods in Applied Mechanics and Engineering 398 (2022) 115248
+
+[24] J.W. Jor, M.D. Parker, A.J. Taberner, M.P. Nash, P.M. Nielsen, Computational and experimental characterization of skin mechanics:
+     identifying current challenges and future directions, Wiley Interdiscip. Rev. Syst. Biol. Med. 5 (5) (2013) 539–556.
+[25] B. Mueller, J. Elrod, O. Distler, C. Schiestl, E. Mazza, On the reliability of suction measurements for skin characterization, J. Biomech.
+     Eng. 143 (2) (2021) 021002.
+[26] T. Lee, S.Y. Turin, A.K. Gosain, I. Bilionis, A.B. Tepole, Propagation of material behavior uncertainty in a nonlinear finite element
+     model of reconstructive surgery, Biomech. Model. Mechanobiol. 17 (2018) 1857–1873.
+[27] Y. Leng, V. Tac, S. Calve, A.B. Tepole, Predicting the mechanical properties of biopolymer gels using neural networks trained on
+     discrete fiber network data, Comput. Methods Appl. Mech. Engrg. 387 (2021).
+[28] N.N. Vlassis, W. Sun, Sobolev training of thermodynamic-informed neural networks for interpretable elasto-plasticity models with level
+     set hardening, Comput. Methods Appl. Mech. Engrg. 377 (2021).
+[29] R.T.Q. Chen, Y. Rubanova, J. Bettencourt, D. Duvenaud, Neural ordinary differential equations, 2019.
+[30] J. Schröder, Anisotropic polyconvex energies, in: Poly-, Quasi-and Rank-One Convexity in Applied Mechanics, Springer, 2010, pp.
+     53–105.
+[31] J. Schröder, P. Neff, Invariant formulation of hyperelastic transverse isotropy based on polyconvex free energy functions, Int. J. Solids
+     Struct. 40 (2) (2003) 401–445.
+[32] D. Balzani, P. Neff, J. Schröder, G. Holzapfel, A polyconvex framework for soft biological tissues. Adjustment to experimental data,
+     Int. J. Solids Struct. 43 (20) (2006) 6052–6070.
+[33] K. He, X. Zhang, S. Ren, J. Sun, Deep residual learning for image recognition, in: Proceedings of the IEEE Conference on Computer
+     Vision and Pattern Recognition, 2016, pp. 770–778.
+[34] T. Doyle, J. Ericksen, in: H. Dryden, T. von Kármán (Eds.), Nonlinear Elasticity, in: Advances in Applied Mechanics, vol. 4, Elsevier,
+     1956, pp. 53–115.
+[35] J. Bradbury, R. Frostig, P. Hawkins, M.J. Johnson, C. Leary, D. Maclaurin, G. Necula, A. Paszke, J. VanderPlas, S. Wanderman-Milne,
+     Q. Zhang, JAX: composable transformations of Python+NumPy programs, 2018.
+[36] M. Mooney, A theory of large elastic deformation, J. Appl. Phys. 11 (9) (1940).
+[37] R.S. Rivlin, Large elastic deformations of isotropic materials iv. further developments of the general theory, Phil. Trans. R. Soc. A
+     241 (835) (1948).
+[38] C.J. Chuong, Y.C. Fung, On residual stresses in arteries, J. Biomech. Eng. 108 (2) (1986) 189–192, _eprint: https://asmedigitalcollect
+     ion.asme.org/biomechanical/article-pdf/108/2/189/5665801/189_1.pdf.
+[39] S.X. Deng, J. Tomioka, J.C. Debes, Y.C. Fung, New experiments on shear modulus of elasticity of arteries, Am. J. Physiol. Heart
+     Circ. Physiol. 266 (1) (1994) H1–H10, PMID: 8304490.
+[40] T. Lee, S.Y. Turin, C. Stowers, A.K. Gosain, A.B. Tepole, Personalized computational models of tissue-rearrangement in the scalp
+     predict the mechanical stress signature of rotation flaps, Cleft Palate-Craniofacial J. 58 (4) (2021) 438–445.
+[41] N.N. Vlassis, R. Ma, W. Sun, Geometric deep learning for computational mechanics part I: anisotropic hyperelasticity, Comput. Methods
+     Appl. Mech. Engrg. 371 (2020) 113299.
+[42] M. Shariff, Physical invariants for nonlinear orthotropic solids, Int. J. Solids Struct. 48 (13) (2011) 1906–1914.
+[43] D.J. Steigmann, On isotropic, frame-invariant, polyconvex strain-energy functions, Q. J. Mech. Appl. Math. 56 (4) (2003) 483–491.
+[44] D.J. Steigmann, Frame-invariant polyconvex strain-energy functions for some anisotropic solids, Math. Mech. Solids 8 (5) (2003)
+     497–506.
+[45] Y. Lanir, A structural theory for the homogeneous biaxial stress-strain relationships in flat collagenous tissues, J. Biomech. 12 (6)
+     (1979) 423–436.
+[46] M.S. Sacks, Biaxial mechanical evaluation of planar biological materials, J. Elasticity Phys. Sci. Solids 61 (1) (2000) 199–246.
+[47] G.A. Holzapfel, R.W. Ogden, Constitutive modelling of passive myocardium: a structurally based framework for material
+     characterization, Philos. Trans. R. Soc. Lond. Ser. A Math. Phys. Eng. Sci. 367 (1902) (2009) 3445–3475.
+[48] D.Y. Gao, P. Neff, I. Roventa, C. Thiel, On the convexity of nonlinear elastic energies in the right Cauchy-Green tensor, J. Elasticity
+     127 (2) (2017) 303–308.
+[49] J. Sivaloganathan, S.J. Spector, On the uniqueness of energy minimizers in finite elasticity, J. Elasticity 133 (1) (2018) 73–103.
+[50] J.P. Wilber, J.R. Walton, The convexity properties of a class of constitutive models for biological soft issues, Math. Mech. Solids 7
+     (3) (2002) 217–235.
+[51] B. Amos, L. Xu, J.Z. Kolter, Input convex neural networks, in: International Conference on Machine Learning, PMLR, 2017, pp.
+     146–155.
+[52] G.H. Teichert, A. Natarajan, A. Van der Ven, K. Garikipati, Machine learning materials physics: Integrable deep neural networks enable
+     scale bridging by learning free energy functions, Comput. Methods Appl. Mech. Engrg. 353 (2019) 201–216.
+[53] J. Bonet, A.J. Gil, R. Ortigosa, A computational framework for polyconvex large strain elasticity, Comput. Methods Appl. Mech.
+     Engrg. 283 (2015) 1061–1094.
+[54] J. Krishnan, D.J. Steigmann, A polyconvex formulation of isotropic elastoplasticity theory, IMA J. Appl. Math. 79 (5) (2014) 722–738.
+[55] D. Nordsletten, A. Capilnasiu, W. Zhang, A. Wittgenstein, M. Hadjicharalambous, G. Sommer, R. Sinkus, G.A. Holzapfel, A viscoelastic
+     model for human myocardium, 2021, arXiv preprint arXiv:2105.06671.
+
+
+
+
+                                                                      18
+

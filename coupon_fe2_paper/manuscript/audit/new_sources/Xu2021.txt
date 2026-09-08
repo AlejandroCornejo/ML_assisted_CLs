@@ -1,0 +1,1417 @@
+                                                         Journal of Computational Physics 428 (2021) 110072
+
+
+
+                                                           Contents lists available at ScienceDirect
+
+
+                                               Journal of Computational Physics
+                                                                  www.elsevier.com/locate/jcp
+
+
+
+
+Learning constitutive relations using symmetric positive
+deﬁnite neural networks
+Kailai Xu a,1 , Daniel Z. Huang a,1 , Eric Darve a,b,∗
+a
+    Institute for Computational and Mathematical Engineering, Stanford University, Stanford, CA, 94305, United States of America
+b
+    Mechanical Engineering, Stanford University, Stanford, CA, 94305, United States of America
+
+
+
+a r t i c l e             i n f o                         a b s t r a c t
+
+Article history:                                          We present a new neural-network architecture, called the Cholesky-factored symmetric
+Received 26 July 2020                                     positive deﬁnite neural network (SPD-NN), for modeling constitutive relations in compu-
+Received in revised form 4 November 2020                  tational mechanics. Instead of directly predicting the stress of the material, the SPD-NN
+Accepted 7 December 2020
+                                                          trains a neural network to predict the Cholesky factor of the tangent stiffness matrix,
+Available online 6 January 2021
+                                                          based on which the stress is calculated in incremental form. As a result of this special
+Keywords:                                                 structure, SPD-NN weakly imposes convexity on the strain energy function, satisﬁes the
+Neural networks                                           second order work criterion (Hill’s criterion) and time consistency for path-dependent ma-
+Plasticity                                                terials, and therefore improves numerical stability, especially when the SPD-NN is used
+Hyperelasticity                                           in ﬁnite element simulations. Depending on the types of available data, we propose two
+Finite element method                                     training methods, namely direct training for strain and stress pairs and indirect training
+Multiscale homogenization                                 for loads and displacement pairs. We demonstrate the effectiveness of SPD-NN on hyper-
+                                                          elastic, elasto-plastic, and multiscale ﬁber-reinforced plate problems from solid mechanics.
+                                                          The generality and robustness of SPD-NN make it a promising tool for a wide range of
+                                                          constitutive modeling applications.
+                                                                                                                © 2020 Elsevier Inc. All rights reserved.
+
+
+
+
+1. Introduction
+
+    One of the goals of material modeling is to construct constitutive models to describe the relationship between strain and
+stress. The mapping between strain and stress (constitutive relations) can be high dimensional and history-dependent, and
+these complexities make constitutive modeling very challenging. Traditionally, the constitutive relations are derived from
+microscopic interactions between multiscale structures or between atoms. However, ﬁrst-principles simulations (e.g., molec-
+ular dynamics based simulations), which can resolve these interactions, remain prohibitively expensive. The computational
+diﬃculty motivates the construction of constitutive models with simpliﬁed assumptions that still capture the essential phys-
+ical constraints of constitutive relations, such as isotropicity or thermodynamics principles of material. Parameters in the
+models are then calibrated on limited and coarse-scale loading test data. These constitutive models lead to affordable and
+robust simulations, and thus the models are very important for large-scale engineering and scientiﬁc applications. However,
+the functional forms representing these constitutive models are often limited to global exponents and polynomials, which
+are insuﬃcient to represent complicated multiscale constitutive relations.
+
+
+
+    * Corresponding author.
+        E-mail addresses: kailaix@stanford.edu (K. Xu), zhengyuh@stanford.edu (D.Z. Huang), darve@stanford.edu (E. Darve).
+    1
+        Both authors contributed equally to this work.
+
+https://doi.org/10.1016/j.jcp.2020.110072
+0021-9991/© 2020 Elsevier Inc. All rights reserved.
+K. Xu, D.Z. Huang and E. Darve                                                                         Journal of Computational Physics 428 (2021) 110072
+
+
+
+
+Fig. 1. Training neural-network-based constitutive relations NNθ , based on different types of data. When the strain and stress pairs are available, we
+can train the neural network using the typical least-square regression. However, when only the displacement and external load (experimental) data are
+available, we need to couple a neural-network-based constitutive model with the dynamic structural equation. In this work, we demonstrate training
+neural-network-based constitutive relations with both approaches.
+
+
+    Since the development of deep learning techniques, deep neural networks (DNN) have emerged as a promising technique
+for constitutive modeling. For example, pioneering work has demonstrated the feasibility of constitutive modeling using
+neural networks in a wide variety of applications, such as Ghaboussi et al. [1] for modeling concrete, Ellis et al. [2] for
+modeling sands, Shen et al. [3], Liang et al. [4] for modeling hyper-elastic materials, and Furukawa et al. [5] for modeling
+viscoelastic materials.
+    Recently, recurrent neural networks (RNNs), which are effective for history-dependent phenomena, have been applied to
+model multiscale multi-permeability poroplasticity [6], multiscale-plasticity [7], and multiscale one-dimensional bars [8].
+    Additionally, neural networks have been used to address more complex material behaviors, such as microcracking, brittle
+fracture, and crack propagation [9–12]. Neural networks that take as input microscopic structure parameters were used to
+design of new materials [13–16].
+    The cited literature shows that DNNs offer a powerful framework to represent complex constitutive relations. There are
+two important aspects of neural-network-based constitutive relations:
+
+  • Firstly, depending on the nature and availability of data, the neural-network-based constitutive relations can either
+    be trained directly or indirectly (Fig. 1). Most of the cited literature adopt the direct training method, where neural-
+    network-based constitutive models and dynamic structural equations are eventually decoupled: the neural networks,
+    which accept strain (or strain increments, etc.) as input and yield stress as outputs, are trained using input-output
+    pairs. To model complex material behavior, this method requires a voluminous amount of strain-stress data, which
+    can be expensive or impossible to collect. Our proposed approach enables training the neural network with either
+    direct input-output data or indirect full-ﬁeld data [17–20], such as displacement and external load data, by coupling
+    the neural network with a dynamic structural equation solver (Fig. 1); the indirect training approach alleviates the
+    demanding requirement for strain-stress data.
+  • Secondly and more importantly, even DNNs that appear to make accurate predictions may be numerically unstable when
+    we plug them into a dynamic structural equation time integrator. For example, in benchmarks that we run, accurate
+    DNNs in fact led to unstable models when coupled with dynamic structural equations. For predictive modeling, issues
+    like numerical stability, generalization, and global accuracy have not been suﬃciently explored. In the present work, the
+    numerical stability of the coupled system is studied, and several stability-preserving neural network architectures are
+    proposed.
+
+    If one solves the structural governing equations embedded with general DNN constitutive models, numerical instabilities
+are observed (see Section 4.1 for an example). We found that the numerical instability is actually due to the violation of
+physical constraints in the constitutive models, such as the time consistency and the second order work criterion, which we
+will discuss in the following. We show that by designing DNNs that satisfy these physical constraints, we can dramatically
+improve numerical stability and prediction accuracy.
+    The idea of adding physics-based constraints to the neural network is not new. For example, Ling et al. [21] enforce
+isotropicity an orthotropy on the predicted strain-energy of the crystal elastic materials through building a basis of invariant
+inputs. Liu et al. [22,23] design deep material networks using a composition of simple building blocks inspired from the
+two-phase linearly elastic model. Heider et al. [24] introduced coordinate-free invariant metrics for the objective frame-
+independent functions to model anisotropic elastoplastic materials. However, despite better accuracy for predicting the
+stress as a result of satisfying these constraints, the performance of the resulting structural governing equations coupled
+with these physics constrained neural networks is not necessarily improved. For example, a trained neural-network-based
+
+                                                                          2
+K. Xu, D.Z. Huang and E. Darve                                                                              Journal of Computational Physics 428 (2021) 110072
+
+
+constitutive model may predict stress relatively accurately, but it may not yield a symmetric positive deﬁnite stiffness
+matrix. Because of this, the numerical solver, where the neural network is embedded, may produce nonphysical solutions
+or suffer from numerical instability.
+   In the present work, we focus on the numerical stability aspect of the resulting hybrid model—the conservation equations
+embedded with NN-based constitutive models. We propose a novel neural network architecture with customized output
+layers to fulﬁll two objectives.
+
+  • The ﬁrst objective is related to the convexity of the strain-energy, which plays a signiﬁcant role in the numerical
+    stability. To this end, we propose to predict the tangent stiffness matrix and enforce that it be symmetric positive
+    deﬁnite.2 The symmetric positive deﬁniteness guarantees the weak convexity of the strain-energy and fulﬁlls the second
+    order work criterion (Hill’s criterion) for path-dependent materials.
+  • Another objective is ensuring time consistency equation (13), in particular for path-dependent materials, such as elasto-
+    plastic materials.
+
+To achieve these objectives, instead of training a neural network to identify a nonlinear map directly between strain and
+stress, we train a neural network (with weights and biases θ ) that maps the strain (and possibly other relevant quantities)
+to a lower triangular matrix Lθ (a Cholesky factor). We then construct the constitutive model in the following incremental
+form:
+
+        σ = Lθ LθT                                                                                                                                     (1)
+
+where  and σ are the incremental strain and stress in Voigt notation.3 In our formulation, the tangent stiffness matrix
+Lθ LθT is automatically symmetric positive semideﬁnite. If we assume that Lθ is bounded, i.e., Lθ 2 ≤ C < ∞ for a constant
+independent of θ , this incremental form leads to a time consistent scheme.
+    In the present work, results based on neural networks trained on both direct input-output data and indirect full-ﬁeld
+data [17–19] are presented. The robustness of our approach is demonstrated in different numerical applications, including
+a hyperelastic material, an elasto-plastic material, and a multiscale material. We have developed a software library that
+seamlessly combines traditional ﬁnite element methods and neural networks. The code is accessible online:
+
+                                                        https://github.com/kailaix/NNFEM.jl
+
+   The remainder of this paper is organized as follows. We ﬁrst introduce the background in Section 2, including the
+governing equations, different classical constitutive relations and their associated constraints. In Section 3, we present our
+constraint-embedded neural network architecture—SPD-NN, and the training procedures. Finally, we apply the learned NN-
+based constitutive relations to several solid mechanics problems, including a one-dimensional truss coupon, and several two-
+dimensional thin plate problems with hyperelastic material, elasto-plastic material and ﬁber-reinforced multiscale material.
+Several issues related to neural networks are discussed in Section 5. We discuss a possible generalization of the approach in
+Section 6.
+
+2. Background
+
+2.1. Governing equations
+
+    The governing equation of a solid undergoing inﬁnitesimal deformations can be written as
+
+        ρ ü = div σ + ρ b           in 
+          u = ū                     on u                                                                                                                (2)
+        σ n = t̄                     on t
+
+where ρ is the mass density, u is the displacement vector, σ is the stress tensor, and ρ b is the body force vector;  denotes
+the computational domain. The prescribed displacement ū and the surface traction t̄ are imposed on the domain boundaries
+u and t with the outward unit normal n, where u ∩ t = ∅ and u ∪ t = ∂ .
+    To solve for the displacement u from Eq. (2), we also need the constitutive relations, which maps the deformation history
+of the structure to the stress:
+
+        σ (t ) = M( (t ), I (t ))                                                                                                                        (3)
+
+
+ 2
+   Exceptions exist, i.e., non-associate elasto-plasticity, where both symmetry and deﬁnite positiveness are lost, and bifurcations and possible instabilities
+appear inside the plastic limit surface.
+ 3
+   For brevity,  and σ represent both tensor form and vector form in Voigt notation depending on the context.
+
+
+                                                                              3
+K. Xu, D.Z. Huang and E. Darve                                                                       Journal of Computational Physics 428 (2021) 110072
+
+
+Here  (t ) is the strain tensor at time t related to the displacement vector and I (t ) denotes all other quantities related to
+material states during time τ = [0, t ), such as  (τ ), σ (τ ), etc. The inﬁnitesimal strain tensor is
+                         1
+          =  (u) = [∇ u + (∇ u)T ]
+                         2
+   When we apply the ﬁnite element method to solve Eq. (2) numerically, we have the following semi-discrete equation at
+time t
+
+         Mü + P(u, M( (u), I )) = f(u, x, p )                                                                                                    (4)
+where we use the same notation u to denote the spatial discretization of the displacement vector u in Eq. (2), M is the
+discrete mass matrix, P and f are the discrete internal and external force vectors, x is the coordinate vector, and p is
+the parameter vector of external loads. We adopt the generalized α -method [25] with αm = −1 and α f = 0 for temporal
+discretization of Eq. (4). This generalized α -method allows for dissipating high frequency energy to damp high frequency
+modes, which is crucial for the robustness of the numerical solver when an approximate constitutive relation is used.
+
+Remark 1. For structure undergoing ﬁnite or large deformations, the ﬁnite strain tensor reads
+                         1
+          =  (u) = [∇ u + (∇ u)T + (∇ u)T ∇ u]                                                                                                   (5)
+                         2
+σ in Eq. (2) represents the ﬁrst Piola-Kirchhoff stress tensor, the constitutive relation generally relates the ﬁnite strain tensor
+with the symmetric second Piola-Kirchhoff stress tensor
+
+         S (t ) = M( (t ), I (t ))                                                                                                                (6)
+The ﬁrst Piola-Kirchhoff tensor and the second Piola-Kirchhoff tensor are related by
+
+         σ = FS
+here F = ∇ u + I is the deformation gradient tensor, where I is the identity matrix.
+   Our method works for both inﬁnitesimal and ﬁnite deformations. Numerical examples of structures undergoing ﬁnite
+deformations are reported in Section 4.1 and Section 4.2.1, and examples using inﬁnitesimal deformations are reported in
+other numerical examples.
+
+2.2. Constitutive relations and associated constraints
+
+    Eq. (3) represents one possible form of constitutive relations. Even when restricted to this speciﬁc form, the consti-
+tutive relations can describe a great variety of material properties. Nevertheless, most of the constitutive relations share
+extra constraints (i.e., objectivity, convex strain energy function, and second law of thermodynamics) that play signiﬁcant
+roles in material stability and numerical stability. In what follows, several stability- and consistency-related constraints of
+constitutive relations are discussed. These constraints should be considered in any data-driven constitutive models.
+
+2.2.1. Hyperelastic materials
+    The constitutive relations of hyperelastic materials are path-independent and are related to the strain-energy density
+function ω( ),
+               ∂ ω( )
+         σ=                                                                                                                                        (7)
+                 ∂
+                                                                                                                                     ∂ 2 ω( )
+In general, the strain-energy density function is assumed to be convex, namely, the tangent stiffness matrix ∂ 2  is sym-
+metric positive deﬁnite (SPD). The assumption in one-dimensional is equivalent to that the strain-stress is monotonically
+increasing.4 The convexity is crucial to both the stability of the material and also the numerical scheme.
+
+2.2.2. Elasto-plastic materials
+    The constitutive relations of elasto-plastic materials are rate-independent but path-dependent, and feature transition
+between elastic and plastic behaviors. Namely, under loading, the material behaves elastically until the initial yield stress σY
+is attained, and then undergoes permanent irreversible plastic deformations with further loading. The onset and continuance
+of plastic deformation is governed by a yield function
+
+         f (σ ) ≤ 0                                                                                                                                (8)
+
+
+ 4
+     Exceptions exist, i.e., strain-softening [26], which is beyond the scope of the present work.
+
+
+                                                                               4
+K. Xu, D.Z. Huang and E. Darve                                                                     Journal of Computational Physics 428 (2021) 110072
+
+
+For plastic deformation, the stress state must remain on the yield surface f = 0, thanks to hardening parameters; and for
+elastic deformation, the yield function satisﬁes f < 0.
+   The strain is assumed to be additively decomposed into elastic  e and plastic  p parts, as follows,
+
+         = e +  p                                                                                                                             (9)
+
+The constitutive relation relates the stress and the elastic part of the strain:
+
+        σ = C e                                                                                                                               (10)
+
+here C is the tangent stiffness tensor. The plastic strain rate is given by a ﬂow rule, i.e., the associative ﬂow rule as follows,
+
+                    ∂f
+        ˙ p = λ̇
+                    ∂σ
+where λ̇ is called the plastic rate parameter or the consistency parameter, which is non-zero only if f = 0.
+  Naturally, the constitutive relation is written in the rate form
+                         ⎧
+                         ⎪C˙
+                         ⎪
+                         ⎪
+                                                              if f < 0
+                         ⎨
+        σ̇ = H˙ =               (C ∂∂ σf )(C ∂∂ σf )T                                                                                         (11)
+                         ⎪
+                         ⎪ C −  T                      ˙   if f = 0
+                         ⎪
+                         ⎩      ∂f    ∂f
+                                    C∂σ         ∂σ
+
+It is worth mentioning the tangent stiffness matrix H is symmetric positive semideﬁnite, and when strain hardening is
+considered, it becomes SPD. The deﬁnite positiveness leads to the second order work criterion, proposed by Hill [27]:
+
+                     1
+        δ 2 W := σ̇ T · ˙ ≥ 0                                                                                                                 (12)
+                     2
+which is also a suﬃcient condition for uniqueness of the elasto-plastic boundary value problem (see [28,29]). Moreover, the
+form in Eq. (11) implies time consistency, i.e., as  → 0, σ → 0, and also rate-independent,5 i.e., the tangent stiffness
+matrix is independent of the strain or stress rate.
+
+2.2.3. Associated constraints
+    Based on the discussion above, the following properties are crucial to be incorporated in data-driven constitutive models:
+
+(1) Symmetry positive deﬁniteness of the tangent stiffness matrix (i.e., strain energy convexity), which leads to non-singular
+    stiffness matrix. We also found that the SPD property is crucial for numerical stability.
+(2) Time consistency, which is formulated as follows,
+
+               lim σ = 0                                                                                                                      (13)
+               →0
+
+     It is crucial for the convergence of the numerical approximation when t −
+                                                                              → 0.
+
+3. Methodology
+
+   In this section, we describe our method for learning the constitutive relations (3) and (6). Our discussion will be divided
+into two parts:
+
+ 1. the neural network architecture for approximating the mapping between the strain and the stress;
+ 2. the direct and indirect training methods based on the types of available data.
+
+3.1. Neural network architectures
+
+    We note that the neural network has already been used to approximate the constitutive relations. The neural network
+architectures in many literatures output stress directly (σ -NN) with the following form (recall that I stands for other
+relevant information up to the current time)
+
+        σ -NN:           σ = NNθ ( , I )                                                                                                      (14)
+
+
+  5
+    Strictly speaking, rate independency implies homogeneity, namely the stiffness tensor must be homogeneous of degree 0 and be dependent only on
+the direction of strain rate or stress rate.
+
+
+                                                                         5
+K. Xu, D.Z. Huang and E. Darve                                                                          Journal of Computational Physics 428 (2021) 110072
+
+
+or output stress increment directly (σ -NN):
+
+        σ -NN:           σ = NNθ ( , I )                                                                                                         (15)
+
+Note that ( , I ) is an abstract description of the neural network dependencies, which may include the strain rate informa-
+                                            
+tion ˙ , or directional information             .
+                                            
+  These architectures are suitable for learning the constitutive relations when the strain and the stress data are available.
+However, these strain-stress relations expressed by Eqs. (14) and (15) do not satisfy certain physical constraints and thus
+may break numerical solvers (see Section 4.1), when we plug them into a numerical solver.
+  We propose an alternative architecture (SPD-NN) based on the incremental form,
+
+        σ = Hθ  = Lθ LθT 
+                                                                                                                                                    (16)
+          Lθ = NNθ ( , I )
+
+Here instead of outputting the stress or stress increment directly, the neural network outputs a lower triangular matrix Lθ ,
+which is the Cholesky factor of the tangent stiffness matrix Hθ . The numerical approximation to Eq. (16) in the dynamic
+simulations has the following form
+
+        σ n+1 = Lθ LθT ( n+1 −  n ) + σ n                                                                                                         (17)
+
+here, the superscript n indicates the time step.
+   An obvious advantage of Eq. (16) is the guarantee that the tangent stiffness matrix is a symmetric semideﬁnite matrix,
+which is true for commonly used constitutive relations (i.e., hyperelasticity and associate elasto-plasticity). Additionally,
+when NNθ is bounded, we have
+
+         lim σ = 0                                                                                                                                 (18)
+         →0
+
+which proves the time-consistency for both path-dependent/independent constitutive relations. In contrast, both the σ -NN
+with σ n+1 = NNθ ( n+1 ,  n , σ n ) and the σ -NN with
+
+        σ n+1 = NNθ ( n+1 ,  n , σ n ) + σ n
+fail to satisfy the time-consistency condition equation (18) for path-dependent constitutive relations.
+    In the following, we discuss how to adapt SPD-NN for different materials.
+
+  • Linear Elasticity
+     For linear elastic material, the tangent stiffness matrix is independent of the strain or stress. Therefore, no neural
+     network is needed, and the constitutive relation reads
+
+              σ n+1 = Cθ  n+1                                                                                                                      (19)
+
+    where Cθ is the parametric tangent stiffness tensor and the unknowns are simply entries in the tensor (no neural
+    network).
+  • Nonlinear Elasticity
+    For nonlinear elastic material, the tangent stiffness matrix equation (7) depends only on the strain at the current time
+    step. The constitutive relation (17) can be formulated as
+
+              σ n+1 = Lθ ( n+1 )Lθ ( n+1 )T ( n+1 −  n ) + σ n                                                                                  (20)
+
+    Note the input  n+1 must be evaluated at the current time step n + 1 because it is impossible to determine the stress
+    at time step n + 1 given only the information at time step n.
+  • Elasto-Plasticity
+    For elasto-plastic material, the material behavior features transition from elastic behavior to plastic behavior. To model
+    this effect, we consider two types of constitutive relations:
+    1. In the linear elasticity region, the constitutive relation is approximated by
+
+                     +1
+                 σ nelasticity = Cθ ( n+1 −  n ) + σ n                                                                                            (21)
+
+     2. In the plasticity region, the constitutive relation is approximated by
+
+                     +1
+                 σ nplasticity = Lθ ( n+1 ,  n , σ n )Lθ ( n+1 ,  n , σ n )T ( n+1 −  n ) + σ n                                               (22)
+
+                                                                               6
+K. Xu, D.Z. Huang and E. Darve                                                                              Journal of Computational Physics 428 (2021) 110072
+
+
+
+
+Fig. 2. An exemplary transition function D (σ , σ̃Y ) = sigmoid 100(σ 2 − σ̃Y2 ) and σ̃Y = 1. Here sigmoid is the sigmoid function sigmoid(x) = (1 +
+e −x )−1 .
+
+
+       However, since we do not know when the transition occurs (the yield strength σY is not available and strain hardening
+       could strength the material), we can relax the constitutive relation using a differentiable6 transition function D (σ n , σ̃Y )
+       (see Fig. 2), whose value is between 0 and 1, as follows,
+
+                                                 +1                            +1
+                 σ n+1 = (1 − D (σ n , σ̃Y ))σ nelasticity + D (σ n , σ̃Y )σ nplasticity                                                                (23)
+
+       here σ̃Y is the estimated yield strength, which does not need to be accurate. When the equivalent stress estimated
+       from σ n (such as von Mises stress)7 is smaller than σ̃Y , the material behavior is assumed to be linear and described
+       by Eq. (21); otherwise, it is assumed to be described by the plastic form equation (22). It is worth noting the plastic
+       form equation (22) can degenerate to the linear elastic form equation (21), but not vice versa. Therefore, the esti-
+       mated yield strength σ̃Y should be smaller than the yield strength σY . In the present study, historical data for plastic
+       form equation (22) span only one time step, more historical data might be needed for materials with strong hysteresis.
+
+Remark 2. Strictly speaking, the stiffness tensor Lθ LθT must be homogeneous of degree 0 and be dependent only on the
+direction of strain rate or stress rate:
+
+               n +1 −  n        σ n +1 − σ n
+                            ,
+              n+1 −  n       σ n+1 − σ n 
+In the implementation, we use the formulation equation (22) for simplicity.
+
+Remark 3. Generally, we can write the strain-stress relations for a linear elastic material in Voigt notation, as follows:
+             ⎡
+               σ11 ⎤ ⎡ C 1111 C 1122 C 1133              C 1123    C 1113    C 1112
+                                                                                    ⎤⎡
+                                                                                        11   ⎤
+             ⎢ σ22 ⎥ ⎢        C 2222 C 2233              C 2223    C 2213    C 2212 ⎥ ⎢ 22 ⎥
+             ⎢     ⎥ ⎢                                                              ⎥⎢       ⎥
+             ⎢ σ33 ⎥ ⎢               C 3333              C 3323    C 3313    C 3312 ⎥ ⎢ 33 ⎥
+             ⎢     ⎥=⎢                                                              ⎥⎢       ⎥
+             ⎢ σ23 ⎥ ⎢                                   C 2323    C 2313    C 2312 ⎥ ⎢ 223 ⎥
+             ⎣σ ⎦ ⎣           symm                                 C 1313    C 1312
+                                                                                    ⎦ ⎣ 213
+                                                                                             ⎦
+                13
+               σ12                                                           C 1212     212
+The corresponding Cholesky factor Lθ of Cθ is a full lower triangular matrix. For the materials considered in the present
+work, they are orthotropic, i.e., they have three mutually orthogonal planes of reﬂection symmetry. Thus the tangent stiffness
+matrix can be expressed by a block diagonal matrix (Orth-NN), when orthotropy axes are used to form an orthogonal frame:
+                   ⎡                                                            ⎤
+                       C 1111   C 1122   C 1133
+                  ⎢             C 2222   C 2233                                 ⎥
+                  ⎢                                                             ⎥
+                  ⎢                      C 3333                                 ⎥
+             Cθ = ⎢                                                             ⎥
+                  ⎢                                C 2323                       ⎥
+                  ⎣             symm                         C 1313
+                                                                                ⎦
+                                                                       C 1212
+
+
+  6
+    The differentiability of the transition function is necessary since we need to evaluate the gradient of σ n+1 with respect to σ n during the training with
+indirect data.
+  7
+    In general, D should depend on σ n+1 instead of σ n . Because it is diﬃcult to express σ n+1 explicitly using this form, we assume σ n+1 ≈ σ n and thus
+obtain Eq. (23).
+
+
+                                                                                7
+K. Xu, D.Z. Huang and E. Darve                                                                     Journal of Computational Physics 428 (2021) 110072
+
+
+Therefore, the associated Cholesky factor Lθ has the following form
+                ⎡                                                                         ⎤
+                  L 1111
+                ⎢ L 2211        L 2222                                                    ⎥
+                ⎢                                                                         ⎥
+                ⎢ L 3311        L 3322      L 3333                                        ⎥
+        Lθ = ⎢                                                                            ⎥                                                    (24)
+                ⎢                                        L 2323                           ⎥
+                ⎣                                                      L 1313
+                                                                                          ⎦
+                                                                                L 1212
+
+Consequently, we can further simplify the neural network outputs to only the nonzero entries in Eq. (24). Eq. (24) is the
+form of the Cholesky factor used in the present work.
+
+Remark 4. Bringing the rate form of Eq. (16) into Eq. (12) leads to
+
+        1
+            σ̇ T · ˙ = ˙ T Lθ LθT ˙ ≥ 0
+        2
+Therefore, our proposed SPD-NN architecture equation (16) is fully consistent with the second order work criterion.
+
+3.2. Training methods
+
+   Based on the types of available data, i.e., direct and indirect, we can employ different training methods. For the following
+discussion, we summarize the neural network based constitutive relations as follows
+                                   ⎧
+                                   ⎪     n +1
+                                   ⎨Cθ                                                           Linear Elasticity
+          n +1        n +1 n  n           n +1      n +1 T   n +1
+        σ      = Mθ ( ,  , σ ) := Lθ ( )Lθ ( ) (               − )+σ
+                                                                       n        n
+                                                                                                  Nonlinear Elasticity
+                                   ⎪
+                                   ⎩(1 − D (σ n , σ̃ ))σ n+1                           n +1
+                                                    Y    elasticity
+                                                                    + D (σ n
+                                                                             , σ̃ Y )σ plasticity
+                                                                                                  Elasto-Plasticity
+
+3.2.1. Direct data
+    Direct data consist of the input and the output of the NN-based constitutive relations such as strain-stress pairs or strain-
+stress increments pairs. These data points come from experimental measurements and numerical simulation results. The
+comprehensive strain-stress data measurement relying on simple mechanical tests, such as tensile or bending tests, might
+be challenging. However, comprehensive strain-stress data generated from sub-scale simulations, such as representative
+volume element (RVE) simulations [30–34] or post-processed from direct numerical simulations, are widely used to train
+neural networks [13,14,21,6].
+    Mathematically, the direct data are given in terms of N sequences of strain-stress pairs at n time snapshots.
+
+        ( 1j , σ 1j ), ( 2j , σ 2j ), · · · , ( nj , σ nj )      j = 1, 2, 3, . . . , N
+
+Here the superscripts indicate time and the subscripts indicate the sequential number. We train the neural network by
+solving a minimization problem
+
+                                    n 
+                                   N                                                     2
+        arg min L(θ) :=                          σ ij − Mθ ( ij ,  ij−1 , σ ij−1 )                                                           (25)
+                θ
+                                   j =1 i =2
+
+
+3.2.2. Indirect data
+    Indirect data consist of deformation data from structure coupons under different load conditions. Deformations are
+measured by techniques such as digital image correlation or grid method [35]. These techniques can record complete het-
+erogeneous ﬁelds, which are rich in the constitutive relations. The virtual ﬁelds method [17,36–38] has been designed to
+apply the ﬁnite element method (FEM) to bridge the full-ﬁeld data with parametric constitutive relations. Recently, the
+method is generalized to an end-to-end training procedure to learn neural-network (or its counterparts) based constitutive
+relations from the full-ﬁeld data [18].
+    The indirect data are given by N full-ﬁeld deformation-load sequential data at n time snapshots
+
+        (u1j , f1j ), (u2j , f2j ), · · · , (unj , fnj )         j = 1, 2, 3, . . . , N
+
+Here the superscripts indicate time and the subscripts indicate the sequential number.
+   We can compute the acceleration and the stress using the formulas
+
+                        uij+1 − 2uij + uij−1
+              üij :=                                                                                                                          (26)
+                                    t 2
+                                                                                               8
+K. Xu, D.Z. Huang and E. Darve                                                                               Journal of Computational Physics 428 (2021) 110072
+
+
+
+
+                   Fig. 3. The procedure of evaluating the residual Li at each time step for training with indirect data approach in Eq. (29).
+
+
+        σ ij (θ ) := Mθ ( (uij ),  (uij−1 ), σ ij−1 (θ )), i = 2, . . . , n − 1                                                                        (27)
+             ü1j = 0, u1j = 0, σ 1j (θ) = 0                                                                                                             (28)
+
+Here t is the time step, which is assumed to be constant. We train the neural network by solving a minimization problem
+
+                                  n −1 
+                                 N                                            2
+        arg min L(θ) :=                      Müij + P(uij , σ ij (θ)) − fij                                                                             (29)
+               θ
+                                 j =1 i =2
+
+Here i is the index for time and j is the index for spacial degrees of freedom. It is worth mentioning, in Eq. (29), the
+predicted stress σ ij (θ ) = Mθ ( (uij ),  (uij−1 ), σ ij−1 (θ )) depends on the predicted stress σ ij−1 (θ ) from the last time step. The
+                                                                                       2
+procedure of evaluating the residual Li = Müij + P(uij , σ ij (θ)) − fij                    at each time step in Eq. (29) is depicted in Fig. 3.
+The procedure resembles the recurrent neural network in deep learning, where the state variables are the stresses. Like
+the recurrent neural network, the stress predictions at different time steps must be sequentially computed and so do
+the back-propagated gradients, and thus the computation is hard to be parallelized. Additionally, the training of recurrent
+neural network suffers from exploding and vanishing gradients problem [39], which poses a challenge for indirect data
+training of SPD-NNs as well. For example, when we train recurrent neural networks using gradient back-propagation, we
+need to back-propagate the gradients layer by layer. When the tanh activation function is used, its derivative is close
+to zero when the input to tanh is large. Therefore, the back-propagated gradients will possibly shrink layer after layer.
+The small gradient makes the training process challenging. In other cases, when the RELU activation function is used, its
+derivative is not contracted; therefore, back-propagation gradients can accumulate exponentially. This phenomenon is called
+gradient explosion. There are many efforts for alleviating these problems. One notable technique is to simply back-propagate
+the gradients for only a few layers instead of all of them. This technique results in an inaccurate gradient and thus its
+effectiveness may be case dependent. Another approach is to carefully initialize the neural network. We employ the latter
+approach in our present work.
+
+3.3. Initialization for indirect data training
+
+   Another notable challenge in training the recurrent neural network based constitutive relation is the existence of many
+local minima, since the training data set is small in the present work, and different constitutive relations under the same
+external loads may produce similar displacements. A common strategy to ﬁnd a good local minimum is to start from
+multiple random weights and biases. However, this strategy is expensive and does not guarantee a good initial guess. We
+thereby propose an initialization technique that yields a set of reasonably good initial weights and biases.
+   The key idea is that according to Eq. (4), we have the relation between the internal force and the stress ﬁeld
+
+        P(uij , σ ij ) = fij − Müij                                                                                                                     (30)
+
+However, solving the stress ﬁeld σ ij from Eq. (30) is generally an underdetermined problem, since the number of equations
+is fewer than the number of stress unknowns. To alleviate this, quadratic elements are used to represent the displacement
+ﬁeld u, and in each quadratic element, a linear stress ﬁeld is assumed and approximated (see Fig. 4).
+    The number of stress unknowns is roughly 3(nx + 1)(n y + 1) for a 2D plate, and 6(nx + 1)(n y + 1)(n z + 1) for a 3D
+cube, the number of equations is roughly 2(2nx + 1)(2n y + 1) for a 2D plate, and 3(2nx + 1)(2n y + 1)(2n y + 1) for a 3D
+cube. Here nx , n y , and n z represent the number of quadratic elements in each direction. Therefore, the number of equations
+outnumbers the number of unknowns, and Eq. (30) becomes an overconstrained problem, the least-square ﬁtting is applied
+for solving it. And then the stress ﬁeld is approximated linearly at each Gaussian point in each quadratic element.
+    Once we solve for σ ij from Eq. (30), we can use the technique in Section 3.2.1 to pre-train the neural network. Although
+the least square approximation of the stress ﬁeld is poor (the error can be larger than 100%), but the approximation is
+qualitatively correct and suﬃcient for obtaining a good initial guess.
+
+                                                                                    9
+K. Xu, D.Z. Huang and E. Darve                                                                           Journal of Computational Physics 428 (2021) 110072
+
+
+
+
+Fig. 4. Schematic of the 2D quadratic element, with quadratic nodes (red circle) for displacements and linear nodes (blue empty square) for stress compo-
+nents. (For interpretation of the colors in the ﬁgures, the reader is referred to the web version of this article.)
+
+
+
+
+Fig. 5. 1D truss problem setup (left): the truss coupon consists of 4 elements with left end ﬁxed and force load on the right end; Extracted strain-stress
+curves for different loading conditions (right).
+
+
+4. Applications
+
+    In this section, we present numerical results from solid mechanics for the proposed NN based constitutive relations:
+
+  • Problem with a 1D truss coupon made of elasto-plastic materials under dynamic loading, which compares the proposed
+    SPD-NN (17) and other neural network architectures, including σ -NN (14) and σ -NN (15).
+  • Problems with 2D thin plates made of hyperelastic materials, elasto-plastic materials, and multiscale ﬁber-reinforced
+     materials under dynamic loading, which demonstrate the effectiveness of the proposed SPD-NN (17) for learning path-
+     independent, path dependent (hysteresis), and multiscale constitutive relations.
+
+In all problems, the training data and test data of the strain/stress ﬁelds and the displacement ﬁelds are generated numeri-
+cally.
+
+4.1. 1D trusses with elasto-plasticity
+
+   In this section, we consider 1D truss elements with a length L x = 1 m, a cross section area A = 0.005 m2 and a density
+8000 kg/m3 . The truss coupon, clamped on the left end, is tested under 5 loading conditions (see Fig. 5-left). The setting
+corresponds to a uniaxial tensile test. The prescribed time-dependent load force t̄ consists of both loading and unloading
+parts and takes the form
+                             
+                         tπ
+        t̄ = p sin                , p = (0.4 tid + 1.6) × 106 N
+                         T
+here tid = 1, 2, 3, 4 and 5 are the test indices. The total simulation time is T = 0.2 s. The case tid = 3 is used as test set and
+all the other tests are used as training sets.
+    The trusses are made of elasto-plastic materials. The Young’s modulus is
+
+        E = 200 GPa
+
+The yield function with isotropic hardening has the form
+
+         f = |σ | − σ Y − K α
+
+The yield strength is σY = 0.3 GPa, the plastic modulus is K = 200
+                                                                9
+                                                                   GPa, the internal hardening variable follows the simplest
+evolutionary equation
+
+        α̇ = λ̇
+
+                                                                           10
+K. Xu, D.Z. Huang and E. Darve                                                                            Journal of Computational Physics 428 (2021) 110072
+
+
+
+
+Fig. 6. The losses evaluated on the training set at each training iteration with SPD-NN (left), σ -NN (middle), and σ -NN (right) with different number of
+layers for the 1D truss problem. Different curves correspond to different initial guesses.
+
+
+    The truss coupon consists of 4 truss elements, which are modeled as geometric nonlinear truss elements [40, p. 63]. The
+time step size is t = 0.001 s.
+    As for the SPD-NN equation (23), the estimated Young’s modulus is assumed to be known, which can be separately
+calibrated using small external loads (e.g., using the method proposed in [18]), and the estimated yield strength is σ̃Y =
+0.1 GPa. The transition function is
+                                                          
+              n                           (σ n )2 − σ̃Y2
+        D (σ , σ̃Y ) = sigmoid                                                                                                                        (31)
+                                              dσ̃Y2
+where d = 0.1 is the nondimensional parameter.
+    Because the strain and stress pairs can be extracted from the uniaxial tensile tests, we can apply the direct input-output
+data training method Section 3.2.1 to train the neural network. Fig. 5-right shows the strain-stress curves exhibiting plastic
+loading and elastic unloading phenomena, which the neural networks are trained to learn. These curves start from the origin
+and rise with the slope E in the linear elastic region, until the stress reaches the yield stress. Then the curves enter the
+strain hardening region, where plastic deformations happen, until the elastic unloading. The slope of the unloading curve
+is typically equal to the slope in the elastic (initial) region of the stress-strain curve. The plasticity deformations result
+in permanent strains, which cannot be recovered by the elastic unloading. Since training neural networks involve highly
+non-convex optimization problems, we start from 10 different initial weights for all NN training.
+    To evaluate the quality of approximation, we propose two kinds of tests:
+
+ 1. NN test: extract the sequential strain-stress data ( i , σ i ) at each Gaussian quadrature point from the test data, and
+    compare the predicted stress and the reference stress for each tuple ( i +1 ,  i , σ i ; σ i +1 ).
+ 2. NN-FEM test: embed the learned constitutive relation Mθ into the ﬁnite element framework, solve the governing equa-
+    tion of the truss coupon under the corresponding loading condition, and ﬁnally compare the predicted strain-stress
+    paths and the truss deformations.
+
+Because the optimization results depend on the initial guess for the neural network weights and biases, we pick the neural
+network with the minimal loss on the training set for the NN test and NN-FEM test. Other choices for selecting the candidate
+neural networks such as cross-validation [41] can also be used. It is worth noting that NN-FEM test is more challenging than
+the NN test, but is more relevant for predictive modeling. Indeed, the NN test does not take the numerical stability in the
+predictive modeling into account and only evaluates the NN’s ability to ﬁt the strain-stress curve. As we will see in the
+following examples, although SPD-NNs and other NN methods ﬁt the strain-stress curves equally well in the NN test, SPD-
+NNs are signiﬁcantly preferable due to their predicting power in new scenarios.
+
+4.1.1. Comparison of SPD-NN, σ -NN, and σ -NN
+    The performance of the aforementioned neural network architectures, including the proposed SPD-NN, σ -NN and σ -
+NN, with different hyper-parameters are compared. The neural networks considered contain 1, 2, 3 and 4 hidden layers
+with 20 neurons in each layer, and tanh as the activation function is used. Both input and output are 1-dimensional. The
+losses at each training step are reported in Fig. 6. Different initial weights lead to different local minima, as with any neural
+network based data-driven approaches. And deeper neural networks perform better in terms of the training error. SPD-NN
+achieves signiﬁcantly smaller training errors, compared with σ -NN and σ -NN.
+    For the NN test, the predicted strain-stress relations are reported in Fig. 7. All deep neural networks (DNN) architec-
+tures give good results. The predictions of different neural network architectures are all very accurate and the errors are
+indiscernible in the plots.
+    In the NN-FEM test, the ﬁnite-element code uses the DNN predictions for integrating the equations of motion. The
+predicted displacement trajectories of the right end point and the predicted strain-stress curves for one Gaussian quadrature
+
+                                                                            11
+K. Xu, D.Z. Huang and E. Darve                                                                              Journal of Computational Physics 428 (2021) 110072
+
+
+
+
+                         Fig. 7. The strain stress curve results for SPD-NN (left), σ -NN (middle), and σ -NN (right) in the NN test.
+
+
+
+
+Fig. 8. Displacement trajectories of the right end point for SPD-NN (left), σ -NN (middle), and σ -NN (right) in the NN-FEM test. As can be seen, some of
+the DNNs lead to unstable models as predicted by the second order work criterion.
+
+
+
+
+Fig. 9. The strain stress curve of the NN-FEM test results obtained by using SPD-NN (left), σ -NN (middle), and σ -NN (right). The middle and right models
+are unstable as predicted by the second order work criterion.
+
+
+
+point on the right end element are reported in Fig. 8 and Fig. 9. Most of σ -NN and σ -NN architectures are found to be
+numerically unstable. We attribute the instability to the deviation of the strain and stress pairs in the test loading condition
+from the training set, where the numerical errors are accumulated during the prediction process. More speciﬁcally, the
+violation of SPD constraints on the tangent stiffness matrix for σ -NN or σ -NN makes them vulnerable to these errors
+and less robust to even slight extrapolations. In contrast, the proposed SPD-NN, which is supposed to be stable inside the
+plastic limit surface according to the second order work criterion (see Eq. (12)), delivers numerically stable results and the
+predicted displacements and strain-stress curves overlap the exact ones.
+
+4.1.2. Comparison of different neural network architectures for SPD-NN
+    In this experiment, we consider different neural network architectures. We vary widths, depths and activation functions
+of the neural network used in SPD-NN, while keeping other settings the same as Section 4.1.1. The errors in the NN-FEM test
+in terms of mean squared errors of the predicted displacements at the ﬁnal time T are shown in Table 1. We see that the
+tanh activation function is in general more accurate than others if appropriate widths and depths of the neural network
+are chosen (for this case, the training set consists of 800 data, the number of neural network parameters is not supposed to
+outnumber it too much). However, ReLU and leaky ReLU are more robust for deep and wide neural networks, despite being
+less accurate.
+
+                                                                              12
+K. Xu, D.Z. Huang and E. Darve                                                                               Journal of Computational Physics 428 (2021) 110072
+
+
+                                 Table 1
+                                 Mean squared errors of the predicted displacements at the ﬁnal time T for different neural
+                                 network architectures, including tanh, ReLU (rectiﬁed linear unit), ELU (exponential linear
+                                 unit), SELU (scaled exponential linear unit), and leaky ReLU (leaky rectiﬁed linear unit) with
+                                 leakage 0.1. The width is the number of activation nodes in each hidden layer. The depth
+                                 is the number of hidden layers. “NaN” denotes the numerical simulation fails (e.g., due to
+                                 numerical instability) using the trained NN-based constitutive relations.
+
+                                                    Depth\Width      2              10            20             40
+                                   tanh             1                1.1 × 10−5     4.2 × 10−5    2.0 × 10−5     3.0 × 10−5
+                                                    3                4.7 × 10−5     1.8 × 10−6    1.3 × 10−6     NaN
+                                                    8                5.5 × 10−4     1.3 × 10−5    NaN            NaN
+                                                    20               8.8 × 10−6     5.9 × 10−5    NaN            NaN
+
+                                   ReLU             1                9.3 × 10−3     3.7 × 10−5    6.1 × 10−5     4.2 × 10−3
+                                                    3                9.3 × 10−3     3.1 × 10−3    4.7 × 10−3     5.3 × 10−3
+                                                    8                9.1 × 10−3     1.8 × 10−4    6.1 × 10−3     1.0 × 10−2
+                                                    20               3.5            5.9 × 10−6    3.3 × 10−3     NaN
+
+                                   leaky ReLU       1                4.6 × 10−3     4.8 × 10−3    4.3 × 10−3     1.2 × 10−2
+                                                    3                8.9 × 10−3     1.2 × 10−2    1.0 × 10−2     2.1 × 10−3
+                                                    8                5.3 × 10−3     5.0 × 10−3    6.6 × 10−3     5.4 × 10−3
+                                                    20               9.3 × 10−3     4.4 × 10−3    8.6 × 10−3     1.8 × 10−2
+
+                                   SELU             1                1.0 × 10−2     6.6 × 10−4    2.2 × 10−4     2.2 × 10−4
+                                                    3                9.6 × 10−3     9.8 × 10−5    4.3 × 10−4     3.8 × 10−4
+                                                    8                9.2 × 10−5     7.6 × 10−3    4.8 × 10−5     NaN
+                                                    20               8.3 × 10−6     5.8 × 10−5    NaN            NaN
+
+                                   ELU              1                4.2 × 10−3     4.6 × 10−3    5.0 × 10−3     6.6 × 10−3
+                                                    3                6.8 × 10−5     5.7 × 10−3    4.7 × 10−4     4.1 × 10−3
+                                                    8                8.0 × 10−6     8.4 × 10−6    NaN            NaN
+                                                    20               6.6 × 10−5     NaN           NaN            NaN
+
+
+
+
+                                             Fig. 10. Impacts of σ̃Y and d on the approximation accuracy of SPD-NNs.
+
+
+
+4.1.3. Choice of σ̃Y and d
+    We consider the impact of σ̃Y and d in the transition function D (see Eq. (31))
+                                                             
+              n                              (σ n )2 − σ̃Y2
+        D (σ , σ̃Y ) = sigmoid
+                                                 d σ̃Y2
+
+on the accuracy of the SPD-NN. As mentioned before, σ̃Y controls where the transition from the elastic form (Eq. (21)) to
+the plastic form (Eq. (22)) happens and d controls the sharpness of the transition (see Fig. 2). In this numerical experiment,
+we use a fully connected neural network with 3 hidden layers, 20 neurons in each layer, and the tanh activation function.
+We vary σ̃Y and d in Eq. (31).
+    The error plot is shown in Fig. 10, where the error metric is the same as Section 4.1.2. The reported errors are the average
+errors of 10 simulations with different initial guesses. We can see that the accuracy of the SPD-NN is less sensitive to d.
+Additionally, as long as we choose a small enough σ̃Y so that the corresponding plastic form (Eq. (22)) covers the plasticity
+regime, the SPD-NN is suﬃciently expressive to approximate the constitutive relation. This justiﬁes our choices d = 0.1 and
+σ̃Y = 0.1 GPa.
+
+                                                                               13
+K. Xu, D.Z. Huang and E. Darve                                                                       Journal of Computational Physics 428 (2021) 110072
+
+
+
+
+Fig. 11. Mean squared errors for different neural network models and training dataset sizes. We see that SPD-NN achieves best accuracy compared with
+other models.
+
+
+
+4.1.4. The effect of the training dataset
+    In this experiment, we investigate the effect of the training dataset, including its size and distance to the test dataset,
+on the performance of the aforementioned neural network models. The prescribed time-dependent load force t̄ consists of
+both loading and unloading parts and takes the form
+                                                           
+                         tπ                    tid − 1
+        t̄ = p sin                ,   p=                 + 1.6 × 106 N
+                         T                       12
+
+here tid = 1, 2, . . . , 25 are the test indices. The total simulation time is T = 0.2 s. The case tid = 13 is used as the test
+dataset. For fairness, we start from the same deep neural network architecture (3 hidden layers, 20 neurons per layer,
+tanh activation function) and weight initialization. We run the optimization for 30,000 iterations using the L-BFGS-B opti-
+mizer.
+   To understand the effect of the training dataset size, we train σ -NN, σ -NN, and SPD-NN using n datasets. In each case,
+we use the following tids (test IDs)
+
+  • n = 1; tid = 12
+  • n = 2; tid = 10, 15
+  • n = 4; tid = 1, 9, 17, 25
+  • n = 9; tid = 3k + 1, k = 0, 1, . . . , 8
+  • n = 14; tid = 1, 3, 5, 7, 8, 10, 12, 14, 16, 18, 19, 21, 23, 25
+  • n = 24; tid = k, k = 13
+
+The errors in the NN test (σ -NN and σ -NN suffer instability for the NN-FEM test) in terms of the mean squared errors of
+the predicted stresses are presented in Fig. 11. See page 11 for a deﬁnition of these tests. Since tid = 13 does not appear
+in the training dataset, the mean squared error can be interpreted as the test error. From Fig. 11, we can see that SPD-NN
+outperforms both σ -NN and σ -NN for moderate dataset sizes. For small dataset sizes, SPD-NN can achieve reasonable
+accuracy, except for the case where only 1 dataset is used. This illustrates that potentially our approach does not require
+a large number of data to have good prediction power. This is beneﬁcial for engineering applications because, in practice,
+data may be scarce or expensive to collect.
+    To understand the effect of the distance between the training data and test data (or the quality of the training data) on
+the performance of the aforementioned neural network models, we conduct the following experiments with small training
+dataset sizes. The tids are indicated for each n:
+
+  • n = 1; tid = 12.
+  • n = 1; tid = 1. Note this dataset is far from the test dataset tid = 13.
+  • n = 2; tid = 10, 15.
+  • n = 2; tid = 1, 25. Note these two datasets are far from the test dataset tid = 13.
+
+The mean squared errors are shown in Table 2. We can see that for all cases, using datasets that are closer to the test
+dataset yields better test results. Therefore, we conclude that although more data help train SPD-NN better, the quality of
+the training data also matters. And the SPD-NN is more robust with respect to the quality of the training dataset when a
+moderate dataset size is used.
+
+                                                                         14
+K. Xu, D.Z. Huang and E. Darve                                                                                       Journal of Computational Physics 428 (2021) 110072
+
+
+                                              Table 2
+                                              Mean squared errors for small dataset sizes. Given the dataset size n, when
+                                              the training dataset is close to the test dataset, the test errors are in general
+                                              smaller.
+
+                                                Training dataset     n=1                         n=2
+                                                                      tid = 12    tid = 1        tid = 10, 15    tid = 1, 25
+                                                σ -NN                 6.02        106365.00      0.13            86.50
+                                                σ -NN                0.06        658.85         0.06            1.00
+                                                SPD-NN                4.40        914.90         0.01            0.06
+
+
+
+
+                                                 Fig. 12. Schematic of the boundary conditions of the thin plate tests.
+
+
+4.2. 2D thin plate with different materials
+
+    In this section, we consider thin plate coupons of size L x = 10 cm by L y = 5 cm with the plane stress assumption (L z =
+0.1 cm). These plates are made of different materials, including hyperelastic material (ﬁnite deformation), elasto-plastic
+material (inﬁnitesimal deformation), and ﬁber-reinforced multiscale elasto-plastic material (inﬁnitesimal deformation). For
+each case, the plate is tested under 13 loading conditions as depicted in Fig. 12. The prescribed time-dependent load force
+t̄ ∈ R2 consists of both loading and unloading parts and takes the form
+                             
+                         tπ
+        t̄ = p sin
+                         T
+
+here p ∈ R2 is the loading parameter vector, as follows,
+
+  • A) clamp on the bottom edge and impose force load on the top                √ edge.√
+    A1: (0, p 1 ), A2: (0, − p 1 ), A3: ( p 3 , 0), A4: (− p 3 , 0), A5: ( p 3 / 2, p 1 / 2), and A6: (0.75p 3 , 0).
+  • B) clamp on the left edge and impose force load on the right                √edge. √
+    B1: ( p 1 , 0), B2: (− p 1 , 0), B3: (0, p 2 ), B4: (0, − p 2 ), B5: ( p 1 / 2, p 2 / 2), and B6: (0, 0.75p 2 ).
+  • C) clamp
+                on the left edge and    impose force load on the bottom edge.
+                  p L             −(x−x0 )2
+     C1:     0, √ 2 x exp                         , with x0 = 5L6 x and σ X = 0.2L x .
+                  2πσ X               σ X2
+
+The total simulation time is T = 0.2s. We use A1-A5 and B1-B5 as training data and A6, B6, and C1 as test data. Both
+training procedures discussed in Sections 3.2.1 and 3.2.2 are applied. For the direct input-output data training, the strain-
+stress sequential data are extracted from all Gaussian points in the training sets. For the indirect data training, the full-ﬁled
+displacement ﬁelds on the 21 by 11 grid (0.5 cm interval) from the training data are extracted. Therefore, this approach is
+potentially applicable to experimental data. The pre-training is required to obtain good initial guesses.
+
+4.2.1. Hyperelasticity
+    The plate is made of the incompressible Rivlin-Saunders material [42,43] with the density ρ = 800 kg/m3 and the energy
+density function
+
+        w = c 1 ( I 1 − 3) + c 2 ( I 2 − 3)
+
+Here c 1 = 0.1863 MPa and c 2 = 0.00979 MPa, and I 1 , I 2 , I 3 are three scalar invariants of the right Cauchy-Green stretch
+tensor C = F F T = 2 + 1, where
+                                  1
+        I 1 = trC         I2 =        [(trC )2 − trC 2 ]           I 3 = J 2 = det C
+                                  2
+The incompressibility implies that J = 1. The plate is assumed to undergo ﬁnite deformations (see Remark 1), and the
+second Piola-Kirchhoff stress tensor reads
+
+                                                                                     15
+K. Xu, D.Z. Huang and E. Darve                                                                                Journal of Computational Physics 428 (2021) 110072
+
+
+
+
+Fig. 13. Top: Trajectories of displacement at top-right (red: u x , yellow: u y ) and top-middle points (blue: u x , green: u y ) of the 2D hyperelastic plate for
+test A6 (left), B6 (middle) and C1 (right), deﬁned on page 15. The reference solutions are marked by empty circles, the solutions obtained by the SPD-NN
+trained using indirect data are marked by solid lines, and the solutions obtained by SPD-NN trained with direct data are marked by dashed lines. Bottom:
+The absolute errors of displacements for each case.
+
+
+               ∂w     ∂J
+        S=        +λJ                                                                                                                                       (32)
+               ∂     ∂
+here λ J is the Lagrangian multiplier, which can be calculated based on the plane stress assumption S 33 = 0. The plate
+domain is discretized by 20 × 10 quadratic quadrilateral elements. The time step size is t = 0.001 s. The data sets are
+generated with load parameters ( p 1 , p 2 , p 3 ) = (44800, 4480, 16800) N/m.
+    Both the direct data training approach in Section 3.2.1 and the indirect data training approach in Section 3.2.2 are applied
+to train a SPD-NN:
+
+        S n+1 = Lθ ( n+1 )Lθ ( n+1 ) T ( n+1 −  n ) + S n                                                                                               (33)
+
+where the neural network consists of 4 hidden layers and 20 neurons in each layer.
+    The predicted trajectories of displacements at the top-right and top-middle points as a function of time and the refer-
+ences for all test cases are depicted in Fig. 13. All predicted results are in good agreement with the references, and the
+direct input-output data training approach leads to slightly better results for case C1. The predicted von Mises stress ﬁelds
+at t = T2 for all test cases and the references are depicted in Fig. 14.
+
+4.2.2. Elasto-plasticity
+    The plate is made of titanium, which is assumed to be elasto-plastic material with density ρ = 4200 kg/m3 . The consti-
+tutive relation is
+
+        σ = C
+here C denotes the isotropic plane stress stiffness tensor with Young’s modulus E = 100 GPa and Poisson’s ratio ν = 0.35.
+The von Mises yield function with isotropic hardening has the form
+               
+         f =        2
+                   σ11 − σ11 σ22 + σ22
+                                    2
+                                       + 3σ12
+                                           2
+                                              − σY − K α                                                                                                    (34)
+
+The yield strength σY = 0.97 GPa and the plastic modulus K = 10 GPa, the internal hardening variable α follows the
+simplest evolutionary equation
+
+        α̇ = λ̇                                                                                                                                             (35)
+
+This plate domain is discretized by 20 × 10 quadratic quadrilateral elements. And the time step size is t = 0.001 s.
+
+                                                                               16
+K. Xu, D.Z. Huang and E. Darve                                                                              Journal of Computational Physics 428 (2021) 110072
+
+
+
+
+Fig. 14. The von Mises stress (MPa) ﬁelds at t = T2 for the 2D hyperelastic plate for test A6 (top), B6 (middle) and C1 (bottom), deﬁned on page 15. From left
+to right: reference solutions (on a ﬁne mesh), solutions obtained by SPD-NN trained with direct data, solutions obtained by SPD-NN trained with indirect
+data.
+
+
+    As for the SPD-NN equation (23), the estimated yield strength is σ̃Y = 0.32GPa, the transition function is
+                                                        
+                                     σ n 2 − σ̃ 2
+        D (σ  n
+              vm ,   σ̃Y ) = sigmoid vm 2 Y
+                                        dσ̃Y
+       n
+here σvm is the computed von Mises stress at the previous time step and d = 0.1 denotes the nondimensional parameter.
+The tangent stiffness matrix Cθ in the linear region is ﬁrst estimated as following, and then used as constant in Eq. (23).
+
+Linear region. The data sets are generated with load parameters
+
+        ( p 1 , p 2 , p 3 ) = (0.16, 0.016, 0.06) GN/m
+which are small enough to maintain the deformations in the linear region.
+    The indirect data training approach in Section 3.2.2 is applied to extract the tangent stiffness matrix, and we obtain the
+following estimation
+                ⎡                                                                  ⎤
+              1.04064 × 106             2.09077 × 105                0.0
+            ⎣
+        Cθ = 2.09077 × 105              1.041146 × 106               0.0       ⎦                                                                        (36)
+                   0.0                        0.0               4.19057 × 10 5
+
+
+Based on Young’s modulus and Poisson’s ratio of the material, the tangent stiffness matrix is
+                 ⎡                                                                 ⎤
+                 1.04167 × 106           2.08333 × 105              0.0
+        Cref = ⎣ 2.08333 × 105           1.04167 × 106              0.0      ⎦                                                                          (37)
+                      0.0                     0.0              4.16667 × 105
+
+                                                                             17
+K. Xu, D.Z. Huang and E. Darve                                                                                  Journal of Computational Physics 428 (2021) 110072
+
+
+
+
+Fig. 15. Trajectories of displacement at top-right (red: u x , yellow: u y ) and top-middle points (blue: u x , green: u y ) of the 2D elasto-plastic plate for test
+A6 (left), B6 (middle) and C1 (right), deﬁned on page 15. The reference solutions are marked by empty circles, the solutions obtained by the CholNN trained
+using indirect data are marked by solid lines, and the solutions obtained by CholNN trained with direct data are marked by dashed lines. Note that the
+plasticity model takes into account the full history of the deformation while the DNN models take as input only the value from the last step.
+
+
+
+For each component, the relative error is less than one percent. These errors are introduced by the discretization, including
+the interpolation of the displacement ﬁeld on the observation grid and the estimation of the acceleration equation (26). It
+is worth mentioning, the direct input-output data training delivers exactly the same stiffness matrix as the reference.
+
+Nonlinear region. The data sets are generated with load parameters
+
+        ( p 1 , p 2 , p 3 ) = (1.6, 0.16, 0.6) GN/m
+which are 10 times larger than these in the linear region. Both direct input-output data training (Section 3.2.1) and indirect
+data training (Section 3.2.2) are applied to train a SPD-NN with 5 hidden layers and 20 neurons in each layer. The predicted
+trajectories of the displacements at top-right and top-middle points for all test cases are depicted in Fig. 15, along with the
+references. SPD-NNs trained with both methods are able to predict the initial elastic behavior, the strain-hardening region,
+and the unloading behavior. The SPD-NN obtained by the direct input-output data training performs better especially for
+the prediction of the yield strength the strain-hardening behavior. The predicted von Mises stress ﬁelds at t = T2 and the
+references for all test cases are depicted in Fig. 16. Reasonable agreements are achieved.
+
+4.2.3. Multiscale ﬁber reinforced elasto-plasticity
+    The plate is made of the titanium—the same as Section 4.2.2—but reinforced by ﬁbers made of SiC, which are assumed
+to be isotropic and elastic with
+
+        ρ = 3200 kg/m3 , E = 400 GPa, and ν = 0.35
+These ﬁbers are square shaped and uniformly distributed in the plate, with a diameter d = 0.25 cm and a fraction 25%.
+There are in total 800 ﬁbers, as shown in Fig. 17. This plate domain is discretized by 200 × 400 quadratic quadrilateral
+elements, and 25 elements for each ﬁber. And the time step size is t = 0.001 s.
+   As for training SPD-NNs, the estimated yield strength and the transition function are the same as these in Section 4.2.2.
+The tangent stiffness matrix Cθ in the linear region is ﬁrst calibrated and then ﬁxed as constant in Eq. (23) when training
+the SPD-NN.
+
+Linear region. The data sets are generated with load parameters
+
+        ( p 1 , p 2 , p 3 ) = (0.16, 0.016, 0.06) GN/m
+which are small enough to maintain the deformations in the linear region. The indirect data training approach in Sec-
+tion 3.2.2 is applied to extract the following predicted tangent stiffness matrix,
+                ⎡                                                                       ⎤
+              1.335174 × 106               3.26448 × 105                 0.0
+            ⎣
+        Cθ = 3.26448 × 105                 1.326879 × 106                0.0      ⎦                                                                           (38)
+                    0.0                          0.0                5.26955 × 105
+
+The predicted linear constitutive relation equation (19) is veriﬁed on the test set. The predicted displacements at top-right
+and top-middle points as a function of time and the references for all test cases are depicted in Fig. 18. The corresponding
+von Mises stress ﬁelds at t = T2 are reported in Fig. 19. The SPD-NN based homogenized model delivers similar results as
+the high-resolution multiscale model.
+
+                                                                                18
+K. Xu, D.Z. Huang and E. Darve                                                                            Journal of Computational Physics 428 (2021) 110072
+
+
+
+
+Fig. 16. The von Mises stress (GPa) ﬁelds at t = T2 for the 2D elasto-plastic plate for test A6 (top), B6 (middle) and C1 (bottom), deﬁned on page 15.
+From left to right: reference solutions (on a ﬁne mesh), solutions obtained by SPD-NN trained with direct data, solutions obtained by SPD-NN trained with
+indirect data.
+
+
+
+
+                                              Fig. 17. Schematic of the ﬁber (orange) reinforced thin plate.
+
+
+Nonlinear region. The data sets are generated with load parameters
+
+        ( p 1 , p 2 , p 3 ) = (1.6, 0.16, 0.6) GN/m
+which are 10 times larger than those in the linear region. Only the indirect data training approach is applied to train a
+SPD-NN with 5 hidden layers and 20 neurons in each layer. To enable direct input-output data training, homogenization is
+required to generate strain-stress data from RVE simulations [13,14,21,6], or extract strain-stress data from direct numerical
+simulations. This may be challenging in the context of experimental data, which necessitates the indirect training approach.
+   The predicted trajectories of displacements at top-right and top-middle points for all test cases are depicted in Fig. 20,
+along with the references. Comparing with the previous elasto-plasticity case, all displacements are smaller due to the
+
+                                                                           19
+K. Xu, D.Z. Huang and E. Darve                                                                                  Journal of Computational Physics 428 (2021) 110072
+
+
+
+
+Fig. 18. Trajectories of displacement at top-right (red: u x , yellow: u y ) and top-middle points (blue: u x , green: u y ) of the 2D multiscale plate in the linear
+region for test A6 (left), B6 (middle) and C1 (right), deﬁned on page 15. The reference solutions are marked by empty circles and the solutions obtained by
+the SPD-NN trained with indirect data are marked by solid lines.
+
+
+
+
+Fig. 19. The von Mises stress (GPa) ﬁelds at t = T2 for the 2D multiscale plate in the linear region for test A6 (top), B6 (middle) and C1 (bottom), deﬁned
+on page 15. From left to right: reference solutions (on a ﬁber-resolved mesh) and solutions obtained by SPD-NN trained with indirect data.
+
+
+
+SiC ﬁber reinforcement. The proposed SPD-NN gives a satisfactory approximation of the initial elastic behavior, the strain-
+hardening region, and the following unloading behavior. The predicted von Mises stress ﬁelds at t = T2 and the references
+for all test cases are depicted in Fig. 21. The predicted and simulated homogenized stress ﬁelds are in reasonably good
+agreement. Although the solutions obtained by SPD-NNs do not capture local large stress concentrations near each ﬁber (at
+the level of the microstructure), the local recovery techniques [44] can be applied to estimate these local stress concen-
+trations. For example, a RVE simulation can be conducted to estimate local stresses using the local strain from the coarse
+homogenized solution.
+
+                                                                                 20
+K. Xu, D.Z. Huang and E. Darve                                                                                  Journal of Computational Physics 428 (2021) 110072
+
+
+
+
+Fig. 20. Trajectories of displacement at top-right (red: u x , yellow: u y ) and top-middle points (blue: u x , green: u y ) of the 2D multiscale plate in nonlinear
+region for test A6 (left), B6 (middle) and C1 (right), deﬁned on page 15. The reference solutions are marked by empty circles and the solutions obtained by
+the SPD-NN trained with indirect data are marked by solid lines.
+
+
+
+
+Fig. 21. The von Mises stress (GPa) ﬁelds at t = T2 for the 2D multiscale plate in nonlinear region for test A6 (top), B6 (middle) and C1 (bottom), deﬁned
+on page 15. From left to right: reference solutions (on a ﬁber-resolved mesh) and solutions obtained by SPD-NN trained with indirect data.
+
+
+Accelerating simulations with neural network surrogates for constitutive modeling. It is also worth noting that each SPD-NN-
+based simulation is several order magnitude faster than the corresponding ﬁber resolved simulations. The CPU times for
+both the SPD-NN-based simulations and ﬁber resolved simulations are shown in Fig. 22. Note as we increase the external
+load, the CPU time increases because more elements undergo plastic deformations, which requires more expensive Raphson-
+Newton iterations in the numerical simulations. Still, the dramatic acceleration from around 24 hours to just a few minutes
+is impressive. However, the acceleration should be carefully interpreted in the context of surrogate models. First, the cur-
+rent benchmarks are based on serial execution, where the state-of-the-art FEM simulations usually involve parallelization.
+Nevertheless, these parallelization techniques for ﬁber resolved simulations are also directly applicable to SPD-NNs. Second,
+the speed of the ﬁber resolved simulations depends on the required resolution (e.g., the resolution on each ﬁber). If we use
+
+                                                                                21
+K. Xu, D.Z. Huang and E. Darve                                                                     Journal of Computational Physics 428 (2021) 110072
+
+
+
+
+Fig. 22. CPU time for simulations using ﬁber resolved DNS (direct numerical simulation) and the SPD-NN surrogate model. The same color denotes the
+same test case (C1, A6, or B6).
+
+
+
+very coarse grids, the speed of the ﬁber resolved simulations may be comparable to or even faster than the SPD-NN-based
+simulations, though the coarse grids raise concerns for accuracy. Third, we have not compared the present model with other
+state-of-the-art accelerating techniques for multiscale modeling, for example projection-based model order reduction [45]
+and self-consistent clustering [46]. Finally, as with any NN-based surrogate models, the SPD-NN only works on test data
+that does not deviate too much from the training data, while ﬁber resolved simulations are usually considered to be general
+and applicable in a much wider context.
+
+5. Discussion of neural networks
+
+   The introduction and benchmarking of SPD-NNs raise many questions, some of which are partially answered in this
+paper while some others are worthwhile to be investigated further. We believe that the following discussion is important
+and central to the application of NN-based constitutive modeling and should be careful dealt for the development of SPD-
+NNs and other NN-based approaches.
+
+Function approximators. In the present work, neural network is used as a basis function to approximate a complex con-
+stitutive relation, the strain-stress relation. Many other basis functions, including piecewise linear functions, radial basis
+functions, and radial basis function networks, can also be applied for the approximation of the Cholesky factor. The choice
+of neural networks is well-versed and justiﬁed by the following three reasons.
+
+  • First, the distribution of the strain data—the input to the neural network—is determined by experiment records, which
+    in general does not evenly spread over the domain. The comparison study presented in [18] illustrates that neural
+    network outperforms the other basis functions in terms of regularization and generalization properties when the data
+    distribution is ill-behaved.
+  • Second, the strain-stress curves are non-smooth in the context of plastic deformations and elastic unloading. As a result
+    of the non-smoothness, the approximation eﬃciency of typical basis functions is usually compromised. Nevertheless,
+    neural networks exhibit the potential to capture the sharp transitions in the strain-stress relations and performs rea-
+    sonably well for the non-smooth data.
+  • Third, the input and the output dimensions are relatively high (e.g., the input is 9D and the output is 4D in the elasto-
+    plasticity and the multi-scale cases), which poses a challenge for traditional basis functions. For example, if we were to
+    use the linear basis functions, to discretize the high dimensional input space, even if we only have 10 grid points per
+    dimension, the total degree of freedom is 109 , which is too costly regarding both the computation and the storage. Yet,
+    neural networks are particularly convenient and useful for expressing mappings between high dimensional spaces [47]
+    and require no mesh in the input parameter domain.
+
+All the aforementioned reasons motivate us to use neural networks in this work.
+
+Optimization method. Most of neural networks in literature, especially in computer science communities, are trained with
+stochastic gradient methods (SGD). In our present work and the previous work [18], the optimization of the loss func-
+tions (25) and (29) is done by the Limited-memory BFGS (L-BFGS-B) method [48] with the line search routine in [49],
+which attempts to enforce the Wolfe conditions [48] by a sequence of polynomial interpolations. Note BFGS is applicable in
+our case since the data sets are typically small and the neural network is reasonably deep and wide; otherwise, the memory
+requirement of L-BFGS-B is so high that SGD or other similar ﬁrst-order methods for training neural networks should be
+
+                                                                       22
+K. Xu, D.Z. Huang and E. Darve                                                        Journal of Computational Physics 428 (2021) 110072
+
+
+adopted. It is worth mentioning that the choice of BFGS optimizer is well-motivated and has long been adopted for scientiﬁc
+and engineering applications due to its fast convergence and robustness.
+
+Data scaling. We observed that input data scaling signiﬁcantly helps train SPD-NNs faster, reduces overﬁtting, and makes
+better predictions. In the present work, the inputs and outputs of the neural network are scaled to a similar magnitude.
+Speciﬁcally, we introduce a strain reference ref and a stress reference σref to scale strains and stresses. We also scale the
+                            σ
+tangent stiffness matrix by  ref . For example, in the elasto-plasticity case, the Cholesky factor has the form
+                                      ref
+
+                                     
+                   i  i −1 σ i −1
+        Lθ           ,      ,
+                 ref ref σref
+                                            σ
+The most important thing is that  ref ∼ O ( E ), here E is the estimated Young’s modulus. This guarantees the inputs for
+                                      ref
+SPD-NN, especially for elasto-plasticity, ( i ,  i −1 , σ i −1 ) have similar magnitudes.
+
+Local minima. Local minima are observed in Section 4.1, since training neural networks involve highly non-convex opti-
+mization problems. Although neural networks with minimal losses on the training set from 10 different initial weights
+perform well, neural networks with median losses are less satisfactory. This reveals the uncertainty with respect to the ini-
+tial weights for most NN-based data-driven approaches. Wider neural networks will be considered in the future, since some
+theoretical and computational results [50,51] show quality of local minima tends to improve toward the global minimum
+value as depths and widths increase. As for the indirect data training approach, pre-training approach (see Section 3.2.2)
+produces acceptable initial weights and thus mitigates this concern. For all these training processes, the optimization is
+terminated when the objective function is called 3,000 times and 50,000 times for pre-training and training, respectively.
+The direct input-output data training is about 4 times faster than the indirect data training.
+
+6. Conclusion
+
+    Data-driven approaches continue to gain popularity for constructing constitutive models from high-ﬁdelity simulations
+and high-resolution experiments. The incorporation of data-driven constitutive models into conservation equations leads to
+a hybrid model, namely a coupled system with differential equations to describe conservation laws and thermodynamic
+principles, and neural networks to describe the material properties.
+    To make these hybrid models numerically more robust, we introduced a novel neural network architecture, SPD-NN, in
+which the neural network outputs the Cholesky factor of the tangent stiffness matrix instead of the stress or the stress
+increment. This neural network architecture weakly imposes convexity on the strain energy function (i.e., SPD tangent
+stiffness matrix). The incremental form of SPD-NN also preserves the time consistency and fulﬁlls the second order work
+criterion. We tested SPD-NN-based constitutive relations on a 1D elasto-plastic truss problem and several 2D plate problems
+in which the plate is made of hyperelastic, elasto-plastic, and multiscale ﬁber-reinforced materials. When contrasting the
+SPD-NN with two other neural network architectures, we showed that SPD-NN exhibits better numerical stability in the
+resulting hybrid models. The general training approach and the improved numerical stability will allow extending SPD-
+NNs to other time-dependent physical systems, such as viscoelastic materials, where the constitutive relations are rate-
+dependent, and plastic materials with stronger hysteresis, where more history-dependent variables are required.
+    However, one limitation of the current approach is that the training process requires full-ﬁeld data, either for strain-
+stress pairs or displacement measurements. This is especially challenging for a 3D solid body, where the measurements may
+only be made on the surface (although by using techniques such as X-ray computer tomograph [52], we can obtain full
+ﬁeld displacements or strain ﬁelds induced by loading). NN-based constitutive modeling with incomplete data remains to
+be investigated in the future.
+
+CRediT authorship contribution statement
+
+   Kailai Xu: Conceptualization, Methodology, Software, Validation, Investigation, Writing, Visualization, Funding acquisition,
+Formal analysis, Resources, Data curation.
+   Daniel Huang: Conceptualization, Methodology, Validation, Investigation, Writing, Visualization, Formal analysis, Data
+curation.
+   Eric Darve: Conceptualization, Methodology, Writing, Visualization, Supervision, Project administration, Funding acquisi-
+tion.
+
+Declaration of competing interest
+
+   The authors declare that they have no known competing ﬁnancial interests or personal relationships that could have
+appeared to inﬂuence the work reported in this paper.
+
+                                                              23
+K. Xu, D.Z. Huang and E. Darve                                                                              Journal of Computational Physics 428 (2021) 110072
+
+
+Acknowledgements
+
+    This work is supported by the Applied Mathematics Program within the Department of Energy (DOE) Oﬃce of Advanced
+Scientiﬁc Computing Research (ASCR), through the Collaboratory on Mathematics and Physics-Informed Learning Machines
+for Multiscale and Multiphysics Problems Research Center (DE-SC0019453).
+
+References
+
+ [1] J. Ghaboussi, J.H. Garrett Jr., Xiping Wu, Knowledge-based modeling of material behavior with neural networks, J. Eng. Mech. 117 (1) (1991) 132–153.
+ [2] G.W. Ellis, C. Yao, Rui Zhao, D. Penumadu, Stress-strain modeling of sands using artiﬁcial neural networks, J. Geotech. Eng. 121 (5) (1995) 429–435.
+ [3] Yuelin Shen, K. Chandrashekhara, W.F. Breig, L.R. Oliver, Finite element analysis of v-ribbed belts using neural network based hyperelastic material
+     model, Int. J. Non-Linear Mech. 40 (6) (2005) 875–890.
+ [4] Guanghui Liang, K. Chandrashekhara, Neural network based constitutive model for elastomeric foams, Eng. Struct. 30 (7) (2008) 2002–2011.
+ [5] Tomonari Furukawa, Genki Yagawa, Implicit constitutive modelling for viscoplasticity using neural networks, Int. J. Numer. Methods Eng. 43 (2) (1998)
+     195–219.
+ [6] Kun Wang, WaiChing Sun, A multiscale multi-permeability poroplasticity model linked by recursive homogenizations and deep learning, Comput.
+     Methods Appl. Mech. Eng. 334 (2018) 337–380.
+ [7] M. Mozaffar, R. Bostanabad, W. Chen, K. Ehmann, J. Cao, M.A. Bessa, Deep learning predicts path-dependent plasticity, Proc. Natl. Acad. Sci. 116 (52)
+     (2019) 26414–26420.
+ [8] F. Ghavamian, A. Simone, Accelerating multiscale ﬁnite element simulations of history-dependent materials using a recurrent neural network, Comput.
+     Methods Appl. Mech. Eng. 357 (2019) 112594.
+ [9] Panagiotis G. Asteris, Vagelis Plevris, Anisotropic masonry failure criterion using artiﬁcial neural networks, Neural Comput. Appl. 28 (8) (2017)
+     2207–2229.
+[10] Somdatta Goswami, Cosmin Anitescu, Souvik Chakraborty, Timon Rabczuk, Transfer learning enhanced physics informed neural network for phase-ﬁeld
+     modeling of fracture, Theor. Appl. Fract. Mech. (2019) 102447.
+[11] Jakub Gajewski, Tomasz Sadowski, Sensitivity analysis of crack propagation in pavement bituminous layered structures using a hybrid system integrat-
+     ing artiﬁcial neural networks and ﬁnite element method, Comput. Mater. Sci. 82 (2014) 114–117.
+[12] Xin Liu, Fei Tao, Wenbin Yu, A neural network enhanced system for learning nonlinear constitutive relation of ﬁber reinforced composites, in: AIAA
+     Scitech 2020 Forum, 2020, 0396.
+[13] B.A. Le, Julien Yvonnet, Q.-C. He, Computational homogenization of nonlinear elastic materials using neural networks, Int. J. Numer. Methods Eng.
+     104 (12) (2015) 1061–1084.
+[14] M.A. Bessa, R. Bostanabad, Z. Liu, A. Hu, Daniel W. Apley, C. Brinson, Wei Chen, Wing Kam Liu, A framework for data-driven analysis of materials under
+     uncertainty: countering the curse of dimensionality, Comput. Methods Appl. Mech. Eng. 320 (2017) 633–667.
+[15] Chun-Teh Chen, Grace X. Gu, Generative deep neural networks for inverse materials design using backpropagation and active learning, Adv. Sci. (2020)
+     1902607.
+[16] Xiaoxuan Zhang, Krishna Garikipati, Machine learning materials physics: multi-resolution neural networks learn the free energy and nonlinear elastic
+     response of evolving microstructures, arXiv preprint, arXiv:2001.01575, 2019.
+[17] Michel Grediac, Fabrice Pierron, Stéphane Avril, Evelyne Toussaint, The virtual ﬁelds method for extracting constitutive parameters from full-ﬁeld
+     measurements: a review, Strain 42 (4) (2006) 233–253.
+[18] Daniel Z. Huang, Kailai Xu, Charbel Farhat, Eric Darve, Predictive modeling with learned constitutive laws from indirect observations, arXiv preprint,
+     arXiv:1905.12530, 2019.
+[19] Jie Yang, Rui Xu, Heng Hu, Qun Huang, Wei Huang, Structural-genome-driven computing for composite structures, Compos. Struct. 215 (2019) 446–453.
+[20] Jamshid Ghaboussi, David A. Pecknold, Mingfu Zhang, Rami M. Haj-Ali, Autoprogressive training of neural network constitutive models, Int. J. Numer.
+     Methods Eng. 42 (1) (1998) 105–126.
+[21] Julia Ling, Reese Jones, Jeremy Templeton, Machine learning strategies for systems with invariance properties, J. Comput. Phys. 318 (2016) 22–35.
+[22] Zeliang Liu, C.T. Wu, M. Koishi, A deep material network for multiscale topology learning and accelerated nonlinear modeling of heterogeneous mate-
+     rials, Comput. Methods Appl. Mech. Eng. 345 (2019) 1138–1168.
+[23] Zeliang Liu, C.T. Wu, Exploring the 3d architectures of deep material network in data-driven multiscale mechanics, J. Mech. Phys. Solids 127 (2019)
+     20–46.
+[24] Yousef Heider, Kun Wang, WaiChing Sun, So(3)-invariance of informed-graph-based deep neural network for anisotropic elastoplastic materials, Com-
+     put. Methods Appl. Mech. Eng. 345 (2020) 1138–1168.
+[25] Jintai Chung, G.M. Hulbert, A time integration algorithm for structural dynamics with improved numerical dissipation: the generalized-α method, J.
+     Appl. Mech. 60 (2) (1993) 371–375.
+[26] Zdenek P. Bazant, Ted B. Belytschko, Ta-Peng Chang, et al., Continuum theory for strain-softening, J. Eng. Mech. 110 (12) (1984) 1666–1692.
+[27] Rodney Hill, The Mathematical Theory of Plasticity, vol. 11, Oxford University Press, 1998.
+[28] Juan C. Simo, Thomas J.R. Hughes, Computational Inelasticity, vol. 7, Springer Science & Business Media, 2006.
+[29] François Nicot, Jean Lerbet, Félix Darve, Second-order work criterion: from material point to boundary value problems, Acta Mech. 228 (7) (2017)
+     2483–2498.
+[30] Zvi Hashin, Analysis of composite materials—a survey, J. Appl. Mech. 50 (3) (1983) 481–505.
+[31] C.T. Sun, R.S. Vaidya, Prediction of composite properties from a representative volume element, Compos. Sci. Technol. 56 (2) (1996) 171–179.
+[32] Frédéric Feyel, Jean-Louis Chaboche, Fe2 multiscale approach for modelling the elastoviscoplastic behaviour of long ﬁbre sic/ti composite materials,
+     Comput. Methods Appl. Mech. Eng. 183 (3–4) (2000) 309–330.
+[33] T. Kanit, S. Forest, I. Galliet, V. Mounoury, D. Jeulin, Determination of the size of the representative volume element for random composites: statistical
+     and numerical approach, Int. J. Solids Struct. 40 (13–14) (2003) 3647–3679.
+[34] Zheng Yuan, Jacob Fish, Toward realization of computational homogenization in practice, Int. J. Numer. Methods Eng. 73 (3) (2008) 361–380.
+[35] Yves Surrel, Moiré and grid methods: a signal-processing approach, in: Interferometry’94: Photomechanics, vol. 2342, International Society for Optics
+     and Photonics, 1994, pp. 118–128.
+[36] Stéphane Avril, Marc Bonnet, Anne-Sophie Bretelle, Michel Grédiac, François Hild, Patrick Ienny, Félix Latourte, Didier Lemosse, Stéphane Pagano,
+     Emmanuel Pagnacco, et al., Overview of identiﬁcation methods of mechanical parameters based on full-ﬁeld measurements, Exp. Mech. 48 (4) (2008)
+     381.
+[37] Giuseppe Geymonat, François Hild, Stéphane Pagano, Identiﬁcation of elastic parameters by displacement ﬁeld measurement, C. R. Mecanique 330 (6)
+     (2002) 403–408.
+
+
+                                                                              24
+K. Xu, D.Z. Huang and E. Darve                                                                              Journal of Computational Physics 428 (2021) 110072
+
+
+[38] Xia-Ting Feng, Chengxiang Yang, Genetic evolution of nonlinear material constitutive models, Comput. Methods Appl. Mech. Eng. 190 (45) (2001)
+     5957–5973.
+[39] Razvan Pascanu, Tomas Mikolov, Yoshua Bengio, On the diﬃculty of training recurrent neural networks, in: International Conference on Machine
+     Learning, 2013, pp. 1310–1318.
+[40] René De Borst, Mike A. Crisﬁeld, Joris J.C. Remmers, Clemens V. Verhoosel, Nonlinear Finite Element Analysis of Solids and Structures, John Wiley &
+     Sons, 2012.
+[41] Jerome Friedman, Trevor Hastie, Robert Tibshirani, The Elements of Statistical Learning, 2nd edition, Springer Series in Statistics, 2016, New York.
+[42] João Paulo Pascon, Large deformation analysis of plane-stress hyperelastic problems via triangular membrane ﬁnite elements, Int. J. Adv. Struct. Eng.
+     11 (3) (2019) 331–350.
+[43] R.S. Rivlin, in: F.R. Eirich (Ed.), Rheology: Theory and Applications, Academic Books, London, 1956, p. 531.
+[44] P. Kanouté, D.P. Boso, J.L. Chaboche, B.A. Schreﬂer, Multiscale methods for composites: a review, Arch. Comput. Methods Eng. 16 (1) (2009) 31–75.
+[45] Matthew J. Zahr, Philip Avery, Charbel Farhat, A multilevel projection-based model order reduction framework for nonlinear dynamic multiscale prob-
+     lems in structural and solid mechanics, Int. J. Numer. Methods Eng. 112 (8) (2017) 855–881.
+[46] Zeliang Liu, M.A. Bessa, Wing Kam Liu, Self-consistent clustering analysis: an eﬃcient multi-scale scheme for inelastic heterogeneous materials, Comput.
+     Methods Appl. Mech. Eng. 306 (2016) 319–341.
+[47] Jiequn Han, Arnulf Jentzen, E. Weinan, Solving high-dimensional partial differential equations using deep learning, Proc. Natl. Acad. Sci. 115 (34) (2018)
+     8505–8510.
+[48] Richard H. Byrd, Peihuang Lu, Jorge Nocedal, Ciyou Zhu, A limited memory algorithm for bound constrained optimization, SIAM J. Sci. Comput. 16 (5)
+     (1995) 1190–1208.
+[49] Jorge J. Moré, David J. Thuente, Line search algorithms with guaranteed suﬃcient decrease, ACM Trans. Math. Softw. 20 (3) (1994) 286–307.
+[50] Roi Livni, Shai Shalev-Shwartz, Ohad Shamir, On the computational eﬃciency of training neural networks, in: Advances in Neural Information Process-
+     ing Systems, 2014, pp. 855–863.
+[51] Kenji Kawaguchi, Jiaoyang Huang, Leslie Pack Kaelbling, Effect of depth and width on local minima in deep learning, Neural Comput. 31 (7) (2019)
+     1462–1498.
+[52] Eric Maire, Philip John Withers, Quantitative x-ray tomography, Int. Mater. Rev. 59 (1) (2014) 1–43.
+
+
+
+
+                                                                              25
+

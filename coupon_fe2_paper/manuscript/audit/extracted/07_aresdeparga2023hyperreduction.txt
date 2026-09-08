@@ -1,0 +1,1642 @@
+                                       Available online at www.sciencedirect.com
+                                                   ScienceDirect
+
+                                   Comput. Methods Appl. Mech. Engrg. 416 (2023) 116298
+                                                                                                                  www.elsevier.com/locate/cma
+
+
+
+           Hyper-reduction for Petrov–Galerkin reduced order models
+        S. Ares de Pargaa,b ,∗, J.R. Bravoa,b , J.A. Hernándeza,b,c , R. Zorrillaa,b , R. Rossia,b
+     a Universitat Politècnica de Catalunya, Department of Civil and Environmental Engineering, Building B0, Campus Nord, Jordi Girona
+
+                                                        1-3, Barcelona 08034, Spain
+ b Centre Internacional de Mètodes Numèrics en Enginyeria (CIMNE), Universitat Politècnica de Catalunya, Building C1, Campus Nord, Jordi
+
+                                                    Girona 1-3, Barcelona 08034, Spain
+           c Universitat Politècnica de Catalunya, E.S. d’Enginyeries Industrial, Aeroespacial i Audiovisual de Terrassa, C/ Colom,
+
+                                                         11, Terrassa 08222, Spain
+                           Received 27 March 2023; received in revised form 22 June 2023; accepted 20 July 2023
+                                                    Available online 26 August 2023
+
+
+
+Graphical Abstract
+
+
+
+
+Abstract
+   Projection-based Reduced Order Models are based on the idea of minimizing the discrete residual of a “full order model”
+(FOM) while at the same time constraining the unknowns to live in a space of reduced dimension. For problems with symmetric
+
+  ∗ Corresponding author at: Universitat Politècnica de Catalunya, Department of Civil and Environmental Engineering, Building B0, Campus
+Nord, Jordi Girona 1-3, Barcelona 08034, Spain.
+    E-mail address: sebastian.ares@upc.edu (S. Ares de Parga).
+
+https://doi.org/10.1016/j.cma.2023.116298
+0045-7825/© 2023 Elsevier B.V. All rights reserved.
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.     Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+positive definite (SPD) Jacobians, this minimization can be achieved optimally by projecting the full order residual onto the
+approximation basis (Galerkin Projection). This approach is sub-optimal for problems with non-SPD Jacobians since it only
+guarantees that the projection of the residual onto the chosen basis is minimized and not the residual itself. One possible
+alternative in such cases is to directly minimize the 2-norm of the residual. This minimization can be achieved either by using
+QR factorization to solve the resulting least-squares problem or by employing the method of the normal equations (LSPG) to
+the same end. The first approach involves constructing and factorizing a rectangular tall and skinny matrix of size proportional
+to the number of unknowns of the FOM. The LSPG method avoids the use of the large matrix by directly constructing
+the product by its transpose. Unfortunately, constructing such a product element by element is not feasible and requires the
+use of a complementary mesh, which adds an extra layer of complexity to the hyper-reduction process when performing mesh
+sampling. The main idea of this work is to propose an alternative technique based on the idea of Petrov–Galerkin minimization.
+Essentially, we choose a left basis so that a least-squares minimization procedure can be carried out on a reduced problem
+while guaranteeing that the discrete full order residual is minimized. The resulting procedure is applicable to problems with
+both SPD and non-SPD Jacobians. Additionally, the resulting minimization problem can be assembled element by element,
+avoiding the use of the complementary mesh and simplifying implementation in the context of finite elements. The resulting
+technique is amenable to hyper-reduction by the use of the Empirical Cubature Method and can be readily applied in the
+context of nonlinear reduction procedures.
+© 2023 Elsevier B.V. All rights reserved.
+
+
+Keywords: Petrov–Galerkin; LSPG; Reduced Order Models; Hyper-reduction
+
+
+
+1. Introduction
+    Projection-based reduced order models (PROM) can significantly reduce the time and storage required for the
+solution of high-fidelity (high-dimensional) discretized PDE based computational models for a given range of
+parametric settings, also known as full-order models (FOM) in the literature. These PROMs are intended for the
+creation of time-critical models such as digital twins, design/shape optimization, control problem optimization, and
+other applications. Unfortunately, the cost of creating a PROM of dimension n scales with both n and the dimension
+of the underlying FOM N ≫ n. To overcome this problem, one popular approach is to divide the computation into
+two parts: one that scales with the FOM but can be executed offline to compute some numerical quantities; and
+another that uses the aforementioned numerical quantities to perform all online computations with a complexity that
+is independent of the FOM’s large dimension. The first part of this offline–online decomposition is at the heart of
+model order reduction, where the state of a large-scale system resides on a lower dimensional manifold engendered
+by time evolution and/or input parameter variation. To do this, solution snapshots corresponding to a carefully chosen
+set of input parameters are subjected to dimensionality reduction (compression) in order to determine a reduced-
+order basis (ROB), using, for instance, Proper Orthogonal Decomposition (POD) [1,2]. The FOM is then projected
+onto the subspace spanned by this ROB in order to provide rapid and accurate online numerical predictions. This
+offline–online technique has been shown to be effective for parametric, linear problems [3,4], as well as nonlinear
+problems with a low-order polynomial dependency [5,6].
+    Similarly, computational methods known as hyper-reduction have gained popularity in overcoming computational
+bottlenecks caused by repeated re-evaluations of parametric reduced-order operators. These methods approximate
+these operators with a computational cost that is independent of the FOM, trading some of the PROM’s accuracy for
+speed. Carlberg first introduced the classification of hyper-reduction methods into two types: the approximate-then-
+project and the project-then-approximate, as described in [7]. The approximate-then-project hyper-reduction methods
+approximate first an operator of interest and then project the approximation onto the left ROB. The underlying idea
+for avoiding a computational cost that grows with the problem’s large dimension N may be traced back to the
+gappy POD technique, which was initially devised for image reconstruction [8]. After nearly a decade, the empirical
+interpolation method was launched on a continuous level with its discrete variant known as discrete EIM (DEIM) [9],
+which is likely the most popular approximate-then-project hyper-reduction method to date. Other approximate-then-
+project hyper-reduction methods have been introduced, such as the missing point estimation [10] and the collocation
+method [11]. Another noteworthy approximate-then-project hyper-reduction method is the Gauss–Newton with
+approximated tensors (GNAT) method [12], which was conceived for the Petrov–Galerkin projection rather than the
+Galerkin framework. On the other hand, hyper-reduction methods of the project-then-approximate type approximate
+directly the projection onto the left ROB. They can be regarded as extended quadrature rules, in which the set of
+                                                                 2
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.         Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+quadrature “points” and associated weights are learned via a supervised method on an empirical set of training
+data. Among this family of methods, we can find the energy-conserving sampling and weighting (ECSW) method
+developed in Ref. [13], and the empirical cubature method (ECM) [14,15]. These methods compute a subset of the
+underlying FOM’s elements (or other entities) that define the quadrature points, then construct an approximation of
+the full solution, which is commonly known as mesh sampling.
+   Hyper-reduction methods have been widely demonstrated to produce numerically stable hyper-reduced PROMs
+(HPROM) [9–11,13–17], especially for standard Galerkin PROM. By definition, in a Galerkin projection, the left
+(Ψ) and right (Φ) ROBs are set to be equal, or the test and approximation spaces are the same (Ψ = Φ).
+The first methods that explored the acceleration of Petrov–Galerkin (PG) PROM, where the left and right ROBs
+differ (Ψ ̸= Φ), are of the approximate-then-project type. These include a gappy-POD-like method, similar to
+DEIM, called the Gauss–Newton with approximated tensors (GNAT) method [7,12,18,19], and a least-squares
+variant of the collocation method [11]. The GNAT was developed in the context of PG-PROMs, especially for
+PG-PROMs in which the left ROB is chosen to minimize the discrete, nonlinear residual over the approximation
+subspace associated with the right ROB in the 2-norm. In this scenario, applying Newton’s technique to solve the
+system of equations is equal to using the Gauss–Newton method to solve the nonlinear, least-squares minimization
+problem. As a result, the PG-PROM method on which GNAT is based is commonly referred to as the least-squares
+Petrov–Galerkin (LSPG) projection method in the literature [7]. Essentially, when the Jacobian (J) associated with
+the Gauss–Newton method results in a symmetric positive definite (SPD) operator, the Galerkin PROM can be
+shown to minimize the discrete, nonlinear residual in a J−1 -norm, whereas the LSPG-PROM can be used for the
+general case where the Jacobian associated with the Gauss–Newton method is not SPD. For example, when the
+Jacobian comes from the discretization of the Navier–Stokes equations, the Galerkin PROM approach lacks the
+minimum-residual optimality property. However, all approximate-then-project methods, such as GNAT, are based
+on sub-optimal greedy algorithms that take the size of the reduced mesh as input, which is unknown a priori.
+Recently, a project-then-approximate method for the hyper-reduction of PG-PROMs was developed, presenting an
+Energy-Conserving Sampling and Weighting (ECSW) type method [13]. This method was extended to PROMs
+based on local, piecewise-affine approximation subspaces and generalized to finite elements spatial discretizations,
+as well as finite volume, and finite differences semi-discretizations.
+   However, in order to evaluate the hyper-reduced residual vectors and Jacobian matrices associated with the
+selected elements and their neighbors, PG-PROMs require a complementary mesh to be constructed [20]. This
+means that the hyper-reduced sample mesh must include the patch of elements that contains the selected elements
+as a complementary mesh, significantly increasing the number of elements required to integrate the hyper-reduced
+model.1 The issue arises from the iteration-dependent left ROB of the LSPG-PROM.
+   In this paper, we propose a novel approach to address the problem of using a complementary mesh for hyper-
+reduction by introducing an equivalent invariant left ROB Ψ that preserves the 2-norm minimum-residual optimality.
+We obtain two different invariant ROBs (Ψ ̸= Φ) and an alternative PG-PROM by compressing either the converged
+projected Jacobians onto the right ROB or the non-converged residuals. Additionally, we utilize the empirical
+cubature method (ECM) to carry out the PG-PROM hyper-reduction without the need for a complementary mesh.
+ECM identifies a reduced subset of elements and corresponding positive weights, which are calculated from a
+minimization of the entire unassembled residual projected onto the left ROB Ψ. Our proposed approach offers a
+novel solution to the problem of avoiding the use of a complementary mesh for hyper-reduction and represents a
+significant contribution to the field.
+
+2. Parametrized problem
+   Let us consider a general nonlinear parametrized discrete operator of the form
+       Rt (ut ; µ) = R(uref + ∆u(t; µ), t; µ) = 0,                                                                                      (1)
+where t ∈ [0, T ] represents time up to a final time T . With a minor abuse of notation, we use the subscript t to
+denote that a variable is evaluated at a specific time instance t. The term ut = uref + ∆ut ∈ R N designates the
+nodal state variable evaluated at the specific time instance t. Here, uref represents a reference solution, often based
+ 1 This behavior should not be confused with hyper-reducing a finite volume model [12,21,22], where it is shown that for the collocation
+mesh, it is necessary to include neighboring cells (and neighbors of neighbors for second order schemes) to compute the governing equations.
+                                                                     3
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.        Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+on the solution at the previous time step, ut−1 .2 We have intentionally omitted the explicit dependency of ut on
+the parameter µ for simplicity of exposition. However, it is important to emphasize that ut intrinsically depends
+on µ, and this dependency will be explicitly denoted when necessary for clarity and instructional purposes. The
+vector µ ∈ D denotes a specific instance of the input parameters, where D ⊂ R P represents the discrete point-set
+of all possible input parameter vectors. The discrete operator Rt : R N × D → R N will be referred to as the residual
+vector. For simplicity of exposition, homogeneous Dirichlet boundary conditions are considered. This high fidelity
+model will be referred to as the full-order model (FOM). The residual vector is assembled in the usual manner by
+summing the elemental contributions, which can be expressed as:
+                 L
+                 ∑       T
+          Rt =         Le Ret ,                                                                                                        (2)
+                 e=1
+
+where L denotes the total number of elements, and Le is the assembly operator that connects the degrees of freedom
+(DOFs) of element e with the global DOFs. The vector Ret represents the values of the elemental residual associated
+with the DOFs of element e.
+   An iterative scheme, such as the Newton–Raphson strategy, is required to find a solution ut for the nonlinear
+residual Rt , resulting in the following iterations: for k = 1, . . . , K , solve
+
+          J(k) (k)    (k)   (k) (k)
+           t (ut ; µ)pt = −Rt (ut ; µ)
+
+                  ∆u(k+1)
+                    t     = ∆u(k)  (k) (k)
+                              t + αt p t                                                                                               (3)
+                       u(k+1)
+                        t     = u(k)   (k+1)
+                                 t + ∆ut     ,
+
+where J represents the Jacobian operator, and ∆u is the increment of the solution state variable at each iteration. R(k)
+                                                                                                                     t
+and J(k)                                                                            (k)                (k)
+      t are the residual and Jacobian evaluated at the current iterative solution ut . Specifically, Rt = Rt |u(k) =
+                                                                                                                   t
+                                  ∂Rt ⏐
+R(uref + ∆u(k)              (k)
+            t , t; µ), and Jt =
+                                                         (k)
+                                        (k) = J(uref + ∆ut , t; µ).
+                                      ⏐
+                                            ∂u ut
+   The process carries out iterations until convergence is reached, thereby finding the solution ut for the specified
+time step t and the given parameter set µ. Notably, a line search could potentially be employed in the direction
+of p ∈ R N to determine the step length α. For a comprehensive understanding and more specific details about the
+procedure, please refer to Algorithm 1. We used the Newton–Raphson method throughout this work for clarity of
+presentation. However, it is worth noting that if the Jacobian matrix is not available or computationally expensive
+to compute, one could use a fixed-point iteration method such as Picard’s method instead of the Newton–Raphson
+method.
+Algorithm 1: Newton-Raphson strategy for FOM.
+ 1      Input: State variable uref
+ 2      Output: State variable ut and increment update ∆ut
+                       (0)           (0)
+     1: Initialize ∆ut = 0, i.e., ut = uref
+     2: for k = 0, . . . , K (convergence) do
+     3:    Evaluate residual R(k)t = Rt |u(k)
+                                           ⏐t
+                                       ∂Rt ⏐
+     4:    Evaluate Jacobian J(k) t =  ∂u ut  (k)
+                   (k) (k)       (k)
+     5:     Solve Jt pt = −Rt
+     6:     Update ∆ut(k+1) = ∆u(k)        (k) (k)
+                                     t + αt pt
+                     (k+1)    (k)       (k+1)
+     7:     Update ut      = ut + ∆ut
+     8: end for
+                ∑K     k+1
+     9: ∆ut =    k=1 ∆ut
+                  (K +1)
+     10: ut = ut             ≡ uref + ∆ut
+
+
+  2 If necessary, the reference solution u
+                                          ref can be enhanced with methods like extrapolation based on the derivatives of ut−1 with respect
+to time. This can provide more accurate initial conditions, aiding in the stability and convergence of the iterative scheme.
+                                                                    4
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.         Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+3. Petrov–Galerkin projection
+
+   We begin by approximating the solution state variable as a linear combination of n orthogonal basis vectors
+φi ∈ R N and coefficients ∆û ∈ Rn . Here, variables denoted with a hat represent those of the reduced order
+dimension n. Consequently, we obtain
+       ∆ũt (µ) = Φ∆ût (µ).                                                                                                            (4)
+   This approximation enables us to update the solution, now referred to as ũt . The tilde notation indicates the
+approximate nature of this variable. Thus, the updated solution is given by
+       ũt = uref + Φ∆ût (µ).                                                                                                          (5)
+   The right ROB Φ is selected through Proper Orthogonal Decomposition (POD), which involves compressing a set
+of snapshots collected from the Full Order Model (FOM) simulations for carefully chosen parameters. Specifically,
+the finite element equations are solved for appropriately chosen values of the input parameter space D, and the state
+variables are stored in snapshot matrices3
+       Au = u1 (µ1 ), u2 (µ1 ), . . . , uT (µ1 ), u1 (µ2 ), u2 (µ2 ), . . . , uT (µ2 ), . . . , uT (µ P ).
+              [                                                                                            ]
+                                                                                                                  (6)
+The solution basis matrix Φ is obtained as a linear combination of the columns of Au , i.e.,
+       col(Φ) ⊂ col(Au )                                                                                                                (7)
+(the column space of Φ is a subspace of the column space of Au ). The Proper Orthogonal Decomposition (POD)
+method aims to reduce the number of columns in Φ while preserving the essential patterns of the solution state
+variable. To achieve this, an error threshold 0 ≤ ϵu < 1 is defined, and a basis matrix Φ is sought such that:
+      A − ΦΦT Au  ≤ ϵu Au  ,
+       u                      
+                        F            F
+                                                                                                               (8)
+where ∥·∥ F denotes the Frobenius norm. One approach to finding this matrix is through truncated Singular Value
+Decomposition (SVD) [23] (see Appendix), which decomposes Au as follows:
+       Au = Φn Σn VnT + E,                                                                                                              (9)
+where Φn is a matrix containing the first n left singular vectors of Au , Σn is a diagonal matrix containing the first
+n singular values, and Vn is the matrix of the first n right singular vectors. The truncation to n modes allows for a
+low-rank approximation of Au , and the remaining term E accounts for the approximation error.
+   When Eq. (5) is substituted into Eq. (1), an over-determined system of N nonlinear equations with n unknowns
+is obtained, where n ≪ N , given by:
+       Rt (ũt ; µ) = R(uref + Φ∆ût (µ), t; µ) = 0.                                                                                   (10)
+To obtain an approximate solution to this system of N nonlinear equations with n unknowns, m constraints are
+imposed by requiring the orthogonality of the nonlinear residual to a left ROB Ψ ∈ R N ×m . This process reduces
+the number of equations in the system from N to m, resulting in a simplified system of m state equations with n
+unknowns given by
+       ΨtT Rt (uref + Φ∆ût (µ); µ) = 0.                                                                                               (11)
+Typically, the order of m is similar to the order of n (O(m) = O(n)), where m ≪ N . However, to avoid an
+under-determined system, it is necessary to ensure that m is greater than or equal to n (m ≥ n) when reducing
+an over-determined system to a simplified system of m state equations with n unknowns, in order to ensure a
+well-posed problem. When m ̸= n, the minimization problem can be addressed using QR decomposition.
+
+  3 Although using u and ∆u in snapshot generation theoretically results in the same column space under exact arithmetic or machine
+tolerance in randomized singular value decomposition (i.e., col(Au ) ⊆ col(A∆u )), we have presented the total approach in this work for its
+didactic value.
+                                                                     5
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.              Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+    Applying Newton–Raphson to solve the reduced non-linear system to find a solution ut results in the following
+iterations: for k = 1, . . . , K , solve
+
+           ΨtT (k) J(k)  (k)      (k)   T (k) (k) (k)
+                    t (ũt ; µ)Φp̂t = −Ψt    Rt (ũt ; µ)
+                                                    (k) (k)
+                                ∆ût(k+1) = ∆û(k)
+                                               t + αt p̂t                                                                           (12)
+                                   ũt(k+1) = ũ(k)     (k+1)
+                                                t + Φ∆ût     ,
+
+where p̂t(k) ∈ Rn . The detailed procedure is given in Algorithm 2.
+   The quality of the approximate solution obtained is contingent on both the selection of the basis Ψt and the
+number of constraints imposed. A suitable basis, along with the optimal number of constraints, may be chosen to
+obtain a sufficiently accurate approximation of the original over-determined system of equations. Although other
+techniques based on Petrov–Galerkin frameworks have been introduced in the literature where the left ROB changes
+over iterations, i.e., Ψ(k)
+                        t , this work presents a novel approach in Section 5 for a Petrov–Galerkin framework that
+finds an invariant or constant left ROB, i.e. Ψ, while preserving the minimum-residual optimality that will be
+discussed in the following section.
+Algorithm 2: Newton-Raphson strategy for general PG-PROM.
+ 1       Input: State variable uref and right ROB Φ
+ 2       Output: State variable ũt and increment update ∆ũt
+                        (0)           (0)
+      1: Initialize ∆ût = 0, i.e., ũt = uref
+      2: for k = 0, . . . , K (convergence) do
+      3:    Evaluate residual R(k)t = Rt |ũ(k)
+                                            ⏐t
+                                        ∂Rt ⏐
+      4:    Evaluate Jacobian J(k) t =         (k)
+                                          ∂ ũ ũt
+                        T (k)
+      5:       Compute Ψt     (see Section 3.1)
+      6:       Compute W(k) = ΨtT (k) J(k)
+                                       t Φ
+      7:     if m ̸= n then
+      8:        Compute QR decomposition W(k) = Q(k) D(k)
+      9:        Solve D(k) p̂(k)
+                               t = −Q
+                                         T (k) T (k) (k)
+                                              Ψ t Rt
+     10:     else
+     11:        Solve W(k) p̂(k)t = −Ψt
+                                          T (k) (k)
+                                               Rt
+     12:     end if
+                                                 (k) (k)
+     13:     Update ∆ût(k+1) = ∆û(k)  t + αt p̂t
+     14:     Update ũ(k+1)
+                         t     = ũ(k)
+                                    t + Φ∆ût
+                                                (k+1)
+
+     15: end for
+                      ∑K           k+1
+     16: ∆ũt = Φ          k=1 ∆ût
+                  (K +1)
+     17: ũt = ũt         ≡ uref + ∆ũt
+
+
+3.1. Optimal left ROB
+
+   The left ROB Ψt is chosen here to minimize the non-linear residual in some norm Gt in order to meet
+the minimum-residual optimality of the projection approximation. Specifically, we seek to solve the following
+minimization problem:
+                                    2
+              1
+      min Rt (uref + Φ∆ût (µ); µ)
+                                     
+                                                                                                        (13)
+     ∆ût ∈R 2
+            n                        
+                                      Gt
+
+where ∥ · ∥Gt denotes a norm defined by a symmetric, positive definite (SPD) matrix Gt ∈ R N ×N . Alternatively, we
+can write the above problem as follows:
+                   1
+            min         Rt (ũt ; µ)T Gt Rt (ũt ; µ).                                                                              (14)
+           ∆ût ∈Rn 2
+                                                                         6
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.          Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+By satisfying the minimum-residual optimality of Eq. (13), a general relationship between projection-based
+reduced-order models and minimum-residual reduced-order models can be established, as follows:
+       ∂Rt (ũt ; µ) ∂ ũ T
+     [                       ]
+                                Gt Rt (ũt ; µ) = 0
+           ∂ ũ       ∂∆ût                                                                           (15)
+                             ]T
+                Jt (ũt ; µ)Φ Gt Rt (ũt ; µ) = 0,
+              [
+
+with the structure of the PROM in Eq. (11); this yields
+           Ψt = Gt Jt (ũt ; µ)Φ,                                                                                               (16)
+which is sufficient to satisfy the minimum-residual property for a general PROM. For further details, please refer
+to [24].
+
+3.1.1. Galerkin projection
+   The Galerkin projection produces search directions p̂(k)                                            −1
+                                                        t that are minimum-residual optimal with Gt = Jt  when
+the Jacobians are SPD matrices; that is,
+           Ψt (ũt ; µ) = J−1
+                           t (ũt ; µ)Jt (ũt ; µ)Φ = Φ,                                                                        (17)
+where the right ROB Φ is constant. Consequently, the left ROB no longer depends on time and the parameter,
+becoming Ψt (ũt ; µ) = Ψ, see Ref. [25]. The Newton–Raphson system is then transformed into the following
+iterations: for k = 1, . . . , K , solve
+
+           ΦT J(k)  (k)      (k)   T (k) (k)
+               t (ũt ; µ)Φp̂t = −Φ Rt (ũt ; µ)
+                                                (k) (k)
+                             ∆û(k+1)
+                                t     = ∆û(k)
+                                           t + αt p̂t                                                                           (18)
+                               ũt(k+1) = ũ(k)     (k+1)
+                                            t + Φ∆ût     ,
+see Algorithm 3 for more details.
+   However, the Galerkin projection does not guarantee that the residual is minimized since the Jacobians of a
+nonlinear problem are not in general SPD matrices. As a result, a different projection for general non-linear problems
+was introduced in Ref. [7], and is discussed in the following section.
+Algorithm 3: Newton-Raphson strategy for Galerkin-PROM.
+ 1       Input: State variable uref and right ROB Φ
+ 2       Output: State variable ũt and increment update ∆ũt
+                        (0)           (0)
+      1: Initialize ∆ût = 0, i.e., ũt = uref
+      2: for k = 0, . . . , K (convergence) do
+      3:    Evaluate residual R(k)t = Rt |ũ(k)
+                                            ⏐t
+                                        ∂Rt ⏐
+      4:    Evaluate Jacobian J(k) t =         (k)
+                                           ∂ ũ ũt
+                               (k)   T (k)
+      5:       Compute W = Φ Jt Φ
+      6:       Solve W(k) p̂(k)
+                            t = −Φ Rt
+                                       T (k)
+                           (k+1)                 (k) (k)
+      7:       Update ∆ût       = ∆û(k)
+                                        t + αt p̂t
+      8:       Update ũ(k+1)
+                        t      = ũ(k)
+                                   t + Φ∆ût
+                                                (k+1)
+
+      9: end for
+                  ∑K      k+1
+     10: ∆ũt = Φ  k=1 ∆ût
+                    (K +1)
+     11: ũt = ũt           ≡ uref + ∆ũt
+
+
+3.1.2. Least-squares Petrov–Galerkin (LSPG) projection
+   Nonlinear problems often result in Jacobians that are not SPD. In such cases, the LSPG method satisfies the
+condition in Eq. (16) by setting Gt = I, where I ∈ R N ×N is the identity matrix. This ensures that the method
+exhibits the minimum-residual property, leading to the following equation:
+           Ψt (ũt ; µ) = Jt (ũt ; µ)Φ.                                                                                        (19)
+                                                                     7
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.        Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+The above equation leads to the Gauss–Newton iterations, which are given by the following steps: for k = 1, . . . , K ,
+solve
+      [                ]T                        [                   ]T
+        J(k)    (k)
+         t (ũt ; µ)Φ     J(k)  (k)        (k)       (k) (k)
+                           t (ũt ; µ)Φp̂t = − Jt (ũt ; µ)Φ            R(k)  (k)
+                                                                         t (ũt ; µ)
+                                                               
+             T (k) (k)                                  T (k) (k)
+           Ψt (ũt ;µ)                                 Ψt (ũt ;µ)                                                (20)
+                                                             (k) (k)
+                                    ∆ût(k+1) = ∆û(k)
+                                                   t   +   α t  p̂t
+
+                                             ũt(k+1) = ũ(k)     (k+1)
+                                                          t + Φ∆ût     .
+
+Note that the chosen left ROB Ψt (ũt ; µ) = Jt (ũt ; µ)Φ changes from one Newton iteration to another (see Algorithm
+4 for more details).
+Algorithm 4: Gauss-Newton strategy for LSPG-PROM.
+ 1       Input: State variable uref and right ROB Φ
+ 2       Output: State variable ũt and increment update ∆ũt
+                        (0)              (0)
+      1: Initialize ∆ût = 0, i.e., ũt = uref
+      2: for k = 0, . . . , K (convergence) do
+      3:    Evaluate residual R(k)t = Rt |ũ(k)
+                                               ⏐t
+                                           ∂Rt ⏐
+      4:    Evaluate Jacobian J(k) t = ∂ ũ ũ(k)
+                                              [ t    ]T
+      5:    Compute left ROB Ψt = J(k)
+                                     T (k)
+                                                  t Φ
+
+      6:     Compute W(k) = ΨtT (k) J(k)   t Φ
+      7:     Solve W(k) p̂(k)t =  −Ψ   T (k) (k)
+                                       t     Rt
+                                                  (k) (k)
+      8:     Update ∆û(k+1)
+                           t     =  ∆  û(k)
+                                         t + αt p̂t
+                        (k+1)      (k)           (k+1)
+      9:     Update ũt        = ũt + Φ∆ût
+     10: end for
+                     ∑K           k+1
+     11: ∆ũt = Φ         k=1 ∆ût
+                 (K +1)
+     12: ũt = ũt       ≡ uref + ∆ũt
+
+   Nonlinear PROMs typically involve at least one step that increases in computational complexity with the
+size of the FOM, even though the nonlinear system that defines the reduced-order model is much smaller. To
+overcome this bottleneck, many nonlinear PROM methods include a hyper-reduction technique that adds an
+additional approximation. For instance, in Newton–Raphson methods, the residual vector R(k)             t (ũt ; µ), Jacobian
+matrix Jt(k) (ũt ; µ), and matrix–vector products for all entities or elements of the FOM are evaluated at each iteration
+for all time steps. Hyper-reduction techniques can tackle this bottleneck by evaluating these vectors and matrices
+over a subset of elements, significantly reducing the computational burden without compromising accuracy. It is
+worth noting that if the left ROB is variant or iteration-dependent (Ψ(k)   t (ũt ; µ)), it may pose a disadvantage to the
+“hyper-reduction” strategy. In such cases, constructing the PROM element by element becomes infeasible, and a
+complementary mesh needs to be used for the reduced mesh. Details regarding the need for a complementary mesh
+approach are discussed in the following section.
+
+4. Hyper-reduction
+     To discuss hyper-reduction, let us first revisit Eq. (11) for convenience:
+           ΨtT Rt (uref + Φ∆ût (µ); µ) = 0.
+For the assembly of elemental contributions, this expression takes the following form:
+                          L                L                 L
+                          ∑       T        ∑                 ∑    T
+           ΨtT Rt = ΨtT         Le Ret =     (Le Ψt )T Ret =   Ψet Ret = 0,                                                   (21)
+                          e=1              e=1               e=1
+where L denotes the total number of elements, and for each element, Le is the assembly operator, Ret is the elemental
+residual vector, and Ψet represents the values of the left ROB associated with the elemental degrees of freedom. As
+                                                                   8
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.            Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+previously mentioned, this equation shows that although the equation-solving effort has drastically diminished with
+n ≪ N , the computational complexity of the problem still scales with the size of the discretization of the underlying
+finite elements. This is because it is necessary to loop over the L finite elements of the mesh to assemble the residual
+vectors and Jacobian matrices.
+    As demonstrated in [13,15], one may approximate the Petrov–Galerkin projection of the residual onto the left
+ROB, given by Eq. (21), by finding a subset of elements z and positive weights ω such that
+       ∑         T
+           ωe Ψet Ret = 0.                                                                                          (22)
+       e∈z
+
+In other words, the subset of elements and their weights are chosen such that the resulting approximation of the
+residual vector satisfies the projection property of the reduced order model. Specifically, the approximation of
+the residual vector is obtained by summing over the chosen elements in z, where for each element e in z, the
+                                                                                                              T
+corresponding weight ωe ∈ ω is multiplied by the residual vector Ret and its corresponding left ROB values Ψet .
+   The optimization problem for determining z and ω involves solving Eq. (21) using the same input parameters
+as in the first reduction stage. The reduced equation is expressed in matrix format as follows:
+       L                     [                                                        ]
+       ∑        T               T                 T                        T
+             Ψie Rie (µ j ) = Ψ1 Ri1 (µ j ),   Ψ2 Ri2 (µ j ),    ...,   Ψ L RiL (µ j ) 1 = bi (µ j ),           i = 1, 2, . . . , T,   (23)
+       e=1
+
+where bi (µ j ) ∈ Rm represents the sum of the projected residuals for all elements at the ith time step for the jth
+parameter instance. Here, 1 denotes an all-ones vector.
+
+Remark 4.1. Using the all-ones vector assumes that the mesh elements are similar enough to each other, such that
+each element’s contribution to the projected residual is approximately equal. An alternative approach is to create a
+weighting vector that incorporates a coefficient to account for the varying contributions, such as the volume of each
+element [14]. If a weighting vector is used, then the residual should be scaled component-wise by its corresponding
+weight.
+   Let us construct a matrix X ∈ R(m×T ×P)×L by collecting the block column matrix from Eq. (23) for all training
+parameters, which is given by:
+                                                                                                     ]T
+      X = X1 (µ1 ), X2 (µ1 ), . . . XT (µ1 ), X1 (µ2 ), X2 (µ2 ), . . . , XT (µ2 ), . . . , XT (µ P ) ,
+           [
+                                                                                                             (24)
+where each block column Xi (µ j ) ∈ R L×m is given by:
+                      T
+                 ⎡                  ⎤
+                   (Ψ1 Ri1 (µ j ))T
+                 ⎢ 2T 2
+                 ⎢ (Ψ Ri (µ j ))T ⎥
+                                    ⎥
+     Xi (µ j ) = ⎢      ..          ⎥.                                                                                                 (25)
+                         .
+                 ⎢                  ⎥
+                 ⎣                  ⎦
+                            T
+                       (Ψ L RiL (µ j ))T
+The discrete minimization problem statement is very similar to the statement for the continuous problem in Ref. [26].
+The objective is to determine the optimal subset of elements and their corresponding weights. Therefore, we need
+to find ω ∈ Rℓ+ and z ⊂ 1, 2, . . . , L such that:
+       (ω, z) = arg min ∥Xz̄ ω̄ − b∥2 ,                                                                                                (26)
+                       ω̄≥0,z̄
+
+where Xz is the block matrix of X formed by the columns corresponding to the indexes z, and ω =
+[ω1 , ω2 , . . . , ωℓ ]T . The goal is to select a set of ℓ elements from the L elements of the underlying finite element mesh
+x1 , x2 , . . . , x L . For more information on the “Empirical Cubature Method” (ECM) for finding the optimal elements
+and weights, we refer the reader to Refs. [14,15]. Unlike other methods in the literature [13,20], the Empirical
+Cubature Method solves the minimization problem in Eq. (26) in terms of a set of orthogonal basis vectors rather
+than snapshots of the raw discrete integrand X. To this end, the ECM requires obtaining an orthonormal matrix via
+a truncated SVD as
+       X = UΣΘ + E.                                                                                                                    (27)
+                                                                        9
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.     Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+The matrix Θ ∈ R p×L is used to define a vector bΘ ∈ R L as
+       Θ1 = bΘ ,                                                                                                           (28)
+such that the equivalent optimization problem statement in Eq. (26) becomes:
+       (ω, z) = arg min ∥Θz̄ ω̄ − bΘ ∥2 .                                                                                  (29)
+                        ω̄≥0,z̄
+
+The ECM algorithm for finding the optimal subset of elements and weights is described in detail in [15], and is
+used in this work to address the hyper-reduction strategy. Note that the hyper-reduction approximation does not aim
+to accurately represent the full-order residual (FOM), but only its projection onto the left subspace spanned by the
+columns of the left reduced order basis (ROM).
+   The hyper-reduction technique has been extensively studied in previous literature for the Galerkin projection [9–
+11,13–17]. However, since it is a relatively new approach, only a limited number of studies have investigated
+scenarios where the left reduced-order basis (ROB) differs [7,20,22,27]. This introduces some unique challenges to
+the hyper-reduction scheme.
+
+4.1. Extension to least-squares problems
+
+   Let us consider the case when the minimization is performed in the 2-norm, which corresponds to Gt = I. In
+this case, Eq. (13) becomes
+       ΦT JtT (ũt ; µ)Rt (ũt ; µ) = 0.                                                                                   (30)
+We define the Jacobian-weighted residual vector as follows:
+       R̄t (ũt ; µ) = JtT Rt (ũt ; µ) = 0.                                                                               (31)
+With this definition at hand, we can rewrite Eq. (30) as
+       ΦT R̄t (ũt ; µ) = 0,                                                                                               (32)
+which, except for the R̄t operator, is identical to Eq. (11) in the sense that it involves a ROB-weighted residual
+quantity. However, because the Jacobian-weighted residual vector involves global quantities, it cannot be assembled
+locally element by element. This means that it requires information from a “complementary mesh”, which is an
+additional set of elements used to accurately represent the global behavior of the system on the reduced mesh.
+   To further clarify this point, we can express Eq. (32) in terms of elemental contributions as follows:
+                       ( L             )
+                        ∑ T T
+        T T          T        e   e  e
+      Φ Jt Rt = Φ           L J t L Rt
+                                  e=1
+                         L
+                         ∑            )T T
+                                  Le Φ Jet Le )Rt
+                           (
+                    =(                                                                                                     (33)
+                         e=1
+                        ( L                   )
+                         ∑          T   T
+                    =             Φe Jet Le       Rt ,
+                          e=1
+
+where we introduce the elemental quantity
+       RtLe := Le Rt .                                                                                                     (34)
+The quantity RtLe signifies the entries of the assembled residual vector that correspond to the degrees of freedom
+of element e. It is important not to confuse this quantity with Re , which denotes the contribution of element e to
+the residual vector. To emphasize this distinction, note that RtLe and Re are not the same, i.e., RtLe ̸= Re .
+   Therefore, we have
+       L
+       ∑        T
+             Φe R̄et (ũt ; µ) = 0,                                                                                        (35)
+       e=1
+                                                                10
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.        Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+
+
+
+Fig. 1. Patch of elements associated to a selected element of a 2D and 3D mesh. (a) 2D, (b) 3D. Red: Patch of elements, Blue: Selected
+element. (For interpretation of the references to color in this figure legend, the reader is referred to the web version of this article.)
+
+
+
+
+where
+                 T
+       R̄et := Jet RtLe .                                                                                                            (36)
+The main difference between the LSPG scheme and other schemes, such as Galerkin, is that the computation of R̄et
+in the former requires determining residual vectors for all elements sharing nodes with element e, forming a patch
+of elements, as shown in Fig. 1 . This feature necessitates constructing a complementary mesh based on the patch
+of elements for a given set of elements z ⊂ 1, 2, . . . , L, regardless of the element selection method employed in
+the hyper-reduction process [20]. This peculiarity of problems arising from minimization of residuals suggests that
+the ECM search process should be adjusted such that, after selecting a specific element, its associated patches are
+considered as candidates for the next step in the algorithm. This maximizes the overlap between patches. Using
+the hyper-reduction scheme described in Section 4 for the variant left ROB would result in an increased number of
+elements to consider in the finite element analyses.
+
+5. Invariant left ROB approach
+5.1. Formulation
+
+   Let us revisit Eq. (30), which is reproduced below for convenience (in the case where Gt = I):
+       rt = ΦT JtT (ũt ; µ)Rt (ũt ; µ) = 0.
+This nonlinear equation can be interpreted as a Petrov–Galerkin projection in which the left subspace or the subspace
+of constraints (a term borrowed from [25]) changes at each iteration. The left subspace in the preceding equation is
+given by col(Jt Φ), where Jt is the Jacobian of the original finite element equations, and this matrix evolves during
+the iterations. In light of the preceding observation, one may wonder whether it is possible to reformulate Eq. (30)
+so that the left ROB matrix is held fixed during the iterations.
+   The problem may be posed as follows: find an orthogonal matrix Ψ ∈ R N ×m such that
+       ΨT Rt (ũt ; µ) = 0                                                                                                           (37)
+for all input parameters µ used for determining the right ROB Φ ∈ R N ×n .
+   In what follows, we describe and discuss two possible approaches for determining the left ROB Ψ. These two
+alternatives will introduce a second training stage in which data will be gathered from the LSPG-PROM solution,
+leading to an increase in offline computational cost. However, we demonstrate in the sequel that this increase in
+computational effort is greatly repaid in the online stage, as the resulting PG-PROM requires far fewer elements
+than the standard LSPG-PROM.
+                                                                   11
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.   Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+5.1.1. Jacobian-based approach
+
+
+      Jacobian basis procedure
+       1. This approach involves solving Eq. 5.1 while collecting the matrices Ji (ũi ; µ j )Φ when convergence is
+          achieved (for all training parameters µ).
+          First, define the auxiliary matrix:
+                  j
+                 SJ (µ j ) := J1 (ũ1 ; µ j )Φ, J2 (ũ2 ; µ j )Φ, . . . , JT (ũT ; µ j )Φ .
+                             [                                                            ]
+                                                                                                               (38)
+          Then construct SJ by stacking these matrices:
+               SJ = S1J (µ1 ), S2J (µ2 ), . . . , SJP (µ P ) .
+                     [                                      ]
+                                                                                                                      (39)
+       2. Once the matrix has been constructed, the truncated SVD (with relative truncation tolerance ϵΨJ ) is used
+          to determine an orthogonal basis matrix:
+                 ΨJ , •, • = SVD(SJ , ϵΨJ ).
+                [         ]
+                                                                                                               (40)
+
+
+
+   It is worth noting that although all iterative schemes in this work are presented using the Newton–Raphson
+method, the proposed approach is not restricted to this method and can be applied to any iterative scheme, including
+those that use fixed-point iteration techniques such as Picard’s method. Therefore, the matrices Ji can be computed
+using either the exact Jacobian or an approximate Jacobian.
+Observations:
+    1. The number of columns of ΨJ is always equal to or greater than the number of columns of Φ:
+
+               ncol(ΨJ ) ≥ ncol(Φ).                                                                                      (41)
+
+       The equality holds in the linear case, i.e., when Jt is constant.
+    2. As a corollary, in the general case where ncol(ΨJ ) > ncol(Φ), Eq. (37) becomes an over-determined system
+       of nonlinear equations. This implies that the problem of Eq. (37) should be posed as finding ∆ût ∈ Rn such
+       that
+                                    2
+                      1
+              min ΨJ Rt (ũt ; µ)  ,
+                           T
+                                     
+                                                                                                             (42)
+             ∆ût ∈Rn 2
+
+        which in turn, leads to the stationary condition
+
+               ∂ 12 (ΨJT Rt )T (ΨJT Rt )   1        ∂Rt T T            1               ∂Rt
+                                         = (ΨJT          ) (ΨJ Rt ) + (ΨJT Rt )T (ΨJT       )
+                        ∂∆ût              2       ∂∆ût               2              ∂∆ût
+                                           1                         1                                                   (43)
+                                         = (ΨJT Jt Φ)T (ΨJT Rt ) + (ΨJT Rt )T (ΨJT Jt Φ)
+                                           2                         2
+                                         = (ΨJT Jt Φ)T (ΨJT Rt ) = 0.
+        Hence, in this case, the residual adopts the expression
+
+               r′t = ΦT (JtT ΨJ )(ΨJT Rt ) = 0.                                                                          (44)
+
+If we use the standard Newton–Raphson method to solve the preceding equation, obtain the following system of
+linear equations at each iteration:
+        ∂r′
+             p̂t = −r′t ,                                                                                                (45)
+       ∂∆ût
+                                                              12
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.       Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+where the Jacobian matrix of the projected residual r′ is given by
+        ∂r′t       ∂JtT                            ∂Rt
+             = ΦT       ΨJ ΨJT Rt + ΦT JtT ΨJ ΨJT                                                                            (46)
+       ∂∆ût      ∂∆ût                           ∂∆ût
+Near the minimum, i.e., when Rt ≈ 0, we can discard the first term on the right-hand side of the above expression,
+leading to the approximation
+        ∂r′
+             ≈ ΦT JtT ΨJ ΨJT Jt Φ,                                                                                           (47)
+       ∂∆ût
+which results in the following Newton–Raphson iterations: for k = 1, . . . , K , solve
+     [                    ]T                                 [                ]T
+       J(k)
+        t   ( ũ(k)
+                t   ; µ)Φ    Ψ J Ψ T (k) (k)
+                                    J
+                                   J t  (ũt ; µ)Φ p̂(k)
+                                                     t   = −   J(k) (k)
+                                                                t  (ũt ; µ)Φ    ΨJ ΨJT R(k)  (k)
+                                                                                         t (ũt ; µ)
+
+                                               ∆ût(k+1) = ∆û(k)  (k) (k)                                                   (48)
+                                                              t + αt p̂t
+                                                  ũt(k+1) = ũ(k)     (k+1)
+                                                               t + Φ∆ût     .
+It should be noted that solving the system of equations above amounts to minimizing the expression
+                                                     2
+                           µ)Φ                      µ)
+            T                        T
+                                                      
+       min  Ψ
+            J  Jt (ũ t ;    p̂t − Ψ J R t ( ũt ;                                                                         (49)
+       p̂t ∈Rn
+                                                      
+
+at each iteration. This minimization problem can be addressed by using the QR factorization of
+       ΨJT Jt Φ ∈ Rm×n .                                                                                                     (50)
+Note that although this matrix is still rectangular, it has a much smaller dimension (m ≪ N and n ≪ N ) compared
+to the full order model ∈ R N ×N .
+
+Proposition. If ϵΨJ = 0 in the SVD of Eq. (40), then Eq. (44) is equivalent to Eq. (37) for the training parameters.
+
+Proof. Eq. (44) can be written as
+       (ΨJ ΨJT Jt Φ)T Rt = 0.                                                                                                (51)
+If ϵΨJ = 0 in Eq. (40), then Jt Φ ∈ col(ΨJ ) for the training parameters. This means that, since ΨJ is orthogonal,
+ΨJ ΨJT Jt Φ = Jt Φ. Thus, Eq. (40) becomes
+       (Jt Φ)T Rt = 0.                                                                                                       (52)
+  □
+
+   As the number of modes increases, such as when solving highly nonlinear problems, the size of the snapshots
+matrix in Eq. (39) can potentially become quite large. This is because the size of the matrix increases linearly with
+the number of modes. This observation highlights the need to explore alternative techniques that can better handle
+large, evolving datasets. One such approach is based on residual evolution, which we will discuss in more detail
+below.
+
+
+5.1.2. Residual-based approach
+   The orthogonal matrix Ψ introduces an orthogonal decomposition of R N as shown in Eq. (37):
+       R N = null(ΨT ) ⊕ col(Ψ).                                                                                             (53)
+It is important to note that a converged nodal residual vector will belong to null(ΨT ), while non-converged nodal
+residual vectors, will have components in col(Ψ). This observation suggests an alternative approach for determining
+the left ROB as a basis matrix for the column space of non-converged residuals. The detailed procedure for this
+approach is provided below. See Fig. 2.
+                                                                  13
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.      Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+
+
+
+                                   Fig. 2. Schematic overview of Petrov–Galerkin PROM construction.
+
+
+
+
+                                                                 14
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.       Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+
+
+      Residuals basis procedure
+       1. For each training parameter µ j and at each nonlinear iteration k, define the non-converged residual at
+          timestep i as:
+                  Ri(k) (µ j ) = Ri (ui(k) ; µ j ),                                                                       (54)
+          Here, k signifies the kth nonlinear iteration. For every timestep i and each training parameter µ j , gather
+          a matrix of snapshots of the non-converged nodal residual vectors associated with the solutions ũi(k) :
+                           [                                               ]
+                                                                 (K −1)
+                Bi (µ j ) = Ri(1) (µ j ), Ri(2) (µ j ), . . . , Ri i (µ j ) ,                                     (55)
+          where K i denotes the total amount of non-linear iterations for the ith time step for the corresponding
+          parameter µ j .
+                                                                                             j
+       2. Assemble all the snapshot matrices Bi (µ j ) into a singular snapshot matrix SB (µ j ) for each parameter
+          µ j . Specifically, stack the snapshot matrices Bi (µ j ) for all timesteps and the jth parameter µ j into a
+          singular matrix representing all non-converged residuals:
+                   j
+                 SB (µ j ) = B1 (µ j ), B2 (µ j ), . . . , BT (µ j ) .
+                             [                                      ]
+                                                                                                                  (56)
+                                                       j
+       3. Compile all the snapshot matrices SB (µ j ) into a final non-converged residuals matrix for all training
+          parameters:
+               SR = S1B (µ1 ), S2B (µ2 ), . . . , SBP (µ P ) .
+                      [                                     ]
+                                                                                                              (57)
+       4. Obtain the orthogonal basis ΨR :
+          Perform a truncated SVD to obtain the orthogonal basis for their column spaces:
+                  [ΨR , •, •] = SVD(SR , ϵR ).                                                                            (58)
+          It is clear that
+                  col(ΨR ) ⊆ col(ΨJ )                                                                                     (59)
+          (see Fig. 2 for schematic overview)
+
+
+
+   It is worth mentioning that, for highly nonlinear dynamical systems, the number of modes in the right ROB is
+expected to be higher than the number of non-linear iterations. This implies that the size of the SR matrix, which is
+constructed by gathering non-converged residuals for each parameter, will only increase in proportion to the number
+of non-linear iterations and is expected to be smaller than the size of the SJ matrix, which is constructed using the
+Jacobian matrix projected onto the left ROB.
+
+
+5.2. Comparing matrix sizes and computational costs in iterative procedures: The case of rectangular
+Petrov–Galerkin approach
+
+   Reduced-order modeling involves iterative procedures, for example, in the Newton–Raphson method, the matrix
+size plays a crucial role in determining both the computational cost and the solution approach.
+   Let us consider the matrix sizes involved in three different iterative schemes: the FOM, Galerkin ROM, and
+Petrov–Galerkin ROM. The FOM system involves a matrix
+       Jt ∈ R N ×N ,
+where N is the original dimensionality of the system. The Galerkin projection, on the other hand, employs the
+matrix
+       ΦT Jt Φ ∈ Rn×n ,
+                                                                  15
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.   Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+which results in a smaller system (n ≪ N ) that needs to be solved, leading to significant computational savings
+during the iterative procedure. It is worth noting that the full order model, Galerkin ROM, and LSPG ROM systems
+considered thus far have all been square systems. However, the Petrov–Galerkin projection requires solving a
+rectangular system of size
+
+          ΨT Jt Φ ∈ Rm×n ,
+
+where m ≥ n (with O(m) = O(n)), leading to a minimization problem that needs to be addressed. One possible
+solution to this problem is QR factorization. Fig. 3 illustrates a schematic representation of the various systems
+and their resulting sizes. Additionally, Algorithm 5 presents the invariant left ROB PG-PROM algorithm, which
+differs from the general PG-PROM algorithm in Algorithm 2 as the left ROB Ψ is an input rather than an iteration-
+dependent variable. This feature brings significant computational savings in the subsequent hyper-reduction stage,
+as we will see later on. Despite the increased system size and associated computational cost, the Petrov–Galerkin
+projection can provide better accuracy than the Galerkin projection in certain situations.
+    Let us examine the computational costs tied to the training and online phases of the Galerkin, LSPG, and Petrov–
+Galerkin strategies more closely. Both the Galerkin and LSPG strategies involve a FOM assembly and solution for
+parameters P and their respective times T during the training phase. The complexity of the FOM assembly is
+O(L), and for the FOM solution, it is O(N k ), with k ≥ 1 depending on the specific iterative solver employed for
+the sparse system. Then, a Singular Value Decomposition (SVD) compression is performed with a complexity of
+O(N (T P)n) using a randomized SVD. In the subsequent online phase, the FOM assembly is repeated, followed by
+a system projection operation, with complexities of O(N0 × n) and O(n 2 × N ) for sparse-dense and dense-dense
+matrix multiplication respectively, where N0 represents the non-zero entries. The online phase concludes with a
+direct solution of a dense ROM, which is associated with a complexity of O(n 3 ). Conversely, the Petrov–Galerkin
+strategy introduces an additional training phase, which involves a repeated FOM assembly, system projection, and
+solution of the LSPG ROM for the same parameters P and their corresponding times T . This phase also requires
+an additional SVD compression operation, with a complexity of O(N (T P K )n), reflecting the sum of nonlinear
+iterations (K ) in a residual-based approach, and once again employing a randomized SVD. Despite these heightened
+computational costs, this phase bolsters the HROM scheme by negating the need for a complementary mesh during
+the creation of the HROM model. The online phase mirrors that of the Galerkin and LSPG strategies but adjusts
+the ROM solution complexity to O(mn 2 ) (with O(m) = O(n)).
+Algorithm 5: Newton-Raphson strategy for invariant left ROB PG-PROM.
+ 1      Input: State variable uref , right ROB Φ, and left ROB Ψ
+ 2      Output: State variable ũt and increment update ∆ût
+                       (0)             (0)
+     1: Initialize ∆ût = 0, i.e., ũt = uref
+     2: for k = 0, . . . , K (convergence) do
+     3:    Evaluate residual R(k)t = Rt |ũ(k)
+                                             ⏐t
+                                         ∂Rt ⏐
+     4:    Evaluate Jacobian J(k) t =           (k)
+                                           ∂ ũ ũt
+     5:      Compute W(k) = ΨT J(k)     t Φ
+     6:      if m ̸= n then
+     7:         Compute QR decomposition W(k) = Q(k) D(k)
+     8:         Solve D(k) p̂(k)
+                               t = −Q
+                                          T (k) T (k)
+                                               Ψ Rt
+      9:     else
+     10:        Solve W(k) p̂(k)t = −Ψ Rt
+                                           T (k)
+
+     11:     end if
+                                                 (k) (k)
+     12:     Update ∆ût(k+1) = ∆û(k)   t + αt p̂t
+                         (k+1)      (k)         (k+1)
+     13:     Update ũt        = ũt + Φ∆ût
+     14: end for
+                      ∑K          k+1
+     15: ∆ût = Φ          k=1 ∆ût
+                  (K +1)
+     16: ũt = ũt        ≡ uref + ∆ût
+
+                                                              16
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.       Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+
+
+
+Fig. 3. This diagram illustrates the various dimensions of the systems that need to be addressed in different scenarios, as well as their
+corresponding projections. The four cases depicted are: (a) a full-order model, (b) a Galerkin-PROM, (c) a LPSG-PROM, and (d) a PG-PROM.
+
+
+
+
+5.3. Hyper-reduction
+
+
+  The Newton–Raphson iterations for the invariant left ROB Petrov–Galerkin Projection-based Reduced Order
+Model with residual-based formulation, aforementioned: for k = 1, . . . , K , we solve the following equations:
+
+
+        ΨRT J(k)  (k)      (k)   T (k) (k)
+             t (ũt ; µ)Φp̂t = −ΨR Rt (ũt ; µ)
+                                          (k) (k)
+                       ∆û(k+1)
+                          t     = ∆û(k)
+                                     t + αt p̂t                                                                                     (60)
+                          ũ(k+1)
+                            t     = ũ(k)     (k+1)
+                                      t + Φ∆ût     .
+                                                                   17
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.       Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+We can highlight the difference between the variant and invariant left ROB approaches by revisiting Eq. (21), which,
+when substituted with the residual-based left ROB, gives:
+                         L
+                         ∑         T
+       ΨRT Rt = ΨRT            Le Ret
+                         e=1
+                 L
+                 ∑
+               =   (Le ΨR )T Ret                                                                                                     (61)
+                   e=1
+                   L
+                   ∑           T
+               =         ΨeR Ret .
+                   e=1
+
+    Comparing this to Eq. (33), the main difference in the LSPG assembling in the variant approach is the term
+R̄et (Eq. (36)). This term requires determining residual vectors for all elements that share nodes with element e
+(i.e., a patch of elements), which leads to the need to store a complementary mesh for the online evaluation of
+the LSPG-HPROM. In contrast, the left ROB in the PG-HPROM method is invariant and does not depend on
+surrounding elements. Therefore, the hyper-reduction scheme can be efficiently coupled with the ECM algorithm
+using an element-by-element construction and optimal mesh sampling.
+
+
+6. Results
+
+   • Analysis of the nonlinear behavior of a cantilever beam subjected to prescribed forces in structural mechanics,
+     with hyperelastic material properties described by the Kirchhoff Saint-Venant model.
+   • A transient rotating pulse convection–diffusion problem with convection dominance.
+   • Flow past a cylinder benchmark in fluid dynamics.
+
+To evaluate the accuracy of the constructed PROMs and HPROMs, we measure the relative error between the
+solution state variables and their corresponding values obtained from the FOM and PROM-based models. At each
+ith time-step solution snapshot of the jth parameter configuration, the relative error is calculated as:
+                                          2
+                                          
+                    ũi (µ j ) − ui (µ j )
+                                          
+       E i (µ j ) =                2        ,                                                          (62)
+                                   
+                          ui (µ j )
+                                   
+
+where ũi (µ j ) ∈ R N and ui (µ j ) ∈ R N are the approximated and reference solutions of the state variable, respectively,
+at the ith time step for the jth parameter configuration. We also calculate the relative error for the entire set of
+solution snapshots, which is defined as:
+                       
+                       
+             S̃u − Su 
+                       
+      E=           F,                                                                                                (63)
+                  
+                  Su 
+                  
+                         F
+
+where
+                                        ...,                            . . . , ũT (µ2 ),   ...,
+             [                                                                                                   ]
+        S̃u = ũ1 (µ1 ), ũ2 (µ1 ),            ũT (µ1 ), ũ1 (µ2 ),                                ũT (µ P )                       (64)
+and
+                                        ...,                                        ...,                 ...,
+            [                                                                                                                    ]
+        Su = u1 (µ1 ), u2 (µ1 ),               uT (µ1 ), u1 (µ2 ), u2 (µ2 ),                 uT (µ2 ),               uT (µ P )       (65)
+are the snapshot matrices capturing the solution and approximation state variables across all time steps and parameter
+configurations.
+                                                                   18
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.        Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+
+
+
+                                             Fig. 4. Cantilever beam with two pressure loads.
+
+
+
+6.1. Structural mechanics case
+
+   In this research, we analyze the nonlinear behavior of a cantilever beam in the field of structural mechanics, with
+the primary objective to compare the performance of Galerkin-PROMs, LSPG-PROMs, and PG-PROMs for systems
+governed by SPD operators. Additionally, the Jacobian-based and Residual-based approaches for selecting the left
+reduced order basis (ROB) Ψ are compared. The cantilever beam, subjected to prescribed forces, is assumed to
+possess hyperelastic material properties, as described by the Kirchhoff Saint-Venant model. The material properties
+include a Young’s modulus of 206.9 GPa and a Poisson’s ratio of 0.29. This beam is designed to undergo large
+displacements, with the problem being formulated using a Total Lagrangian formulation under √    a plane stress analysis
+                                                                                                                    √
+setup. Two pressure loads, P1 and P2 , are applied to the system. They are defined as P1 = c1 ∗ α and P2 = c2 ∗ α
+respectively, with c1 = 108 Newtons and c2 = 107 Newtons. These loads, directed in negative vertical and horizontal
+directions, are presented in Fig. 4. The loads are applied simultaneously with varying intensities over a series of
+steps to simulate the nonlinear behavior of the cantilever beam. The model will be trained for α values in the range
+of [0.1, 2.0] and tested for extrapolated values of α in the range (2.0, 4.0]. As also depicted in Fig. 4, there is a
+fixed displacement imposed on the left boundary. The model for this analysis comprises 6954 finite elements with
+3626 nodes, leading to 7252 degrees of freedom. This comprehensive model complexity aims to provide a precise
+simulation of the nonlinear behavior of the system under the conditions specified.
+Reduction. For this analysis, specific tolerances were set to guide the reduction process. The tolerance used to
+determine the dimensionality of the latent variables û, which subsequently defines the number of columns in the
+right reduced order basis (ROB) Φ, was set at ϵu = 10−6 . For the Petrov–Galerkin approaches, both Residual-based
+and Jacobian-based, the singular value decomposition (SVD) tolerance was established as ϵR = ϵJ = 10−6 . This
+tolerance value serves to determine the size of the left ROB Ψ. Lastly, the tolerance for the empirical cubature
+method (ECM), used across all projection strategies, was set to machine precision.
+Discussion. The numerical investigation led to a latent approximation space Φ of dimension 3 (number of modes)
+and a constraint space Ψ of dimension 7 (number of modes). The latter size was consistent in both Petrov–Galerkin
+methods, Jacobian-based and Residual-based, highlighting the uniformity in the constraint space selection.
+   Analyzing the overall L2 norms in both the training and testing phases, our models have delivered highly
+promising results. In the training phase (Table 1), the L2 norms between FOM, ROM, and HROM models were
+found to be on the order of 10−6 to 10−8 for both x and y displacements. This corresponds closely to our original
+error truncation tolerance set at 10−6 , thereby demonstrating excellent model fidelity in reproducing the training
+scenarios. Moreover, both the LSPG and Petrov–Galerkin strategies yielded similarly low L2 norms, reinforcing the
+residual-minimum property these methods aim to achieve. This result not only validates our proposed methodologies,
+but also highlights the underlying relationship between these projection strategies. In the testing phase (Table 2),
+where the models are applied to an extrapolated parametric space, the L2 norms remained low and within the same
+order of magnitude as the original error truncation tolerance. This result validates the robustness of our models, as
+they maintain a high degree of accuracy even when extrapolated beyond their training data (see Figs. 5 and 6).
+   The HROMs selection process resulted in the following distribution of elements: Galerkin strategy yielded 20
+elements (0.29% of the total 6954 elements), LSPG strategy yielded 35 elements (0.50% of the total), Petrov–
+Galerkin Residual-based strategy selected 68 elements (0.98% of the total), and Petrov–Galerkin Jacobian-based
+strategy selected 54 elements (0.78% of the total). It is worth noting that although the LSPG strategy initially
+                                                                   19
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.      Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+Table 1
+Overall L2 norms for training phase.
+ Strategy                          Overall L2 Norm (Training)                                                    Variable
+                                   FOM vs ROM                  ROM vs HROM               FOM vs HROM
+                                   2.125 × 10−8                9.630 × 10−13             2.125 × 10−8            Displacement x
+ Galerkin                          4.089 × 10−9                1.060 × 10−12             4.089 × 10−9            Displacement y
+                                   1.257 × 10−6                1.251 × 10−9              1.257 × 10−6            Displacement x
+ LSPG                              1.136 × 10−6                1.173 × 10−9              1.136 × 10−6            Displacement y
+                                   9.731 × 10−7                1.434 × 10−8              9.587 × 10−7            Displacement x
+ Petrov–Galerkin Res.              8.826 × 10−7                1.325 × 10−8              8.693 × 10−7            Displacement y
+                                   9.060 × 10−7                1.159 × 10−8              8.946 × 10−7            Displacement x
+ Petrov–Galerkin Jac.              7.814 × 10−7                1.021 × 10−8              7.712 × 10−7            Displacement y
+
+
+Table 2
+Overall L2 norms for testing phase.
+ Strategy                          Overall L2 Norm (Testing)                                                     Variable
+                                   FOM vs ROM                  ROM vs HROM               FOM vs HROM
+                                   3.331 × 10−7                2.748 × 10−11             3.331 × 10−7            Displacement x
+ Galerkin                          6.843 × 10−8                3.326 × 10−11             6.842 × 10−8            Displacement y
+                                   2.095 × 10−5                1.230 × 10−8              2.094 × 10−5            Displacement x
+ LSPG                              1.968 × 10−5                1.178 × 10−8              1.967 × 10−5            Displacement y
+                                   1.618 × 10−5                2.339 × 10−7              1.595 × 10−5            Displacement x
+ Petrov–Galerkin Res.              1.528 × 10−5                2.243 × 10−7              1.506 × 10−5            Displacement y
+                                   1.508 × 10−5                2.279 × 10−7              1.486 × 10−5            Displacement x
+ Petrov–Galerkin Jac.              1.354 × 10−5                2.020 × 10−7              1.334 × 10−5            Displacement y
+
+
+                                         Table 3
+                                         Speedups for ROM and HROM using different strategies.
+                                          Strategy                          Total speedup
+                                          ROM Galerkin                      9.92
+                                          HROM Galerkin                     612.13
+                                          ROM LSPG                          13.32
+                                          HROM LSPG                         119.85
+                                          ROM Petrov-Galerkin Res.          7.70
+                                          HROM Petrov-Galerkin Res.         164.70
+                                          ROM Petrov-Galerkin Jac.          8.56
+                                          HROM Petrov-Galerkin Jac.         228.86
+
+
+
+appears to require fewer selected elements than the Petrov–Galerkin strategies, it demands information from the
+surrounding elements and thus necessitates a complementary mesh. This increases the effective number of elements
+from 35 to 293, as shown in Fig. 7. Consequently, despite the initially smaller selection, LSPG yields a considerably
+lower speedup when compared to the other strategies (see Table 3). These results elucidate the significant speedups
+achieved when deploying HROM strategies compared to their traditional ROM counterparts.
+   Our numerical results highlight that, particularly for problems exhibiting symmetric positive-definite (SPD)
+operators like the one studied in this case, the Galerkin approach consistently provides superior results and speed-
+ups. However, the reader must not overlook the primary goal of this work, which is to propose an equivalent
+projection strategy to LSPG, one that utilizes a fixed left reduced order basis, Ψ, and obviates the necessity of the
+complementary mesh.
+   Noteworthy is the contrast in the speed-ups achieved: we observe a transition from an LSPG HROM speed-up of
+119.85 to a Petrov–Galerkin speed-up of 164.70 for the Residuals-based approach and 228.86 for the Jacobian-based
+method. This significant impact in terms of computational efficiency is pronounced even for this relatively simple and
+coarse problem. Another important aspect to discuss is the relative effort required to train the HROM models from
+                                                                   20
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.          Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+
+
+
+Fig. 5. Relative L2 Norm between the FOM and ROM against the scaling parameter α. The vertical line at α = 2.0 denotes the boundary
+between the training (α ∈ [0.0, 2.0], shaded green) and testing phases (α ∈ (2.0, 4.0], shaded blue). Each line represents a different strategy
+used in the model reduction process. The subfigures represent two distinct variables of interest: (a) Displacement in x, and (b) Displacement
+in y. (For interpretation of the references to color in this figure legend, the reader is referred to the web version of this article.)
+
+
+
+
+Fig. 6. Relative L2 Norm between the FOM and the HROM against the scaling parameter α. The vertical line at α = 2.0 denotes the
+boundary between the training (α ∈ [0.0, 2.0], shaded green) and testing phases (α ∈ (2.0, 4.0], shaded blue). Each line represents a different
+strategy used in the model reduction process. The subfigures represent two distinct variables of interest: (a) Displacement in x, and (b)
+Displacement in y. (For interpretation of the references to color in this figure legend, the reader is referred to the web version of this
+article.)
+
+
+
+the FOM. In this specific case, if we consider the effort for training the Galerkin strategy as a reference, we observe
+that the LSPG strategy has a slightly higher ratio of 1.01 to the Galerkin, showing a similar efficiency in training
+the model. On the other hand, the Petrov–Galerkin strategies present a higher ratio of 1.38. This increase in training
+effort for the Petrov–Galerkin strategies originates from the second training phase, which is required to determine
+the optimal fixed left ROB Ψ. This underscores the trade-off in computational efficiency when selecting a modeling
+strategy. In this case, the reduction in elements needed for the Petrov–Galerkin methods (which eliminates the need
+for a complementary mesh, unlike LSPG) comes at the cost of increased computational effort during training.
+   Moving forward, the aim is to investigate how these findings extrapolate to problems with finer meshes and
+different physics. We believe the strategies presented in this work will be invaluable tools in addressing more
+complex, real-world problems in structural mechanics and beyond.
+
+
+                                                                      21
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.      Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+
+
+
+Fig. 7. Comparison of HROM solutions for different strategies in the context of the cantilever beam: (a) FOM, (b) Galerkin HROM, (c)
+LSPG HROM, (d) Petrov–Galerkin HROM. The figure also exhibits the different HROM meshes used for each strategy.
+
+
+
+6.2. Convection–diffusion case
+
+   In this study, we solved a 2D convection–diffusion problem on a non-uniform mesh comprising 23204 elements
+and 11603 nodes (degrees of freedom). This problem, characterized by a transient rotating pulse, is adapted
+from [28]. The transient convection–diffusion equation is expressed as:
+       ∂u
+          + a · ∇u − ∇ · (ε∇u) = s            in Ω = [0, 1] × [0, 1].                                                          (66)
+       ∂t
+In this equation, u represents the unknown scalar field, ∂u
+                                                         ∂t
+                                                            is the rate of change of this field over time, and a · ∇u
+is the convective term where a = (−y, x) is the velocity field. The term ∇ · (ε∇u) represents diffusion, and s is the
+source term defined as:
+           {           (                  )2 )
+                                               if x 2 + y 2 < 1,
+                                                  √
+              10 × exp −50 x 2 + y 2 − 21
+                             (
+       s=                                                                                                         (67)
+              0                                otherwise.
+The boundary conditions are set as u = 0 on ∂Ω (the boundary of Ω ), and u = 0 at t = 0.
+   This problem is chosen due to its convection-dominant nature. For further details on the problem setup, please
+refer to [28].
+   The reduced order model was trained using properties of two different materials: Ethylene Glycol and SAE 30
+Engine Oil. Ethylene Glycol has a density of approximately 1110 kg/m3 , a thermal conductivity of 0.253 W/(m*K),
+and a specific heat of 2412 J/(kg*K). SAE 30 Engine Oil, on the other hand, has a density of approximately
+875 kg/m3 , a thermal conductivity of 0.15 W/(m*K), and a specific heat of 2092 J/(kg*K).
+   In the testing phase, the reduced order model was extrapolated to a third material, Glycerol. Glycerol has a density
+of approximately 1260 kg/m3 , a thermal conductivity of 0.286 W/(m*K), and a specific heat of 2430 J/(kg*K). The
+primary goal of this experiment is to assess the ability of the reduced order model to generalize over varying material
+parameters. The time for the convection–diffusion problem was defined from 0 to 5 s.
+Reduction. The reduction process for the convection–diffusion problem was carried out with a tolerance level of
+ϵu = 10−3 , which was used to determine the dimensionality of the latent variables û. Under this tolerance, the
+number of modes in the right reduced order basis (ROB) Φ was 18. The Petrov–Galerkin methods, with singular
+value decomposition (SVD) tolerances of ϵR = ϵJ = 10−3 , resulted in a left ROB, Ψ, comprising 18 modes for the
+                                                                 22
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.       Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+             Table 4
+             Mean relative L2 norms for the training phase.
+              Strategy                           FOM vs ROM                ROM vs HROM                  FOM vs HROM
+              Galerkin                           2.323 × 10−3              1.35 × 10−6                  1.089 × 10−3
+              LSPG                               2.326 × 10−3              1.399 × 10−5                 1.640 × 10−3
+              Petrov–Galerkin Res.               2.180 × 10−3              1.635 × 10−4                 1.267 × 10−3
+              Petrov–Galerkin Jac.               2.326 × 10−3              1.335 × 10−6                 1.230 × 10−3
+
+
+
+
+Fig. 8. Relative L2 Norm between the FOM and ROM for different training materials. Each line represents a different strategy used in the
+model reduction process. The subfigures represent two distinct materials: (a) Ethylene Glycol, and (b) SAE 30 Engine Oil.
+
+
+
+Jacobian-based approach and 19 modes for the Residual-based approach. The empirical cubature method (ECM),
+which was utilized in all the projection strategies, was configured with a tolerance of 10−6 .
+Discussion. Our model’s initial validation utilized training materials, specifically Ethylene Glycol and SAE 30
+Engine Oil. The resultant mean relative L2 errors across different model reduction strategies are encapsulated in
+the Table 4.
+    In contrast to the structural mechanics case, the Galerkin method, impacted by the non-SPD nature of the problem,
+fails to yield a clear minimum solution. Nonetheless, an interesting observation from the results is the convergence
+of Petrov–Galerkin strategies and the LSPG method to similar error magnitudes. Illustrating the evolution of the
+mean relative L2 error for varying reduction strategies concerning the temperature variable, Figs. 8 and 9 further
+highlight the implications of the problem not being SPD.
+    Remarkably, the Petrov–Galerkin strategies not only match the LSPG’s error values but also outperform them
+within an HROM context further presented. The effectiveness and aptness of the Petrov–Galerkin strategies in
+handling such complicated problems are thereby accentuated.
+    Delving into the HROM selection process, it yielded the following element distribution: the Galerkin strategy
+incorporated 365 elements (representing 1.57% of the total 23204 elements), the LSPG strategy included 358
+elements (1.54% of the total), the Petrov–Galerkin Residual-based strategy integrated 462 elements (1.99% of the
+total), and the Petrov–Galerkin Jacobian-based strategy adopted 439 elements (1.89% of the total). It is noteworthy
+that, despite seemingly requiring fewer elements, the LSPG strategy depends on information from surrounding
+elements, necessitating a complementary mesh. The LSPG strategy further results in a marked increase in the
+effective number of elements, growing from 358 to 3265, approximately 9.1 times the original selection. This
+inflated selection constitutes 14.07% of the original FOM with 23204 elements, a significant increase from the
+initial 1.54%, as depicted in Fig. 10.
+    In contrast, the Petrov–Galerkin strategies hold an advantage as they prevent this rise in elements while still
+providing a solution with a minimum residual comparable to the LSPG strategy.
+    Having delved into the complexities of element distribution within different strategies, let us now shift our focus
+to another critical metric: the total speedups achieved for the ROMs and HROMs across these strategies. This will
+                                                                  23
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.       Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+
+
+
+Fig. 9. Relative L2 Norm between the FOM and the HROM for different training materials. Each line represents a different strategy used
+in the model reduction process. The subfigures represent two distinct materials: (a) Ethylene Glycol, and (b) SAE 30 Engine Oil.
+
+                           Table 5
+                           Average speedups for ROM and HROM using different strategies, and the percentage
+                           of elements selected for HROM with respect to the FOM.
+                            Strategy                               Total speedup (average over materials)
+                            ROM Galerkin                           4.04
+                            HROM Galerkin                          49.0
+                            ROM LSPG                               4.33
+                            HROM LSPG                              21.35
+                            ROM Petrov-Galerkin Res.               3.63
+                            HROM Petrov-Galerkin Res.              35.39
+                            ROM Petrov-Galerkin Jac.               3.64
+                            HROM Petrov-Galerkin Jac.              37.44
+
+
+             Table 6
+             Mean relative L2 norms for the testing phase with glycerol.
+              Strategy                           FOM vs ROM                ROM vs HROM                 FOM vs HROM
+              Galerkin                           2.324 × 10−3              1.15 × 10−6                 1.090 × 10−3
+              LSPG                               2.327 × 10−3              1.41 × 10−5                 1.640 × 10−3
+              Petrov–Galerkin Res.               2.167 × 10−3              1.22 × 10−14                1.267 × 10−3
+              Petrov–Galerkin Jac.               2.326 × 10−3              6.07 × 10−15                1.231 × 10−3
+
+
+
+provide us with another important perspective on the comparative performance of these methods. Table 5 below
+encapsulates the total average speedups for the ROM and HROM using different strategies.
+   After establishing our model’s performance with the training materials, we expanded our analysis to encompass
+a material distinct from the training set, specifically, Glycerol. This rigorous test allows us to evaluate our
+model’s ability in predicting the behavior of materials beyond its training repertoire. Delving into the comparative
+examination of mean relative L2 norms for different model reduction strategies applied to Glycerol, the Table 6
+below encapsulates these findings. It lays out the mean relative L2 norms for the temperature variable. Our
+exploration of Glycerol test results underlines the robust performance of our reduced order model across diverse
+materials with comparable properties. Figs. 11(a) ans 11(b) visualize the trajectory of the mean relative L2 error
+for various reduction strategies in relation to the temperature variable of the test material, Glycerol.
+   While the Galerkin strategy for HROM marks high speedup in this non-SPD problem and provides a benchmark,
+we must heed the fact that the Galerkin method does not guarantee convergence to the minimum solution for all non-
+SPD problems. Consequently, it could potentially induce instabilities [19]. Despite its commendable performance in
+the given context, its reliability may falter in other scenarios. Our prime interest lies in comparing and contrasting the
+LSPG strategy with the Petrov–Galerkin strategies. At first glance, the LSPG strategy may appear more resourceful
+                                                                  24
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.       Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+
+
+
+Fig. 10. Comparison of HROM solutions for different strategies in the context of the transient rotating pulse (Ethylene Glycol): (a) FOM,
+(b) Galerkin HROM, (c) LSPG HROM, (d) Petrov–Galerkin HROM. The figure also exhibits the different HROM meshes used for each
+strategy.
+
+
+
+due to its more economical selection of elements from the FOM. However, its need for a larger effective selection
+driven by the necessary complementary mesh eventually cuts into its computational speedup.
+   Conversely, the Petrov–Galerkin strategies deliver substantial speedups while harnessing a relatively lean fraction
+of FOM elements. Impressively, these strategies achieve a solution fidelity comparable to the LSPG method but boast
+superior computational efficiency. This performance delineates a desirable balance between computational speedup
+and approximation accuracy, thereby hinting at the potential edge of Petrov–Galerkin strategies in non-SPD problem
+settings.
+
+6.3. Fluid dynamics case
+
+   The 2D CFD simulation for the incompressible Navier–Stokes equations was performed to solve the well-known
+flow past a cylinder benchmark for specific base velocities. The problem geometry consists of a 5 × 2 m channel
+with a non-slip cylinder of 0.2 m diameter located at coordinates (1.25,0.5). The top and bottom walls are also
+non-slip, and the pressure is fixed along the right edge. The time-dependent parabolic inlet function is applied at
+                                                                   25
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.          Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+
+
+
+Fig. 11. Relative L2 Norm between the FOM and ROM or HROM for the testing material Glycerol. Each line represents a different strategy
+used in the model reduction process.
+
+                                                       Table 7
+                                                       The calculated Reynolds num-
+                                                       bers for each base velocity. The
+                                                       test scenario (vb = 5.0 ms ) is
+                                                       shaded in gray.
+                                                        vb ( ms )        Re
+                                                        4.0              66.7
+                                                        5.0               83.3
+                                                        6.0              100
+
+
+
+the left edge, with a sinusoidal ramp-up applied to the inlet function from 0.0 to 1.0 s. This inlet function is defined
+as:
+              {
+                vb y(1 − y)sin( π2t ), t ∈ [0, 1)
+       v(t) =
+                vb y(1 − y),           t ∈ [1, T ]
+   For the monitoring of the results, a probe is positioned downstream from the cylinder’s trailing edge at coordinates
+(1.43, 0.52). This probe serves to gather key data from the flow dynamics.
+   The simulations are run with base velocities (vb ) of 4.0 ms and 6.0 ms for a total of 30 s for the training phase,
+and with a base velocity of 5.0 ms for 40 s during the testing phase. These base velocities correspond to different
+Reynolds numbers, calculated using the formula:
+               vavg ∗ ρ ∗ D
+       Re =                 ,
+                     η
+where η = 0.002 mkgs is the dynamic viscosity, ρ = 1 mkg3 is the fluid density, D = 0.2 m is the diameter of the
+cylinder, and vavg is the average velocity, calculated as v6b . The calculated Reynolds numbers for each base velocity
+are presented in Table 7.
+   The time step is 0.1 s, and the mesh consists of 68298 linear triangular elements with 34149 nodes (102447
+degrees of freedom). Fig. 12 illustrates the problem setup and boundary conditions. By simulating this benchmark,
+we aim to evaluate the ability of our reduced-order models to reconstruct the flow behavior at different Reynolds
+numbers, derived from various base velocities.
+Reduction. In this specific analysis, tolerance levels were carefully selected to obtain a sufficiently good approxima-
+tion of the fluid-dynamics problem at hand, to avoid introducing high phase and amplitude errors. A tolerance level
+of ϵu = 10−4 was adopted to ascertain the dimensionality of the latent variables û. This resulted in the construction
+of a right ROB Φ that incorporated 98 modes. For the Petrov–Galerkin approach, particularly the Residual-based
+method, a SVD tolerance of ϵR = 5 × 10−4 was employed to prevent the left ROB from becoming excessively
+                                                                     26
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.          Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+
+
+
+                                                       Fig. 12. Flow past a cylinder 2D.
+
+
+
+large, and yielded a left ROB Ψ consisting of 153 modes. For the left ROB, only the Residual-based approach was
+employed in this case to minimize the memory load during the second training phase. This decision was strategic,
+as the Jacobian-based method would have resulted in a snapshots matrix for the left ROB growing linearly with the
+number of modes in the right ROB. In contrast, the Residual-based approach’s snapshots matrix expands linearly
+with the number of nonlinear iterations, which are significantly fewer in this case than the number of modes. This
+strategy facilitated a more efficient training process without sacrificing the accuracy of the results. The empirical
+cubature method (ECM), deployed across all projection strategies, was configured with a tolerance of 10−5 .
+Discussion. With the objective of appraising the resilience and accuracy of our training model, we embarked on a
+validation study, employing the training parameters vb of 4.0 ms (Re = 66.7) and 6.0 ms (Re = 100). These specific
+values were judiciously selected to encompass a varied, yet illustrative range of the prospective parameter space
+wherein the model would be anticipated to perform.
+    In this context, it is important to highlight certain aspects of the outcome that stem directly from the unique
+properties of the boundary conditions (e.g. the inlet ramp-up) and parametric settings for this case. Given the
+complexity of the problem, the model did not showcase a substantial reduction in the information required for
+an accurate representation. Specifically, out of 600 snapshots collected for the training set, the optimal right ROB
+required 98 modes to accurately represent both the phase and amplitude of the dynamics, devoid of high spikes and
+significant errors. This translates into the need for roughly one-sixth of the total information of the problem. While
+such a requirement may lead to potential limitations in the performance of both the ROM and the HROM, it is
+pivotal to note that these outcomes do not undermine the value of our research. Rather, they provide an opportunity
+to gain insights into the nature of complex systems.
+    Moreover, the primary intention of this paper is not focused on achieving the highest efficiency of information
+reduction, but rather on demonstrating and accentuating the performance of the proposed Petrov–Galerkin HROM in
+comparison to the LSPG approach for a general case. Even under less-than-optimal circumstances, our findings shed
+valuable light on the versatility and potential of the proposed HROM framework. One important aspect to highlight
+is the relative performance of the different reduced order models. Throughout the simulation, it was observed that
+both the LSPG and Petrov–Galerkin cases consistently presented results more closely aligned with those of the FOM,
+compared to the Galerkin ROM. This outcome underscores the superior performance of the Petrov–Galerkin and
+LSPG models in replicating the detailed fluid dynamics captured by the FOM, even under vortical flow conditions.
+    Furthermore, it is noteworthy that as the size of the left ROB is increased for the Petrov–Galerkin model, its
+outcomes should progressively align with those of the LSPG model. In other words, with a sufficiently large left
+ROB, the Petrov–Galerkin model would essentially replicate the LSPG results, underlining the inherent congruence
+between these two ROM methodologies when deployed with adequate basis sets. This characteristic reinforces
+their capability for delivering reliable and precise simulations, consistent with the FOM, for a wide range of fluid
+dynamics problems. The outcomes of these comparisons are visually represented in Figs. 13(a), 13(b), 14(a), and
+14(b).
+    The HROM selection process yielded the following element distribution: the Galerkin strategy incorporated 6216
+elements (representing about 9.10% of the total 68298 elements in the FOM), the LSPG strategy included 5914
+elements (8.66% of the total), and the Petrov–Galerkin strategy integrated 5829 elements (about 8.53% of the total).
+Though the LSPG strategy seems to require fewer elements, it leverages information from surrounding elements,
+hence necessitating more elements in a complementary mesh. Consequently, the effective number of elements
+                                                                      27
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.      Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+
+
+
+Fig. 13. Velocity profiles at a selected probe node for the FOM and HROM using Galerkin, LSPG, and Petrov–Galerkin strategies. The
+velocities correspond to a Reynolds number of 66.7 (vb = 4.0 ms ) and represent a training parameter. Zoomed-in regions are provided to
+visualize specific details.
+
+
+
+
+Fig. 14. Velocity profiles at a selected probe node for the FOM and HROM using Galerkin, LSPG, and Petrov–Galerkin strategies. The
+velocities correspond to a Reynolds number of 100 (vb = 6.0 ms ) and represent a training parameter. Zoomed-in regions are provided to
+visualize specific details.
+
+
+
+expands from 5914 to 32838, about 5.55 times the original selection, constituting 48.07% of the original FOM.
+This surge represents a substantial increase from the initial 8.66%, as depicted in Fig. 15. In contrast, the Petrov–
+Galerkin strategies avert this surge in elements while still providing a solution with a minimum residual comparable
+to the LSPG strategy.
+   With a comprehensive understanding of the element distribution across different strategies, it is equally important
+to delve into another significant performance metric: the total speedups achieved for the HROM across these
+strategies. This analysis will provide us with a valuable perspective on the comparative efficiency of these methods.
+Table 8 encapsulates the total speedups for the HROM using different strategies.
+   The speedups depicted in Table 8 attest to the efficiency and effectiveness of these strategies within an HROM
+context. Notably, the Petrov–Galerkin strategy outperforms the LSPG strategy in terms of speedup, despite delivering
+comparable results. This improved efficiency can be attributed to Petrov–Galerkin’s ability to bypass the need for
+a complementary mesh, offering significant advantages when selecting an optimal strategy for problems exhibiting
+non-SPD operators.
+   To further assess the performance of our model, we conducted additional tests for a different inflow velocity of
+vb = 5.0 ms , corresponding to a Reynolds number of 83.3. This lies between the two training Reynolds numbers,
+                                                                  28
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.         Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+
+
+
+Fig. 15. Comparison of HROM solutions for different strategies in the context of the transient flow past a cylinder (vb = 6.0 ms ): (a) FOM,
+(b) Galerkin HROM, (c) LSPG HROM, (d) Petrov–Galerkin HROM. The figure also showcases the different HROM meshes used for each
+strategy.
+
+                                                Table 8
+                                                Total speedups for HROM using different
+                                                strategies.
+                                                 Strategy              Total speedup
+                                                 HROM Galerkin         3.29
+                                                 HROM LSPG             1.81
+                                                 HROM Petrov-Galerkin 3.15
+
+
+
+allowing us to examine the capability of our model to interpolate for a Reynolds number not explicitly included in
+the training set. Additionally, we tested the ability of our model to extrapolate in time for another 10 s, reaching up
+to 40 s instead of the 30 s it was trained on. This evaluation is critical to determining the robustness and adaptability
+of our model to predict future states beyond its training horizon. The results of these tests are visually represented
+in Figs. 16(a) and 16(b).
+   The figures reveal that the LSPG and Petrov–Galerkin strategies more accurately reproduce the phase and
+amplitude of the FOM. In contrast, the Galerkin strategy takes more time to reach the fully developed flow, shows
+higher amplitude errors, and experiences a noticeable phase shift. This underscores the effectiveness of the LSPG and
+Petrov–Galerkin strategies in accurately capturing the system dynamics, even under interpolation and extrapolation
+scenarios.
+
+7. Conclusions
+
+   In this study, we have proposed an innovative approach that blends two key components: an invariant left ROB
+Ψ and its natural integration with the ECM hyper-reduction method. Crucially, our framework allows the left ROB
+to be different from the right ROB, providing enhanced flexibility in the hyper-reduction of nonlinear methods.
+Our model demonstrated significant improvements in accuracy, particularly for problems with non-SPD operators.
+Additionally, it exhibited remarkable efficiency in generating hyper-reduced models for PG-PROMs while preserving
+the minimum-residual optimality offered by LSPG projection. In the diverse range of problems studied, including
+structural mechanics (SPD), convection–diffusion (non-SPD), and fluid dynamics (non-SPD), our model showcased
+robust performance. A noteworthy aspect of our findings was the comparable performance of Petrov–Galerkin
+strategies to LSPG, despite the former exhibiting superior computational speedups. Petrov–Galerkin strategies also
+                                                                    29
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.      Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+
+
+
+Fig. 16. Velocity profiles at a selected probe node for the FOM and HROM using Galerkin, LSPG, and Petrov–Galerkin strategies. The
+velocities correspond to a Reynolds number of 83.3 (vb = 5.0 ms ) and represent a testing parameter. Zoomed-in regions are provided to
+visualize specific details. The vertical dashed gray line indicates the edge of the training horizon (time = 30 s).
+
+
+
+managed to bypass the surge in the requirement of elements, a limitation observed in the LSPG approach due to the
+need for a complementary mesh. Although the introduction of our proposed PG-HPROM necessitates an additional
+offline training stage, its efficiency in terms of the number of selected elements equals that of Galerkin HPROMs,
+eliminating the need for a complementary mesh. Importantly, the model’s robustness was further reinforced through
+validation studies, demonstrating its ability to accurately interpolate and extrapolate under conditions and timelines
+not explicitly included in the training set. Given these results, our approach signifies broad applicability in complex
+industrial models across various fields, such as structural mechanics, convection–diffusion, and fluid dynamics,
+especially for problems with non-SPD Jacobians. This research represents a substantial stride in the field of hyper-
+reduction for nonlinear methods, indicating promising potential for further improvements in computational efficiency
+and model fidelity in the realm of reduced-order modeling. As an expansion, our methodology could further leverage
+advancements in local bases and neural networks, suggesting exciting avenues for future exploration and application.
+
+
+Declaration of competing interest
+
+   The authors declare that they have no known competing financial interests or personal relationships that could
+have appeared to influence the work reported in this paper.
+
+
+Data availability
+
+   Data will be made available on request
+
+
+Acknowledgments
+
+   The authors acknowledge financial support from the Spanish Ministry of Economy and Competitiveness, through
+the “Severo Ochoa Programme for Centres of Excellence in R&D” (CEX2018-000797-S)”. We acknowledge
+financial support from the Generalitat de Catalunya through the FI SDUR-2021 grant, which provided funding
+for the predoctoral training of Sebastian Ares de Parga Regalado. This project has received funding from
+the European High-Performance Computing Joint Undertaking (JU) under grant agreement Nos 955558 and
+956104. The JU receives support from the European Union’s Horizon 2020 research and innovation programme
+and from Spain, Germany, France, Italy, Poland, Switzerland, and Norway. Spanish Ministry of Science and
+Innovation (MICINN) supports the project through the project PCI2021-121945. This publication is part of the
+R&D project PCI2021-121944, financed by MCIN/AEI/10.13039/501100011033 and by the “European Union
+NextGenerationEU/PRTR”.
+                                                                 30
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.         Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+Appendix. Singular value decomposition
+  This appendix provides details on the singular value decomposition (SVD) method used to find a basis matrix
+Φ that satisfies the conditions presented in the main text. The procedure involves computing a truncated SVD [23]
+(TSVD) of the matrix Au , which is the matrix to be decomposed, with a given relative tolerance 0 < ϵu ≤ 1. The
+TSVD function is defined symbolically as follows:
+       [U, Σ, V] = SVD(Au , ϵu ),                                                                                                       (68)
+                n×r                                                       r ×r
+where U ∈ R    is the matrix of left singular vectors, Σ ∈ R   is the matrix of positive singular values (diagonal),
+and V ∈ Rm×r is the matrix of right singular vectors. These matrices satisfy the following relationships:
+       A = UΣVT + E,               ∥E∥ F ≤ ϵ∥A∥ F ,           UT U = VT V = Ir ×r ,            Σ(i+1,i+1) ≥ Σ(i,i) > 0,                 (69)
+where ∥ · ∥ F denotes the Frobenius norm, E is the truncation error, and Σ (i, i) denotes the ith largest singular value
+of Au . The basis matrix Φ is then chosen as the matrix of the first n columns of U:
+       Au = Un Σn VnT + E,                                                                                                              (70)
+           
+                Φ
+where Un and Vn are the first n columns of U and V, respectively, and Σn is the n × n diagonal matrix containing
+the n largest singular values of Au .
+
+References
+ [1] L. Sirovich, Turbulence and the dynamics of coherent structures. I. Coherent structures, Quart. Appl. Math. 45 (1987).
+ [2] S. Balachandar, Turbulence, coherent structures, dynamical systems and symmetry, AIAA J. 36 (1998).
+ [3] A.C. Antoulas, An overview of approximation methods for large-scale dynamical systems, Annu. Rev. Control 29 (2005).
+ [4] N.N. Cuong, K. Veroy, A.T. Patera, Certified real-time solution of parametrized partial differential equations, Handbook of Materials
+     Modeling, 2005.
+ [5] C.W. Rowley, T. Colonius, R.M. Murray, Model reduction for compressible flows using POD and Galerkin projection, Physica D 189
+     (2004).
+ [6] P. Benner, S. Gugercin, K. Willcox, A survey of projection-based model reduction methods for parametric dynamical systems, SIAM
+     Rev. 57 (2015).
+ [7] K. Carlberg, C. Bou-Mosleh, C. Farhat, Efficient non-linear model reduction via a least-squares Petrov-Galerkin projection and
+     compressive tensor approximations, Internat. J. Numer. Methods Engrg. 86 (2011).
+ [8] R. Everson, L. Sirovich, Karhunen–Loève procedure for gappy data, J. Opt. Soc. Amer. A 12 (1995).
+ [9] S. Chaturantabut, D.C. Sorensen, Nonlinear model reduction via discrete empirical interpolation, SIAM J. Sci. Comput. 32 (2010).
+[10] D. Galbally, K. Fidkowski, K. Willcox, O. Ghattas, Non-linear model reduction for uncertainty quantification in large-scale inverse
+     problems, Internat. J. Numer. Methods Engrg. 81 (2010).
+[11] D. Ryckelynck, A priori hyperreduction method: An adaptive approach, J. Comput. Phys. 202 (2005).
+[12] K. Carlberg, C. Farhat, J. Cortial, D. Amsallem, The GNAT method for nonlinear model reduction: Effective implementation and
+     application to computational fluid dynamics and turbulent flows, J. Comput. Phys. 242 (2013).
+[13] C. Farhat, T. Chapman, P. Avery, Structure-preserving, stability, and accuracy properties of the energy-conserving sampling and weighting
+     method for the hyper reduction of nonlinear finite element dynamic models, Internat. J. Numer. Methods Engrg. 102 (2015).
+[14] J.A. Hernández, M.A. Caicedo, A. Ferrer, Dimensional hyper-reduction of nonlinear finite element models via empirical cubature,
+     Comput. Methods Appl. Mech. Engrg. 313 (2017).
+[15] J.A. Hernández, A multiscale method for periodic structures using domain decomposition and ECM-hyperreduction, Comput. Methods
+     Appl. Mech. Engrg. 368 (2020).
+[16] M. Barrault, Y. Maday, N.C. Nguyen, A.T. Patera, An ‘empirical interpolation’ method: application to efficient reduced-basis
+     discretization of partial differential equations, C. R. Math. 339 (2004).
+[17] C. Farhat, P. Avery, T. Chapman, J. Cortial, Dimensional reduction of nonlinear finite element dynamic models with finite rotations
+     and energy-based mesh sampling and weighting for computational efficiency, Internat. J. Numer. Methods Engrg. 98 (2014).
+[18] D. Amsallem, M.J. Zahr, C. Farhat, Nonlinear model order reduction based on local reduced-order bases, Internat. J. Numer. Methods
+     Engrg. 92 (2012).
+[19] K. Carlberg, M. Barone, H. Antil, Galerkin v. least-squares Petrov–Galerkin projection in nonlinear model reduction, J. Comput. Phys.
+     330 (2017).
+[20] S. Grimberg, C. Farhat, R. Tezaur, C. Bou-Mosleh, Mesh sampling and weighting for the hyperreduction of nonlinear Petrov–Galerkin
+     reduced-order models with local reduced-order bases, Internat. J. Numer. Methods Engrg. 122 (2021).
+[21] P.J. Blonigan, K.T. Carlberg, F. Rizzi, M. Howard, J.A. Fike, Model reduction for hypersonic aerodynamics via conservative lspg
+     projection and hyper-reduction, in: AIAA Scitech 2020 Forum, 2020.
+[22] Y.S. Shimizu, E.J. Parish, Windowed space–time least-squares Petrov–Galerkin model order reduction for nonlinear dynamical systems,
+     Comput. Methods Appl. Mech. Engrg. 386 (2021).
+                                                                     31
+S. Ares de Parga, J.R. Bravo, J.A. Hernández et al.      Computer Methods in Applied Mechanics and Engineering 416 (2023) 116298
+
+[23] C. Eckart, G. Young, The approximation of one matrix by another of lower rank, Psychometrika 1 (1936).
+[24] M.J. Zahr, Adaptive Model Reduction to Accelerate Optimization Problems Governed by Partial Differential Equations (Ph.D. thesis),
+     Stanford University, 2016.
+[25] Y. Saad, Iterative methods for sparse linear systems, second ed., Methods (2003).
+[26] S.S. An, T. Kim, D.L. James, Optimizing cubature for efficient integration of subspace deformations, ACM Trans. Graph. 27 (2008).
+[27] F. Fang, C.C. Pain, I.M. Navon, A.H. Elsheikh, J. Du, D. Xiao, Non-linear Petrov-Galerkin methods for reduced order hyperbolic
+     equations and discontinuous finite element methods, J. Comput. Phys. 234 (2013).
+[28] A.H.J. Donea, Finite Element Methods for Flow Problems, 2003.
+
+
+
+
+                                                                  32
+

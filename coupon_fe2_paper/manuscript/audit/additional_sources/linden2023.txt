@@ -1,0 +1,2319 @@
+                                        Neural networks meet hyperelasticity: A guide to enforcing physics
+
+                                                      Lennart Linden1 , Dominik K. Klein2 , Karl A. Kalina1 , Jörg Brummund1 ,
+                                                                     Oliver Weeger2 , and Markus Kästner1,3*
+
+                                                                   1 Institute of Solid Mechanics, TU Dresden, 01062 Dresden, Germany
+arXiv:2302.02403v2 [cs.CE] 6 Jul 2023
+
+
+
+
+                                                    2 Cyber-Physical Simulation Group & Graduate School of Computational Engineering, Department of
+                                                Mechanical Engineering & Centre for Computational Engineering, TU Darmstadt, 64293 Darmstadt, Germany
+                                                   3 Dresden Center for Computational Materials Science (DCMS), TU Dresden, 01062 Dresden, Germany
+                                                                       * Corresponding author, email: markus.kaestner@tu-dresden.de
+
+
+
+
+                                                                                            May 3, 2023
+
+
+
+
+                                                                                               Abstract
+                                              In the present work, a hyperelastic constitutive model based on neural networks is proposed which ful-
+                                              ﬁlls all common constitutive conditions by construction, and in particular, is applicable to compressible
+                                              material behavior. Using diﬀerent sets of invariants as inputs, a hyperelastic potential is formulated as
+                                              a convex neural network, thus fulﬁlling symmetry of the stress tensor, objectivity, material symmetry,
+                                              polyconvexity, and thermodynamic consistency. In addition, a physically sensible stress behavior of the
+                                              model is ensured by using analytical growth terms, as well as normalization terms which ensure the
+                                              undeformed state to be stress free and with zero energy. In particular, polyconvex, invariant-based stress
+                                              normalization terms are formulated for both isotropic and transversely isotropic material behavior. By
+                                              fulﬁlling all of these conditions in an exact way, the proposed physics-augmented model combines a sound
+                                              mechanical basis with the extraordinary ﬂexibility that neural networks oﬀer. Thus, it harmonizes the
+                                              theory of hyperelasticity developed in the last decades with the up-to-date techniques of machine learning.
+                                              Furthermore, the non-negativity of the hyperelastic neural network-based potentials is numerically exam-
+                                              ined by sampling the space of admissible deformations states, which, to the best of the authors’ knowledge,
+                                              is the only possibility for the considered nonlinear compressible models. For the isotropic neural network
+                                              model, the sampling space required for that is reduced by analytical considerations. In addition, a proof
+                                              for the non-negativity of the compressible Neo-Hooke potential is presented. The applicability of the
+                                              model is demonstrated by calibrating it on data generated with analytical potentials, which is followed by
+                                              an application of the model to ﬁnite element simulations. In addition, an adaption of the model to noisy
+                                              data is shown and its extrapolation capability is compared to models with reduced physical background.
+                                              Within all numerical examples, excellent and physically meaningful predictions have been achieved with
+                                              the proposed physics-augmented neural network.
+
+
+                                        Key words: hyperelasticity, physics-augmented neural networks, normalization, anisotropy, constitutive
+                                        modeling, ﬁnite element simulation
+
+                                        Accepted version of manuscript published in the Journal of the Mechanics and Physics of Solids.
+                                        Date accepted: June 14, 2023. DOI: 10.1016/j.jmps.2023.105363. License: CC BY-NC-ND 4.0
+
+
+
+                                                                                                   1
+1 Introduction
+The mechanical principles underlying hyperelasticity were extensively discussed in the last decades, but for
+a long time, fulﬁlling them all at once could be seen as “the main open problem of the theory of material
+behavior” (Truesdell and Noll [58]). For instance, while both the polyconvexity [5, 6] and objectivity
+condition have a sound mechanical motivation, objective strain measures easily violate the polyconvexity
+condition [26]. This does not mean that diﬀerent constitutive conditions contradict each other – it rather
+shows the big challenge of fulﬁlling them all at the same time. With an increasing amount of restrictions
+a model should fulﬁll, this eﬀort increases considerably, and it took sophisticated approaches to construct
+analytical models which fulﬁll all relevant conditions at the same time [9, 49]. In addition, the calibration of
+such models is also not a trivial task and requires a lot of knowledge [47].
+     To overcome the time consuming task of formulating classical constitutive models and to improve the
+restricted functional relationships that most of these analytical models bring along, concepts like the data-
+driven mechanics approach [25] or modern machine learning methods such as Gaussian process regression
+[12, 14] or neural networks (NNs) [1, 28] represent promising alternatives. For the ﬁrst time, the idea of
+applying NNs in constitutive modeling was proposed in the early 1990s by Ghaboussi et al. [16]. However,
+in this early phase, mostly pure black-box approaches were used, i.e., networks that do not take into account
+any physical principles and therefore can only reproduce the training dataset, here consisting of stress-strain
+couples, well but extrapolate poorly. To remedy this weakness, a fairly new trend in NN-based constitutive
+modeling, and in scientiﬁc machine learning in general [46], is to include essential underlying physics in a
+strong form, e.g., by using adapted network architectures, or in a weak form, e.g., by modifying the loss term
+for the training [37]. These types of approaches, coined as physics-informed [24], mechanics-informed [4],
+physics-augmented [27], physics-constrained [21], or thermodynamics-based [40], enable an improvement
+of the extrapolation capability and the usage of sparse training data [24, 29], which is particularly important
+when constitutive models are to be ﬁtted to experimental data.
+     In the following, a brief overview on the mentioned NN-based approaches applied to finite strain hyper-
+elasticity modeling is given. Regarding isotropic materials, transferred from analytical models, the works
+[32, 51] propose to approximate the elastic potential by a feed-forward neural network (FFNN) with three
+deformation-type invariants as input and thus fulﬁll several constitutive conditions, e.g., thermodynamic
+consistency, objectivity, or material symmetry. However, similar to the approaches [30, 34, 48] applied to
+anisotropic problems, the elastic potential is needed directly for training within [32, 51]. In the meantime,
+NNs using invariants as inputs and the hyperelastic potential as output, thus also being a priori thermody-
+namically consistent, have become a fairly established approach [13, 21, 26, 27, 33, 35, 36, 55]. Thereby,
+a more sophisticated training is applied, which allows the direct calibration of the network by tuples of
+stress and strain, i.e., the derivative of the energy with respect to the deformation is used in the loss term.
+This technique is also named Sobolev training [59, 61]. Alternatively, in order to ensure thermodynamic
+consistency a posteriori, a previously trained network predicting stress coeﬃcients can be used to construct
+a pseudo-potential [22]. An NN-based approach which is coupled to a speciﬁc model, the so-called micro-
+sphere approach, is presented in [66]. Other approaches formulate NN-potentials in terms of the eigenvalues
+of the deformation gradient [53], thus generalizing Ogden-type models [45], or formulate NN-potentials in
+terms of the components of strain tensors [4, 10, 26, 61].
+     Besides the mentioned requirements, namely thermodynamic consistency, objectivity, and material sym-
+metry, there exist further physical conditions, e.g., ellipticity, which ensures material stability [64]. However,
+since ellipticity is diﬃcult to verify and ensure, the concept of polyconvexity of the strain energy potential
+[5, 6], which implies ellipticity and is mathematically linked to the existence and stability of solutions of the
+elasticity problem, is preferable for the formulation of constitutive models [43]. There are several approaches
+for building polyconvex NNs [8, 26, 36, 54, 55], with the most notable technique for incorporating this
+condition being the use of input convex neural networks (ICNNs) originally introduced by Amos et al. [3].
+
+
+                                                        2
+Other approaches consider convexity of the strain energy potential in the right Cauchy-Green deformation
+tensor 𝑪. While, in addition to polyconvexity, this may be a desirable feature of the strain energy potential
+[31], convexity in 𝑪 alone is not suﬃcient to ensure material stability [63]. In the same manner as polyconvex
+NNs, strain energy potentials which are convex in 𝑪 can be represented with ICNNs [4]. In [59], convexity of
+the proposed potential in 𝑪 is examined for one speciﬁc dataset. While for the examined case, the proposed
+potential is indeed convex in 𝑪, this condition is not fulﬁlled by construction, and, consequently, it may be
+violated for other applications of the model. For the fulﬁllment of the growth condition, a special network
+architecture may be applied [21], whereas using analytical growth terms is more widely spread [26, 27]. Fi-
+nally, while several works introduce correction terms which ensure normalization conditions, they are either
+not polyconvex [4, 10, 57] or restricted to the case of nearly incompressible material behavior [36]. E.g., the
+model proposed in [36] includes terms of the form (𝐼1 − 3) 2 , where 𝐼1 denotes the ﬁrst invariant of the right
+Cauchy-Green deformation tensor. However, in order to preserve polyconvexity of 𝐼1 , the functions acting
+on it must in general be convex and non-decreasing, cf. [26, Remark A.10]. For the quadratic function used
+in [36], this holds only if 𝐼1 is bounded from below by 3, which is only the case for det 𝑭 = 1, cf. [49, Corol-
+lary A.11], where 𝑭 denotes the deformation gradient. Thus, for det 𝑭 ≠ 1, the polyconvexity of the potential
+in [36] is not ensured by construction. Overall, to the best of our knowledge, the models found in literature so
+far only fulﬁll subsets of constitutive conditions belonging to compressible hyperelasticity in an exact way,
+while the remaining ones are only fulﬁlled in an approximate fashion, i.e., they are taken into account by
+penalty terms in the loss [56, 62]. Becoming more speciﬁc, while [26] fulﬁlls the polyconvexity condition in
+an exact way, the normalization condition is only approximated by learning it through the calibration data.
+On the other side, while [57] uses a stress correction for the exact fulﬁllment of the normalization condition,
+this stress correction term includes non-diagonal components of the right Cauchy-Green deformation tensor,
+and thus is in general not polyconvex and violates material symmetry.
+    Concluding on NN-based constitutive models, fulﬁlling all common constitutive conditions of compress-
+ible hyperelasticity in an exact way at the same time has so far remained an open challenge.1 In particular, to
+the best of the authors’ knowledge, no polyconvex stress normalization, which also not violates the balance of
+angular momentum, objectivity, and material symmetry conditions, has been proposed yet for compressible
+material behavior. In the present work, such an approach which consequently accounts for thermodynamic
+consistency, symmetry of the stress tensor, objectivity, material symmetry, polyconvexity, growth condition
+as well as normalization of energy and stress by construction of the network architecture is systematically
+derived. Regarding the introduced new family of NN-based hyperelastic models, which fulﬁll all of the afore-
+mentioned conditions in an exact way, we advocate for naming them as physics-augmented neural networks
+(PANNs). The proposed framework will be very valuable in ﬁelds, where highly ﬂexible and at the same
+time physically sensible constitutive models are required, such as the simulation of microstructured materials
+[17, 21]. For this purpose, the PANN approach is build up by extending the aforementioned model [26]. By
+formulating polyconvex, invariant-based stress normalization terms, the missing link between polyconvexity
+and stress normalization in the compressible case is made. As pointed out in Remark 3.2, these conditions
+are particularly challenging to combine. This is followed by a detailed analytical and numerical study an-
+alyzing the overall model. This includes extensive investigations with diﬀerent model approaches, from a
+naive NN model which does not include any mechanical conditions, up to the PANN model including all
+mechanical conditions. Both interpolation and extrapolation of the diﬀerent models are examined thoroughly,
+and statistical evaluations are carried out. Thereby, it is clearly explained step by step how all the considered
+physical conditions are incorporated into the PANN approach, which is particularly applicable to compress-
+ible anisotropic material behavior. Our framework is applied to the isotropic and transversely isotropic case,
+where several descriptive examples including multiaxial stress-strain states and noisy data are considered.
+    1This is only true for the case of compressible elastic materials. A corresponding proposal is made by Linka and Kuhl [36] for
+the incompressible case. However, apart from the restriction to incompressible materials, it is less general in some other points
+compared to the approach presented here.
+
+
+                                                                3
+The data basis for training is thereby generated by using analytical potentials. After the calibration of the
+models, they are applied within ﬁnite element (FE) computations to demonstrate their usability and general
+accuracy. Finally, a proof for the non-negativity of a compressible Neo-Hooke potential is presented, which,
+to the best of the authors’ knowledge, has not been done yet.
+     The outline of the manuscript is as follows: In Sec. 2, the fundamentals of hyperelasticity are discussed,
+which are then applied to the proposed NN model in Sec. 3. In Sec. 4, numerical examples are presented.
+Finally, in Sec. 5 we conclude with a short discussion on the importance of augmenting neural networks with
+physics. Besides some auxiliary appendices, in App. C, a proof for the non-negativity of a compressible
+Neo-Hooke potential is presented.
+
+Notation    Throughout this work the space of tensors
+
+                                           L 𝑛 := R3 ⊗ · · · ⊗ R3 ∀𝑛 ∈ N                                       (1)
+                                                  | {z }
+                                                     𝑛-times
+
+is used, except for a tensor of rank zero. In Eq. (1), R3 , N and ⊗ denote the Euclidean vector space, the set of
+natural numbers without zero and the dyadic product, respectively. Tensors of rank one and two are given by
+boldface italic symbols in the following, i.e., 𝒂 ∈ L1 or 𝑩, 𝑪 ∈ L2 . Transpose and inverse of a second order
+tensor 𝑩 are marked by 𝑩𝑇 and 𝑩 −1 , respectively. Furthermore, trace, determinant and cofactor are denoted
+by tr 𝑩, det 𝑩 and cof 𝑩 := det(𝑩) 𝑩 −𝑇 . The set of invertible second order tensors with positive determinant
+is denoted by 𝒢ℒ + (3) := {𝑨 ∈ L2 | det 𝑨 > 0}, while the orthogonal     group and special orthogonal group in
+R3 are denoted by 𝒪(3) := 𝑨 ∈ L2 | 𝑨𝑇 · 𝑨 = 1 and 𝒮𝒪(3) := 𝑨 ∈ L2 | 𝑨𝑇 · 𝑨 = 1, det 𝑨 = 1 , respectively.
+Here, 1 ∈ L2 denotes    the second order identity tensor. The space of symmetric second order tensors is
+denoted as 𝒮𝓎𝓂 := 𝑨 ∈ L2 | 𝑨 = 𝑨𝑇 . Furthermore, the single and double contraction of two tensors are
+given by 𝑩 · 𝑪 = 𝐵 𝑘𝑞 𝐶𝑞𝑙 𝒆 𝑘 ⊗ 𝒆𝑙 and 𝑩 : 𝑪 = 𝐵 𝑘𝑙 𝐶𝑙𝑘 , respectively. Thereby, 𝒆 𝑘 ∈ L1 denotes a Cartesian basis
+vector and the Einstein summation convention is used. ∇𝑿 is the nabla operator with respect to reference
+conﬁguration B0 . For reasons of readability, the arguments of functions are usually omitted within this work.
+However, to show the dependencies, energy functions are given with their arguments, except when derivatives
+are written. Also, we let the symbol of a function be identical to the symbol of the function value itself.
+
+
+2 Fundamentals of hyperelasticity
+2.1 Kinematics, stress measures and balance equations
+Let us consider the motion of a solid body, which in its reference conﬁguration at the time 𝑡 0 ∈ R is
+given by B0 ⊂ R3 . After deformation, the current conﬁguration of the body is given by B ⊂ R3 at time
+𝑡 ∈ T := {𝜏 ∈ R | 𝜏 ≥ 𝑡0 }. The motion of the body is deﬁned by a bĳective mapping 𝝋 : B0 × T → B, linking
+material particles 𝑿 ∈ B0 to 𝒙 = 𝝋 ( 𝑿, 𝑡) ∈ B. Associated with 𝝋, the deformation gradient 𝑭 ∈ 𝒢ℒ + (3) and its
+determinant are deﬁned as 𝑭 := (∇𝑿 𝝋) 𝑇 and 𝐽 := det 𝑭 ∈ R>0 . A deformation measure, which is free of rigid
+body motions, is given by the positive deﬁnite right Cauchy-Green deformation tensor 𝑪 := 𝑭𝑇 · 𝑭 ∈ 𝒮𝓎𝓂.
+    Following the concepts of nonlinear continuum mechanics, we introduce the symmetric Cauchy stress
+𝝈 ∈ 𝒮𝓎𝓂 as well as the ﬁrst and second Piola-Kirchhoﬀ stress tensors 𝑷 ∈ L2 and 𝑻 ∈ 𝒮𝓎𝓂. The latter two
+follow from the pull back operations 𝑷 := 𝐽𝝈 · 𝑭 −𝑇 and 𝑻 := 𝑭 −1 · 𝑷, respectively.
+    To complete the set of material independent equations, relevant balance laws are given in short. Account-
+ing for conservation of mass given by 𝜚0 = 𝐽 𝜚 with 𝜚0 and 𝜚 denoting the mass densities of reference and
+current conﬁguration, the balance of linear momentum with respect to B0 is given by
+
+                                               ∇𝑿 · 𝑷𝑇 + 𝜚0 𝒇 = 0 .                                            (2)
+
+
+                                                        4
+In the equation above, inertia terms are neglected and 𝒇 ∈ L1 denotes a mass speciﬁc force density. Further-
+more, considering the balances of mass and linear momentum (2), the balance of angular momentum follows
+to
+
+                                                        𝑷 · 𝑭 𝑇 = 𝑭 · 𝑷𝑇 .                                                      (3)
+
+Consequently, by using the stress transformations given above, one ﬁnds that the conservation of angular
+momentum requires the symmetry of the stress tensors 𝝈 and 𝑻. The introduced mechanical balance equations
+                                                                            𝒑                    𝒑
+are complemented by the boundary conditions 𝒖 = 𝒖ˆ on 𝜕B0𝒖 and 𝒑 = 𝒑ˆ on 𝜕B0 , where 𝜕B0𝒖 and 𝜕B0 denote
+                                                     𝒑                      𝒑
+essential and natural boundaries for which 𝜕B0𝒖 ∪ 𝜕B0 = 𝜕B0 and 𝜕B0𝒖 ∩ 𝜕B0 = ∅ hold. Finally, by taking
+into account the previously introduced balance equations as well as the balances of energy and entropy, it
+follows the Clausius-Duhem inequality as a consequence of the second law of thermodynamics. If thermal
+eﬀects are neglected, this relation is given by
+
+                                                                ¤𝑇 ≥0,
+                                                      −𝑊¤ + 𝑷 : 𝑭                                                               (4)
+
+                                                                                ¤ is the material time
+where 𝑊 denotes the Helmholtz free energy density with respect to d𝑉0 ⊂ B0 and (·)
+derivative.
+
+2.2 General requirements for hyperelasticity
+The aim of constitutive modeling in elasticity is to ﬁnd a connection between the strain at a material point
+and the stress it evokes. In hyperelasticity, the mapping between strain and stress is not deﬁned directly, but
+a potential
+
+                                              𝜓 : 𝒢ℒ + (3) → R,          𝑭 ↦→ 𝜓 (𝑭)                                             (5)
+
+is introduced, which corresponds to the strain energy density stored in the body and is equal to the Helmholtz
+free energy density 𝑊. Thus, to satisfy the inequality (4) for arbitrary 𝑭,  ¤ the corresponding ﬁrst Piola-
+Kirchhoﬀ stress follows to
+                                                                  𝜕𝜓
+                                                            𝑷=       .                                                          (6)
+                                                                  𝜕𝑭
+By this deﬁnition, the stress tensor is a gradient ﬁeld which implies energy conservation and path-independency,
+thus being thermodynamically consistent by construction [21, 33, 36].2
+     The hyperelastic potential is subjected to further mathematical and physical considerations, which are
+shortly discussed in the following and also illustrated in Fig. 1. For a more detailed introduction to hypere-
+lasticity, the reader is referred to [18, 19, 47].
+    First of all, 𝜓 (𝑭) has to be constructed such that the compatibility with the balance of angular momentum
+is ensured. By using Eqs. (3) and (6) this requirement is expressed as
+
+                                                     𝜕𝜓 𝑇        𝜕𝜓
+                                                        ·𝑭 = 𝑭·     .                                                           (7)
+                                                     𝜕𝑭         𝜕𝑭𝑇
+Using the stress transformations introduced in Sec. 2.1, this results in the requirement for the symmetry of
+                                             𝜕𝜓 ! 𝜕𝜓
+the stress tensors 𝝈 and 𝑻, e.g., 𝑻 = 𝑭 −1 · 𝜕𝑭 = 𝜕𝑭 𝑇 · 𝑭 −𝑇 = 𝑻 𝑇 .
+
+   2Note that the constitutive equations must always be physically consistent, i.e., without contradiction to the introduced balance
+equations. Special importance is attached to the compatibility with the second law of thermodynamics, given here in the form of the
+Clausius-Duhem inequality (4). Therefore, the thermodynamic consistency is especially highlighted here.
+
+
+                                                                 5
+ (a) Thermodynamic consistency               (b)    Symmetry of stress tensor              (c)                  Objectivity
+                𝜕𝜓
+             𝑷=                                                    𝝈 = 𝝈𝑇                        𝜓(𝑸 · 𝑭) = 𝜓(𝑭) ∀𝑸 ∈ 𝒮𝒪(3)
+                𝜕𝑭
+                                                                     𝜎21
+       𝑷
+                                                                                                     𝑭                        𝑸·𝑭
+                                                                                                                    d𝒙
+                                                        𝜎12                     𝜎12
+                                                                                                                   𝐵
+                          𝜓                                                                          d𝑿                            d𝒙 ∗
+                                                                     𝜎21
+           1                          𝑭                                                          𝐵0                            𝐵∗
+
+ (d)       Material symmetry                  (e)             Polyconvexity                (f)            Growth condition
+                 𝑇
+       𝜓(𝑭 · 𝑸 ) = 𝜓(𝑭) ∀𝑸 ∈ 𝒢                  𝜓 convex w.r.t. 𝑭, cof 𝑭 and det 𝑭               𝜓(𝑭) → ∞ as (𝐽 → ∞ ∨ 𝐽 → 0+ )
+
+                      𝑭                             𝜓                                                 𝜓
+                                                                                                          ∞                        ∞
+           d𝑿                       d𝒙
+
+
+                         d𝑿 ∗       d𝒙 ∗
+           d𝑿
+
+                𝑸𝑇              𝑭                                        𝑭, cof 𝑭, det 𝑭                           1                𝐽
+
+ (g) Normalization condition energy (h) Normalization condition stress                     (i) Non-negativity of strain energy
+                     𝜓(1) = 0                                      𝑷(1) = 0                                     𝜓(𝑭) ≥ 0
+       𝜓                                            𝑷                                            𝜓
+
+
+
+
+                     1                𝑭                        1                    𝑭                       1                  𝑭
+
+
+
+Figure 1: Schematic depiction of the common conditions on elastic potential and stresses: (a) thermodynamic con-
+sistency, (b) symmetry of the Cauchy stress, (c) objectivity, (d) material symmetry, (e) polyconvexity, (f) volumetric
+growth condition, (g) and (h) normalization conditions for energy and stress, as well as (i) non-negativity of energy.
+Within (e)–(i), solid blue lines denote models accounting for the respective condition, while the dashed red lines mark
+models which violate it. In (c) and (d), d𝑿, d𝑿 ∗ , d𝒙, and d𝒙∗ denote material line elements for diﬀerent deformation
+states, where d𝑿 ∗ and d𝒙 ∗ are transformed by a rotation of d𝑿 and d𝒙, respectively.
+
+
+   Secondly, a constitutive model should be independent on the choice of observer, which is referred to as
+objectivity. In hyperelasticity, this is formalized as
+                                       𝜓 (𝑸 · 𝑭) = 𝜓 (𝑭)       ∀ 𝑭 ∈ 𝒢ℒ + (3), 𝑸 ∈ 𝒮𝒪(3) .                                               (8)
+    The constitutive equations should also reﬂect the material’s underlying (an-)isotropy which is expressed
+as material symmetry and mathematically written as
+                                    𝜓 (𝑭 · 𝑸𝑇 ) = 𝜓 (𝑭)       ∀ 𝑭 ∈ 𝒢ℒ + (3), 𝑸 ∈ 𝒢 ⊆ 𝒪(3) ,                                             (9)
+where 𝒢 denotes the symmetry group of the material under consideration.
+    Furthermore, we consider hyperelastic potentials which are polyconvex [5, 6, 9, 49], allowing for a
+representation
+                                                𝜓 (𝑭) = P (𝑭, cof 𝑭, det 𝑭) ,                                                           (10)
+
+
+                                                                     6
+where P (𝑭, cof 𝑭, det 𝑭) is convex in its arguments, with cof 𝑭 = det(𝑭) 𝑭 −𝑇 denoting the cofactor of the
+deformation gradient. Polyconvexity stems from a quite theoretical context – however, it implies ellipticity
+[64], which is of practical importance and far more challenging to include in the model formulation than
+polyconvexity. The ellipticity (or rank-one convexity) condition [43, 64]
+
+                                                   𝜕2𝜓
+                                     (𝒂 ⊗ 𝒃) :         : (𝒂 ⊗ 𝒃) ≥ 0             ∀𝒂, 𝒃 ∈ L1 ,                                   (11)
+                                                  𝜕𝑭𝜕𝑭
+ensures material stability of the model, which leads to a favorable behavior in numerical applications. Note
+that, in order to ensure polyconvexity, all steps that are made in the construction of the hyperelastic potential
+must preserve polyconvexity, in particular, polyconvex invariants have to be used [41], cf. Sec. 2.3.
+    In addition, a variety of coercivity conditions can be considered, the most common one being the
+volumetric growth condition
+                                                                             
+                                  𝜓 (𝑭) → ∞ as 𝐽 → 0+ ∨ 𝐽 → ∞ ,                                             (12)
+
+in order to take into account the observation that a material body can not be compressed to a volume of zero
+or expanded to an inﬁnite volume [19]. In particular, the case of large volumetric compression is important,
+because it may be in a relevant range of practical engineering applications.
+    Finally, the functional relationship given in Eq. (5) is subjected to further considerations on a physically
+sensible behavior. In the undeformed conﬁguration, i.e., 𝑭 = 1, the normalization conditions
+                                                          !                          !
+                                             𝜓 (𝑭 = 1) = 0 and          𝑷(𝑭 = 1) = 0                                            (13)
+
+for both energy and stress should hold. Besides the normalization, the free energy should increase in any
+case if deformation appears. Thus, in addition to Eq. (13)1 , the non-negativity of the strain energy, i.e.,
+𝜓 (𝑭) ≥ 0, is required.
+    By formulating the potential in terms of invariants following from the right Cauchy-Green deformation
+tensor 𝑪 and a set of structural tensors, summarized in a set S  , which reﬂects the material symmetry of the
+material body under consideration [18, 19], i.e.,
+
+                                                 𝜓 : R𝑚 → R,          I ↦→ 𝜓 (I) ,                                              (14)
+
+both the objectivity and the material symmetry condition are fulﬁlled [47].3 Therein, I := (𝐼1 , . . . , 𝐼𝑚 ) ∈ R𝑚
+denotes an 𝑚-tuple containing a set of complete and irreducible invariants 𝐼 𝛼 (𝑪, S  ) of the symmetry group
+under consideration. Here, complete means that an arbitrary invariant can be expressed as a function of the
+elements of I, e.g., 𝜓 (I). Irreducible means that one invariant 𝐼 𝛼 of the set I cannot be expressed by the
+other elements of I, cf. [9]. Note that these invariants have to be chosen such that they do not violate the
+polyconvexity condition.4 The corresponding second Piola-Kirchhoﬀ stress tensor is then given as
+
+                                                   𝜕𝜓    Õ𝑚
+                                                             𝜕𝜓 𝜕𝐼 𝛼
+                                           𝑻=2        =2             = 𝑭 −1 · 𝑷 .                                               (15)
+                                                   𝜕𝑪    𝛼=1
+                                                             𝜕𝐼 𝛼 𝜕𝑪
+
+Finally, formulating the hyperelastic potential in terms of invariants of the right Cauchy-Green tensor implies
+symmetry of the Cauchy stress tensor 𝝈, which ensures the conservation of angular momentum [19].
+    3Note that 𝜓(𝑭) and 𝜓(I) are diﬀerent functions, as indicated by the arguments. In favor of a reduced set of symbols, this casual
+notation is used within this work.
+    4It should be noted that there are symmetry groups for which no complete set can be found that does not violate polyconvexity
+[27]. In this case it must be decided which property of the model is preferable. Furthermore, it might be possible that there does not
+exist a set of invariants to describe the anisotropy of materials with arbitrary microstructures, e.g., 3D-printed composites.
+
+
+                                                                  7
+2.3 Special material symmetry classes and specific models
+Throughout this work, both isotropic ( := ⊚) and transversely isotropic ( := k) material behavior are
+considered as examples of speciﬁc material symmetry groups. In the isotropic case, i.e., when the material
+response is direction-independent, 𝒢 = 𝒪(3), a complete and irreducible set is given by the three invariants
+                                      𝐼1 := tr 𝑪,        𝐼2 := tr(cof 𝑪),          𝐼3 := det 𝑪 .                                 (16)
+In this case, there are no structural tensors needed, hence S ⊚ = ∅ holds. For transversely isotropic materials,
+a complete functional basis is given by the three isotropic invariants 𝐼1 , 𝐼2 , 𝐼3 together with
+                                          𝐼4 := tr(𝑪 · 𝑮),         𝐼5 := tr(cof (𝑪) · 𝑮) ,                                       (17)
+where 𝑮 denotes the second order transversely isotropic structural tensor [9, 50]. In case the preferred
+direction is parallel to the 𝑋1 -direction, the structural tensor’s components are given by
+                                                                   𝛽2
+                                                                 ©              ª
+                                                                        0    0
+                                                    (𝐺 𝐾 𝐿 ) := ­­ 0         0 ®® ,
+                                                                        1
+                                                                        𝛽                                                        (18)
+                                                                              1
+                                                                 «            𝛽¬
+                                                                   0    0
+
+where 𝛽 ∈ R>0 is a model parameter [50]. Thus, it holds S k = {𝑮 }.
+
+2.3.1 Isotropic model
+At this point, analytical models have to make an explicit choice of the functional relationship for the
+hyperelastic potential. While some choices have a strong physical motivation [39], most models are of a
+heuristic nature – and the reduced ﬂexibility that often goes along with this human choice of functional
+relationship purely stems from the necessity of an explicit form of the model. To become more speciﬁc, we
+consider the isotropic Neo-Hooke model
+                                                              
+        nh            1                       𝜆                          𝐸                𝐸𝜈
+       𝜓 (𝐼1 , 𝐼3 ) =     𝜇 (𝐼1 − ln 𝐼3 − 3) + (𝐼3 − ln 𝐼3 − 1) , 𝜇 =          , 𝜆=                  (19)
+                      2                       2                       2(1 + 𝜈)      (1 + 𝜈) (1 − 2𝜈)
+with the material parameters (𝐸, 𝜈) corresponding to the Young’s modulus and Poisson’s ratio . From this
+potential, the second Piola-Kirchhoﬀ stress can be derived as
+                                                             
+                                                    𝜆 2𝜇 + 𝜆
+                                      𝑻 nh = 𝜇1 +     −         cof 𝑪 .                            (20)
+                                                    2    2𝐼3
+Note that, e.g., the linear dependency on 𝐼1 is a quite restrictive choice. Again, the second law of thermody-
+namics is fulﬁlled by constructing the stress as a gradient ﬁeld, while symmetry of the Cauchy stress tensor,
+objectivity and material symmetry are fulﬁlled by using invariants. Then, the normalization conditions are
+fulﬁlled by cleverly combining both material parameters and invariants, which becomes evident when setting
+𝑪 = 1, 𝐼1 = 3, 𝐼3 = 1 in Eqs. (19) and (20). By using the term − ln 𝐼3 in combination with the remaining
+invariants, the volumetric growth condition is also fulﬁlled. Finally, all mathematical operations preserve the
+polyconvexity of the invariants.
+     Surprisingly, to the best of the authors’ knowledge, the non-negativity of the elastic potential, i.e.,
+  nh
+𝜓 (𝐼1 , 𝐼3 ) ≥ 0 for arbitrary physically admissible combinations of invariants 𝐼1 and 𝐼3 , has not been shown
+yet. This is particularly challenging due to the fact that 𝜓 nh (𝐼1 , 𝐼3 ) is polyconvex, i.e., convex w.r.t. 𝑭, cof 𝑭
+and det 𝑭, but not convex w.r.t. 𝑭 alone or convex w.r.t. 𝑪. 5 In particular, the Neo-Hooke potential is not
+convex in 𝑭 as the invariant 𝐼3 is not convex in 𝑭 [52]. In Theorem C.5, a proof for the non-negativity of the
+compressible Neo-Hooke potential is presented.
+   5This is in contrast to the incompressible case [36], where the deﬁnition range of the invariants is signiﬁcantly more limited since
+𝐽 ≡ 1.
+
+
+                                                                  8
+2.3.2 Transversely isotropic model
+In order to describe transversely isotropic material behavior, we consider the analytical model
+                                                                           p                                    𝜂1
+           𝜓˜ ti (𝐼1 , 𝐼2 , 𝐼3 , 𝐼4 , 𝐼5 ) = 𝛼1 𝐼1 + 𝛼2 𝐼2 + 𝛿1 𝐼3 − 𝛿2 ln( 𝐼3 ) + 𝜂 ∗ 𝐼4𝛼4 + 𝐼5𝛼4 , 𝜂 ∗ :=              ,   (21)
+                                                                                                            𝛼4 (tr 𝑮) 𝛼4
+as proposed by Schröder et al. [50]. This transversely isotropic potential presented in Eq. (21) does not fulﬁll
+the energy normalization condition, cf. Eq. (13). In order to include this condition we introduce the slightly
+adapted version
+
+                                    𝜓 ti (𝐼1 , 𝐼2 , 𝐼3 , 𝐼4 , 𝐼5 ) := 𝜓˜ ti (𝐼1 , 𝐼2 , 𝐼3 , 𝐼4 , 𝐼5 ) + 𝜓˜ ti, energy        (22)
+
+with the normalization term
+                                                                                                           
+                                                                                                         𝜂1
+                          𝜓˜ ti, energy := −𝜓˜ ti (𝐼1 , 𝐼2 , 𝐼3 , 𝐼4 , 𝐼5 )       = − 3𝛼1 + 3𝛼2 + 𝛿1 + 2      ,              (23)
+                                                                              𝑪=1                        𝛼4
+where it already becomes evident that fulﬁlling the energy normalization condition is straightforward for
+arbitrary complex strain energy functions. As the energy normalization term Eq. (23) is a constant, it neither
+inﬂuences the polyconvexity of the original potential Eq. (21), nor its corresponding second Piola-Kirchhoﬀ
+stress
+                                                                                                      
+    ti                                 𝛿2  −1     ∗ 𝛼4 −1       ∗ 𝛼4 −1
+                                                                           
+                                                                                 −1                 −1
+   𝑻 = 2 𝛼1 1 + 𝛼2 𝐼 1 1 − 𝑪 + 𝛿 1 𝐼 3 −     𝑪 + 𝛼4 𝜂 𝐼 4 𝑮 + 𝛼4 𝜂 𝐼 5       𝐼5 𝑪 − cof (𝑪) · 𝑮 · 𝑪       . (24)
+                                         2
+
+The constitutive model thus includes the material parameters (𝛽, 𝛼1 , 𝛼2 , 𝛿1 , 𝛿2 , 𝛼4 , 𝜂1 ), with restrictions given
+in [50]. Herein, all conditions introduced in Sec. 2.2 are satisﬁed by the analytical model. However, in
+contrast to Sec. 2.3.1 and to the best of the authors’ knowledge, the non-negativity of the strain energy density
+cannot be proven analytically and can thus only be veriﬁed numerically.
+   To close, while the constitutive conditions on hyperelasticity discussed in this section have a sound
+physical and mathematical basis, the restricted functional relationships that most analytical models choose
+have not. This limitation can be circumvented by using PANNs.
+
+
+3 Physics-augmented neural network constitutive model
+In the previous section, we discussed the constitutive conditions of hyperelasticity. Now, instead of choosing
+an analytical formulation for the potential, like in Secs. 2.3.1 and 2.3.2, we aim to exploit the excellent
+approximation properties of FFNNs [1, 28]. In the following, the overall PANN model is introduced, which
+satisﬁes all further introduced conditions, except for the non-negativity of the energy, in an exact way, see
+Sec. 2.2.
+
+3.1 Basic conditions
+By constructing the stress as the gradient of a potential predicted directly by a FFNN, thermodynamic
+consistency of the model is fulﬁlled. If the potential is additionally formulated in terms of invariants, a
+symmetric Cauchy stress tensor6 is automatically obtained and the condition of objectivity as well as
+the condition of material symmetry are satisﬁed. At this stage, the neural network already fulﬁlls basic
+   6It should be noted that a FFNN directly mapping from 𝑭 to 𝑷 does not necessarily yield an elastic model which accounts for
+𝝈 = 𝝈𝑇 . The same restriction holds for a model which maps from 𝑭 to 𝜓(𝑭). E.g., in Naumann and Ihlemann [42], a pseudo elastic
+model is investigated which violates the integrability condition, so that the stress is no longer a gradient ﬁeld.
+
+
+                                                                           9
+conditions by construction, i.e., thermodynamic consistency, objectivity, material symmetry and symmetry
+of the stress tensor.
+    We assume that the anisotropic hyperelastic material behavior can be described by the irreducible and
+independent set of invariants I := (𝐼1 , . . . , 𝐼𝑚 ) with 𝐼 𝛽 (𝑪, S  ), 𝛽 ∈ N ≤𝑚 . However, it may be necessary
+to incorporate further invariants 𝐼 𝛾∗ (I), 𝛾 ∈ N ≤ 𝐴 with 𝐴 ∈ N ≥0 into the argument list of the predicted
+potential, e.g., in order to fulﬁll additional physical conditions or to increase the approximation quality of the
+predictions [21, 26]. By using the extended set of invariants I ∗ := (𝐼1 , . . . , 𝐼𝑚 , 𝐼1∗ , . . . , 𝐼 ∗𝐴) as inputs of a FFNN
+with scalar-valued output which is then taken as a hyperelastic potential 𝜓 (I ∗ ), the ﬂexibility of the resulting
+model exceeds the one of analytical formulations by far. Furthermore, in a lot of practical applications it is
+suﬃcient to restrict the network architecture to only one hidden layer containing 𝑁 NN neurons. Using the
+activation function ℱ : R → R, which needs to be continuously diﬀerentiable twice, the most simple case of
+an invariant-based potential using only one hidden layer is given by
+
+                                                     Õ
+                                                     𝑁 NN
+                                                               ©Õ
+                                                                  𝑚         Õ𝐴
+                                                                                                 ª
+                              𝜓   NN,     ∗
+                                         (I ) :=         𝑊 𝛼 ℱ ­ 𝑤 𝛼𝛽 𝐼 𝛽 +     𝑤 ∗𝛼𝛾 𝐼 𝛾∗ + 𝑏 𝛼 ® ,                      (25)
+                                                     𝛼=1       « 𝛽=1        𝛾=1                  ¬
+where 𝑊 𝛼 , 𝑤 𝛼𝛽 , 𝑤 ∗𝛼𝛾 and 𝑏 𝛼 denote weights and bias values, respectively, which together form the set of
+parameters P ∈ R 𝑃 , with 𝑃 ∈ N denoting the total number of parameters, to be optimized in the calibration
+process to ﬁt a given dataset. Note that none of the methods introduced in this paper is restricted to FFNNs
+with one hidden layer, but can directly be applied for multilayered network architectures, cf. Appendix A.
+Nevertheless, we use only one layer here to better illustrate the derivations. Then, the stress prediction is
+done by applying
+
+                                               Õ
+                                               𝑚
+                                                 𝜕𝜓 NN, 𝜕𝐼               Õ
+                                                                          𝐴 Õ
+                                                                            𝑚           ∗
+                                                                              𝜕𝜓 NN, 𝜕𝐼𝛾 𝜕𝐼 𝛽
+                                  NN,                           𝛼
+                              𝑻          =2                          +2                               .                   (26)
+                                               𝛼=1
+                                                       𝜕𝐼 𝛼   𝜕𝑪          𝛾=1 𝛽=1
+                                                                                    𝜕𝐼 𝛾∗   𝜕𝐼 𝛽 𝜕𝑪
+
+This special choice of input quantities – namely, invariants – is the ﬁrst way of including physics into the NN.
+
+3.2 Polyconvexity
+For ensuring polyconvexity of the potential, it is necessary to use polyconvex invariants of the symmetry
+group under consideration. In addition, the network architecture must be adapted in a certain way. By using
+a convex and non-decreasing activation function ℱ and non-negative weights, polyconvexity of the overall
+potential 𝜓 NN, (I ∗ ) is ensured [26]. Here, the Softplus activation function 𝒮𝒫(𝑥) := log(1 + exp(𝑥)) ∈ C ∞
+is applied, which is convex and non-decreasing, which overall leads to the conditions
+
+                         𝑊 𝛼 , 𝑤 𝛼𝛽 , 𝑤 ∗𝛼𝛾 ∈ R ≥0 , 𝑏 𝛼 ∈ R ∀𝛼 ∈ N ≤ 𝑁 NN , 𝛽 ∈ N ≤𝑚 , 𝛾 ∈ N ≤ 𝐴 .                       (27)
+
+Remark 3.1 (Input convex neural networks (ICNNs)). This special kind of FFNN, namely, one with its
+output being convex in its input arguments, is referred to as ICNN [3]. In order to understand what makes
+this kind of NNs convex, we take a step back and consider the univariate function
+
+                                            𝑓 : R → R,        𝑥 ↦→ 𝑓 (𝑥) := (𝑔 ◦ ℎ) (𝑥) ,                                 (28)
+
+where 𝑓 is composed of two functions 𝑔, ℎ : R → R. Given that all of the above functions are twice
+continuously diﬀerentiable, convexity of 𝑓 (𝑥) in 𝑥 is equivalent to the non-negativity of its second derivative
+
+                                   𝑓 ′′ (𝑥) = (𝑔′′ ◦ ℎ) (𝑥) ℎ′ (𝑥) 2 + (𝑔′ ◦ ℎ) (𝑥) ℎ′′ (𝑥) ≥ 0 .                         (29)
+
+
+                                                                     10
+                                                    Physics-augmented neural network (PANN)
+               𝐼1
+
+                                                                                                                    𝜕
+   𝑪           𝐼2                                   𝜓 NN, + 𝜓 stress, + 𝜓 energy, + 𝜓 growth = 𝜓 PANN,         𝜕𝑪   𝑻 PANN,
+
+
+  S
+
+
+
+
+Figure 2: Illustration of the PANN based constitutive model for the material symmetry group  under consideration.
+Note that the hidden-layer (yellow) of the NN may be multilayered.
+
+
+A suﬃcient, albeit not necessary condition for this is that the innermost function ℎ is convex (ℎ′′ ≥ 0), while
+𝑔 is convex and non-decreasing (𝑔′′ ≥ 0 and 𝑔′ ≥ 0). This can be generalized to arbitrarily many function
+compositions, where the innermost function must be convex, while every following function must be convex
+and non-decreasing. Transferred to FFNNs, which can be seen as compositions of multiple vector-valued
+functions, this generalizes to the condition that in an ICNN the ﬁrst hidden layer must be node-wise convex,
+while every subsequent layer must be node-wise convex and non-decreasing, cf. [26, Appendix A].
+    When applied to hyperelasticity, the architecture of ICNNs has to be further adapted: as the invariants
+are nonlinear functions of the arguments deﬁned in the polyconvexity condition, i.e., (𝑭, cof 𝑭, det 𝑭),
+cf. Eq. (10), they are the innermost function acting on the arguments of the polyconvexity condition. Thus,
+                                                                                                          √
+already the ﬁrst hidden layer has to be convex and non-decreasing. The only exception is the use of 𝐽 = 𝐼3
+as an additional invariant (instead of 𝐼3 ), since 𝐽 is an argument of the polyconvexity condition. For this
+reason, the activation function acting on 𝐽 must only be convex and not necessarily non-decreasing. This
+is pragmatically taken into account by including the additional invariant 𝐼1∗ := −2𝐽 in the set of invariants,
+which is furthermore essential to represent negative stresses at all [26]. Note that there are diﬀerent ways
+of constructing polyconvex neural networks, e.g., [55] or [8]. However, the simple structure and excellent
+ﬂexibility of ICNNs makes them a very natural choice for this task. For a more extensive introduction to
+polyconvex neural networks and explicit proofs, see [26].
+
+3.3 Growth and normalization conditions
+Finally, growth and normalization conditions remain to be included in the neural network, ensuring a
+physically sensible stress behavior of the model. For this, growth and normalization terms are added to the
+original potential 𝜓 NN, (I ∗ ) of Eq. (25). Then, with  denoting the symmetry group under consideration,
+the overall PANN model, given as
+
+                    𝜓 PANN, (I ∗ ) := 𝜓 NN, (I ∗ ) + 𝜓 stress, (𝐽, 𝐼4 , . . . , 𝐼𝑚 ) + 𝜓 energy, + 𝜓 growth (𝐽) ,        (30)
+
+fulﬁlls all constitutive conditions introduced in Sec. 2.2, except for the non-negativity of the energy, in an
+exact way. Even for simple analytical models such as the Neo-Hooke model, cf. Eq. (19), a proof of the
+non-negativity of the energy is not straightforward, cf. App. C. Thus, it becomes evident that a proof of
+non-negativity for fairly general hyperelastic potentials is a daunting task. Consequently, the non-negativity
+of the PANN model is examined numerically, cf. Sec. 4, where the required sampling space for the isotropic
+model can be reduced by analytical considerations, cf. Theorem C.6. In Fig. 2, the overall structure of the
+PANN model is exemplarily illustrated for one hidden layer. Consequently, the corresponding stress is given
+
+
+                                                                  11
+by the expression
+
+                                        𝜕𝜓 PANN,
+                         𝑻 PANN, = 2             = 𝑻 NN, + 𝑻 stress, + 𝑻 energy, + 𝑻 growth .                 (31)
+                                           𝜕𝑪
+    One way to fulﬁll the volumetric growth condition are coercive functions. However, since ICNNs are
+not necessarily coercive, they are not suited to fulﬁll this condition and therefore an analytical term
+                                                              1     2
+                                           𝜓 growth (𝐽) := 𝐽 + − 2                                      (32)
+                                                               𝐽
+is introduced, which is chosen in such a way that polyconvexity is not violated. This leads to the corresponding
+stress contribution
+                                                    1         1
+                                     𝑻 growth = 2 𝐽 + − 2 1 − 2 𝐽𝑪 −1 .                                     (33)
+                                                     𝐽           𝐽
+Another way to fulﬁll the volumetric growth condition is further adapting the network architecture, cf. [21],
+however, using an analytical term is more straightforward.
+   The correction term for the energy normalization is given by
+
+                                         𝜓 energy, := −𝜓 NN, (I ∗ )          ∈ R.                               (34)
+                                                                         𝑪=1
+
+Since 𝜓 energy, is a constant, it holds 𝑻 energy, = 0. Together with the stress normalization term denoted by
+𝜓 stress, (𝐽, 𝐼4 , . . . , 𝐼𝑚 ), meaning vanishing gradients of the potential for the undeformed state, we ensure
+
+                                                 𝜓 PANN, (I ∗ )         =0                                       (35)
+                                                                   𝑪=1
+
+as well as
+
+                                    ©Õ 𝜕𝜓 PANN, 𝜕𝐼 𝛼 Õ Õ 𝜕𝜓 PANN, 𝜕𝐼𝛾 𝜕𝐼 𝛽 ª
+                                       𝑚               𝐴 𝑚             ∗
+                  𝑻 PANN,       = 2­                +                       ®     =0.                            (36)
+                                          𝜕𝐼 𝛼   𝜕𝑪 𝛾=1 𝛽=1 𝜕𝐼 𝛾∗   𝜕𝐼 𝛽 𝜕𝑪
+                                    «                                        ¬
+                             𝑪=1
+                                      𝛼=1                                      𝑪=1
+
+Thus, the potential has a local minimum exactly for the undeformed state with 𝑪 = 1, where for this case we
+deﬁne the invariants as 𝐼 0𝛼 := 𝐼 𝛼 (𝑪 = 1) and 𝐼 𝛽∗0 := 𝐼 𝛽∗ (𝑪 = 1). However, due to the fact that 𝜓 PANN, (I ∗ ) is
+polyconvex, i.e., convex w.r.t. 𝑭, cof 𝑭 and det 𝑭, but not convex w.r.t. 𝑭 or 𝑪, the non-negativity of the
+energy, i.e., 𝜓 PANN, (I ∗ ) ≥ 0 does not automatically follow. As already stated in Sects. 2.3.1 and 2.3.2, a
+numerical test for admissible deformation states is needed to prove the fulﬁllment of this condition, see also
+Sec. 4.
+    The polyconvex stress correction 𝜓 stress, (𝐽, 𝐼4 , . . . , 𝐼𝑚 ) depends on the symmetry group under consider-
+ation and is now further discussed.
+
+3.3.1 Isotropic normalization term
+In the isotropic case with I ∗ := (𝐼1 , 𝐼2 , 𝐼3 , 𝐼1∗ ) the normalization term is given by
+
+                                              𝜓 stress,⊚ (𝐽) := −𝔫 (𝐽 − 1) ,                                      (37)
+
+where the constant
+                                                                                     
+                                 𝜕𝜓 NN,⊚    𝜕𝜓 NN,⊚ 𝜕𝜓 NN,⊚ 𝜕𝜓 NN,⊚ 𝜕𝐼1∗
+                          𝔫 := 2         +2        +       +                                    ∈R                (38)
+                                  𝜕𝐼1        𝜕𝐼2     𝜕𝐼3     𝜕𝐼1∗ 𝜕𝐼3
+                                                                                          𝑪=1
+
+
+                                                           12
+is a weighted sum of derivatives of the ICNN potential with respect to the invariants for the undeformed state
+𝑪 = 1. The corresponding stress contribution is given by
+
+                                                   𝑻 stress,⊚ = −𝔫𝐽𝑪 −1 .                                          (39)
+
+and leads to the fact that the undeformed state is stress-free by construction.
+    This deﬁnition of the correction term comprises two ideas: ﬁrst of all, this approach preserves poly-
+convexity of the potential, since the additional term is a linear function in 𝐽, which is an invariant quantity
+included in the arguments of the polyconvexity condition, cf. Eq. (10). Furthermore, the partial derivatives
+
+                                         𝜕𝐼 𝛼                         𝜕𝐼1∗
+                                                = 𝜉1 and                     = 𝜂1                                  (40)
+                                         𝜕𝑪 𝑪=1                       𝜕𝑪 𝑪=1
+
+of the isotropic invariants w.r.t. 𝑪 for the undeformed state are multiples of the identity tensor 1 for all
+𝛼 ∈ N ≤3 with constants 𝜉, 𝜂 ∈ R. Hence, it can normalize the stress for the undeformed state to zero, which
+becomes evident when setting 𝑪 = 1 in Eq. (39). Further details are provided in Appendix B, where all
+necessary tensor derivatives are given in analytical form.
+
+3.3.2 Transversely isotropic normalization term
+In the case of transverse isotropy with I ∗ := (𝐼1 , 𝐼2 , 𝐼3 , 𝐼4 , 𝐼5 , 𝐼1∗ ) the partial derivatives of the additional
+invariants 𝐼4 , 𝐼5 w.r.t. 𝑪 for the undeformed state are not multiples of the identity anymore, but include the
+structural tensor 𝑮, e.g.,
+
+                                      𝜕𝐼4                        𝜕𝐼5
+                                             =𝑮          and            = 𝐼5 1 − 𝑮 .                               (41)
+                                      𝜕𝑪 𝑪=1                     𝜕𝑪 𝑪=1
+
+Thus, the correction term
+
+                              𝜓 stress,k (𝐽, 𝐼4 , 𝐼5 ) := −𝔬(𝐽 − 1) + 𝔭(𝐼4 − 𝐼40 ) + 𝔮(𝐼5 − 𝐼50 )                  (42)
+
+is introduced, with 𝐼40 = 𝐼50 = tr 𝑮. Again, the constant
+                                                                                                   
+                    𝜕𝜓 NN,k    𝜕𝜓 NN,k 𝜕𝜓 NN,k 𝜕𝜓 NN,k 𝜕𝐼1∗ 𝜕𝜓 NN,k
+             𝔬 := 2         +2        +       +            +        tr 𝑮 + 𝔮 tr 𝑮                             ∈R   (43)
+                     𝜕𝐼1        𝜕𝐼2     𝜕𝐼3     𝜕𝐼1∗ 𝜕𝐼3     𝜕𝐼5                                        𝑪=1
+
+is a weighted sum of the derivatives of the ICNN potential with respect to the invariants for the undeformed
+state 𝑪 = 1. Furthermore, with the ReLU-function denoted as ℛℒ, the non-negative constants
+
+                                    𝔭 := ℛℒ(−𝑥) ∈ R ≥0 ,            𝔮 := ℛℒ(𝑥) ∈ R ≥0                              (44)
+
+are deﬁned with the argument                                             
+                                                 𝜕𝜓 NN,k 𝜕𝜓 NN,k
+                                            𝑥 :=        −                           .                              (45)
+                                                  𝜕𝐼4     𝜕𝐼5                 𝑪=1
+Due to the non-negativity of 𝔭, 𝔮 as well as the polyconvexity of 𝐼4 , 𝐼5 , the correction term is again polyconvex.
+It should be emphasized again that in the correction terms no assumptions on the number of hidden layers in
+the neural networks are made, and the approach can directly be applied to multilayered network architectures.
+Overall, in the transversely isotropic case, the stress contribution of the normalization term is given by
+                                                                                        
+                          𝑻 stress,k = −𝔬𝐽𝑪 −1 + 2𝔭𝑮 + 2𝔮 𝐼5 𝑪 −1 − cof (𝑪) · 𝑮 · 𝑪 −1 ,                        (46)
+
+
+                                                               13
+where all necessary tensor derivatives of the Appendix B are integrated.
+    Note that in the deﬁnitions of all correction terms, even though 𝜓 stress, (𝐽, 𝐼4 , 𝐼5 ) and 𝜓 energy depend on
+the evaluation of 𝜓 NN, (I ∗ ) and its partial derivatives at 𝑪 = 1, no assumptions on the number of hidden
+layers in the ICNN 𝜓 NN, (I ∗ ) are made, and the approaches can directly be applied to multilayered network
+architectures.
+Remark 3.2. Stress normalization terms as proposed in this section again exemplify the challenge of fulﬁlling
+several mechanical conditions at once. Without polyconvexity, formulating stress normalization terms is
+straightforward. In this case, projection approaches such as
+
+                                                                𝜕𝜓  NN,
+                                              𝜓˜ stress,,C = −                  : (𝑪 − 1)                       (47)
+                                                                 𝜕𝑪        𝑪=1
+
+can be applied, as proposed by [10, Eq. (20)], see also [4, 20] and [57], where a slightly adapted version
+of Eq. (47) is applied. Unfortunately, as not all components of 𝑪 are convex in 𝑭, this approach is not
+polyconvex. Also, as the correction term is formulated directly in 𝑪, it does not fulﬁll the material symmetry
+condition, cf. Eq. (9). A polyconvex counterpart of Eq. (47) is given by
+
+                                                            𝜕𝜓     NN,
+                                          𝜓˜ stress,,F = −                      : (𝑭 − 1) .                     (48)
+                                                             𝜕𝑭            𝑭=1
+
+However, as it is formulated directly in 𝑭, this approach does not fulﬁll the objectivity condition, the balance
+of angular momentum and the material symmetry condition, cf. Sec. 2.2. In a similar manner, a projection
+approach can be formulated in terms of the invariants. For the model proposed in this work, this corresponds
+to
+                                        Õ
+                                        𝑚
+                                          𝜕𝜓 NN,                          Õ 𝐴
+                                                                                  𝜕𝜓 NN,                 
+                    𝜓˜ stress,,I = −                            𝐼 𝛽 − 𝐼 𝛽0 −         ∗         𝐼 ∗
+                                                                                                  𝛾 − 𝐼 ∗0
+                                                                                                        𝛾    .   (49)
+                                        𝛽=1
+                                                𝜕𝐼 𝛽   𝑪=1                    𝛾=1
+                                                                                   𝜕𝐼 𝛾   𝑪=1
+
+This projection approach ensures that the partial derivatives of the adapted potential
+
+                                                  𝜓˜ NN, := 𝜓 NN, + 𝜓˜ stress,,I                              (50)
+
+w.r.t. each individual invariant vanish at the identity 𝑪 = 1, thus ensuring a stress-free reference conﬁguration.
+This, in turn, fulﬁlls both objectivity and material symmetry. But again, the invariant-based projection
+approach does not fulﬁll the polyconvexity condition, as the subtraction operation required here does not
+preserve the polyconvexity of the invariants.
+    Closely related to the invariant-based projection approach, it is possible to directly formulate the hyper-
+elastic potential so that its gradients w.r.t. the invariants vanish in the reference conﬁguration [36, 55]. For
+the model proposed in this work, this corresponds to
+
+                       𝜕𝜓 NN,                           𝜕𝜓 NN,
+                                 = 0 and                            = 0 ∀𝛼 ∈ N ≤𝑚 , 𝛾 ∈ N ≤ 𝐴 .                  (51)
+                        𝜕𝐼 𝛼 𝑪=1                          𝜕𝐼 𝛾∗ 𝑪=1
+In [36], this is done by applying activation functions such as
+
+                                                        𝑓 (𝐼1 ) = (𝐼1 − 3) 2 ,                                   (52)
+
+whose gradient
+                                                       𝜕 𝑓 (𝐼1 )
+                                                                 = 2(𝐼1 − 3)                                     (53)
+                                                         𝜕𝐼1
+
+                                                                   14
+vanishes at the identity 𝑪 = 1, 𝐼1 = 3. However, as pointed out in the introduction, [36] considers incompress-
+ible material behavior, which allows for the usage of simple activation functions such as quadratic functions,
+cf. Eq. (52). In the compressible case, the invariants do not have a global minimum at the identity 𝑪 = 1,
+suitable activation functions become fairly complex. The construction of such functions becomes particularly
+challenging, as besides a vanishing gradient at some speciﬁc point, the function should fulﬁll other condi-
+tions. E.g., it should be convex and monotonically increasing, be at least twice continuously diﬀerentiable
+and should not have a too high slope. Overall, one candidate for 𝛼 ∈ (0, ∞) is the fairly complicated function
+                                             
+                                             
+                                             
+                                             
+                                             
+                                               0              for 𝑥 < 0 ,
+                                                       1 4
+                                     𝑓 (𝑥) = 𝛼6 𝑥 3 − 12                                                     (54)
+                                            
+                                                          𝑥   for 0 ≤ 𝑥 ≤ 𝛼 ,
+                                            
+                                             𝑥−3       4
+                                             6
+                                              𝛼       𝛼
+                                                      12      for 𝛼 < 𝑥 .
+
+Furthermore, while being suitable for the construction of polyconvex models, this approach is quite restrictive,
+as it does not even allow for the representation of simple analytical models such as the Neo-Hooke model,
+cf. Eq. (19) and reference [55]. In [36], this problem is circumvented by assuming perfect incompressibility
+and applying the hydrostatic pressure as an additional unkown. However, this is not possible for the general,
+compressible case, which suggests that such methods are limited to the incompressible case.
+     Yet another approach for transverse isotropy is to formulate the potential such that
+
+                                               𝜕𝜓 NN,k 𝜕𝜓 NN,k
+                                                      ≡                                                      (55)
+                                                𝜕𝐼4     𝜕𝐼5
+holds for each deformation state 𝑪 ∈ 𝒮𝓎𝓂. Actually, Eq. (55) is similar to stress normalization approaches
+for analytical constitutive models, cf. [50, Sec. 3.1], [9, Sec. 6.4.1] and Eq. (21). Within the framework
+proposed in the present work, Eq. (55) would fairly faciliate the stress normalization term, cf. Eqs. (42,45).
+By that, the transversely isotropic stress normalization term, cf. Eq. (42), would take a much easier form
+similar to the isotropic case, cf. (37). In the context of NNs, Eq. (55) could be fulﬁlled by setting all weights
+and activation funtions equal which act on the 𝐼4 and 𝐼5 input. However, this would be quite restrictive, as it
+would globally restrict the functional dependency of the hyperelastic potential in 𝐼4 and 𝐼5 .
+    In contrast to the just discussed approaches, the invariant-based normalization terms proposed in this
+work only make minor, less restrictive modiﬁcations to the strain energy potential, cf. Remark 3.3, while
+fulﬁlling all common constitutive conditions by construction.
+
+3.4 Model calibration
+Finally, the model has to be calibrated to data of a speciﬁc material including the set of structural tensors,
+summarized in S  , which corresponds to the material symmetry group  under consideration. Throughout
+this work, datasets of the form
+                                                             
+                                       D = 1 𝑪, 1 𝑻 , 2 𝑪, 2 𝑻 , . . .                                    (56)
+
+consisting of strain-stress tuples in terms of right Cauchy-Green deformation and second Piola-Kirchhoﬀ
+stress tensors are used. In order to examine the generalization of a model, i.e., its prediction of general load
+cases, it is essential to evaluate it on data not seen in the calibration process. Thus, the overall dataset D is
+split into a calibration dataset Dc and a test dataset Dt with Dc ∩ Dt = ∅. Then, after the calibration of the
+model on the dataset Dc , its predictions can be evaluated on Dt . Only when the model is able to predict the
+load cases of the test dataset, and only if the load cases included in the test dataset are suﬃciently general, it
+can be assumed that the model generalizes well and can predict the stress for arbitrary deformations.
+    The next step of the model calibration is the choice of its hyperparameters, here, the number of hidden
+layers and the nodes they contain. For this, a “suﬃciently large” number of layers and nodes should be
+
+                                                        15
+chosen, so that the model is ﬂexible enough for the material behavior under consideration. For general NNs,
+overﬁtting [1, 28], i.e., a too accurate interpolation of the calibration data which results in a bad prediction
+of general data, is an issue. However, as we will demonstrate, for the PANN proposed in this work, the
+inclusion of physics provides the model with a pronounced mathematical structure, which makes it less prone
+to overﬁtting. Then, with a ﬁxed model architecture, the model parameters P must be optimized, i.e., its
+weights and biases. To calibrate the model parameters P on the dataset Dc , the loss function deﬁned in terms
+of the mean squared error
+
+                                                   1 Õc 𝑖
+                                                        |D |
+                                                                                     2
+                                  ℳ𝒮ℰ  (P) =                𝑻 − 𝑻 model, ( 𝑖 𝑪; P)                                 (57)
+                                                  |Dc | 𝑖=1
+
+is minimized, where |Dc | denotes the number of tuples in Dc and k·k denotes the Frobenius norm. Note that
+the hyperelastic potential 𝜓 PANN (I ∗ ) is calibrated only through its gradients, i.e., the corresponding stress
+tensor, which is referred to as Sobolev training [60]. For the optimization process, the SLSQP optimizer
+(Sequential Least Squares Programming) is applied [44]. According the proposed model, loss function
+and optimizer have no inﬂuence on the underlying physics, and they could also be chosen otherwise. An
+implementation of the described workﬂow is realized using Python, TensorFlow and SciPy.
+
+Remark 3.3. In the calibration process, it is important to already account for the growth term 𝜓 growth (𝐽)
+included in the model 𝜓 PANN, (I ∗ ), cf. Eq. (30), as in particular for calibration data including high
+volumetric compressions, it can have a considerable inﬂuence on the model. On the other side, the stress and
+energy normalization terms may not necessarily have to be included in the calibration process: the energy
+normalization term 𝜓 energy can be added to the PANN model after calibration, as it is a constant it does not
+inﬂuence the stress prediction at all. Then, even when the model is calibrated without the stress correction
+term 𝜓 stress, (𝐽, 𝐼4 , . . . , 𝐼𝑚 ), it can learn through suitable data how to approximate the stress-free reference
+conﬁguration [26]. Given that the approximation of the stress-free reference conﬁguration is good enough,
+the constants 𝔫, 𝔬, 𝔭 on which the stress correction depends become very small, cf. Eqs. (38,43,44). Then,
+both the correction term 𝜓 stress, (𝐽, 𝐼4 , . . . , 𝐼𝑚 ) and its gradient 𝑻 stress, approximately vanish, and adding the
+stress correction after the model calibration has a negligibly small inﬂuence on the overall model behavior.
+While it is indeed possible to fulﬁll the normalization conditions in good approximation by learning them
+through suitable data, they are only fulﬁlled exactly when incorporated in the model formulation, e.g., by
+normalization terms.
+
+
+4 Numerical examples
+After the introduction of the PANN hyperelastic constitutive model in the former section, the ability of our
+approach is now demonstrated by several numerical examples and compared to approaches with reduced
+physical foundation. We start with simple stress states and analyze interpolation and extrapolation behavior,
+also for perturbed data. Thereafter, we go on to complex multiaxial deformation states. Finally, the trained
+PANN model is applied within a ﬁnite element simulation.
+
+4.1 Simple stress-strain states
+In this subsection, three types of models, namely a network 𝑷simple (𝑭) directly mapping from 𝑭 to 𝑷, a
+network 𝜓 NN,⊚ (I ∗ ) accounting for the basic conditions, and the PANN 𝜓 PANN,⊚ (I ∗ ), are compared with
+respect to their interpolation and extrapolation capabilities for simple stress-strain states. Thereby, the ﬁrst
+
+
+
+
+                                                           16
+model, given by
+                                                                                    !
+                                     Õ
+                                     𝑁 NN
+                                                       Õ
+                                                       3 Õ
+                                                         3
+           simple
+         𝑃 𝑘𝐿       (𝑭) := 𝐵 𝑘𝐿 +           𝑊 𝛼𝑘𝐿 𝒮𝒫             𝑤 𝛼𝑖𝐽 𝐹𝑖𝐽 + 𝑏 𝛼 with 𝐵 𝑘𝐿 , 𝑊 𝛼𝑘𝐿 , 𝑤 𝛼𝑖𝐽 , 𝑏 𝛼 ∈ R ,   (58)
+                                     𝛼=1               𝑖=1 𝐽=1
+
+does not take into account any of the introduced conditions, the second, which is deﬁned by Eq. (25), respects
+for thermodynamic consistency, symmetry of 𝝈, objectivity and material symmetry, and the PANN fulﬁlls
+the conditions of the previous model and additionally includes polyconvexity, growth condition, as well as
+energy and stress normalization, see Eq. (30).
+    In the following examples, the architectures of the three models are set to one hidden layer with 𝑁 NN := 4
+neurons. Furthermore, the softplus activation function is used for all models. The calibration of the model
+accounting for basic conditions and the PANN is performed according to Sec. 3.4. In contrast, naturally, the
+training of the 𝑭-𝑷 model is performed with data for 𝑭 and 𝑷. Furthermore, the Adam optimizer is used for
+the training of this model. The training data for this study are generated by using the isotropic Neo-Hooke
+model, cf. Eq. (20), where the constants (𝐸, 𝜈) := (1 MPa, 0.3) are chosen.
+
+4.1.1 Interpolation behavior
+In order to analyze the interpolation behavior of the three models, we investigate three diﬀerent sets of
+uniaxial stress states: ideal data, oﬀset data, as well as noisy data.
+
+Ideal data The three models are ﬁrst trained on analytical data from a uniaxial tension and compression test
+in 𝑋1 -direction, cf. Fig. 3(a1). The principal stretch 𝜆 1 ∈ R>0 in 𝑋1 -direction is prescribed and the principal
+stretch 𝜆 2 ∈ R>0 has to be calculated in such a way that the stresses 𝑇22
+                                                                         ⊚    ⊚
+                                                                           ,𝑇33 vanish, so that the components of
+the deformation tensor and the stress tensor result in
+                                                   𝜆2 0 0                                       𝑇⊚ 0 0
+                                                  © 1        ª                                 © 11   ª
+                          (𝐶𝐾 𝐿 )   uniaxial
+                                               := ­ 0 𝜆22 0 ® ,       (𝑇𝐾 𝐿 )   uniaxial,⊚
+                                                                                             = ­ 0 0 0® .                (59)
+                                                  « 0 0 𝜆2 ¬                                   « 0 0 0¬
+                                                           2
+
+
+Accordingly, this leads to a uniaxial stress state, which is commonly applied in experimental investigations.
+Only 30 tuples ( 𝑖 𝑪, 𝑖 𝑻 ⊚ ) with 0.8 ≤ 𝜆 1 ≤ 2 are used as training data for the models. Note that the tuple for
+𝜆 1 = 1 occurs twice in the data set, since this point is assigned to both the compression and tension ranges.
+This has no inﬂuence on the approximation behavior of the PANN model 𝜓 PANN,⊚ (I ∗ ), since this model is
+normalized by construction. However, for both the 𝑭-𝑷 model and the basic conditions model 𝜓 NN,⊚ (I ∗ ),
+the undeformed state is weighted more heavily in the data set.
+                                                     simple       NN,⊚              PANN,⊚
+     After calibration, the stress-stretch curves 𝑇11 (𝜆 1 ), 𝑇11       (𝜆 1 ),and 𝑇11     (𝜆 1 ) of the three models
+are available in analytical form and are compared with the training data in Fig. 3(a1). As expected, it can be
+seen that all three NN-based models are able to perfectly approximate the ideal dataset which is also shown
+by the MSEs given in Tab. 1. The basic conditions model as well as the PANN also reproduce the energy
+𝜓 ⊚ (𝜆 1 ) with high accuracy although it was not trained directly, see Fig. 3(a2). Thus, incorporating physics
+does not degrade the model prediction quality. In addition, we would like to point out that only the PANN
+                                                            PANN,⊚
+model really fulﬁlls the normalization condition, i.e., 𝑇11        (𝜆 1 = 1) = 0, exactly.
+
+Offset data The next step is to investigate the ﬂexibility of the models for non-ideal data. For this, the
+stress components of the ideal dataset are shifted according to
+                                                                              100 0 0
+                                                                            ©        ª
+                                    (𝑇𝐾 𝐿 ) oﬀset,⊚ := (𝑇𝐾 𝐿 ) uniaxial,⊚ + ­ 0 0 0® kPa ,                               (60)
+                                                                            « 0 0 0¬
+
+                                                                 17
+                                                                                             oﬀset,⊚
+so that the calibration dataset is no longer normalized for the undeformed state, i.e., 𝑇11          (𝜆 1 = 1) ≠ 0.
+Thereby, the normalization condition included into the PANN model is of particular interest now.
+    As can be seen in Fig. 3(b1), the 𝑭-𝑷 model 𝑷 simple (𝑭) perfectly approximates the training data again,
+see also the MSE given in Tab. 1. However, this is only possible since this simple model does not know
+about the existence of a potential and is thus not really an hyperelastic one. In contrast, the basic conditions
+model 𝜓 NN,⊚ (I ∗ ) is not able to reproduce the training data well near 𝜆 = 1, which is due to the fact that it
+cannot violate the material symmetry and that the stress results from the derivative of an elastic potential.
+However, for the undeformed state a non-zero stress is predicted, which is in contradiction to the expectation
+of a standard elastic model.
+    As can be seen in Fig. 3(b1), due to the model approach according to Sec. 3, the normalization condition
+                                                                                             PANN,⊚
+is only exactly fulﬁlled by the PANN model 𝜓 PANN,⊚ (I ∗ ) after model calibration, i.e., 𝑇11        (𝜆 1 = 1) = 0.
+Although it becomes evident from the proofs in Sec. 3, it is now demonstrated that this important condition
+is fulﬁlled at all times by construction, even for the case when the training data have an oﬀset. Similar to
+the basic conditions model, due to the stress normalization and the polyconvexity, the PANN model does
+not approximate the data points in the neighborhood of 𝜆 1 = 1 well – but in a physically meaningful way –
+resulting in an inﬂection point within the stress-stretch curve. Outside this neighborhood, the approximation
+
+(a1)                         Ideal data            (b1)                        Offset data           (c1)                          Noisy data
+                                                                                                                     400
+                                                                   400
+                 200
+                                                                                                                     200
+
+
+
+
+                                                                                                            in kPa
+     in kPa
+
+
+
+
+                                                       in kPa
+
+
+
+
+                                                                   200
+                   0                                                                                                    0
+
+                                                                                                        𝑇11
+ 𝑇11
+
+
+
+
+                                                                                                         ⊚
+                                                   𝑇11
+  ⊚
+
+
+
+
+                                                    ⊚
+
+
+
+
+                                                                     0
+
+                −200                                                                                                −200
+                                                                  −200
+
+                       1.0       1.5         2.0                         1.0         1.5       2.0                           1.0       1.5      2.0
+                                𝜆1                                                  𝜆1                                                𝜆1
+
+(a2)                                               (b2)                                              (c2)
+
+
+                 300                                               400                                               300
+ 𝜓 ⊚ in kJ/m3
+
+
+
+
+                                                   𝜓 ⊚ in kJ/m3
+
+
+
+
+                                                                                                     𝜓 ⊚ in kJ/m3
+
+
+
+
+                 200                                                                                                 200
+                                                                   200
+                 100                                                                                                 100
+
+                   0                                                 0                                                 0
+                       1.0          1.5      2.0                         1.0             1.5   2.0                           1.0       1.5      2.0
+                               𝜆1                                                   𝜆1                                                𝜆1
+
+                             Training data                               PANN                                       𝑭-𝑷 model
+                                                                         Basic conditions                           Normalization condition
+
+Figure 3: Predicted stress-stretch curves 𝑇11⊚
+                                               (𝜆1 ) of the PANN, the NN fulﬁlling the basic conditions, as well as the 𝑭-𝑷
+                                              NN
+model with one hidden layer containing 𝑁 := 4 neurons. The trained models are compared to data from a uniaxial
+tension/compression test in 𝑋1 -direction for: (a1) ideal isotropic Neo-Hooke data, (b1) data with oﬀset, and (c1) noisy
+data. In (a2)–(c2), the corresponding energies of the models are shown. For reasons of improved comparability, energy
+normalization is applied for 𝜓 NN,⊚ ( I ∗ ) which, however, has no inﬂuence on the stress prediction.
+
+
+                                                                               18
+of the data points is close to perfect. Thereby, the non-convexity of 𝑇11 in 𝜆 1 should not be mistaken as
+a violation of the polyconvexity condition. The proposed NN model is polyconvex by construction, cf.
+Remark 3.1, and furthermore, polyconvexity does not pose restrictions on the dependency of 𝑻 in 𝑭.
+    Due to the described physical restrictions, the MSEs of the basic conditions model and the PANN are
+several orders of magnitude larger compared to the 𝑭-𝑷 model for the oﬀset data, cf. Tab. 1. The elastic
+energies given by 𝜓 NN,⊚ (I ∗ ) and 𝜓 PANN,⊚ (I ∗ ) are shown in Fig. 3(b2). Thereby, no signiﬁcant diﬀerence
+between both models occurs. Note that the training data are not included in this plot because there is no
+energy available for the oﬀset dataset under consideration.
+
+Noisy data In the last step, the approximation behavior of the three models with respect to noisy data is
+investigated. For this purpose, the stress components of a larger ideal dataset containing 100 tuples ( 𝑖 𝑪, 𝑖 𝑻 ⊚ )
+are shifted according to
+                                                                𝜉 0 0
+                                                              ©       ª
+                      (𝑇𝐾 𝐿 ) noisy,⊚ := (𝑇𝐾 𝐿 ) uniaxial,⊚ + ­0 0 0®       with      𝜉 ∼ N (𝜇, 𝜎 2 ) ,           (61)
+                                                              « 0 0 0¬
+where 𝜉 describes a normally distributed noise with mean value 𝜇 = 0 kPa and standard deviation 𝜎 = 50 kPa.
+     Although the training data are overlaid with a strong Gaussian noise, as it can be seen in Fig. 3(c1),
+all three calibrated models give a result that appears to be physically reasonable. To be more precise, the
+predicted stress-stretch curves are monotonously increasing and the potentials 𝜓 PANN,⊚ (𝜆 1 ) and 𝜓 NN,⊚ (𝜆 1 )
+shown in Fig. 3(c2) are convex in 𝜆 1 , which is both to be expected for uniaxial stress, they are smooth, and
+do not show any markedly oscillations. It can be seen that the stress prediction is approximately zero for the
+undeformed state in this case, see Fig. 3(c1). However, only the PANN model satisﬁes all relevant conditions
+in an exact manner, which also applies to stress-strain states not included in the training. The advantage
+of this property will be revealed in the next study. The 𝑭-𝑷 model even violates the balance of angular
+momentum, since 𝑻 simple and 𝝈 simple are not symmetrical.
+     The MSEs for all three models are again given in Tab. 1. Due to the imperfect data, the values are
+increased by several orders of magnitude compared to the ideal case.
+Table 1: MSE according to Eq. (57) achieved with the 𝑭-𝑷 model, the NN fulﬁlling the basic conditions and the PANN
+for training with diﬀerent uniaxial stress data. The respective stress predictions are shown in Fig. 3.
+
+                           Model                Ideal data          Data with oﬀset       Noisy data
+                                                           2                     2
+                         𝑭-𝑷 model              3.14 kPa              2.87 kPa          2.02 · 103 kPa2
+                    Basic conditions NN     1.74 · 10−4 kPa2        1.22 · 103 kPa2     2.03 · 103 kPa2
+                        PANN model          5.92 · 10−5 kPa2        2.77 · 103 kPa2     2.02 · 103 kPa2
+
+
+
+4.1.2 Extrapolation behavior
+Now, the extrapolation behavior of the compared models is analyzed by considering three load cases: uniaxial
+tension/compression, biaxial tension/compression, as well as simple shear. For the training of 𝑷simple (𝑭),
+𝜓 NN,⊚ (I ∗ ), and 𝜓 PANN,⊚ (I ∗ ) only uniaxial stress states and the corresponding deformations within the
+narrow range 0.8 ≤ 𝜆 1 ≤ 1.1 have been used here, cf. Eq. (59), which are stored in the dataset D uniaxial,⊚ with
+|D uniaxial,⊚ | = 15. Again, note that the tuple for 𝜆 1 = 1 occurs twice in the data set, since this point is assigned
+to both the compression and tension ranges. Given that the PANN model 𝜓 PANN,⊚ (I ∗ ) is normalized by
+construction, this does not aﬀect the approximation behavior. In contrast, for both the 𝑭-𝑷 model and the
+basic conditions model 𝜓 NN,⊚ (I ∗ ), the undeformed state is weighted more heavily in the data set.
+
+                                                               19
+Uniaxial stress states As one can see in Fig. 4(a1), all models again perfectly approximate the training data
+which is also evident from the MSEs given in Tab. 2. However, the 𝑭-𝑷 model fails immediately when it
+has to extrapolate. The model 𝜓 NN,⊚ (I ∗ ), in contrast, is very good at extrapolating up to a stretch of 𝜆 1 = 4,
+which is really impressing from the author’s point of view. Likewise, the related energy shown in Fig. 4(a2)
+is very well reproduced. Thus, the advantage of invariant-based approaches [13, 21, 26, 27, 33, 35, 36, 55]
+which approximate the energy and not directly the stress is particularly evident here. Even more impressive
+is the result for the PANN model, which is able to reproduce the data almost perfectly despite extrapolation.
+This is also evident from the MSE for the extrapolated data, which is two orders of magnitude lower for the
+PANN model than for the basic conditions model, cf. Tab. 2. The observed improvement results from the
+insertion of the additional physical principles, namely polyconvexity, growth condition, as well as energy and
+stress normalization, into the PANN model.
+
+ (a1)                       Uniaxial stress       (b1)                      Biaxial stress         (c1)                       Simple shear stress
+                  400                                                                                  800
+                                                                  500
+                  200                                                                                             600
+
+
+
+
+                                                                                                       in kPa
+         in kPa
+
+
+
+
+                                                      in kPa
+
+
+
+
+                                                                  250
+                                                                                                                  400
+                   0                                                0
+
+
+
+
+                                                                                                   𝑇12
+     𝑇11
+
+
+
+
+                                                  𝑇11
+
+
+
+
+                                                                                                    ⊚
+      ⊚
+
+
+
+
+                                                   ⊚
+
+
+
+
+                                                                                                                  200
+                −200                                             −250
+                                                                                                                    0
+                        1       2        3    4                           1.0          1.5   2.0                        0.0     0.5   1.0   1.5     2.0
+                                    𝜆1                                            𝜆1                                                   𝛾
+ (a2)                                             (b2)                                             (c2)
+                                                                                                                  800
+
+                2000                                             1000                                             600
+ 𝜓 ⊚ in kJ/m3
+
+
+
+
+                                                  𝜓 ⊚ in kJ/m3
+
+
+
+
+                                                                                                   𝜓 ⊚ in kJ/m3
+
+
+
+
+                                                                                                                  400
+                1000                                              500
+                                                                                                                  200
+
+                   0                                               0                                                0
+                        1      2         3    4                           1.0      1.5       2.0                        0.0     0.5   1.0   1.5     2.0
+                                    𝜆1                                            𝜆1                                                   𝛾
+                            Training data                               PANN                        𝑭-𝑷 model
+                            Extrapolation data                          Basic conditions            Normalization condition
+
+Figure 4: Predicted stress-stretch curves 𝑇𝐾⊚ 𝐿 (𝜆1 ) and 𝑇𝐾⊚ 𝐿 (𝛾) of the PANN, the NN fulﬁlling the basic conditions,
+as well as the 𝑭-𝑷 model with one hidden layer containing 𝑁 NN := 4 neurons. Shown is the extrapolation of the
+models trained with uniaxial stress data stored in D uniaxial,⊚ from an isotropic Neo-Hooke model for: (a1) uniaxial
+tension/compression test, (b1) biaxial tension/compression test, and (c1) a simple shear test. The corresponding energies
+are given in (a2)–(c2).
+
+
+
+
+                                                                             20
+                                                                                                          15
+        15                                           15
+
+
+                                                                                                          10
+        10                                           10
+
+
+
+
+                                                𝐼1
+
+
+
+
+                                                                                                     𝐼2
+   𝐼1
+
+
+
+
+                                                     5                                                    5
+        5
+
+                5       10         15                              1                    2                           1            2
+                      𝐼2                                                  𝐼3                                             𝐼3
+
+                       Uniaxial stress training data                                        Uniaxial stress extrapolation data
+                        Simple shear stress data                                            Biaxial stress data
+
+Figure 5: Location of the deformation states within the isotropic invariant space for uniaxial tension/compression test,
+biaxial tension/compression test, and simple shear test. Shown are the sectional planes 𝐼1 -𝐼2 , 𝐼1 -𝐼3 , and 𝐼2 -𝐼3 .
+
+
+Biaxial stress states and simple shear Now, as a next step, we want to evaluate how the models perform
+if they have to extrapolate for completely unknown load cases, i.e., biaxial stress states
+                                                𝜆2 0 0                                            𝑇⊚ 0 0
+                                               © 1 2      ª                                      © 11     ª
+                        (𝐶𝐾 𝐿 )   biaxial
+                                            := ­ 0 𝜆 1 0 ® ,             (𝑇𝐾 𝐿 )   biaxial,⊚
+                                                                                               = ­ 0 𝑇11
+                                                                                                       ⊚
+                                                                                                         0®                          (62)
+                                               « 0 0 𝜆2 ¬                                        «0   0 0¬
+                                                        2
+
+
+and simple shear
+                                                                       1      0
+                                                                     ©          ª
+                                                                          𝛾
+                                                (𝐶𝐾 𝐿 )   shear
+                                                                  := ­𝛾 𝛾 + 1 0®
+                                                                         2
+                                                                                                                                     (63)
+                                                                     «0   0   1¬
+with 0 ≤ 𝛾 ≤ 2 denoting the shearing. The results for the stress predictions are given in Fig. 4(b1) and (c1).
+Again, the simple approach 𝑷 simple (𝑭) completely fails for the unseen data. In the simple shear load case,
+                                                simple
+even a completely implausible shear stress 𝑇12         ≈ 0 is predicted, since the model has learned in training
+that the diagonal elements of the stress tensor disappear. In contrast, the basic conditions model 𝜓 NN,⊚ (I ∗ )
+is still quite good at physically plausible extrapolation, but shows noticeable deviations for 𝜆 1 > 1.4 within
+the biaxial stress loading. A similar result is obtained for simple shear, where noticeable deviations occur
+starting at 𝛾 ≈ 0.8. The same holds for the approximation of the energy which is shown in Fig. 4(b2) and
+(c2). Surprisingly, the PANN model is able to predict the data almost perfectly for biaxial and simple shear,
+although full extrapolation is required here. The signiﬁcantly improved extrapolation capability of the PANN
+model 𝜓 PANN,⊚ (I ∗ ) compared to 𝑷 simple (𝑭) and 𝜓 NN,⊚ (I ∗ ) becomes also evident from the MSEs given
+in Tab. 2. To illustrate into which ranges the models must extrapolate for the considered test cases, the
+deformation states examined are shown within the invariant space in Fig. 5.
+     Thus, summarizing the ﬁndings of the presented study, the adaption of NN-based models in such a way
+that they fulﬁll physical conditions for arbitrary loadings does not necessarily improve the approximation of
+training data, at least for the simple load cases considered, but it does allow for a signiﬁcant improvement in
+the extrapolation capability.
+
+4.2 Complex multiaxial stress-strain states
+Now, as we have shown the advantage of invariant-energy-based NN approaches, we want to analyze only this
+model class in the following. Thereby, it is of interest whether the exact fulﬁllment of the physical principles
+
+                                                                    21
+Table 2: MSE according to Eq. (57) achieved with the 𝑭-𝑷 model, the NN fulﬁlling the basic conditions, and the PANN
+model for training with uniaxial tension/compression (0.8 ≤ 𝜆1 ≤ 1.1) as well as extrapolation to unknown states.
+
+        Model            Training uniaxial stress   Extrapolation uniaxial stress    Biaxial stress       Simple shear stress
+                                               2                             2                        2
+      𝑭-𝑷 model              1.95 · 10−1 kPa                9.43 · 104 kPa           1.35 · 105 kPa         8.06 · 105 kPa2
+ Basic conditions NN         1.30 · 10−4 kPa2               1.26 · 105 kPa2          6.24 · 105 kPa2        5.65 · 104 kPa2
+     PANN model              3.91 · 10−5 kPa2               6.21 · 102 kPa2          4.11 · 103 kPa2       1.58 · 10−5 kPa2
+
+
+introduced in Sec. 2.2 could be too restrictive, so that the model is not ﬂexible enough to approximate
+complex multiaxial stress-strain states given by a non-linear material behavior suﬃciently well. Thereby, the
+four diﬀerent architectures 𝜓 (i), (I ∗ ), 𝜓 (ii), (I ∗ ), 𝜓 (iii), (I ∗ ), as well as 𝜓 (iv), (I ∗ ) satisfying
+
+  (i) the basic conditions, i.e., thermodynamic consistency, symmetric 𝝈, objectivity and material symmetry,
+
+  (ii) the conditions of (i) + polyconvexity,
+
+ (iii) the conditions of (ii) + growth condition, as well as
+
+ (iv) the conditions of (iii) + energy and stress normalization
+
+are compared to each other for isotropic as well as transversely isotropic behavior, respectively. Note that the
+ﬁrst and the fourth model are equal to 𝜓 NN, (I ∗ ) and 𝜓 PANN, (I ∗ ).
+
+4.2.1 Generation of training data
+In a ﬁrst step, the data basis for the training of the NNs has to be acquired. In the absence of real experiments,
+it is generated numerically here. To this end, a uniaxial tensile test is applied on a virtual sample in an
+FE simulation, see Fig. 6(a) and (b). By applying a uniaxial tensile test on this structure, the holes in the
+structure will lead to fairly inhomogeneous deformation gradients at each quadrature point of the ﬁnite element
+mesh. The aim of this simulation is to generate such general deformation gradients, which are then used to
+generate data with the analytical models introduced in Sec. 2.3. Here, the sample’s geometric dimensions
+are speciﬁed by 𝐿 𝑥1 × 𝐿 𝑥2 × 𝐿 𝑥3 = (100 × 100 × 5) mm. Within the uniaxial tensile test, the displacement
+boundary condition with a maximum value 𝑢ˆ ≤ 40 mm is prescribed, i.e., 𝑢1 = 𝑢ˆ holds in the plane 𝑋1 = 𝐿 𝑥1
+and is linearly increased in each increment of the FE simulation. In contrast, 𝑢1 = 0 holds in the plane 𝑋1 = 0.
+At the point (0, 𝐿 𝑥2 , 0) the displacement 𝑢2 = 0 is additionally prescribed and due to the ﬁxed bearing at the
+point (0, 𝐿 𝑥2 , −𝐿 𝑥3 ) the displacement is blocked, i.e., 𝒖 = 0 holds in order to prevent rigid body motion. The
+geometry generation and the meshing was realized using the tool Gmsh [15].
+     Within this virtual experiment, the required dataset D ⊚ consisting of the tuples D𝑖⊚ := ( 𝑖 𝑪, 𝑖 𝑻 ⊚ ) is
+collected at the quadrature points of the ﬁnite elements within 30 increments. In order to demonstrate the
+ability of the proposed NN-based method, the nonlinear stress-strain relation (20) is chosen for the isotropic
+constitutive behavior of the sample’s material. Here the material parameters for the analytical model are
+chosen according to Tab. 3.
+     Following the work of Kalina et al. [22] and prescribing a relative tolerance 𝜂 := 1 %, the dataset was then
+ﬁltered w.r.t. the invariants ( 𝑖 𝐼1 , 𝑖 𝐼2 , 𝑖 𝐼3 ) ∈ R3 for the corresponding deformation state 𝑖 𝑪 to obtain a reduced
+dataset D red,⊚ with |D red,⊚ | = 963 for the calibration process of the PANN. This procedure took advantage
+of the fact that the introduced model lives in the space of invariants rather than in the space of deformations.
+     Finally, diﬀerent deformation states are available, which are stored for the isotropic case with the cor-
+responding stresses of the Neo-Hooke model in the dataset D red,⊚ . For the transversely isotropic case with
+the preferred direction parallel to the 𝑋1 -direction, the same deformation states are chosen as data basis and
+
+                                                           22
+stored with the corresponding stresses of Schröder’s model (24) in the dataset D red,k with |D red,k | = 963 as
+well. The chosen parameters of the analytical transversely isotropic model are also given in Tab. 3.
+
+Table 3: Material parameters of isotropic Neo-Hooke and transversely isotropic analytical model proposed by Schröder
+et al. [50]. The models are given in Eqs. (20) and (24), respectively.
+
+                             𝐸         𝜈      𝛽        𝛼1          𝛼2               𝛿1         𝛿2         𝛼4    𝜂1
+
+                          103 kPa      0.3    2      8 kPa        0 kPa        10 kPa         56 kPa      2    10 kPa
+
+
+                            (a)                                               (b)        𝑋3   𝑋2
+                                                      𝑋3
+                                                                                  𝑋1
+                                             𝑋1            𝑋2
+                                                                                                                  𝐿 𝑥1
+
+
+
+                                  𝑢ˆ                            𝐿 𝑥3
+                                                                                                   𝐿 𝑥2
+
+Figure 6: Uniaxial tensile test for data generation: (a) three-dimensional, inhomogeneous specimen and applied
+boundary conditions with prescribed displacement 𝑢ˆ 𝒆1 as well as (b) top view of the specimen’s geometry with
+𝐿 𝑥1 × 𝐿 𝑥2 × 𝐿 𝑥3 = (100 × 100 × 5) mm.
+
+
+
+4.2.2 Overall prediction quality
+First, for the reduced dataset D red, , we will compare the overall prediction quality of the trained NNs (i)–(iv)
+satisfying diﬀerent physical constraints, introduced in Sec. 2.2, for the isotropic as well as the transversely
+isotropic case. Thereby, for the transversely isotropic case 𝛽 = 2 is chosen for the structural tensor 𝑮 given in
+Eq. (18). In the following examples, the network architecture is set to one hidden layer with 𝑁 NN := 8 neurons.
+The NN-based models are trained w.r.t. the dataset D red, , where a random division into calibration (70 %)
+and test (30 %) data is made once. Within the training process, the weights and bias values 𝑊 𝛼 , 𝑏 𝛼 , 𝑤 𝛼𝛽
+and 𝑤 ∗𝛼𝛾 are then determined according to Sec. 3.4. Within one training run, the respective NN is trained
+30 times, and the parameters of the best achieved training state with the lowest MSE (57), see Sec. 3.4, are
+stored at the end [22].7 In order to evaluate the approximation behavior of the trained NNs, we compute the
+relative error measure
+
+                                                             max         𝑖 𝑻  − 𝑖 𝑻 model,
+                                                           𝑖∈N ≤|D  |
+                                                  𝜀  :=                                                                     (64)
+                                                                       max k 𝑗 𝑻  k
+                                                                   𝑗 ∈N ≤|D  |
+
+
+for the Frobenius norm k𝑻 k of the second Piola-Kirchhoﬀ stress. To exclude random eﬀects, a statistical
+study is performed, i.e., a total of 300 training runs has been performed for each model. Since no uniform
+distribution w.r.t. the error measure 𝜀  can be seen from the results, no underlying distribution is assumed
+here, see the histogram plots given in App. D. Thus, median 𝜀 med, and quantiles are used to compare the
+interpolation quality of the models with each other. The results of the described study are shown in Fig. 7.
+    7Due to local minima within the loss function, the optimization procedure which is applied here depends on the starting values
+of the weights and biases. Thus, the network is trained several times to overcome this, cf. Kalina et al. [21, 22].
+
+
+
+                                                                         23
+         (a)                                                            (b)
+
+   (i)                                                            (i)
+
+  (ii)                                                           (ii)
+
+  (iii)                                                          (iii)
+
+  (iv)                                                           (iv)
+
+                          10−3                       10−2                     10−2                10−1
+                            𝜀⊚ in %                                                          𝜀 k in %
+               Basic conditions            With polyconvexity                 With growth condition         PANN
+
+Figure 7: Boxplots with the median 𝜀med, , 25th and 75th as well as the 1st and 99th percentile of relative error measure
+𝜀 according to Eq. (64) for the reduced dataset D red, and the (a) isotropic NNs or (b) transversely isotropic NNs with
+(i) basic conditions, (ii) polyconvexity, (iii) growth condition and polyconvexity as well as (iv) the PANN satisfying all
+conditions including normalization.
+
+
+Isotropic model Regarding the NNs’ stress approximation for the isotropic case, an extremely good pre-
+diction quality with a median of the errors 𝜀 med,⊚ < 0.003 % is achieved for all models, cf. Fig. 7(a). As one
+can see, the approximation quality of 𝜓 (ii),⊚ (I ∗ ) accounting for the polyconvexity worsens in comparison to
+the architecture 𝜓 (i),⊚ (I ∗ ) which only fulﬁlls the basic conditions. Thus, the limitation to positive weights
+reduces the approximation quality of the NN in the statistical sense. However, as already mentioned, the
+errors are still extremely low. If the growth condition is further added, the error of this NN denoted as
+𝜓 (iii),⊚ (I ∗ ), which fulﬁlls basic conditions + polyconvexity + growth condition, stays in a similar range.
+Surprisingly, when the normalization conditions are ﬁnally added, the resulting distribution achieved with
+𝜓 (iv),⊚ (I ∗ ) is very similar to the ﬁrst model, i.e., the basic conditions model. Thus, summarizing the study
+carried out, adding all common physical principles of hyperelasticity to the NN-based model does not lead
+to a deterioration in the approximation for the isotropic case. This is although conditions such as positive
+weights to account for polyconvexity are reducing the variability of the NN.
+      Finally, regarding the non-negativity condition on the elastic energy, a numerical test has been applied.
+In order to scan only physically admissible deformation states, the principal stretch 𝜆 ∈ R>0 is varied and
+𝑪 diag (𝜆) := 𝜆2 1 is computed as a spherical tensor, which is suﬃcient for isotropy according to Theorem C.6
+of App. C. The invariants are calculated and the respective energy is determined. Within a range of
+1/10 ≤ 𝜆 ≤ 10, only positive energies have been numerically detected for the trained isotropic PANN with
+relative error 𝜀 ⊚ , which is closest to the median 𝜀 med,⊚ , exemplarily.
+
+Transversely isotropic model Regarding the NNs’ stress approximation for the transversely isotropic
+scenario given in Fig. 7(b), compared to isotropy, the error is now an order of magnitude higher even for
+the best model 𝜓 (i),k (I ∗ ). This can be explained by the increased complexity of the reference model (21).
+However, with a median of the errors 𝜀 med,k < 0.4 %, a high level of prediction quality is still attained
+for all models. Now the four models (i)–(iv) are compared. Applying the model 𝜓 (ii),k (I ∗ ), which takes
+polyconvexity into account, leads to errors that are increased by an order of magnitude compared to the
+basic conditions architecture 𝜓 (i),k (I ∗ ). Thus, the limitation to positive weights signiﬁcantly reduces the
+approximation quality of the NN. If the growth condition is further added, the error of this NN, denoted
+as 𝜓 (iii),k (I ∗ ), stays in a similar range. Finally, when the normalization conditions are added, the resulting
+distribution of erros achieved with 𝜓 (iv),k (I ∗ ) shifts again to slightly larger values.
+    We would like to emphasize that the models are based on only one hidden layer with 𝑁 NN = 8 neurons.
+
+
+                                                            24
+The approximation quality of the NN-based models could easily be increased by adapting the network
+architecture, i.e., using several hidden layers or more neurons, in order to be able to represent the complex
+material behavior suﬃciently well. Summarizing, adding all common physical principles of hyperelasticity
+to the NN-based model leads to a deterioration of the prediction quality of approximately one order of
+magnitude for the transversely isotropic case. Since the errors are nevertheless very small, the PANN model
+should be chosen anyway, especially with regard to the very good extrapolation capability.
+      Regarding the non-negativity condition on the elastic energy, a numerical test has been applied for
+transverse isotropy, too. Again, to scan only physically admissible deformation states, the principal stretches
+𝜆 1 , 𝜆 2 , 𝜆 3 ∈ R>0 are varried and the diagonal tensor 𝑪 diag (𝜆 1 , 𝜆 2 , 𝜆 3 ) = 𝜆21 𝒆 1 ⊗ 𝒆1 + 𝜆22 𝒆2 ⊗ 𝒆2 + 𝜆23 𝒆3 ⊗ 𝒆 3 is
+computed. Here, in addition, rotations of these states perpendicular to the preferred direction 𝑋1 have to be
+considered. Thus, we end up with a ﬁve parameter space for the deformation to be sampled:
+
+                            𝑪 k (𝜆 1 , 𝜆 2 , 𝜆 3 , 𝜑2 , 𝜑3 ) = 𝑹(𝜑2 , 𝜑3 ) · 𝑪 diag (𝜆 1 , 𝜆 2 , 𝜆 3 ) · 𝑹𝑇 (𝜑2 , 𝜑3 ) .                      (65)
+
+In the equation above, 𝑹(𝜑2 , 𝜑3 ) = 𝑹 𝑥2 (𝜑2 ) · 𝑹 𝑥3 (𝜑3 ) ∈ 𝒮𝒪(3) is a rotation tensor with 𝑹 𝑥2 (𝜑2 ) and 𝑹 𝑥2 (𝜑3 )
+denoting rotations around the 𝑋2 - and 𝑋3 -axis, respectively. With Eq. (65) and the structural tensor given in
+Eq. (18) invariants are calculated and the respective energy is determined. Within a range of 1/10 ≤ 𝜆 𝛼 ≤ 10,
+0 ≤ 𝜑 𝛽 ≤ 𝜋/2 with 𝛼 ∈ N ≤3 , 𝛽 ∈ {2, 3}, only positive energies have been numerically detected for both the
+model (21) and the trained transversely isotropic PANN with relative error 𝜀 k , which is closest to the median
+𝜀 med,k , exemplarily.
+
+4.2.3 Application of the calibrated PANN within an FE simulation
+
+        10                                                10
+                                                                                                              7.5
+   𝐼1
+
+
+
+
+                                                     𝐼1
+
+
+
+
+                                                                                                        𝐼2
+
+
+
+                                                                                                              5.0
+         5                                                  5
+
+                                                                                                              2.5
+             2.5         5.0        7.5                                 1                     2                              1                 2
+                           𝐼2                                                 𝐼3                                                  𝐼3
+                   Uniaxial stress training data                   Multiaxial stress training data                         Torsional sample
+
+Figure 8: Location of the deformation states within the invariant space for uniaxial stress-strain data D uniaxial,⊚ ,
+multiaxial stress-strain data D red,⊚ and the torsional sample, which is loaded by specifying a distortion of 𝜙ˆ = 45◦ ,
+cf. Fig. 9(a). Shown are the sectional planes 𝐼1 -𝐼2 , 𝐼1 -𝐼3 , and 𝐼2 -𝐼3 .
+
+     In order to prove the suitability of invariant-based NNs for the numerical simulation of complex
+shaped samples and components, a comparison to reference results generated with the isotropic Neo-Hooke
+model (20), which has been used for the calibration, is shown in the following. Thereby, the model fulﬁlling
+the basic conditions and the PANN are each analyzed in two diﬀerent scenarios: once trained with multiaxial
+stress-strain states D red,⊚ and once with only uniaxial stress-strain states D uniaxial,⊚ , cf. Sects. 4.1.2 and 4.2.2.
+In the ﬁrst case, one of the 300 trained models is selected that is closest to the median 𝜀 med,⊚ .
+     As a test example, a three-dimensional problem is considered: the torsion of a prismatic sample, cf. the
+sketch given in Fig. 9(a). Thus, regarding the nonlinear character of the reference constitutive law 𝜓 nh (𝐼1 , 𝐼3 ),
+this example is a good possibility to validate and explore potential limits of both approaches. In the validation
+
+                                                                        25
+setup, the three-dimensional torsion sample with one circular hole is loaded by specifying 𝜙ˆ = 45◦ as angle of
+twist in the plane max 𝑿 ∈ B0 𝑋1 . Additionally, inside this plane the displacement 𝑢1 = 0 is applied to prevent
+warping. In order to avoid rigid body motions, the displacement is fully clamped in the plane min 𝑿 ∈ B0 𝑋1 ,
+i.e., 𝒖 = 0 holds. Both, the basic conditions model (25) and the PANN (30), have been implemented within
+the FE toolbox FEniCS [2, 38]. Therein, the stress relations given by Eqs. (26) and (31) and the material
+
+
+ (a)             𝜙ˆ                 (b)                            (c)                          (d)
+
+
+
+
+                               𝑋1
+                          𝑋2        𝑋3
+                                             nh / kPa
+                                            𝑃31                      nh − 𝑃 NN,⊚ /max |𝑃 nh |
+                                                                    𝑃31                          nh − 𝑃 PANN,⊚ /max |𝑃 nh |
+                                                                                                𝑃31
+                                                                            31           31             31             31
+
+                                     −124               124          0                0.0032%     0                 0.0024%
+
+Figure 9: FE simulation of torsional sample without warping: (a) applied boundary conditions, (b) macroscopic stress
+       nh
+ﬁeld 𝑃31  on the deformed conﬁguration B by specifying 𝜙ˆ = 45◦ as angle of twist, and (c) relative error of the PANN-
+             PANN,⊚                                                        NN,⊚                                   nh . The NNs
+stress ﬁeld 𝑃31      as well as (d) relative error of the stress ﬁeld 𝑃31       of basic conditions model w.r.t. 𝑃31
+                                                     red,⊚      red,⊚                NN
+were trained with multiaxial stress-strain data D          , |D       | = 963, and 𝑁 = 8 neurons in only one hidden-layer
+were implemented as constitutive equations each.
+
+ (a)             𝜙ˆ                 (b)                            (c)                          (d)
+
+
+
+
+                               𝑋1
+                          𝑋2        𝑋3
+                                             nh / kPa
+                                            𝑃31                      nh − 𝑃 NN,⊚ /max |𝑃 nh |
+                                                                    𝑃31                          nh − 𝑃 PANN,⊚ /max |𝑃 nh |
+                                                                                                𝑃31
+                                                                            31           31             31             31
+
+                                     −124               124          0                  3.70%     0                  0.14%
+
+Figure 10: FE simulation of torsional sample without warping: (a) applied boundary conditions, (b) macroscopic
+             nh on the deformed conﬁguration B by specifying 𝜙ˆ = 45◦ as angle of twist, and (c) relative error of the
+stress ﬁeld 𝑃31
+                     PANN,⊚                                                       NN,⊚                                     nh
+PANN-stress ﬁeld 𝑃31        as well as (d) relative error of the stress ﬁeld 𝑃31         of basic conditions model w.r.t. 𝑃31 .
+The NNs were trained with only uniaxial stress-strain data D    uniaxial,⊚ , |D uniaxial,⊚              NN
+                                                                                           | = 15, and 𝑁 = 4 neurons in only
+one hidden-layer were implemented as constitutive equations each.
+
+
+                                                              26
+tangents
+
+                                    𝜕 2 𝜓 NN,⊚                              𝜕 2 𝜓 PANN,⊚
+                       CNN,⊚ := 4              ∈ L4   and    CPANN,⊚ := 4                ∈ L4 ,               (66)
+                                     𝜕𝑪𝜕𝑪                                      𝜕𝑪𝜕𝑪
+which are required within the solution via a standard Newton-Raphson scheme, are calculated by means of
+automatic differentiation.
+    To evaluate the NNs’ prediction quality, a comparison to the local stress ﬁeld 𝑃31      nh is considered in the
+
+following, cf. Fig. 9(b). We start with the models trained by complex multiaxial stress-strain states stored in
+the dataset D red,⊚ , where the covered domain in the invariant space is shown in Fig. 8. For both NNs, relative
+errors below 0.004 % occur, see the surface plots given in Fig. 9(c), (d), i.e., the predictions are almost perfect
+                                nh . This is not surprising, since a mapping of the deformations of the torsional
+w.r.t. the reference stresses 𝑃31
+sample into the invariant space shows that it is almost completely covered by D red,⊚ . Therefore, nearly no
+extrapolation is necessary here, see also the discussion in [22]. In the next step, we consider the NN-based
+models only trained by uniaxial stress states stored in the dataset D uniaxial,⊚ , where the covered curve in the
+invariant space is again shown in Fig. 8. Looking now at the results in Figs. 10(c) and (d), we see a signiﬁcant
+error of 3.7 % for the basic conditions model, which is due to the need for extrapolation. However, despite
+this, very low errors below 0.14 % are achieved with the PANN model.
+    Consequently, in this example, both the basic conditions model and the PANN approach are very well
+able to describe the learned nonlinear constitutive behavior within the FE simulation of a comparatively
+complex load case, whereas the PANN is better, especially if extrapolation is required. Thereby, NNs with
+𝑁 NN = 8 and 𝑁 NN = 4 neurons in only one hidden layer are used, respectively, which is very small compared
+to typical NNs applied to problems originating from computational mechanics. Moreover, the implemented
+basic conditions model and the PANN provide the typical quadratic convergence of Newton iteration and are
+therefore computationally very eﬃcient.
+
+
+5 Conclusion
+In the present work, an NN-based constitutive model for compressible ﬁnite strain hyperelasticity is proposed.
+This approach denoted as PANN fulﬁlls all common constitutive conditions belonging to the class of hy-
+perelasticity, i.e., thermodynamic consistency, symmetry of the stress tensor, objectivity, material symmetry,
+polyconvexity, growth condition, as well as normalization of energy and stress, in an exact way. Further-
+more, the non-negativity of the neural network potentials is numerically examined by sampling the space of
+physically admissible deformation states. For the isotropic model, the sampling space required for that is
+reduced based on analytical considerations. The proposed model allows the description of highly nonlinear
+hyperelastic relationships while taking into account the underlying physics and is trainable by using standard
+machine learning libraries such as Tensorﬂow. In addition, a proof for the non-negativity of the compressible
+Neo-Hooke potential is presented, which, to the best of the authors’ knowledge, has not been done yet.
+     Starting with a short literature review on NN-based elastic models, an introduction on ﬁnite strain
+hyperelasticity including an overview on general requirements as well as two speciﬁc anisotropy classes
+and models is given. Based on this, the PANN approach is built up step by step: using diﬀerent sets
+of invariants as inputs for a convex neural network, the model fulﬁlls the balance of angular momentum,
+objectivity and material symmetry conditions, as well as thermodynamic consistency and polyconvexity.
+Then, the volumetric growth condition is fulﬁlled by using an analytical growth term. Finally, energy and
+stress normalization are fulﬁlled by polyconvex normalization terms. The stress normalization terms depend
+on the material symmetry group and are exemplarily derived for isotropic and transversely isotropic material
+behavior. However, the procedure for fulﬁlling physical conditions, e.g., using normalization terms, can
+also be applied to analytical or other machine learning approaches. Afterwards, the applicability of the
+
+
+                                                        27
+PANN models is demonstrated, where a calibration to isotropic and transversely isotropic data generated
+with analytical potentials is performed. For all cases, even for highly multiaxial deformation states and
+noisy stress-strain data, a highly accurate and robust prediction quality has been shown. In addition, it
+has been shown that the PANN is characterized by an extremely good extrapolation capability. Finally, the
+straightforward application into FE simulations is demonstrated.
+     Summarizing, the introduced PANN model for compressible ﬁnite strain hyperelasticity has shown to
+be an eﬃcient tool, which can be used in numerous applications stemming from solid mechanics. Thereby,
+including physics into the NN-based model is the crucial step for several reasons: ﬁrst of all it leads to reliable,
+i.e., physically sensible, model predictions. But more than that, it is also essential in order to improve the
+generalization properties of NNs [24, 29] and allows for extrapolation [21, 27]. Furthermore, only with
+the pronounced mathematical structure that the inclusion of constitutive conditions provides, it is possible
+to calibrate the models with small amounts of data which are usually available in engineering applications.
+Finally, this also enables the use of comparatively small network architectures, cf. [21, 27]. Thus, when
+constructing NN-based constitutive models, as many constitutive conditions should be fulﬁlled in an exact
+way as possible, as this is the only way to ensure their fulﬁllment with absolute certainty. However, for some
+applications this might not be possible, e.g., when for the symmetry group under consideration no complete
+functional basis in invariants is available and using invariants would restrict the model ﬂexibility too much,
+cf. [26]. Only then the structure of the model should be weakened by fulﬁlling some constitutive conditions
+in an approximate fashion, in order to gain more model ﬂexibility. Besides that, as already mentioned,
+the structure and reliability that the exact fulﬁllment of constitutive conditions provides, should always be
+prioritized.
+     In order to generalize our proposed NN-based framework for elastic materials, several extensions are
+planned in the future. For instance, polyconvex normalization terms for further material symmetry groups [9]
+have to be derived. Furthermore, in order to allow an automated discovery of type and orientation of the
+underlying anisotropy, the usage of tensor-basis NNs would be a valuable addition [13]. The application
+of the PANN model in the identiﬁcation of material models from experimental data is also promising [11,
+57]. Finally, an extension to multiphysics problems [23, 27, 65] is feasible to expand the possible ﬁeld of
+application.
+
+
+Acknowledgements
+Dominik K. Klein and Oliver Weeger acknowledge funding from the Deutsche Forschungsgemeinschaft
+(DFG – German Research Foundation) – Grant No. 492770117 and support by the Graduate School of
+Computational Engineering within the Centre of Computational Engineering at the TU Darmstadt.
+    All presented computations were performed on a PC-Cluster at the Center for Information Services and
+High Performance Computing (ZIH) at TU Dresden. The authors thus thank the ZIH for generous allocations
+of computer time. Finally, the authors would like to thank Franz Hirsch and Philipp Metsch for providing the
+serverjob scripts to communicate with the HPC-Cluster.
+
+
+CRediT authorship contribution statement
+Lennart Linden: Conceptualization, Formal analysis, Investigation, Methodology, Visualization, Software,
+Validation, Visualization, Writing - original draft, Writing - review and editing. Dominik Klein: Con-
+ceptualization, Formal analysis, Methodology, Visualization, Software, Validation, Writing - original draft,
+Writing - review and editing. Karl A. Kalina: Conceptualization, Formal analysis, Methodology, Visual-
+ization, Software, Writing - original draft, Writing - review and editing. Jörg Brummund: Formal analysis,
+
+
+
+                                                        28
+Methodology, Writing - review and editing. Oliver Weeger: Conceptualization, Funding acquisition, Re-
+sources, Writing - review and editing. Markus Kästner: Funding acquisition, Resources, Writing - review
+and editing.
+
+
+Declarations
+Conflict of interest: The authors declare that they have no conﬂict of interest.
+
+
+A Multilayered neural networks
+In this work, sets of invariants are used as inputs for FFNNs [1, 28] with scalar-valued output, where the
+output is used to model a hyperelastic potential. In Sec. 3, a FFNN architecture with only one hidden layer
+is introduced, which prooves to be ﬂexible enough for a lot of practical applications [21, 27]. Nevertheless,
+the methods introduced in Sec. 3 are not restricted to network architectures containing only one hidden layer,
+and for the sake of completeness, multilayered network architectures, cf. Fig. 11, are now introduced.
+     In a nutshell, FFNNs can be seen as a composition of multiple vector-valued functions, where the
+components are referred to as nodes or neurons and the functions acting in each node are referred to as
+activation functions. FFNNs can gain ﬂexibility in two ways: either the number of nodes in each hidden
+layer is increased, as it is done for one hidden layer in Sec. 3, or the amount of hidden layers is increased.
+Generalizing the single-layered architecture of Eq. (25) for a network architecture with 𝐻 hidden layer and
+𝑁 NN,𝐻 nodes in each hidden layer yields
+                                        Õ
+                                         𝑚                  Õ
+                                                            𝐴                                 NN,1
+                              [1]                   [1]             ∗[1]      [1]
+                             𝑨𝛼 = ℱ            𝑤 𝛼𝛽 𝐼 𝛽 +         𝑤 𝛼𝛾 𝐼𝛾∗ + 𝑏 𝛼        ∈ R𝑁          ,           (67)
+                                         𝛽=1                𝛾=1
+
+                                         𝑁 NN,ℎ−1
+                                            Õ                                     NN,ℎ
+                             𝑨 [ℎ]
+                               𝛼 =ℱ                   𝑤 [ℎ]
+                                                        𝛼𝛽 𝛽𝑨 [ℎ−1]
+                                                                    + 𝑏 [ℎ]
+                                                                        𝛼     ∈ R𝑁      with ℎ = 2, . . . , 𝐻 ,   (68)
+                                              𝛽=1
+                                      𝑁Õ
+                                       NN,𝐻
+                      NN,
+                  𝜓            ∗
+                             (I ) =           𝑊 𝛼 𝑨 [𝛼𝐻 ] ∈ R ,                                                   (69)
+                                       𝛼=1
+
+with the polyconvex, irreducible and independent invariants 𝐼 𝛽 (𝑪, S  ) as well as the additional invariants
+𝐼 𝛾∗ (I) as deﬁned in Sec. 3. By the special choice of activation function ℱ as convex and non-decreasing in
+every hidden layer and 𝑊 𝛼 ≥ 0, the polyconvexity of the invariants is preserved. Again, the Softplus activation
+function 𝒮𝒫(𝑥) := log(1 + exp(𝑥)) is applied, which is convex and non-decreasing for non-negative weights
+and arbitrary bias values, and overall the conditions
+               𝑊 𝛼 , 𝑤 [ℎ]   ∗[1]
+                       𝛼𝛽 , 𝑤 𝛼𝛾 ∈ R ≥0 , 𝑏 𝛼 ∈ R ∀ℎ ∈ N ≤ 𝐻 , 𝛼 ∈ N ≤ 𝑁 NN,ℎ−1 , 𝛽 ∈ N ≤𝑚 , 𝛾 ∈ N ≤ 𝐴            (70)
+result in a polyconvex neural network, cf. Remark 3.1, see also [26] for a more extensive discussion and
+explicit proofs.
+
+
+B Derivatives of invariants
+For the convenience of the reader, in Tab. 4, both isotropic and transversely isotropic invariants,
+                                                                                          √         as well as
+their derivatives w.r.t. 𝑪, are provided. From this, the derivative of the determinant 𝐽 = 𝐼3 follows as
+                                                            𝜕𝐽 𝐽 −1
+                                                              = 𝑪 ,                                               (71)
+                                                            𝜕𝑪 2
+
+                                                                   29
+                                                 Physics-augmented neural network (PANN)
+            𝐼1
+                                                                                                           𝜕
+  𝑪         𝐼2                                   𝜓 NN, + 𝜓 stress, + 𝜓 energy, + 𝜓 growth = 𝜓 PANN,   𝜕𝑪   𝑻 PANN,
+
+ S
+
+
+
+
+Figure 11: Illustration of the multilayered PANN based constitutive model for the material symmetry group  under
+consideration.
+
+                       Table 4: Derivatives of isotropic and transversely isotropic invariants.
+
+                                                                                  𝜕 𝐼𝛼
+                                            𝐼𝛼
+                                                                                  𝜕𝑪
+
+                                           𝐼1 := tr 𝑪                              1
+
+                         Isotropic
+                         Isotropy          𝐼2 := tr(cof 𝑪)                      𝐼1 1 − 𝑪
+
+                                           𝐼3 := det 𝑪                           cof 𝑪
+
+
+                         Transverse        𝐼4 := tr(𝑪 · 𝑮)                         𝑮
+                         isotropy
+                                           𝐼5 := tr(cof(𝑪) · 𝑮)       𝐼5 𝑪 −1 − cof(𝑪) · 𝑮 · 𝑪 −1
+
+
+
+which implies the derivative of the adapted invariant 𝐼1∗ := −2𝐽 as
+
+                                                    𝜕𝐼1∗
+                                                         = −𝐽𝑪 −1 .                                                (72)
+                                                    𝜕𝑪
+
+C Non-negativity of the strain energy density
+In this appended section, the non-negativity of isotropic hyperelastic energy functions is discussed by
+analytical consideration. In many cases strain energy density functions are formulated in terms of invariants,
+but it should be noted that not all arbitrary states in the space of invariants are also physically admissible, since
+these can lead to real negative or even complex principal stretches. Consequently, it is necessary to determine
+restrictions for the invariants in the following, which ensure positive deﬁniteness of the right Cauchy-Green
+deformation tensor. Then, for certain strain energy density functions, it can be proven that they only lead
+to non-negative values for physically admissible deformation states. This procedure will be shown in the
+following.
+    Let 𝐼1 := tr 𝑪, 𝐼2 := tr (cof 𝑪) and 𝐼3 := det 𝑪 be the principal invariants of the right Cauchy-Green
+deformation tensor 𝑪 := 𝑭𝑇 · 𝑭 ∈ 𝒮𝓎𝓂. We denote the eigenvalues of the right Cauchy-Green deformation
+tensor as 𝜅1 , 𝜅2 and 𝜅3 . These eigenvalues can be represented by the principal stretches 𝜆 1 , 𝜆 2 and 𝜆 3 , which
+are the eigenvalues of the deformation gradient 𝑭 ∈ 𝒢ℒ + (3), i.e., 𝜅 𝛼 = 𝜆2𝛼 holds for all 𝛼 ∈ N ≤3 .
+Definition C.1. A deformation state is called physically admissible if the deformation tensor 𝑪 ∈ 𝒮𝓎𝓂 is
+positive deﬁnite, i.e., if all associated eigenvalues are positive (𝜅1 , 𝜅2 , 𝜅3 > 0).
+
+                                                           30
+Lemma C.2. The characteristic equation
+                                               𝜅 3 − 𝐼1 𝜅 2 + 𝐼2 𝜅 − 𝐼3 = 0 ,                                      (73)
+of the right Cauchy-Green deformation tensor 𝑪 ∈ 𝒮𝓎𝓂 has real eigenvalues, if and only if the restriction
+                              𝑞 2  𝑝 3                         𝐼2         2𝐼 3 𝐼1 𝐼2
+                      Γ :=         +       ≤0,       with 𝑝 := 𝐼2 − 1 , 𝑞 := − 1 +       − 𝐼3                      (74)
+                               2      3                             3         27    3
+is fulﬁlled.
+
+Proof. According Cardano’s formula, one obtains real solutions of the cubic Eq. (73), if and only if the
+restriction (74) is fulﬁlled [7].                                                                      
+
+Theorem C.3. A deformation state is physically admissible, if and only if the following restrictions
+                                  1  3                                          
+              Γ(𝐼1 , 𝐼2 , 𝐼3 ) =     4𝐼1 𝐼3 − 𝐼12 𝐼22 + 4𝐼23 + 27𝐼32 − 18𝐼1 𝐼2 𝐼3 ≤ 0 and 𝐼1 , 𝐼2 , 𝐼3 > 0         (75)
+                                 108
+are fulﬁlled.
+
+Proof. ” ⇐ ” : Given that restrictions (75) are satisﬁed and since the invariants 𝐼1 , 𝐼2 , 𝐼3 > 0 are positive, it
+can be shown by a proof of contradiction that the eigenvalues 𝜅 𝛼 are positive real solutions of Eq. (73). The
+invariants are given by 𝐼1 = 𝜅1 + 𝜅2 + 𝜅3 , 𝐼2 = 𝜅1 𝜅2 + 𝜅1 𝜅3 + 𝜅2 𝜅3 and 𝐼3 = 𝜅1 𝜅2 𝜅3 and it is assumed that Eq. (73)
+is satisﬁed. The invariant 𝐼3 is non-negative exactly if none or exactly two eigenvalues 𝜅 𝛼 are negative, since
+the eigenvalues are real numbers according Lemma C.2. Furthermore, the condition 𝐼3 ≠ 0 is equivalent to
+𝜅 𝛼 ≠ 0 for all 𝛼 ∈ N ≤3 . Hence, only the case that two eigenvalues are negative and one is positive must be
+investigated. Without loss of generality let 𝜅2 and 𝜅3 be negative and 𝜅1 be positive (𝜅1 > 0, 𝜅2 < 0, 𝜅3 < 0).
+Then, we obtain
+                                     𝐼2 = 𝜅1 (𝜅2 + 𝜅3 ) + 𝜅2 𝜅3 > 0 ,                                              (76)
+                                                      𝜅2 𝜅3
+                                              ⇔                 > 𝜅1 > −(𝜅2 + 𝜅3 ) ,                               (77)
+                                                  −(𝜅2 + 𝜅3 )
+where in the last inequality the relation 𝐼1 = 𝜅1 + 𝜅2 + 𝜅3 > 0 was used. After multiplying with the term
+−(𝜅2 + 𝜅3 ) > 0, this leads to the contradiction
+                                                   0 > 𝜅22 + 𝜅32 + 𝜅2 𝜅3 ,                                         (78)
+because the right hand side only consists of positive terms.
+” ⇒ ” : This follows directly from the deﬁnitions 𝐼1 = 𝜅1 + 𝜅2 + 𝜅3 , 𝐼2 = 𝜅1 𝜅2 + 𝜅1 𝜅3 + 𝜅2 𝜅3 and 𝐼3 = 𝜅1 𝜅2 𝜅3 as
+well as from Cardano’s formula [7].                                                                                
+
+Lemma C.4. Let the restrictions (75) be fulﬁlled. If and only if the case Γ = 0 holds, then at least two
+eigenvalues 𝜅 𝛼 are equal. The single eigenvalue will be denoted as 𝑥 > 0 and the double eigenvalue as 𝑦 > 0.
+As a consequence, the invariants result in
+                               𝐼1 = 𝑥 + 2𝑦 > 0 ,    𝐼2 = 2𝑥𝑦 + 𝑦 2 > 0 ,        𝐼3 = 𝑥𝑦 2 > 0 .                    (79)
+Then, the partial derivatives are given by
+                             𝜕𝐼1                                             𝜕𝐼1
+                                 =1>0,                                           =2>0,                             (80)
+                             𝜕𝑥                                              𝜕𝑦
+                             𝜕𝐼2                                             𝜕𝐼2
+                                 = 2𝑦 > 0 ,                                      = 2𝑥 + 2𝑦 > 0 ,                   (81)
+                             𝜕𝑥                                              𝜕𝑦
+                             𝜕𝐼3                                             𝜕𝐼3
+                                 = 𝑦2 > 0 ,                                      = 2𝑥𝑦 > 0 .                       (82)
+                             𝜕𝑥                                              𝜕𝑦
+
+                                                            31
+Proof. The ﬁrst result follows directly from Cardano’s formula [7]. Then, the partial derivatives are basic
+calculations.                                                                                            
+
+C.1 Neo-Hooke model
+Theorem C.5. The strain energy density function
+                                                                          
+                     nh           1                       𝜆
+                   𝜓 (𝐼1 , 𝐼3 ) =     𝜇 (𝐼1 − ln 𝐼3 − 3) + (𝐼3 − ln 𝐼3 − 1) ,             𝜇, 𝜆 > 0              (83)
+                                  2                       2
+of the isotropic Neo-Hooke model is non-negative for all physically admissible deformation states.
+
+Proof. The continuously diﬀerentiable function 𝜓 nh : R3 → R, (𝐼1 , 𝐼2 , 𝐼3 ) ↦→ 𝜓 nh (𝐼1 , 𝐼3 ) is convex w.r.t. the
+principal invariants 𝐼1 , 𝐼2 , 𝐼3 and has no local extremum, since the gradient w.r.t. the principal invariants
+does not vanish. Note that this Neo-Hooke model does not depend on the principal invariant 𝐼2 explicitly.
+Likewise, the gradient does not vanish if the domain of the function 𝜓 nh (𝐼1 , 𝐼3 ) is restricted to the subset
+Ω := {(𝐼1 , 𝐼2 , 𝐼3 ) ∈ R3 | Γ(𝐼1 , 𝐼2 , 𝐼3 ) ≤ 0, 𝐼1 , 𝐼2 , 𝐼3 > 0} according Theorem C.3. Accordingly, the minimum
+value is assumed to be on the boundaries of the admissible domain Ω given by
+
+                       𝜕ΩΓ := {(𝐼1 , 𝐼2 , 𝐼3 ) ∈ R3 | Γ(𝐼1 , 𝐼2 , 𝐼3 ) = 0, 𝐼1 > 0, 𝐼2 > 0, 𝐼3 > 0} ,           (84)
+                                                  3
+                       𝜕Ω1 := {(𝐼1 , 𝐼2 , 𝐼3 ) ∈ R | Γ(𝐼1 , 𝐼2 , 𝐼3 ) ≤ 0, 𝐼1 = 0, 𝐼2 > 0, 𝐼3 > 0} ,            (85)
+                       𝜕Ω2 := {(𝐼1 , 𝐼2 , 𝐼3 ) ∈ R3 | Γ(𝐼1 , 𝐼2 , 𝐼3 ) ≤ 0, 𝐼1 > 0, 𝐼2 = 0, 𝐼3 > 0} ,           (86)
+                                                  3
+                       𝜕Ω3 := {(𝐼1 , 𝐼2 , 𝐼3 ) ∈ R | Γ(𝐼1 , 𝐼2 , 𝐼3 ) ≤ 0, 𝐼1 > 0, 𝐼2 > 0, 𝐼3 = 0} .            (87)
+
+First, we note that for 𝐼1 → 0+ or 𝐼2 → 0+ , also 𝐼3 → 0+ holds, due to the fact that the principal invariants are
+real positive values (𝐼1 , 𝐼2 , 𝐼3 > 0). Since the term − ln 𝐼3 is dominating according Eq. (83), 𝜕Ω1,2,3 leads to
+lim 𝐼3 →0+ 𝜓 nh (𝐼1 , 𝐼3 ) = ∞, which is not a local minimum.
+     Second, we consider 𝜕ΩΓ . Consequently, we now consider only the independent variables 𝑥, 𝑦 ∈ R>0
+according to Lemma C.4. To ﬁnd an extremum of 𝜓 nh on 𝜕ΩΓ , the partial derivatives of the potential w.r.t.
+the independent variables are computed and set to zero:
+                                                                                
+                             𝜕𝜓 nh 𝜕𝜓 nh 𝜕𝐼1 𝜕𝜓 nh 𝜕𝐼3 𝜇            1   𝜆       1
+                                  =            +          =      1 − + 1 − 2 𝑦2 = 0 ,                         (88)
+                                                            2           4
+                                                                                
+                              𝜕𝑥     𝜕𝐼1 𝜕𝑥       𝜕𝐼3 𝜕𝑥            𝑥          𝑥𝑦
+                             𝜕𝜓 nh 𝜕𝜓 nh 𝜕𝐼1 𝜕𝜓 nh 𝜕𝐼3              1   𝜆       1
+                                  =            +          = 𝜇 1 − + 1 − 2 𝑥𝑦 = 0 ,                            (89)
+                              𝜕𝑦     𝜕𝐼1 𝜕𝑦       𝜕𝐼3 𝜕𝑦            𝑦   2      𝑥𝑦
+where Eqs. (80)–(82) with 𝑥, 𝑦 ≠ 0 are used. By subtracting the half of Eq. (89) from Eq. (88) we obtain the
+equation
+                                                              
+                                     1           𝜇 𝜆         1
+                                       (𝑦 − 𝑥) − +       𝑦−        =0,                                  (90)
+                                     2          𝑥𝑦 2         𝑥𝑦
+which obviously holds for 𝑥 = 𝑦. The other solution can be obtained from
+                                                                        
+                                   𝜆 2                     2   1 2𝜇
+                              −𝜇 + 𝑥𝑦 − 1 = 0 ⇔ 𝑦 =                    +1 ,                                     (91)
+                                   2                             𝑥 𝜆
+but when substituted into Eq. (88), this implies the contradiction 𝜇 = 0.
+    Finally, we substitute the solution 𝑥 = 𝑦 into Eq. (88), which leads to the cubic equation
+                                                              
+                                             3 2𝜇        2𝜇
+                                           𝑥 + 𝑥−           +1 = 0 ,                                            (92)
+                                                 𝜆        𝜆
+
+
+                                                            32
+which has obviously the solution 𝑥 = 1. Using polynomial division, we can obtain the quadratic equation
+                                                       
+                                            2      2𝜇
+                                           𝑥 +𝑥       +1 = 0 ,                                        (93)
+                                                   𝜆
+
+which does not lead to real solutions, since 𝜇, 𝜆 > 0 hold. In fact, the function 𝜓 nh (𝑥) is convex w.r.t. the
+                                                                                    2 nh
+triple eigenvalue 𝑥 ∈ (0, ∞) of the volumetric deformation states 𝑪 = 𝑥1, since 𝜕𝜕𝑥𝜓2 > 0 holds for all positive
+triple eigenvalues of the spherical tensor.
+     Consequently, 𝑥 = 𝑦 = 1 is a global minimum point of 𝜓 nh (𝑥, 𝑦) and thus the unique real and non-negative
+solution of Eqs. (88) and (89) on the admissible set Ω. Finally, 𝜓 nh (𝑥 = 1, 𝑦 = 1) = 0 can be determined, i.e.,
+the undeformed state has zero energy. Hence, 𝜓 nh (𝐼1 , 𝐼3 ) ≥ 0 holds for all physically admissible deformation
+states.                                                                                                        
+
+C.2 Isotropic PANN
+Theorem C.6. Consider the isotropic PANN model
+
+                               Õ                                                 2
+                                          ©Õ                           ª
+                               𝑁 NN          3
+                                                                              1
+         𝜓   PANN,⊚     ∗
+                      (I ) =       𝑊 𝛼 𝒮𝒫 ­ 𝑤 𝛼𝛽 𝐼 𝛽 + 𝑤 ∗𝛼1 𝐼1∗ + 𝑏 𝛼 ® + 𝐽 + − 2 − 𝔫 (𝐽 − 1) + 𝜓 energy,⊚ ,   (94)
+                                                                              𝐽
+                               𝛼=1        « 𝛽=1                        ¬
+including the normalization constant
+                                                                                  
+                                   𝜕𝜓 NN,⊚    𝜕𝜓 NN,⊚ 𝜕𝜓 NN,⊚ 𝜕𝜓 NN,⊚ 𝜕𝐼1∗
+                            𝔫 := 2         +2        +       +                               ∈R,                (95)
+                                    𝜕𝐼1        𝜕𝐼2     𝜕𝐼3     𝜕𝐼1∗ 𝜕𝐼3
+                                                                                       𝑪=1
+                                                                        √
+with I ∗ := (𝐼1 , 𝐼2 , 𝐼3 , 𝐼1∗ ) and the additional invariant 𝐼1∗ := −2 𝐼3 = −2𝐽. Given that
+
+                                          𝜕𝜓 PANN,⊚                𝜕𝜓 PANN,⊚
+                                                    > 0 and                  >0                                 (96)
+                                             𝜕𝐼1                      𝜕𝐼2
+
+holds, the potential 𝜓 PANN,⊚ (I ∗ ) can possess local minima only for volumetric deformation states 𝑪 = 𝜆2 1
+with 𝜆 ∈ (0, ∞).
+                                                                                                                √
+Proof. The continuously diﬀerentiable function 𝜓 PANN,⊚ : R3 → R, (𝐼1 , 𝐼2 , 𝐼3 ) ↦→ 𝜓 PANN,⊚ (𝐼1 , 𝐼2 , 𝐼3 , −2 𝐼3 )
+is convex w.r.t. the principal invariants 𝐼1 , 𝐼2 , 𝐼3 and has no local extremum, since the gradient w.r.t. the
+invariants does not vanish due to condition (96). It should be noted that the assumptions (96) are not
+too restrictive for the approximation quality of the neural network, since they are already satisﬁed by
+small positive weights 𝑤 𝛼1 , 𝑊 𝛼 and 𝑤 𝛽2 , 𝑊 𝛽 for at least one 𝛼, 𝛽 ∈ N ≤ 𝑁 NN . Thus, the gradient does not
+vanish when the domain of the function 𝜓 PANN,⊚ (I ∗ ) is restricted to the subset of admissible invariants
+Ω := {(𝐼1 , 𝐼2 , 𝐼3 ) ∈ R3 | Γ(𝐼1 , 𝐼2 , 𝐼3 ) ≤ 0, 𝐼1 , 𝐼2 , 𝐼3 > 0}, as given in according Theorem C.3.
+    Since the growth term (32) is included in the potential 𝜓 PANN,⊚ (I ∗ ) and all other terms are ﬁnite, the
+boundaries 𝜕Ω1 , 𝜕Ω2 , 𝜕Ω3 from Eqs. (85)–(87) do not need to be considered. The argumentation is analogous
+to that in the proof of Theorem C.5. Consequently, only the boundary 𝜕ΩΓ needs to be considered, given in
+Eq. (84). The partial derivatives of the polyconvex NN-based model w.r.t. the invariants are denoted by
+
+                                                             𝜕𝜓 PANN,⊚
+                                                    𝜓 𝛾 :=             .                                        (97)
+                                                               𝜕𝐼𝛾
+
+
+
+
+                                                              33
+In order to compute local extrema, the partial derivatives w.r.t. the eigenvalues, which are expressed with the
+help of Lemma C.4, are set to zero:
+
+                                 𝜕𝜓 PANN,⊚
+                                           = 𝜓1 + 2𝑦 𝜓2 + 𝑦 2 𝜓3 = 0 ,                                     (98)
+                                    𝜕𝑥
+                                 𝜕𝜓 PANN,⊚
+                                           = 2 𝜓1 + 2(𝑥 + 𝑦) 𝜓2 + 2𝑥𝑦 𝜓3 = 0 .                             (99)
+                                    𝜕𝑦
+Subtracting the half of Eq. (99) from Eq. (98) yields
+
+                                           (𝑦 − 𝑥) (𝜓2 + 𝑦 𝜓3 ) = 0 .                                     (100)
+
+Substituting the ﬁrst solution 𝜓2 = −𝑦 𝜓3 into Eq. (98) leads to the contradiction 𝜓1 = 𝑦 2 𝜓3 and 𝜓2 = −𝑦 𝜓3 ,
+which can not be fulﬁlled by 𝑦 > 0 as well as the assumptions 𝜓1 > 0 and 𝜓2 > 0. Consequently, the other
+solution 𝑥 = 𝑦 is the only solution of the Eqs. (98) and (99).
+     Same as for the Neo-Hooke model above, the search for a global minimum of 𝜓 PANN,⊚ (I ∗ ) thus can be
+narrowed down to the (convex) set of real positive triple eigenvalues 𝑥 ∈ (0, ∞) of the spherical tensor 𝑪 = 𝑥1.
+In particular, 𝑥 = 1 is a local minimum point by construction with 𝜓 PANN,⊚ (𝑥 = 1) = 0, since the normalization
+constant 𝔫 of the normalization term, given in Eq. (37), was chosen accordingly. However, since 𝐽 = 𝑥 3/2 is
+strictly concave in 𝑥 ∈ (0, ∞) and may appear with a positive or negative factor due the normalization, it can
+generally not be shown that 𝜓 PANN,⊚ (𝑥) is convex w.r.t. the triple eigenvalue. Thus, the minimum point 𝑥 = 1
+may not be unique and further triple eigenvalues 𝑥 ≠ 1 of the spherical tensor 𝑪 = 𝑥1 might exist, for which
+                   PANN,⊚
+the derivative 𝜕𝜓 𝜕𝑥 vanishes and 𝜓 PANN,⊚ (𝑥) < 0 holds.                                                      
+
+
+D Stochastic
+In this appended section, the raw data obtained in the statistical study which is discussed in Sec. 4.2.2 are
+presented. The histograms including median and 25th as well as 75th percentile for the isotropic ( = ⊚)
+and the transversely isotropic ( = k) case are given in Fig. 12(a)–(b), respectively. For each model in this
+statistical investigation, a total of 300 training runs have been completed. Based on the reduced data set
+D red, , the respective NN is trained 30 times in one training run, and the parameters of the optimal training
+state with the lowest MSE (57), as described in Sec. 3.4, are stored.
+
+
+
+
+                                                        34
+(a)
+               (i)                Basic conditions                              (ii)            With polyconvexity
+
+               600                                                              600
+      %
+
+
+
+
+                                                                       %
+      1
+
+
+
+
+                                                                       1
+               400                                                              400
+      𝜑⊚ in
+
+
+
+
+                                                                       𝜑⊚ in
+               200                                                              200
+
+                 0                                                                0
+                 0.000     0.002      0.004   0.006         0.008                 0.000      0.002    0.004   0.006     0.008
+                                      𝜀⊚ in %                                                         𝜀⊚ in %
+
+               (iii)         With growth condition                              (iv)                   PANN
+               600                                                              600
+      %
+
+
+
+
+                                                                       %
+                                                                       1
+      1
+
+
+
+
+               400                                                              400
+
+
+
+
+                                                                       𝜑⊚ in
+      𝜑⊚ in
+
+
+
+
+               200                                                              200
+
+                 0                                                                0
+                 0.000     0.002      0.004   0.006         0.008                 0.000      0.002    0.004   0.006     0.008
+                                      𝜀⊚ in %                                                         𝜀⊚ in %
+(b)
+               (i)                Basic conditions                              (ii)             With polyconvexity
+
+               100                                                               15
+      %
+
+
+
+
+                                                                       %
+      1
+
+
+
+
+                                                                       1
+
+
+
+
+                                                                                 10
+      𝜑 k in
+
+
+
+
+                                                                       𝜑 k in
+
+
+
+
+               50
+                                                                                  5
+
+                 0                                                                0
+                  0.00     0.01      0.02      0.03        0.04                        0.0    0.2        0.4      0.6
+                                      𝜀 k in %                                                        𝜀 k in %
+
+               (iii)         With growth condition                              (iv)                   PANN
+
+               15                                                                15
+                                                                       %
+      %
+      1
+
+
+
+
+                                                                       1
+
+
+
+
+               10                                                                10
+      𝜑 k in
+
+
+
+
+                                                                       𝜑 k in
+
+
+
+
+                 5                                                                5
+
+                 0                                                                0
+                     0.0    0.2          0.4         0.6                               0.0    0.2        0.4      0.6
+                                      𝜀 k in %                                                        𝜀 k in %
+                                            Median                              25th and 75th percentile
+
+Figure 12: Histograms with 𝑁 bins := 30 of the error measure 𝜀 given in Eq. (64) for diﬀerent anisotropies: (a) isotropic
+and (b) transversely isotropic invariant-based models. (i) basic conditions, (ii) polyconvexity, (iii) growth condition and
+polyconvexity, as well as (iv) PANN satisfying all conditions including normalization. The results were generated with
+300 training runs, selecting the best of 30 trains each. Calibration has been done with the reduced data set D red, .
+
+
+
+
+                                                                  35
+References
+ [1]   C. C. Aggarwal. Neural Networks and Deep Learning. 1st ed. Springer International Publishing, 2018.
+ [2]   M. Alnæs et al. “The FEniCS project version 1.5”. In: Archive of Numerical Software 3.100 (2015).
+ [3]   B. Amos, L. Xu, and J. Z. Kolter. “Input convex neural networks”. In: Proceedings of the 34th International Conference on
+       Machine Learning. Ed. by D. Precup and Y. W. Teh. Vol. 70. Proceedings of Machine Learning Research. PMLR, 2017,
+       pp. 146–155. arXiv: 1609.07152.
+ [4]   F. As’ad, P. Avery, and C. Farhat. “A mechanics-informed artiﬁcial neural network approach in data-driven constitu-
+       tive modeling”. In: International Journal for Numerical Methods in Engineering 123.12 (2022), pp. 2738–2759. doi:
+       10.1002/nme.6957.
+ [5]   J. M. Ball. “Constitutive inequalities and existence theorems in nonlinear elasto-statics”. In: Herriot Watt Symposion:
+       Nonlinear Analysis and Mechanics. Ed. by R.J. Knops. Vol. 1. London: Pitman, 1977, pp. 187–241.
+ [6]   J. M. Ball. “Convexity conditions and existence theorems in nonlinear elasticity”. In: Archive for Rational Mechanics and
+       Analysis 63.4 (1976), pp. 337–403. doi: 10.1007/BF00279992.
+ [7]   Ilja N. Bronshtein, Konstantin A. Semendyayev, Gerhard Musiol, and Heiner Muehlig. Handbook of mathematics. 5th ed.
+       Berlin: Springer, 2007.
+ [8]   P. Chen and J. Guilleminot. “Polyconvex neural networks for hyperelastic constitutive models: A rectiﬁcation approach”. In:
+       Mechanics Research Communications 125 (2022), p. 103993. doi: 10.1016/j.mechrescom.2022.103993.
+ [9]   V. Ebbing. “Design of Polyconvex Energy Functions for All Anisotropy Classes”. PhD thesis. Universität Duisburg-Essen,
+       2010.
+[10]   M. Fernández, M. Jamshidian, T. Böhlke, K. Kersting, and O. Weeger. “Anisotropic hyperelastic constitutive models for
+       ﬁnite deformations combining material theory and data-driven approaches with application to cubic lattice metamaterials”.
+       In: Computational Mechanics 67.2 (2021), 653–677. doi: 10.1007/s00466-020-01954-7.
+[11]   M. Flaschel, S. Kumar, and L. De Lorenzis. “Unsupervised discovery of interpretable hyperelastic constitutive laws”. In:
+       Computer Methods in Applied Mechanics and Engineering 381 (2021), p. 113852. doi: 10.1016/j.cma.2021.113852.
+[12]   A. L. Frankel, R. E. Jones, and L. P. Swiler. “Tensor basis Gaussian process models of hyperelastic materials”. In: Journal
+       of Machine Learning for Modeling and Computing 1.1 (2020). doi: 10.1615/.2020033325.
+[13]   J. N. Fuhg, N. Bouklas, and R. E. Jones. “Learning hyperelastic anisotropy from data via a tensor basis neural network”. In:
+       Journal of the Mechanics and Physics of Solids 168 (2022), p. 105022. doi: 10.1016/j.jmps.2022.105022.
+[14]   J. N. Fuhg, M. Marino, and N. Bouklas. “Local approximate Gaussian process regression for data-driven constitutive models:
+       Development and comparison with neural networks”. In: Computer Methods in Applied Mechanics and Engineering 388
+       (2022), p. 114217. doi: 10.1016/j.cma.2021.114217.
+[15]   C. Geuzaine and J.-F. Remacle. “Gmsh: A 3-D ﬁnite element mesh generator with built-in pre- and post-processing facilities”.
+       In: International Journal for Numerical Methods in Engineering 79.11 (2009), pp. 1309–1331. doi: https://doi.org/10.1002/nme.2579.
+[16]   J. Ghaboussi, J. H. Garrett, and X. Wu. “Knowledge-based modeling of material behavior with neural networks”. In: Journal
+       of Engineering Mechanics 117.1 (1991), pp. 132–153. doi: 10.1061/(ASCE)0733-9399(1991)117:1(132).
+[17]   T. Gärtner, M. Fernández, and O. Weeger. “Nonlinear multiscale simulation of elastic beam lattices with anisotropic
+       homogenized constitutive models based on artiﬁcial neural networks”. In: Computational Mechanics 68 (Nov. 2021). doi:
+       10.1007/s00466-021-02061-x.
+[18]   P. Haupt. Continuum Mechanics and Theory of Materials. 2nd ed. Springer Berlin Heidelberg, 2002.
+[19]   G. A. Holzapfel. Nonlinear Solid Mechanics: A Continuum Approach for Engineering. 2nd ed. Wiley, 2000.
+[20]   S. Huang, Z. He, B. Chem, and C. Reina. “Variational Onsager Neural Networks (VONNs): A thermodynamics-based
+       variational learning strategy for non-equilibrium PDEs”. In: Journal of the Mechanics and Physics of Solids 163 (2022),
+       p. 104856. doi: 10.1016/j.jmps.2022.104856.
+[21]   K. A. Kalina, L. Linden, J. Brummund, and M. Kästner. “FEANN: An eﬃcient data-driven multiscale approach based on
+       physics-constrained neural networks and automated data mining”. In: Computational Mechanics (2023). doi: 10.1007/s00466-022-02260-0.
+[22]   K. A. Kalina, L. Linden, J. Brummund, P. Metsch, and M. Kästner. “Automated constitutive modeling of isotropic hyperelas-
+       ticity based on artiﬁcial neural networks”. In: Computational Mechanics 69 (Jan. 2022), pp. 1–20. doi: 10.1007/s00466-021-02090-6.
+[23]   K. A. Kalina, P. Metsch, J. Brummund, and M. Kästner. “A macroscopic model for magnetorheological elastomers based
+       on microscopic simulations”. en. In: International Journal of Solids and Structures 193-194 (2020), pp. 200–212. doi:
+       10.1016/j.ijsolstr.2020.02.028.
+
+
+                                                               36
+[24]   G. E. Karniadakis, I. G. Kevrekidis, L. Lu, P. Perdikaris, S. Wang, and L. Yang. “Physics-informed machine learning”. In:
+       Nature Reviews Physics (2021). doi: 10.1038/s42254-021-00314-5.
+[25]   T. Kirchdoerfer and M. Ortiz. “Data-driven computational mechanics”. In: Computer Methods in Applied Mechanics and
+       Engineering 304 (2016), pp. 81–101. doi: 10.1016/j.cma.2016.02.001.
+[26]   D. K. Klein, M. Fernández, R. J. Martin, P. Neﬀ, and O. Weeger. “Polyconvex anisotropic hyperelasticity with neural
+       networks”. In: Journal of the Mechanics and Physics of Solids 159 (2022), p. 104703. doi: 10.1016/j.jmps.2021.104703.
+[27]   D. K. Klein, R. Ortigosa, J. Martínez-Frutos, and O. Weeger. “Finite electro-elasticity with physics-augmented neural
+       networks”. In: Computer Methods in Applied Mechanics and Engineering 400 (2022), p. 115501.
+[28]   S. Kollmannsberger, D. D’Angella, M. Jokeit, and L. Herrmann. Deep Learning in Computational Mechanics. Vol. 977.
+       Studies in Computational Intelligence. Springer, 2021. doi: 10.1007/978-3-030-76587-3.
+[29]   S. Kumar and D. M. Kochmann. “What machine learning can do for computational solid mechanics”. In: Current Trends and
+       Open Problems in Computational Mechanics. Ed. by F. Aldakheel, B. Hudobivnik, M. Soleimani, H. Wessels, C. Weißenfels,
+       and M. Marino. Cham: Springer International Publishing, 2022, pp. 275–285. doi: 10.1007/978-3-030-87312-7_27.
+[30]   B. A. Le, J. Yvonnet, and Q.-C. He. “Computational homogenization of nonlinear elastic materials using neural networks”.
+       In: International Journal for Numerical Methods in Engineering 104.12 (2015), pp. 1061–1084. doi: 10.1002/nme.4953.
+[31]   S. Lehmich, P. Neﬀ, and J. Lankeit. “On the convexity of the function 𝐶 ↦→ 𝑓 (det𝐶) on positive-deﬁnite matrices”. In:
+       Mathematics and Mechanics of Solids 19.4 (2014), pp. 369–375. doi: 10.1177/1081286512466099.
+[32]   G. Liang and K. Chandrashekhara. “Neural network based constitutive model for elastomeric foams”. In: Engineering
+       Structures 30.7 (2008), pp. 2002–2011. doi: 10.1016/j.engstruct.2007.12.021.
+[33]   L. Linden, K. A. Kalina, J. Brummund, P. Metsch, and M. Kästner. “Thermodynamically consistent constitutive modeling
+       of isotropic hyperelasticity based on artiﬁcial neural networks”. In: PAMM 21.1 (2021). doi: 10.1002/pamm.202100144.
+[34]   J. Ling, R. Jones, and J. Templeton. “Machine learning strategies for systems with invariance properties”. In: Journal of
+       Computational Physics 318 (2016), pp. 22–35. doi: 10.1016/j.jcp.2016.05.003.
+[35]   K. Linka, M. Hillgärtner, K. Abdolazizi, R. Aydin, M. Itskov, and C. Cyron. “Constitutive artiﬁcial neural networks: A
+       fast and general approach to predictive data-driven constitutive modeling by deep learning”. In: Journal of Computational
+       Physics (2020), p. 110010. doi: 10.1016/j.jcp.2020.110010.
+[36]   K. Linka and E. Kuhl. “A new family of Constitutive Artiﬁcial Neural Networks towards automated model discovery”. In:
+       Computer Methods in Applied Mechanics and Engineering 403 (2023), p. 115731. doi: 10.1016/j.cma.2022.115731.
+[37]   Z. Liu, Y. Du, Y. Chen, and M. Tegmark. “Physics-augmented learning: A new paradigm beyond physics-informed learning”.
+       In: 2021.
+[38]   A. Logg, K.-A. Mardal, and G. Wells. Automated solution of differential equations by the finite element method: The FEniCS
+       nook. Vol. 84. Springer Science & Business Media, 2012.
+[39]   R. J. Martin, I.-D. Ghiba, and P. Neﬀ. “A polyconvex extension of the logarithmic Hencky strain energy”. In: Analysis and
+       Applications 17.03 (2019), pp. 349–361. doi: 10.1142/S0219530518500173.
+[40]   F. Masi and I. Stefanou. “Multiscale modeling of inelastic materials with Thermodynamics-based Artiﬁcial Neural Networks
+       (TANN)”. In: Computer Methods in Applied Mechanics and Engineering 398 (2022), p. 115190. doi: 10.1016/j.cma.2022.115190.
+[41]   J. Merodio and P. Neﬀ. “A note on tensile instabilities and loss of ellipticity for a ﬁber-reinforced nonlinearly elastic solid”.
+       In: Archives of Mechanics 58 (2006), pp. 293–303.
+[42]   C. Naumann and J. Ihlemann. “On the thermodynamics of pseudo-elastic material models which reproduce the Mullins
+       eﬀect”. In: International Journal of Solids and Structures (2015). doi: 10.1016/j.ijsolstr.2015.05.014.
+[43]   P. Neﬀ, I.-D. Ghiba, and J. Lankeit. “The exponentiated Hencky-logarithmic strain energy. Part I: Constitutive issues and
+       rank-one convexity”. In: Journal of Elasticity 121 (2015), pp. 143–234. doi: 10.1007/s10659-015-9524-7.
+[44]   J. Nocedal and S. J. Wright. “Sequential quadratic programming”. In: Numerical Optimization. Springer New York, 2006,
+       pp. 529–562. doi: 10.1007/978-0-387-40065-5_18.
+[45]   R. W. Ogden, G. Saccomandi, and I. Sgura. “Fitting hyperelastic models to experimental data”. In: Computational Mechanics
+       34.6 (2004), pp. 484–502. doi: 10.1007/s00466-004-0593-y.
+[46]   G. C. Y. Peng et al. “Multiscale modeling meets machine learning: What can we learn?” In: Archives of Computational
+       Methods in Engineering (2020). doi: 10.1007/s11831-020-09405-5.
+[47]   A. Ricker and P. Wriggers. “Systematic ﬁtting and comparison of hyperelastic continuum models for elastomers”. In: Archives
+       of Computational Methods in Engineering (2023). doi: 10.1007/s11831-022-09865-x.
+
+
+                                                                 37
+[48]   K. Sagiyama and K. Garikipati. “Machine learning materials physics: Deep neural networks trained on elastic free en-
+       ergy data from martensitic microstructures predict homogenized stress ﬁelds with high accuracy”. In: (2019). arXiv:
+       1901.00524 [cond-mat, physics:physics].
+[49]   J. Schröder and P. Neﬀ. “Invariant formulation of hyperelastic transverse isotropy based on polyconvex free energy functions”.
+       In: International Journal of Solids and Structures 40 (2003), pp. 401–445. doi: 10.1016/S0020-7683(02)00458-4.
+[50]   J. Schröder, P. Neﬀ, and V. Ebbing. “Anisotropic polyconvex energies on the basis of crystallographic motivated structural ten-
+       sors”. In: Journal of the Mechanics and Physics of Solids 56.12 (2008), pp. 3486–3506. doi: https://doi.org/10.1016/j.jmps.2008.08.00
+[51]   Y. Shen, K. Chandrashekhara, W. F. Breig, and L. R. Oliver. “Neural network based constitutive model for rubber material”.
+       In: Rubber Chemistry and Technology 77.2 (2004), pp. 257–277. doi: 10.5254/1.3547822.
+[52]   B. Smith, F. De Goes, and T. Kim. “Stable Neo-Hookean ﬂesh simulation”. In: ACM Transactions on Graphics 37.2 (2018),
+       pp. 1–15. doi: 10.1145/3180491.
+[53]   S. R. St. Pierre, K. Linka, and E. Kuhl. “Principal-stretch-based constitutive neural networks autonomously discover a subclass
+       of Ogden models for human brain tissue”. In: Brain Multiphysics 4 (2023), p. 100066. doi: 10.1016/j.brain.2023.100066.
+[54]   V. Tac, K. Linka, F. Sahli-Costabal, E. Kuhl, and A. B. Tepole. “Benchmarks for physics-informed data-driven hyperelastic-
+       ity”. In: (2023). doi: 10.48550/ARXIV.2301.10714.
+[55]   V. Tac, F. Sahli Costabal, and A. B. Tepole. “Data-driven tissue mechanics with polyconvex neural ordinary diﬀerential equa-
+       tions”. In: Computer Methods in Applied Mechanics and Engineering 398 (2022), p. 115248. doi: 10.1016/j.cma.2022.115248.
+[56]   V. Tac, V. D. Sree, M. K. Rausch, and A. B. Tepole. “Data-driven modeling of the mechanical behavior of anisotropic soft
+       biological tissue”. In: Engineering with Computers (2022). doi: 10.1007/s00366-022-01733-3.
+[57]   P. Thakolkaran, A. Joshi, Y. Zheng, M. Flaschel, L. De Lorenzis, and S. Kumar. “NN-EUCLID: Deep-learning hy-
+       perelasticity without stress data”. In: Journal of the Mechanics and Physics of Solids 169 (2022), p. 105076. doi:
+       10.1016/j.jmps.2022.105076.
+[58]   C. Truesdell and W. Noll. The Non-Linear Field Theories of Mechanics. 3rd ed. Springer Berlin Heidelberg, 2004.
+[59]   N. N. Vlassis, R. Ma, and W. C. Sun. “Geometric deep learning for computational mechanics part I: Anisotropic hyperelastic-
+       ity”. In: Computer Methods in Applied Mechanics and Engineering 371 (2020), p. 113299. doi: 10.1016/j.cma.2020.113299.
+[60]   N. N. Vlassis and W. C. Sun. “Sobolev training of thermodynamic-informed neural networks for interpretable elasto-plasticity
+       models with level set hardening”. In: Computer Methods in Applied Mechanics and Engineering 377 (2021), p. 113695. doi:
+       10.1016/j.cma.2021.113695.
+[61]   N. N. Vlassis, P. Zhao, R. Ma, T. Sewell, and W. C. Sun. “Molecular dynamics inferred transfer learning models for ﬁnite-
+       strain hyperelasticity of monoclinic crystals: Sobolev training and validations against physical constraints”. In: International
+       Journal for Numerical Methods in Engineering 123.17 (2022), pp. 3922–3949. doi: 10.1002/nme.6992.
+[62]   P. Weber, J. Geiger, and W. Wagner. “Constrained neural network training and its application to hyperelastic material
+       modeling”. In: Computational Mechanics 68.5 (2021), pp. 1179–1204. doi: 10.1007/s00466-021-02064-8.
+[63]   D. Yang Gao, P. Neﬀ, I. Roventa, and C. Thiel. “On the convexity of nonlinear elastic energies in the right Cauchy-Green
+       tensor”. In: Journal of Elasticity 127 (2017), pp. 303–308. doi: 10.1007/s10659-016-9601-6.
+[64]   L. Zee and E. R. Sternberg. “Ordinary and strong ellipticity in the equilibrium theory of incompressible hyperelastic solids”.
+       In: Archive for Rational Mechanics and Analysis 83 (1983), pp. 53–90. doi: 10.1007/BF00281087.
+[65]   M. Zlatić and M. Čanađĳa. “Incompressible rubber thermoelasticity: A neural network approach”. In: Computational
+       Mechanics 71.5 (2023), pp. 895–916. doi: 10.1007/s00466-023-02278-y.
+[66]   C. Zopf and M. Kaliske. “Numerical characterisation of uncured elastomers by a neural network based approach”. In:
+       Computers & Structures 182 (2017), pp. 504–525. doi: 10.1016/j.compstruc.2016.12.012.
+
+
+
+
+                                                                 38
+

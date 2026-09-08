@@ -1,0 +1,2255 @@
+                                     Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+                                                         Contents lists available at ScienceDirect
+
+
+                                          Comput. Methods Appl. Mech. Engrg.
+                                                 journal homepage: www.elsevier.com/locate/cma
+
+
+
+
+CECM: A continuous empirical cubature method with application to
+the dimensional hyperreduction of parameterized finite element
+models
+J.A. Hernández a,c ,∗, J.R. Bravo a,b , S. Ares de Parga a,b
+a
+  Centre Internacional de Mètodes Numèrics en Enginyeria (CIMNE), Barcelona, Spain
+b
+  Universitat Politècnica de Catalunya-BarcelonaTech (UPC), Department of Civil and Environmental Engineering (DECA), Barcelona, Spain
+c
+  Universitat Politècnica de Catalunya- BarcelonaTech (UPC), E.S. d’Enginyeries Industrial, Aeroespacial i Audiovisual de Terrassa
+(ESEIAAT), Terrassa, Spain
+
+
+
+ARTICLE               INFO                             ABSTRACT
+
+Keywords:                                              We propose a method for finding optimal quadrature/cubature rules with positive weights for
+Empirical Cubature Method                              parameterized functions in 1D, 2D or 3D spatial domains. The method takes as starting point the
+Hyperreduction                                         values of the functions at the Gauss points of a finite element (FE) mesh of the spatial domain
+Reduced-order modeling
+                                                       for a representative sample of input parameters, and then construct an elementwise continuous
+Singular Value Decomposition
+                                                       orthogonal basis for such functions using the truncated Singular Value Decomposition (SVD)
+Quadrature
+                                                       along with element polynomial fitting. To avoid possible memory bottlenecks in computing
+                                                       the SVD, we propose a Sequential Randomized SVD (SRSVD) in which the matrix is provided
+                                                       in a column-partitioned format, and which uses randomization to accelerate the processing of
+                                                       each individual block. After computing the basis functions, the method determines an exact
+                                                       integration rule for such functions, featuring as many points as functions, and in which the
+                                                       points are selected among the Gauss points of the FE mesh. Finally, the desired optimal rule
+                                                       is obtained by an sparsification process in which the algorithm zeroes one weight at a time
+                                                       while readjusting the positions and weights of the remaining points so that the constraints of
+                                                       the problem are satisfied. We apply this methodology to multivariate polynomials in cartesian
+                                                       domains to demonstrate that the method is indeed able to produce optimal rules – i.e., Gauss
+                                                       product rules –, and to a 2-parameters, 3D sinusoidal–exponential function to illustrate the use
+                                                       of the SRSVD in scenarios in which the standard SVD cannot handle the operation because of
+                                                       memory limitations. Lastly, the fact that the method does not require the analytical expression
+                                                       of the integrand functions – just their values at the FE Gauss points – makes it suitable for
+                                                       dealing with the so-called hyperreduction of parameterized finite element models. We exemplify
+                                                       this by showing its performance in the derivation of low-dimensional surrogate models in the
+                                                       context of the multiscale FE method. The Matlab source codes of both the CECM and the SRSVD,
+                                                       along with the scripts for launching the numerical tests, are openly accessible in the public
+                                                       repository https://github.com/Rbravo555/CECM-continuous-empirical-cubature-method.
+
+
+
+
+    ∗ Corresponding author at: Centre Internacional de Mètodes Numèrics en Enginyeria (CIMNE), Barcelona, Spain.
+      E-mail address: joaquin.alberto.hernandez@upc.edu (J.A. Hernández).
+
+https://doi.org/10.1016/j.cma.2023.116552
+Received 11 August 2023; Received in revised form 12 October 2023; Accepted 16 October 2023
+Available online 27 October 2023
+0045-7825/© 2023 The Authors.           Published by Elsevier B.V. This is an open access article under the CC BY-NC license
+(http://creativecommons.org/licenses/by-nc/4.0/).
+J.A. Hernández et al.                                                                                     Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+1. Introduction
+
+
+   The present paper is concerned with a classical problem of numerical analysis: the approximation of integrals over 1D, 2D and
+3D domains of parameterized functions as a weighted sum of the values of such functions at a set of 𝑚 points {𝒙1 , 𝒙2 … 𝒙𝑚 }:
+
+                                 ∑
+                                 𝑚
+             𝑓 (𝒙; 𝜇) 𝑑𝛺 ≈             𝑓 (𝒙𝑔 ; 𝜇)𝑤𝑔 ,                                                                                                                       (1)
+        ∫𝛺
+                                 𝑔=1
+
+(with 𝑚 as small as possible). This problem is generally known as either quadrature (for 1D domains) or cubature (for higher
+dimensions), and has a long pedigree stretching back as far as C.F. Gauss, who devised in 1814 the eponymous quadrature rule
+for univariate polynomials.
+
+
+
+1.1. Cubature problem in hyperreduced-order models
+
+
+    The recent development of the so-called hyperreduced-order models (HROMs) for parameterized finite element (FE) analyses [1,2]
+has sparked the resurgence of interest in this classical problem. Indeed, a crucial step in the construction of such HROMs is
+the solution of the cubature problem associated to the evaluation of the nonlinear term(s) in the pertinent governing equations.
+For instance, in a Galerkin-based structural HROM, the nonlinear term is typically the projection of the nodal FE internal forces
+𝑭 ℎ ∈ R𝑁𝑑𝑜𝑓 (here 𝑁𝑑𝑜𝑓 denotes the number of degrees of freedom of the FE model) onto the span of the displacement modes, i.e.:
+𝑭 = 𝝓𝑇 𝑭 ℎ , 𝝓 ∈ R𝑁𝑑𝑜𝑓 ×𝑛 being the matrix of displacement modes. The basic premise in these HROMs is that the number of modes
+is much smaller that the number of FE degrees of freedom (𝑛 ≪ 𝑁𝑑𝑜𝑓 ). This in turn implies that the internal forces per unit volume
+will also reside in a space of relatively small dimensions (independent of the size of the underlying FE mesh), and therefore, its
+integral over the spatial domain will be, in principle, amenable to approximation by an efficient cubature rule, featuring far less
+points than the original FE-based rule. The challenge lies in determining the minimum number of cubature points necessary for
+achieving a prescribed accuracy, as well as their location and associated positive weights. The requisite of positive weights arises
+from the fact that, in a Galerkin FE framework, the Jacobian matrix of the discrete system of equations is a weighted sum of the
+contribution at each FE Gauss point. Thus, if the Jacobian matrices at point level are positive definite, the global matrix is only
+guaranteed to inherit this desirable attribute if the cubature weights are positive [2].
+    Before delving into the description of the diverse approaches proposed to date to deal with this cubature problem in the context
+of HROMs, it proves convenient to formally formulate the problem in terms of a generic parameterized vector-valued function
+                                𝑁𝑒𝑙 𝑒
+𝒂 ∶ 𝛺 ×  → R𝑛 . Let 𝛺 = ∪𝑒=1      𝛺 be a finite element partition of the spatial domain 𝛺 ⊂ R𝑑 (𝑑 = 1, 2 or 3). For simplicity
+of exposition, assume that all elements are isoparametric and of the same order of interpolation, possessing 𝑟 Gauss points each.
+Suppose we are given the values of the integrand functions for 𝑃 instantiations of the input parameters ({𝝁𝑖 }𝑃𝑖=1 = 𝑠 ⊂ ) at
+all the Gauss points of the discretization. The integral of the function over 𝛺 for each 𝝁𝑗 (𝑗 = 1, 2 … 𝑃 ) can be calculated by the
+corresponding element Gauss rule as
+               𝑁𝑒𝑙                             𝑁𝑒𝑙 𝑟
+               ∑                               ∑  ∑
+        𝑏𝑘 =                𝑎𝑖 (𝒙, 𝝁𝑗 ) 𝑑𝛺 =              𝑎𝑖 (𝒙̄ 𝑒𝑔 , 𝝁𝑗 )𝑊𝑔𝑒 ,   𝑘 = (𝑗 − 1)𝑛 + 𝑖;          𝑗 = 1, 2 … 𝑃 ;         𝑖 = 1, 2 … 𝑛.                           (2)
+                     ∫𝛺 𝑒
+               𝑒=1                             𝑒=1 𝑔=1
+
+Here, 𝒙̄ 𝑒𝑔 ∈ 𝛺𝑒 denotes the position of the 𝑔th Gauss point of element 𝛺𝑒 , whereas 𝑊𝑔𝑒 > 0 is the product of the Gauss weight and
+the Jacobian of the isoparametric transformation at such a point. Each 𝑏𝑘 (𝑘 = 1, 2 … 𝑃 𝑛) is therefore considered as the ‘‘exact’’
+integral, that is, the reference value we wish to approximate. The above expression can be written in a compact matrix form as
+
+        𝒃𝐹 𝐸 = 𝑨𝑇𝐹 𝐸 𝑾 𝐹 𝐸 ,                                                                                                                                                (3)
+
+where 𝒃𝐹 𝐸 ∈ R𝑛𝑃 is the vector of ‘‘exact’’ integrals defined in Eq. (2), 𝑨𝐹 𝐸 is the matrix obtained from evaluating the integrand
+                                                           𝑁𝑒𝑙
+functions at all the FE Gauss point, 𝑿𝐹 𝐸 = {{𝒙̄ 𝑒𝑔 }𝑟𝑔=1 }𝑒=1 , while 𝑾 𝐹 𝐸 designates the vector of FE weights, formed by gathering all the
+Gauss weights in a single column vector. Each column of 𝑨𝐹 𝐸 is the discrete representation of a scalar-valued integrand function,
+and thus the total number of columns is equal to the number of sampling parameters 𝑃 times the number of integrand functions
+per parameter, 𝑛. The number of rows of 𝑨𝐹 𝐸 , on the other hand, is equal to the total number of integration points (𝑀 = 𝑁𝑒𝑙 ⋅ 𝑟).
+In terms of element contributions, matrix 𝑨𝐹 𝐸 is expressible as
+
+               ⎡ 𝑨(1) ⎤                                       ⎡𝑎 (𝒙̄ 𝑒 , 𝝁 )       𝑎2 (𝒙̄ 𝑒1 , 𝝁1 )   ⋯      𝑎𝑛 (𝒙̄ 𝑒1 , 𝝁1 )   ⋯      𝑎𝑛 (𝒙̄ 𝑒1 , 𝝁𝑃 )⎤
+               ⎢ 𝐹𝐸 ⎥                                         ⎢ 1 1 1                                                                                  ⎥
+               ⎢ (2) ⎥                                        ⎢                                                                                        ⎥
+                 𝑨                                             𝑎 (𝒙̄ 𝑒 , 𝝁 )       𝑎2 (𝒙̄ 𝑒2 , 𝝁1 )   ⋯      𝑎𝑛 (𝒙̄ 𝑒2 , 𝝁1 )   ⋯      𝑎𝑛 (𝒙̄ 𝑒2 , 𝝁𝑃 )⎥
+        𝑨𝐹 𝐸 = ⎢ 𝐹 𝐸 ⎥                  where           𝑨(𝑒) =⎢ 1 2 1                                                                                                       (4)
+               ⎢        ⎥                                𝐹𝐸   ⎢                                                                                        ⎥
+               ⎢ ⋮ ⎥                                          ⎢      ⋮                    ⋮           ⋮            ⋱            ⋮              ⋮       ⎥
+               ⎢ (𝑁𝑒𝑙 ) ⎥                                     ⎢                                                                                        ⎥
+               ⎣𝑨𝐹 𝐸 ⎦                                        ⎣𝑎1 (𝒙̄ 𝑒𝑟 , 𝝁1 )    𝑎2 (𝒙̄ 𝑒𝑟 , 𝝁1 )   ⋯      𝑎𝑛 (𝒙̄ 𝑒𝑟 , 𝝁1 )   ⋯      𝑎𝑛 (𝒙̄ 𝑒𝑟 , 𝝁𝑃 )⎦
+                              𝑁𝑒𝑙 ⋅𝑟×𝑛𝑃                                                                                                                𝑟×𝑛𝑃
+
+                                                                                              2
+J.A. Hernández et al.                                                                  Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+(here 𝑨(𝑒)
+        𝐹𝐸
+           ∈ R𝑟×𝑛𝑃 denotes the block matrix corresponding to the 𝑟 Gauss points of element 𝛺𝑒 ). The same notational scheme is
+used for the vector of FE weights:
+
+              ⎡ 𝑾 (1) ⎤                                        ⎡𝑊 𝑒 ⎤
+              ⎢ 𝐹𝐸 ⎥                                           ⎢ 1⎥
+              ⎢ (2) ⎥                                          ⎢ 𝑒⎥
+                𝑾                                                𝑊
+        𝑾𝐹𝐸 = ⎢ 𝐹𝐸 ⎥                   where             𝑾𝐹𝐸 = ⎢ 2 ⎥ .
+                                                          (𝑒)
+                                                                                                                                                         (5)
+              ⎢        ⎥                                       ⎢    ⎥
+              ⎢ ⋮ ⎥                                            ⎢ ⋮ ⎥
+              ⎢ (𝑁𝑒𝑙 ) ⎥                                       ⎢ 𝑒⎥
+              ⎣𝑾 𝐹 𝐸 ⎦                                         ⎣𝑊𝑟 ⎦
+                         𝑁 ⋅𝑟×1
+                             𝑒𝑙                                      𝑟×1
+
+    The cubature problem consists in finding a set of points 𝑿 ∶= {𝒙𝑔 }𝑚     𝑔=1
+                                                                                 (𝒙𝑔 ∈ 𝛺) and associated positive weights {𝜔𝑔 }𝑚
+                                                                                                                               𝑔=1
+                                                                                                                                   (with 𝑚
+as small as possible) such that the vector of ‘‘exact’’ integrals 𝒃𝐹 𝐸 is approximated to some desired level of accuracy 0 ≤ 𝜖𝑏 ≤ 1, i.e.:
+
+        ‖𝑨𝑇(𝑿)𝝎 − 𝒃𝐹 𝐸 ‖2 ≤ 𝜖𝑏 ‖𝒃𝐹 𝐸 ‖2 .                                                                                                                (6)
+
+Here, ‖ ∙ ‖2 is the standard Euclidean norm, whereas 𝑨(𝑿) and 𝝎 denote the matrix of the integrand evaluated at the set of points
+𝑿 and their associated weights, respectively:
+               ⎡ 𝑨(𝒙1 ) ⎤    ⎡ 𝑎1 (𝒙1 , 𝝁1 )   𝑎2 (𝒙1 , 𝝁1 )   ⋯   𝑎𝑛 (𝒙1 , 𝝁1 )   ⋯     𝑎𝑛 (𝒙1 , 𝝁𝑃 ) ⎤             ⎡ 𝜔1 ⎤
+               ⎢        ⎥    ⎢                                                                         ⎥             ⎢ ⎥
+                 𝑨(𝒙  )        𝑎 (𝒙 , 𝝁 )      𝑎2 (𝒙2 , 𝝁1 )   ⋯   𝑎𝑛 (𝒙2 , 𝝁1 )   ⋯     𝑎𝑛 (𝒙2 , 𝝁𝑃 ) ⎥               𝜔
+        𝑨(𝑿) = ⎢     2 ⎥
+                          ∶= ⎢ 1 2 1                                                                             𝝎 = ⎢ 2⎥     .                          (7)
+               ⎢ ⋮ ⎥         ⎢      ⋮               ⋮          ⋮        ⋱          ⋮          ⋮        ⎥             ⎢⋮⎥
+               ⎢𝑨(𝒙 )⎥       ⎢𝑎 (𝒙 , 𝝁 )       𝑎2 (𝒙𝑚 , 𝝁1 )   ⋯   𝑎𝑛 (𝒙𝑚 , 𝝁1 )   ⋯     𝑎𝑛 (𝒙𝑚 , 𝝁𝑃 )⎥⎦             ⎢𝜔 ⎥
+               ⎣    𝑚 ⎦      ⎣ 1 𝑚 1                                                                     𝑚×𝑃 𝑛       ⎣ 𝑚 ⎦𝑚×1
+
+Remark 1.1. A remark concerning notation is in order here. In Eq. (7), 𝑨(𝒙) (𝒙 ∈ 𝛺) represents a vector-valued function that returns
+the 𝑛 entries of the integrand function 𝒂(𝒙) for the 𝑃 samples of the input parameters, in the form of row matrix (i.e., 𝑨(𝒙) ∈ R1×𝑛𝑃 ).
+On the other hand, when the argument of 𝑨 is not a single point, but a collection of 𝑚 points 𝑿 ∶= {𝒙𝑔 }𝑚   𝑔=1
+                                                                                                                , then 𝑨(𝑿) represents
+a matrix with as many rows as points in the set, i.e. 𝑨(𝑿) ∈ R𝑚×𝑛𝑃 . According to this notational convention, the matrix defined in
+Eq. (4) can be compactly written as 𝑨𝐹 𝐸 = 𝑨(𝑿𝐹 𝐸 ).
+
+1.2. State-of-the-art on cubature rules for HROMs
+
+    The first attempts to solve the above described cubature problem in the context of reduced-order modeling were carried by the
+computer graphics community. The cubature scheme proposed by An et al. in Ref. [3] in 2010 for dealing with the evaluation of
+the internal forces in geometrically nonlinear models may be regarded as the germinal paper in this respect. An and co-workers [3]
+addressed the cubature problem (6) as a best subset selection problem (i.e., the desired set of points is considered a subset of the entire
+set of Gauss points, 𝑿 ⊂ 𝑿𝐹 𝐸 ). They proposed a greedy strategy that incrementally constructs the set of points by minimizing the
+norm of the residual of the integration at each iteration, while enforcing the positiveness of the weights. Subsequent papers in the
+computer graphics community (see Ref. [4] and references therein) revolved around the same idea, and focused fundamentally in
+improving the efficiency of the scheme originally proposed by An et al. [3]—which turned out to be ostensibly inefficient, for it
+solves a nonnegative-least squares problem, using the standard Lawson–Hanson algorithm [5], each time a new point enters the set.
+    Interesting re-interpretations of the cubature problem came with the works of Von Tycowicz et al. [6] and Pan et al. [7]—still
+within computer graphics circles. Both works recognized the analogy between the discrete cubature problem and the quest for
+sparsest solution of underdetermined systems of equations, a problem which is common to many disciplines such as signal processing,
+inverse problems, and genomic data analysis [8]. Indeed, if we regard the vector of reduced weights 𝝎 as a sparse vector of the
+same length as 𝑾 𝐹 𝐸 , then the best subset selection problem can be posed as that of minimizing the nonzero entries of 𝝎:
+
+        min ‖𝝎‖0 , subject to ‖𝑨𝑇𝐹 𝐸 𝝎 − 𝒃𝐹 𝐸 ‖2 ≤ 𝜖𝑏 ‖𝒃𝐹 𝐸 ‖2                                                                                           (8)
+        𝝎≥𝟎
+
+where ‖ ⋅ ‖0 stands for the 𝓁0 pseudo-norm—the number of nonzero entries of the vector. It is well-known [9] that this problem
+is computationally intractable (NP hard), and therefore, recourse to either suboptimal greedy heuristic or convexification is to be
+made. Von Tycowicz et al. [6] adapted the algorithm proposed originally in Ref. [10] for compressed sensing applications (called
+normalized iterative hard thresholding, abbreviated NIHT) by incorporating the positive constraints, reporting significant improvements
+in performance with respect to the original NNLS-based algorithm of An et al. [3]. The work by Pan et al. [7], on the other
+hand, advocated an alternative approach – also borrowed from the compressed sensing literature, see Ref. [11] – based on the
+convexification of problem (8). Such a convexification consists in replacing the 𝓁0 pseudo-norm by the 𝓁1 norm—an idea that, in
+turn, goes back to the seminal paper by Chen et al. [12]. In doing so, the problem becomes tractable, and can be solved by standard
+Linear Programming (LP) techniques.
+    Cubature schemes did not enter the computational engineering scene until the appearance in 2014 of the Energy-Conserving
+Mesh Sampling and Weighting (ECSW) scheme proposed by C. Farhat and co-workers [1]. The ECSW is, in essence, a nonnegative
+least squares method (NNLS), very much aligned to the original proposal by An et al. [3], although much more algorithmically
+efficient. Indeed, Farhat and co-workers realized that the NNLS itself produces sparse approximations, and therefore it suffices to
+introduce a control-error parameter inside the standard NNLS algorithm—rather than invoking the NNLS at each greedy iteration, as
+proposed originally in An’s paper [3]. The efficiency of the ECSW was tested against other sparsity recovery algorithms by Farhat’s
+
+                                                                             3
+J.A. Hernández et al.                                                                 Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+team in Ref. [13], arriving at the conclusion that, if equipped with an updatable QR decomposition for calculating the unrestricted
+least-squares problem of each iteration, the ECSW outperformed existing implementations based on convexification of the original
+problem. It should be pointed out that, although the ECSW is a mesh sampling procedure, and therefore, the entities selected by
+the ECSW are finite elements rather than single Gauss points, the formulation of the problem is rather similar to the one described
+in the foregoing: the only differences are that, firstly, each element contribution 𝑨(𝑒)
+                                                                                       𝐹𝐸
+                                                                                          in Eq. (4) collapses into a single row obtained
+as the weighted sum of the Gauss points rows; and, secondly, the vector of FE weights 𝑾 𝐹 𝐸 is replaced by an all-ones vector.
+    The Empirical Cubature Method, hereafter referred to as Discrete Empirical Cubature Method (DECM), introduced by the first
+author in Ref. [2] for parameterized finite element structural problems, also addresses the problem via a greedy algorithm, in the
+spirit of An’s approach [3], but exploits the fact that deriving a cubature rule for integrating the set of functions contained column-
+wise in matrix 𝑨𝐹 𝐸 is equivalent to deriving a cubature rule for a set of orthogonal bases for such functions. Ref. [2] demonstrates
+that this brings two salient advantages in the points selection process. Firstly, the algorithm invariably converges to zero integration
+error when the number of selected points is equal to the number of orthogonal basis functions; and secondly, the algorithm need
+not enforce the positiveness of the weights at each iteration. Furthermore, Ref. [2] recognizes that the cubature problem is ill-posed
+when 𝒃𝐹 𝐸 ≈ 𝟎 – this occurs, for instance, in self-equilibrated structural problems, such as computational homogenization [14,15]
+– and shows that this can be overcome by enforcing the sum of the reduced weights to be equal to the volume of the domain. In
+Ref. [16], the first author proposed an improved version of the original DECM, in which the local least-squares problem at each
+iteration are solved by rank-one updates.
+    Another approach also introduced recently in the computational engineering community is the Empirical Quadrature Method
+(EQM), developed by A. Patera and co-workers [17–19]. It should be noted that the name similarity with the above described
+Empirical Cubature Method is only coincidental, for the EQM is not based on the nonnegative least squares method, like the ECM,
+but rather draws on the previously mentioned 𝓁1 convexification of problem (8). Thus, in the EQM, the integration rule is determined
+by linear programming techniques, as in the method advocated in the work by Pan et al. [7] for computer graphics applications.
+
+Remark 1.2. The preceding literature survey solely includes hyperreduction methods based on the efficient evaluation of the
+integrals appearing in the full-order FE equations via cubature rules with positive weights. Nevertheless, it should be mentioned
+that there is another important class of hyperreduction methods, which actually predates cubature-based schemes in computational
+engineering circles. Such methods may be termed interpolation-based approaches, for they rely on the approximation of the full-
+order nonlinear terms, either assembled, see Refs. [20,21], or unassembled, see Ref. [22] as a linear expansion of SVD basis vectors,
+the coefficients in this expansion being determined by interpolation at selected entries of the basis matrix (or more generally, by
+least-squares fitting [23]). For a comprehensive review of such interpolation-based methods, the reader is referred to Ref. [24]. It
+should be also pointed out that, according to the comparative performance study conducted by Farhat and co-workers in Ref. [25],
+cubature-based schemes with positive weights tend to be more robust than interpolation-based approaches, because they preserve
+the numerical stability properties of the original full-order model.
+
+1.3. Efficiency of best subset selection algorithms
+
+    The best subset selection algorithms described in the foregoing vary in the way the corresponding optimization problem is
+formulated, and also in computational performance (depending on the nature and size of the problem under consideration), yet all of
+them have something in common: none of them is able to provide the optimal solution, not even when the optimal integration points
+are contained in the set of FE Gauss points. We have corroborated this claim by examining the number of points provided by all these
+methods when the integrand is a 1D polynomial in the interval 𝛺 = [−1, 1]. In Fig. 1, we show, for the case of polynomials of order
+𝑃 = 5, the location of the points and the associated weights provided by1 : (1) the nonnegative least-squares method (NNLS); (2)
+the linear-programming based method (LP); (3) the Discrete Empirical Cubature Method (DECM); (4) and the normalized iterative
+hard thresholding (NIHT). We also show in each Figure the 3-points optimal Gauss rule, which in this case is 𝜔∗1 = 𝜔∗3 = 5∕9,
+                              √
+𝜔∗2 = 8∕9, and 𝑥∗1 = −𝑥∗3 = 3∕5 𝑥∗2 = 0. The employed spatial discretization features 𝑁𝑒𝑙 = 1000 elements, with one Gauss point
+per element (located at the midpoint), and it was arranged in such a way that 3 of the corresponding element midpoints coincide
+with the optimal Gauss points. It can be seen that, as asserted, none of the four schemes is able to arrive at the optimal quadrature
+rule. Rather, the four methods provide quadrature rules with 𝑚 = 𝑃 + 1 = 6 points, that is, with as many points as functions to be
+integrated; in the related literature, these rules are known as interpolatory quadrature rules [27]. Different experiments with different
+initial discretizations and/or polynomial orders led invariably to the same conclusion (i.e., all of them produce interpolatory rules).
+
+1.4. Goal and methodology
+
+   Having described the capabilities and limitations of existing cubature methods in the context of HROMs, we now focus on the
+actual goal of the present paper, which is to enhance such methods so that they produce rules close to the optimal ones—or at least
+rules featuring far less points than integrand functions. Our proposal in this respect draws inspiration from the elimination algorithm
+advocated, apparently independently, by Bremer et al. [28] and Xiao et al. [29] in the context of the so-called Generalized Gaussian
+
+
+   1 The NNLS and LP analyses can be carried out by calling standard libraries (here we have used the Matlab functions lsqnonneg and linprog, respectively),
+
+the ECM algorithm is given in Ref. [16], whereas for the NIHT we have used the codes given in Ref. [26].
+
+
+                                                                             4
+J.A. Hernández et al.                                                                     Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+
+
+Fig. 1. Location of the points and magnitude of the weights of the integration rules for polynomial of order 𝑃 = 5 in 𝛺 = [−1, 1] provided by the: (a)
+Linear programming-based strategy (LP); (b) Discrete Empirical Cubature Method (DECM); (c) Non-negative least-squares (NNLS). (d) Normalized iterative hard
+thresholding (NIHT). Note that in the 4 cases, the number of integration points is equal to the number of functions to be integrated (i.e., monomials) 𝑚 = 𝑃 +1 = 6.
+The optimal solution is provided by the Gaussian quadrature rule of 𝑚∗ = 3 points, also displayed in each of the four graphs.
+
+
+
+
+Rules (see Refs. [30–32]), which, as its name indicates, is a research discipline that seeks to extend the scope of the quadrature
+rule originally developed for polynomials by C.F. Gauss. To the best of the authors’ knowledge, cross-fertilization between this
+field and the field of hyperreduction of parameterized finite element models has not yet taken place. This lack of cross-fertilization
+may be attributed to the fact that the former is fundamentally concerned with parametric families of functions whose analytical
+expression is known, while the latter concentrates in huge databases of empirical functions (i.e., functions derived from computational
+experiments), whose values are only given at certain points of the spatial domain (the Gauss points of the FE mesh). The present
+work, thus, appears to be the first attempt to combine ideas from these two related disciplines.
+    The intuition behind the elimination algorithm presented in Refs. [28,29] goes as follows. Consider, for instance (the same
+arguments can be used with either the LP or NIHT approaches), the points and weights provided by the interpolatory DECM rule
+shown in Fig. 1.b. Observe that the distribution of weights is rather irregular, being the difference between the largest and smallest
+weights more pronounced than in the case of the optimal rule—for instance, the smallest weight is only 5% of the total length of the
+domain. This suggests that we may get rid of some of the points in the initial set, on the grounds that, as their contribution to the
+integration error is not significant (relatively small weights), a slight ‘‘readjustment’’ of the positions and weights of the remaining
+points may suffice to return the integration error to zero. Since we cannot know a priori how many points in total can be eliminated,
+this operation must be carried out carefully, removing one point at a time.
+
+1.4.1. Sparsification problem
+    Although inspired by this elimination scheme, our approach addresses the problem from a different perspective, more in line
+with the sparsification formulation presented in expression (8), in which the goal is to drive to zero as many weights as possible.
+To understand how our sparsification scheme works, it proves useful to draw a physical analogy in which the integration points
+are regarded as particles endowed with nonnegative masses (the weights), and which are subject to nonlinear conservation equations
+(the integration conditions). At the beginning, the particles have the positions and masses (all positive) determined by one of the
+interpolatory cubature rules discussed previously in Section 1.3. The goal is to, progressively, drive to zero the mass of as many
+particles as possible, while keeping the remaining particles within the spatial domain, and with nonnegative masses. To this end,
+at each step, we reduce the mass of the particle that least contributes to the conserved quantities, and then calculate the position
+and masses of the remaining particles so that the nonlinear conservation equations are satisfied.
+    For solving the nonlinear balance equations using standard methods (i.e., Newton’s), it is necessary to have a continuous (and
+differentiable) representation of the integrand functions. In contrast to the cases presented in Refs. [28,29], in our case, the analytical
+expression of such functions are in general not available. To overcome this obstacle, we propose to construct local polynomial
+interpolatory functions using the values of the integrand functions at the Gauss points of each finite element traversed by the
+particles.
+    Another crucial difference of our approach with respect to Refs. [28,29] is the procedure to solve the nonlinear equations at
+each step. Due to the underdetermination of such equations, there are an infinite number of possible configurations of the system
+for the majority of the steps. Both Refs. [28,29] use the pseudo-inverse of the Jacobian matrix, a fact that is equivalent to choosing
+the (non-sparse) 𝓁2 minimum-norm solution [9] in each iteration. By contrast, here we employ sparse solutions, with as many
+nonzero entries as functions to be integrated. The rationale for employing this sparse solution is that, on the one hand, it minimizes
+the number of particles that move at each iteration, and consequently, diminish the computational effort of tracking the particles
+through the mesh; and, on the other hand, it reduces the overall error inherent to the recovery of the integrand functions via
+interpolation.
+    It should be stressed that we do not employ a specific strategy for directly enforcing the positiveness of the masses (weights).
+Rather, we force the constant function to appear in the set of integrand functions; in our physical analogy, this implies that one
+
+                                                                                 5
+J.A. Hernández et al.                                                      Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+of the balance equations is the conservation of mass. Since the total mass of the system is to be conserved, reducing the mass of
+one particle leads to an increase in the overall mass of the remaining particles, and this tends to ensure that their masses remain
+positive. On the other hand, when a particle attempts to leave the domain, we return it back to its previous position, and proceed
+with the solution scheme. If convergence is not achieved, or the constraints are massively violated, we simply abandon our attempt
+of reducing the weight of the current controlled particle, and move to the next particle in the list. The process terminates – hopefully
+at the optimum – when we have tried to make zero the masses of all particles.
+    We choose as initial interpolatory rule – over the other methods discussed in Fig. 1 – the Discrete Empirical Cubature Method,
+DECM. The reason for this choice is twofold. Firstly, we have empirically found that the DECM gives points that tend to be close
+to the optimal
+             √ ones—for instance, in Fig. 1.b two of the points calculated by the DECM practically coincide with the optimal Gauss
+points 𝑥1 = 3∕5 and 𝑥2 = 0. Secondly, the DECM does not operate directly on the sampling matrix 𝑨𝐹 𝐸 defined in Eq. (4), but
+rather on an orthogonal basis matrix for its column space [16]. As a consequence, the cubature problem translates into one of
+integrating orthogonal basis functions, and this property greatly facilitates the convergence of the nonlinear problem alluded to
+earlier. The combination of the DECM followed by the continuous search process will be referred to hereafter as the Continuous
+Empirical Cubature Method (CECM).
+
+1.5. Sequential randomized SVD (SRSVD)
+
+    We use the ubiquitous Singular Value Decomposition (SVD) to determine the orthogonal basis matrix for the column space
+of 𝑨𝐹 𝐸 required by the DECM. Computationally speaking, the SVD is by far the most memory-intensive operation of the entire
+cubature algorithm. For instance, in a parametric function of dimension 𝑛 = 10, with 𝑃 = 100 parametric samples and a mesh of
+𝑁𝑒𝑙 = 106 linear hexahedra elements featuring 𝑛𝑔 = 8 Gauss points each, matrix 𝑨𝐹 𝐸 occupies 64 Gbytes of RAM memory. To
+overcome such potential memory bottlenecks, we have devised a scheme for computing the SVD in which the matrix is provided
+into a column-partitioned format, with the submatrices being processed one at a time. In contrast to other partitioned schemes,
+such as the one proposed by the first author in Ref. [2] or the partitioned Proper Orthogonal Decomposition of Ref. [33], which
+compute the SVD of the entire matrix from the individual SVDs of each submatrices, our scheme addresses the problem in an
+incremental, sequential fashion: at each increment, the current basis matrix (for the column space of 𝑨𝐹 𝐸 ) is enriched with the left
+singular vectors coming from the SVD of the orthogonal complement. The advantage of this sequential approach over the concurrent
+approaches in Refs. [2,33] is that it exploits the existence of linear correlations across the blocks. For instance, in a case in which
+all submatrices are full rank, and besides, a linear combination of the first submatrix (this may happen when analyzing periodic
+functions), our sequential approach would require performing a single SVD—that of the first matrix. By contrast, the concurrent
+approaches in Refs. [2,33], would not only need to calculate the SVD of all the submatrices, but they would not provide any benefit
+at all in terms of computer memory (in fact the partitioned scheme would end up being more costly than the standard one-block
+implementation). Lastly, to accelerate the performance of each SVD on the orthogonal complement of the submatrices, we employ
+a modified version of the randomized blocked SVD proposed by Martinsson et al. [34], using as prediction for the rank of a given
+submatrix that of the previous submatrix in the sequence.
+
+1.6. Organization of the paper
+
+    The paper is organized as follows. The determination of the orthogonal basis functions and their gradients by using the SVD
+of the sampling matrix are discussed in Section 2. Although an original contribution of the present work, we have relegated the
+description of the Sequential Randomized SVD (SRSVD) algorithm to Appendix (in order not to interrupt the continuity of the
+presentation of the cubature algorithm, which constitutes the primary focus of this paper). On the other hand, the computation of
+the interpolatory cubature rule by the Discrete Empirical Cubature Method, DECM, is presented in Section 3, and the solution of
+the continuous sparsification problem in Sections 4 and 5. Except for the DECM, which can be found in the original Ref. [16], we
+provide the pseudo-codes of all the algorithms involved in both the cubature and the SRSVD. Likewise, we have summarized all the
+implementation steps in Box 5.1 of Section 5.3. The logic of the proposed methodology can be followed without the finer details
+from the information in this Box.
+    Sections 6.1 and 6.2 are devoted to the numerical validation by comparison with the (optimal) quadrature and cubature rules of
+univariate and multivariate Lagrange polynomials. The example presented in Section 6.3, on the other hand, is intended to illustrate
+the performance of the method in scenarios where the proposed SRSVD becomes essential—because the integrand matrix exhausts
+the memory capabilities of the computer at hand. Finally, the application of the proposed CECM to the hyperreduction of a multiscale
+finite element model is explained in Section 6.4.
+
+2. Orthogonal basis for the integrand
+
+2.1. Basis matrix via SVD
+
+   As pointed out in the foregoing, our cubature method does not operate directly on the integrand sampling matrix 𝑨𝐹 𝐸 , defined
+in Eq. (4), but on a basis matrix for its column space, denoted henceforth by 𝑼 ∈ R𝑀×𝑝 . Since 𝑼 will be a linear combination of
+the columns of 𝑨𝐹 𝐸 , which are in turn the discrete representation of the scalar integrand functions we wish to integrate, it follows
+that the columns of 𝑼 themselves will be the discrete representations of basis functions for such integrand functions. These basis
+
+                                                                   6
+J.A. Hernández et al.                                                                                 Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+functions will be denoted hereafter by 𝑢𝑖 ∶ 𝛺 → R (𝑖 = 1, 2 … 𝑝). In analogy to Eq. (4), we can write 𝑼 in terms of such basis
+functions as
+           ⎡ 𝑼 (1) ⎤                                            ⎡𝒖(𝒙̄ 𝑒 )⎤
+           ⎢ (2) ⎥                                              ⎢ 1𝑒 ⎥
+             𝑼 ⎥                                                 𝒖(𝒙̄ )
+        𝑼 =⎢                     where                 𝑼 (𝑒) ∶= ⎢ 2 ⎥ .                                                                                                 (9)
+           ⎢ ⋮ ⎥                                                ⎢ ⋮ ⎥
+           ⎢𝑼 (𝑁𝑒𝑙 ) ⎥                                          ⎢𝒖(𝒙̄ 𝑒 )⎥
+           ⎣         ⎦𝑀×𝑝                                       ⎣ 𝑟 ⎦𝑟×𝑝
+while
+               [                                       ]
+        𝒖(𝒙) ∶= 𝑢1 (𝒙)        𝑢2 (𝒙)      ⋯      𝑢𝑝 (𝒙) 1×𝑝 .                                                                                                          (10)
+
+We shall require these basis functions to be 𝐿2 (𝛺)-orthogonal, i.e.:
+
+             𝑢𝑖 𝑢𝑗 𝑑𝛺 = 𝛿𝑖𝑗 ,          𝑖, 𝑗 = 1, 2 … 𝑝,                                                                                                                (11)
+        ∫𝛺
+𝛿𝑖𝑗 being the Kronecker delta. By evaluating the above integral using the FE-Gauss rule (as done in Eq. (2)), we get:
+                            𝑁𝑒𝑙 𝑟
+                            ∑  ∑
+             𝑢𝑖 𝑢𝑗 𝑑𝛺 =               𝑢𝑖 (𝒙̄ 𝑒𝑔 )𝑊𝑔𝑒 𝑢𝑗 (𝒙̄ 𝑒𝑔 ) = 𝑼 𝑇𝑖 diag(𝑾 𝐹 𝐸 )𝑼 𝑗 ,       𝑖, 𝑗 = 1, 2 … 𝑝.                                                       (12)
+        ∫𝛺
+                            𝑒=1 𝑔=1
+
+In the preceding equation, 𝑼 𝑖 and 𝑼 𝑗 represents the 𝑖th and 𝑗th columns of 𝑼 , while diag(𝑾 𝐹 𝐸 ) stands for a diagonal matrix
+containing the entries of the vector of FE weights 𝑾 𝐹 𝐸 (defined in Eq. (5)). The above condition can be cast in a compact form as
+
+        𝑼 𝑇 diag(𝑾 𝐹 𝐸 )𝑼 = 𝑰,                                                                                                                                         (13)
+
+𝑰 being the 𝑝 × 𝑝 identity matrix. The preceding equation reveals that orthogonality in the 𝐿2 (𝛺) sense for the basis functions 𝑢𝑖
+translates into orthogonality for the columns of 𝑼 in the sense defined by the following inner product
+
+        ⟨𝒗1 , 𝒗2 ⟩𝑊 ∶= 𝒗𝑇1 diag(𝑾 𝐹 𝐸 )𝒗2                                                                                                                              (14)
+
+(𝒗1 , 𝒗2 ∈ R𝑀 ).
+     In order to determine 𝑼 from 𝑨𝐹 𝐸 , we compute first the (truncated) Singular Value Decomposition of the weighted matrix defined
+by
+                    √
+         ̄ ∶= diag( 𝑾 𝐹 𝐸 )𝑨𝐹 𝐸
+         𝑨                                                                                                                       (15)
+
+that is:
+        ̄ = 𝑼̄ 𝑺𝑽 𝑇 + 𝑬,
+        𝑨             ̄                                                                                                                                                (16)
+
+symbolyzed in what follows as the operation:
+
+        [𝑼̄ , 𝑺, 𝑽 ] = 𝚂𝚅𝙳(𝑨,
+                           ̄ 𝜖𝑠𝑣𝑑 ).                                                                                                                                   (17)
+
+Here, 𝑼̄ ∈ R𝑀×𝑝 , 𝑺 ∈ R𝑝×𝑝 and 𝑽 ∈ R𝑑𝑃 ×𝑝 are the matrices of left-singular vectors, singular values and right-singular vectors,
+respectively. The matrix of singular values is diagonal with 𝑆𝑖𝑖 ≥ 𝑆𝑖−1,𝑖−1 > 0, while the matrices of left-singular and right-singular
+vectors obey the orthogonality conditions
+          𝑇
+        𝑼̄ 𝑼̄ = 𝑰,              𝑽 𝑇 𝑽 = 𝑰.                                                                                                                             (18)
+
+Matrix 𝑬̄ in Eq. (16), on the other hand, represents the truncation term, which is controlled by a user-specified tolerance 0 ≤ 𝜖𝑠𝑣𝑑 ≤ 1
+such that
+
+        ‖𝑬‖
+         ̄ 𝐹 ≤ 𝜖𝑠𝑣𝑑 ‖𝑨‖
+                     ̄ 𝐹                                                                                                                                               (19)
+
+(here ‖ ∙ ‖𝐹 denotes the Frobenius norm). The desired basis matrix 𝑼 is computed from 𝑼̄ as
+                 √       −1
+       𝑼 = diag( 𝑾 𝐹 𝐸 ) 𝑼̄ .                                                                                                                                          (20)
+
+It can be readily seen that, in doing so, the 𝑾 𝐹 𝐸 -orthogonality condition defined in Eq. (13) is satisfied. Multiplication of both sides
+of Eq. (16) allows us to write
+
+        𝑨𝐹 𝐸 = 𝑼 𝑺𝑽 𝑇 + 𝑬,                                                                                                                                             (21)
+
+where
+                  √       −1
+        𝑬 ∶= diag( 𝑾 𝐹 𝐸 ) 𝑬.̄                                                                                                                                         (22)
+
+Notice that, by virtue of the definition of Frobenius norm, and by using the preceding expression, we have that
+         ̄ 2 = tr (𝑬̄ 𝑬)𝑇
+                      ̄ = tr (𝑬 𝑇 diag(𝑾 𝐹 𝐸 )𝑬) = ‖𝑬‖2 ,
+        ‖𝑬‖𝐹                                          𝑊                                                                                                                (23)
+
+                                                                                            7
+J.A. Hernández et al.                                                          Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+where tr (∙) stands for the trace operator, and ‖ ∙ ‖𝑊 designates the norm induced by the inner product introduced in Eq. (14). Since
+the same reasoning can be applied to ‖𝑨‖  ̄ 𝐹 , we can alternatively write the truncation condition (19) as
+
+        ‖𝑬‖𝑊 ≤ 𝜖𝑠𝑣𝑑 ‖𝑨𝐹 𝐸 ‖𝑊 .                                                                                                                  (24)
+
+Remark 2.1. When 𝑨𝐹 𝐸 is too large to be processed as a single matrix, we shall use, rather than the standard SVD (17), the
+sequential randomized SVD alluded to in the introductory section (1.5):
+
+        [𝑼̄ , 𝑺, 𝑽 ] = 𝚂𝚁𝚂𝚅𝙳([𝑨
+                              ̄ 1, 𝑨
+                                   ̄ 2, … 𝑨
+                                          ̄ 𝑠 ], 𝜖𝑠𝑣𝑑 )                                                                                         (25)
+       ̄ 1, 𝑨
+(here [𝑨    ̄ 2, … 𝑨
+                   ̄ 𝑠 ] stands for a partition of the weighted matrix 𝑨).
+                                                                       ̄ The implementation details are provided in Algorithm 6 of
+Appendix.
+
+
+2.2. Constant function
+
+   We argued in Section 1.4 that the efficiency of the proposed search algorithm relies on one fundamental requirement: the
+volume of the domain is to be exactly integrated—i.e., the sum of the cubature weights must be equal to the volume of the domain
+𝑉 =        𝑑𝛺. If the integrand functions are provided as a collection of analytical expressions, this can be achieved by incorporating
+     ∫𝛺
+a constant function in such a collection, with the proviso that the value for the constant should be sufficiently high so that the SVD
+regards the function as representative within the sample.
+   The same reasoning applies when the only data available is the empirical matrix 𝑨𝐹 𝐸 : in this case, we may make 𝑨𝐹 𝐸 ←
+[𝑨𝐹 𝐸 , 𝑐𝟏], where 𝟏 is an all-ones vector and 𝑐 ∈ R the aforementioned constant. Alternatively, to make the procedure less contingent
+upon the employed constant 𝑐, we may expand, rather than the original matrix 𝑨𝐹 𝐸 , the basis matrix 𝑼 itself. To preserve column-
+wise orthogonality, we proceed by first computing the component of the all-ones vector orthogonal to the column space of 𝑼 (with
+respect to the inner product (14)):
+
+        𝒗 = 𝟏 − 𝑼 𝑼 𝑇 diag(𝑾 𝐹 𝐸 )𝟏 = 𝟏 − 𝑼 𝑼 𝑇 𝑾 𝐹 𝐸 .                                                                                         (26)
+
+If ‖𝒗‖2 ≈ 0, then no further operation is needed (the column space of 𝑼 already contains the all-ones vector); otherwise, we set
+𝒗 ← 𝒗∕‖𝒗‖2 , and expand 𝑼 as 𝑼 ← [𝒗, 𝑼 ].
+
+Lemma 2.1.        If the column space of the basis matrix 𝑼 contains the all-ones (constant) vector, then
+          𝑇
+        𝑬 𝑾 𝐹 𝐸 = 𝟎,                                                                                                                            (27)
+
+that is, the integrals of the functions whose discrete representation are the truncation matrix 𝑬 in the SVD (21) are all zero.
+
+Proof. By construction, the truncation term 𝑬 admits also a decomposition of the form 𝑬 = 𝑼⊥ 𝑺⊥ 𝑽 ⊥𝑇 , where ⟨𝑼⊥ , 𝑼⊥ ⟩𝑊 = 𝑰,
+⟨𝑼⊥ , 𝑼 ⟩𝑊 = 𝟎 and 𝑽 ⊥𝑇 𝑽 = 𝑰. Thus, replacing this decomposition into Eq. (27), we arrive at
+
+        𝑬 𝑇 𝑾 𝐹 𝐸 = 𝑽 ⊥ 𝑺⊥ (𝑼⊥𝑇 𝑾 𝐹 𝐸 ) = 𝟎.                                                                                                    (28)
+
+The proof boils down thus to demonstrate that 𝑼⊥𝑇 𝑾 𝐹 𝐸 = 𝟎. This follows easily from the condition that ⟨𝑼⊥ , 𝑼 ⟩𝑊 = 𝟎. Indeed, since
+the all-ones vector pertains to the column space of 𝑼 , the matrix of trailing modes 𝑼⊥ is also orthogonal to the all-ones vector,
+hence
+
+        ⟨𝑼⊥ , 𝟏⟩𝑊 = 𝟎 ⇒ 𝑼⊥𝑇 diag(𝑾 𝐹 𝐸 )𝟏 = 𝑼⊥𝑇 𝑾 𝐹 𝐸 = 𝟎.                                                                                      (29)
+
+
+2.3. Evaluation of basis functions
+
+    During the weight-reduction process, it is necessary to repeatedly evaluate the basis functions, as well as their spatial gradient,
+at points, in general, different from the Gauss points of the mesh.
+
+
+2.3.1. Integrand given as analytical expression
+                                                                                           𝜕𝑨(𝒙)
+    If the analytical expressions for the integrand functions 𝑨(𝒙) and their spatial derivatives  (𝑖 = 1, 2 … 𝑑) are available, these
+                                                                                             𝜕𝑥𝑖
+evaluations can be readily performed by using the singular values and right-singular vectors of decomposition (21) as follows:
+
+        𝒖(𝒙) = 𝑨(𝒙)𝑽 𝑺 −1 ,                                                                                                                     (30)
+
+and
+        𝜕𝒖(𝒙)   𝜕𝑨(𝒙)
+              =       𝑽 𝑺 −1 ,         𝑖 = 1 … 𝑑.                                                                                               (31)
+         𝜕𝑥𝑖     𝜕𝑥𝑖
+
+                                                                       8
+J.A. Hernández et al.                                                                     Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+Proof. Post-multiplication of both sides of Eq. (21) by 𝑽 leads to
+
+         𝑨𝐹 𝐸 𝑽 = 𝑼 𝑺𝑽 𝑇 𝑽 + 𝑬𝑽 = 𝑼 𝑺𝑽 𝑇 𝑽 + 𝑼⊥ 𝑺⊥ 𝑽 ⊥𝑇 𝑽 ,                                                                                                (32)
+                                                                                                                                                   𝑇
+where we have used the matrices introduced in the proof of Lemma 2.1. By virtue of the orthogonality conditions 𝑽 𝑽 = 𝑰 and
+𝑽 ⊥𝑇 𝑽 = 𝟎, the above equation becomes 𝑨𝐹 𝐸 𝑽 = 𝑼 𝑺; postmultiplication by 𝑺 −1 finally leads to 𝑼 = 𝑨𝐹 𝐸 𝑽 𝑺 −1 . This equation holds,
+not only for 𝑨𝐹 𝐸 = 𝑨(𝑿𝐹 𝐸 ), but for any 𝑨(𝒙), as stated in Eq. (30). □
+
+Remark 2.2. Eq. (31) indicates that the gradient of the 𝑗th basis function depends inversely on the 𝑗th singular value. Negligible
+singular values, thus, may give rise to inordinately high gradients, causing convergence issues during the nonlinear readjustment
+problem. To avoid these numerical issues, the SVD truncation threshold 𝜖𝑠𝑣𝑑 (see Expression (24)) should be set to a sufficiently
+large value (typically 𝜖𝑠𝑣𝑑 ≥ 10−6 ).
+
+2.3.2. Interpolation using Gauss points
+   In general, however, the analytical expression for the integrand functions are not available, and therefore, the preceding equations
+cannot be employed for retrieving the values of the orthogonal basis functions. This is the case encountered when dealing with FE-
+based reduced-order models, where the only information we have at our disposal is the value of the basis functions at the Gauss
+points of the finite elements, represented by submatrices 𝑼 (𝑒) ∈ R𝑟×𝑝 (𝑒 = 1, 2 … 𝑁𝑒𝑙 ) in Eq. (9).
+   In a FE-based reduced-order model, at element level, the integrand functions are, in general, a nonlinear function of the employed
+nodal shape functions. It appears reasonable, thus, to use also polynomial interpolatory functions to estimate the values of the basis
+functions at other points of the element using as interpolatory points, rather than the nodes of the element, their Gauss points. If
+we denote by 𝑵 (𝑒) ∶ 𝛺𝑒 → R1×𝑟 the 𝑟 interpolatory functions (arranged as a row matrix), then we can write
+
+         𝒖(𝒙) = 𝑵 (𝑒) (𝒙)𝑼 (𝑒) ,                 𝒙 ∈ 𝛺𝑒 .                                                                                                  (33)
+Likewise, the spatial derivatives can be determined as
+         𝜕𝒖(𝒙)
+               = 𝑩 𝑖(𝑒)(𝒙)𝑼 (𝑒) ,                 𝒙 ∈ 𝛺𝑒 ,    𝑖 = 1…𝑑                                                                                      (34)
+          𝜕𝑥𝑖
+where
+                     𝜕𝑵 (𝑒)
+         𝑩 (𝑒)
+           𝑖 ∶=             ,       𝑖 = 1 … 𝑑.                                                                                                             (35)
+                      𝜕𝑥𝑖
+    The level of accuracy of this estimation will depend on the number of Gauss point per element with respect to the order of the
+nodal shape functions, as well as the distorsion of the physical domain 𝛺𝑒 with respect to the parent domain—which is the cause of
+the aforementioned nonlinearity. It may be argued that if the element has no distorsion, the evaluation of the integrand via Eq. (33)
+will be exact if the proper number of Gauss points is used. For instance, in a small-strains structural problem, if the element is a
+4-noded bilinear quadrilateral, with no distorsion (i.e., a rectangle), and the term to be integrated is the virtual internal work, then
+the integrand is represented exactly by a quadratic.2 polynomial. Such a polynomial possesses (2 + 1)2 = 9 monomials, and therefore
+a 3 × 3 Gauss rule would be needed. Notice that this is an element integration rule with one point more per spatial direction than the
+integration standard rule for bilinear quadrilateral elements (2 × 2). Nevertheless, numerical experience shows that in general it is
+not necessary to ‘‘overintegrate’’ the element provided that a sufficiently dense mesh is used in areas where high gradients are likely
+to appear. This will be corroborated in the example presented in Section 6.4 Likewise, in this regard, it should be pointed out that
+the proposed algorithm for solving the ‘‘readjustment’’ step will not work if the integrand functions are constant over the element.
+Thus, linear triangles/tetrahedra for integrating internal forces in structural problems cannot be used in the proposed approach.
+    The expression for 𝑵 (𝑒) and 𝑩 (𝑒)
+                                    𝑖 in terms of the coordinates of the Gauss points {𝒙 ̄ 𝑒1 , 𝒙̄ 𝑒2 … 𝒙̄ 𝑒𝑟 } can be obtained by the standard
+                                                                                                                               ′
+procedure used in deriving FE shape functions, see e.g. Ref. [35]. Firstly, we introduce the mapping 𝝋𝑒 ∶ 𝛺𝑒 → 𝛺𝑒 defined by
+                    1
+         [𝒙′ ]𝑖 =      [𝒙 − 𝒙̄ 𝑒0 ]𝑖 ,           𝑖 = 1…𝑑                                                                                                   (36)
+                    𝐿𝑖
+                                                                  ∑
+where [∙]𝑖 symbolyzes the 𝑖th component of the argument, 𝒙̄ 𝑒0 = ( 𝑟𝑔=1 𝒙̄ 𝑒𝑔 )∕𝑟 is the centroid of the Gauss points, and 𝐿𝑖 is a scaling
+length defined by
+
+         𝐿𝑖 = max (|[𝒙̄ 𝑒𝑔 − 𝒙̄ 𝑒0 ]𝑖 |),                𝑖 = 1 … 𝑑.                                                                                        (37)
+               𝑔=1…𝑟
+                                                                                                                  ′
+                                                                                           ̄ = {𝒙̄ ′ , 𝒙̄ ′ … 𝒙̄ ′ }, where 𝒙̄ ′ = 𝝋𝑒 (𝒙̄ 𝑒 ), is
+The expression of the shape functions in terms of the scaled positions of the Gauss points 𝑿       1 2           𝑟             𝑔          𝑔
+given by
+                                          ′
+         𝑵 (𝑒) (𝒙′ ) = 𝑷 (𝒙′ )𝑷 −1(𝑿
+                                   ̄ ).                                                                                                                    (38)
+Here, 𝑷 (𝒙′ ) ∈ R1×𝑟 is the row matrix containing the monomials up to the order corresponding to the number and distribution of
+Gauss points at point 𝒙′ = 𝝋𝑒 (𝒙); for instance, for the case of a 2D 𝑞 × 𝑞 rule, where 𝑟 = 𝑞 2 , this row matrix adopts the form
+                           0    0     1   0      𝑖   𝑗       𝑞−1   𝑞−1
+         𝑷 (𝒙′ ) ∶= [𝑥′ 1 𝑥′ 2 , 𝑥′ 1 𝑥′ 2 ⋯ 𝑥′ 1 𝑥′ 2 ⋯ 𝑥′ 1 𝑥′ 2 ]1×𝑟 .                                                                                  (39)
+
+
+  2   Virtual work is the product of virtual strains (which are linear in a 4-noded rectangular) and stresses (which are therefore also linear).
+
+
+                                                                                 9
+J.A. Hernández et al.                                                                      Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+                                                       ′
+                                           ̄ ) ∈ R𝑟×𝑟 , known as the moment matrix [35], is formed by stacking the result of applying
+The other matrix appearing in Eq. (38), 𝑷 (𝑿
+the preceding mapping to the set of scaled Gauss points 𝑿 ̄ ′ . Provided that the element is not overly distorted (no negative Jacobians
+in the original isoparameteric transformation), the invertibility of 𝑷 (𝑿  ̄ ′ ) is guaranteed thanks to the coordinate transformation
+Eq. (36)—which ensures that the coordinates of all points range between −1 and 1, therefore avoiding scaling issues in the inversion.
+    As for the gradient of the shape functions in Eq. (35), by applying the chain rule, we get that
+                            ′
+                  𝜕𝑷 (𝒙′ ) 𝜕𝑥 𝑗 −1 ̄ ′  1 𝜕𝑷 (𝒙′ ) −1 ̄ ′
+        𝑩 (𝑒)
+          𝑖 =         ′
+                               𝑷 (𝑿 ) =           𝑷 (𝑿 ).                                                                                                      (40)
+                   𝜕𝑥 𝑗 𝜕𝑥𝑖             𝐿𝑖 𝜕𝑥′ 𝑖
+
+
+3. Discrete empirical Cubature method (DECM)
+
+
+   Once the orthogonal basis matrix 𝑼 has been computed by the weighted SVD outlined in Section 2.1, the next step consists
+in determining an interpolatory cubature rule (featuring as many points as functions to be integrated) for the basis functions
+𝒖 ∶ 𝛺 → R1×𝑝 . As pointed out in Section 1.4, we employ for this purpose the Empirical Cubature Method, proposed by the first
+author in Ref. [2], and further refined in Ref. [16]. We call it here Discrete Empirical Cubature Method, DECM, to emphasize that
+the cubature points are selected among the Gauss points of the mesh. The DECM, symbolized in what follows as the operation
+
+        [𝒛, 𝒘∗ ] ← DECM(𝑼 , 𝑾 𝐹 𝐸 ),                                                                                                                           (41)
+
+takes as inputs the basis matrix 𝑼 ∈ R𝑀×𝑝 and the vector of positive FE weights 𝑾 𝐹 𝐸 ∈ R𝑀 ; and returns a set of 𝑝 indexes
+𝒛 ⊂ {1, 2 … 𝑀} and a vector of positive weights 𝒘∗ such that
+
+        𝑼 (𝒛, ∶)𝒘∗ = 𝒃.                                                                                                                                        (42)
+
+Here, 𝑼 (𝒛, ∶) denotes, in the so-called ‘‘colon’’ notation [36] (the one used by Matlab), the submatrix of 𝑼 formed by the rows
+corresponding to indexes 𝒛, while 𝒃 ∈ R𝑝 is the vector of ‘‘exact’’ integrals of the basis functions, that is:
+
+        𝒃=        𝒖𝑇 𝑑𝛺 = 𝑼 𝑇 𝑾 𝐹 𝐸 .                                                                                                                          (43)
+             ∫𝛺
+
+   The points associated to the selected rows will be denoted hereafter by 𝑿 ∗ = {𝒙∗1 , 𝒙∗2 … 𝒙∗𝑝 } (𝑿 ∗ ⊂ 𝑿𝐹 𝐸 ). Hence, according to the
+notational convention introduced in Remark 1.1, P𝒛 𝑼 may be alternatively expressed as
+
+                         ⎡𝒖(𝒙∗ )⎤ ⎡𝑢 (𝒙∗ )          𝑢2 (𝒙∗1 )   ⋯    𝑢𝑝 (𝒙∗1 )⎤
+                         ⎢ 1 ⎥ ⎢ 1 1                                           ⎥
+                         ⎢𝒖(𝒙∗ )⎥ ⎢𝑢 (𝒙∗ )          𝑢2 (𝒙∗2 )   ⋯    𝑢𝑝 (𝒙∗2 )⎥⎥
+        P𝒛 𝑼 = 𝒖(𝑿 ∗ ) = ⎢ 2 ⎥ = ⎢ 1 2                                                                                                                         (44)
+                         ⎢      ⎥ ⎢                                            ⎥
+                         ⎢ ⋮ ⎥ ⎢ ⋮                     ⋮        ⋱       ⋮ ⎥
+                         ⎢ ∗⎥ ⎢                                                ⎥
+                         ⎣𝒖(𝒙𝑝 )⎦ ⎣𝑢1 (𝒙∗𝑝 )        𝑢2 (𝒙∗𝑝 )   ⋯    𝑢𝑝 (𝒙∗𝑝 )⎦
+                                                                                   𝑝×𝑝
+
+
+Remark 3.1. It should be stressed that the solution to problem Eq. (42) is not unique. Rather, the number of possible solutions
+grows combinatorially with the ratio between the total number of Gauss points and the number of functions (𝑀∕𝑝). The situation
+is illustrated in Fig. 2, where we graphically explain how the DECM works for the case of 𝑀 = 6 Gauss points and polynomial
+                                                                                                                √                √
+functions up to order 1 (it can be readily shown that the orthogonal functions in this case are 𝑢1 = 3∕2𝑥 and 𝑢2 = 1∕2, displayed
+in Fig. 2.a). The problem, thus, boils down to select 𝑝 = 2 points out of 𝑀 = 6, such that the resulting weights are positive.            √    In
+Fig. 2.b, we plot each 𝒖(𝒙̄ 𝑔 ) (𝑔 = 1, 2 … 6) along with the vector of exact integrals, which in this case is equal to 𝒃 = [0, 2]𝑇 . It
+                                                                ( ) (6)
+follows from this representation that, out of the 𝑀              𝑝
+                                                                   = 2 = 15 possible combinations, only 9 pairs are valid solutions. The DECM3
+chooses 𝒙∗1 = 𝒙̄ 4 and 𝒙∗2 = 𝒙̄ 1 , which is the solution that yields the largest ratio between highest and lowest weight. Other possible
+solutions are, for instance, pairs {𝒙̄ 1 , 𝒙̄ 6 } and {𝒙̄ 2 , 𝒙̄ 6 }—observe that in both cases, vector 𝒃 lies in the cone4 ‘‘positively spanned’’
+by {𝒖(𝒙̄ 1 ), 𝒖(𝒙̄ 6 )} and {𝒖(𝒙̄ 2 ), 𝒖(𝒙̄ 6 )}, respectively.
+
+    The reader interested in the points selection algorithm behind the DECM is referred5 to Ref. [16], Appendix, Algorithm 7.
+
+
+
+   3 The first vector 𝒖(𝒙
+                        ̄ 4 ) is chosen because is the one which is most positively parallel to 𝒃 (notice that, because of symmetry, it might have chosen 𝒖(𝒙̄ 3 ) as
+well). Then it orthogonally projects 𝒃 onto 𝒖(𝒙̄ 4 ), giving 𝒔, and then search for the vector which is more positively parallel to the residual 𝒃 − 𝒔, which in this
+case is 𝒖(𝒙̄ 1 ).
+   4 The cone positively spanned by a set of vectors is the set of all possible positive linear combinations of such vectors [37].
+   5 It should be pointed that the notation employed in Ref. [16] is different from the one used here. The input of the DECM in Ref. [16] (which is called
+
+therein simply the ECM ) is not 𝑼 , but the transpose of the weighted matrix 𝑼̄ (defined in Eq. (16)). Likewise the error threshold appearing in Ref. [16] is to
+be set to zero in order to produce an interpolatory rule.
+
+
+                                                                                     10
+J.A. Hernández et al.                                                                             Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+
+
+                                                                                                                                       √                    √
+Fig. 2. Performance of the Discrete Empirical Cubature Method (DECM) [16], for the case of the orthonormal functions 𝑢1 = 3∕2𝑥 and 𝑢2 = 1∕2 in the
+interval 𝛺 = [−1, 1]. The number of finite elements is 𝑁𝑒𝑙 = 1, and the number of Gauss points 𝑀 = 𝑟 = 6. (a) Graph of the functions along with the location
+of the Gauss points 𝒙̄ 6 = −𝒙̄ 1 = 0.9325, 𝒙̄ 5 = −𝒙̄ 2 = 0.6612, 𝒙̄ 4 = −𝒙̄ 3 = 0.2386. (b) Representation in the plane 𝑢1 𝑢2 of each vector 𝒖(𝒙̄ 𝑔 ) = [𝑢1 (𝒙̄ 𝑔 ), 𝑢2 (𝒙̄ 𝑔 )]𝑇
+                                                                 √
+(𝑔 = 1, 2 … 6), along with the vector of exact integrals 𝒃 = [0, 2]𝑇 . The DECM chooses points 𝒙̄ 4 and 𝒙̄ 1 , giving weights equal to 𝑤∗1 = 1.5925 and 𝑤∗2 = 0.4075.
+
+
+
+
+3.1. Relation between SVD truncation error and the DECM integration error
+
+
+   Let us examine now the error incurred in approximating the ‘‘exact’’ integrals 𝒃𝐹 𝐸 = 𝑨𝑇𝐹 𝐸 𝑾 𝐹 𝐸 by the DECM cubature rule. This
+error may be expressed as
+
+         𝑒𝑑𝑒𝑐𝑚 ∶= ‖𝑨𝑇𝐹 𝐸 𝑾 ∗ − 𝑨𝑇𝐹 𝐸 𝑾 𝐹 𝐸 ‖2                                                                                                                               (45)
+            ∗
+where 𝑾 ∶= P𝑇𝒛 𝒘∗ (a vector of the same length as 𝑾 𝐹 𝐸 , but with nonzero entries only at the indexes specified by 𝒛). Inserting
+decomposition (21) in the preceding equation, we get
+               (                         )
+      𝑒𝑑𝑒𝑐𝑚 = ‖ 𝑽 𝑺(𝑼 𝑇 𝑾 ∗ − 𝑼 𝑇 𝑾 𝐹 𝐸 ) + (𝑬 𝑇 𝑾 ∗ − 𝑬 𝑇 𝑾 𝐹 𝐸 )‖2                                                         (46)
+
+From condition (42), it follows that the term involving the basis matrix 𝑼 vanishes; besides, since by construction the column space
+of 𝑼 contains the all-ones vector, we have that, by virtue of Lemma 2.1, 𝑬 𝑇 𝑾 𝐹 𝐸 = 𝟎. Thus, Eq. (46) boils down to
+
+         𝑒𝑑𝑒𝑐𝑚 = ‖𝑬 𝑇 𝑾 ∗ ‖2 .                                                                                                                                              (47)
+
+    The truncation term 𝑬 in the above condition is controlled by the SVD tolerance 𝜖𝑠𝑣𝑑 appearing in inequality (24). Thus, the
+integration error 𝑒𝑑𝑒𝑐𝑚 may be lowered to any desired level by decreasing the SVD tolerance 𝜖𝑠𝑣𝑑 . Numerical experience shows that
+for most problems 𝑒𝑑𝑒𝑐𝑚 ∕‖𝒃𝐹 𝐸 ‖2 is slightly above, but of the same order of magnitude, as 𝜖𝑠𝑣𝑑 .
+
+
+4. Global sparsification problem
+
+
+4.1. Formulation
+
+
+   We now concentrate our attention on the sparsification problem outlined in Section 1.4.1. The design variables in this optimization
+problem will be a vector of 𝑝 weights
+
+         𝒘 = [𝑤1 , 𝑤2 … 𝑤𝑝 ]𝑇 ,                𝑤𝑔 ≥ 0,                                                                                                                      (48)
+
+(recall that 𝑝 is the number of orthogonal basis functions we wish to integrate), and the position of the associated points within the
+domain:
+
+         𝑿 = {𝒙1 , 𝒙2 … 𝒙𝑝 },                𝒙𝑔 ∈ 𝛺.                                                                                                                        (49)
+
+With a minor abuse of notation, we shall also use 𝑿 to denote the variable formed by stacking the position of the points into a
+column matrix, i.e.: 𝑿 = [𝒙𝑇1 , 𝒙𝑇2 … 𝒙𝑝 ]𝑇 . On the other hand, we define the integration residual as
+
+         𝒓 ∶= 𝒖𝑇(𝑿)𝒘 − 𝒃                                                                                                                                                    (50)
+
+                                                                                       11
+J.A. Hernández et al.                                                                   Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+that is, as the difference between the approximate and the exact integrals of the basis functions. In the preceding equation, 𝒖(𝑿)
+designates the matrix formed by stacking the rows of all 𝒖(𝒙𝑔 ) ∈ R1×𝑝 (𝑔 = 1, 2 … 𝑝) into a single matrix, i.e.:
+
+                ⎡𝒖(𝒙1 )⎤ ⎡𝑢1 (𝒙1 )       𝑢2 (𝒙1 )   ⋯     𝑢𝑝 (𝒙1 )⎤
+                ⎢      ⎥ ⎢                                         ⎥
+                  𝒖(𝒙 )    𝑢 (𝒙 )        𝑢2 (𝒙2 )   ⋯     𝑢𝑝 (𝒙2 )⎥
+        𝒖(𝑿) ∶= ⎢ 2 ⎥ = ⎢ 1 2                                                                                                                            (51)
+                ⎢ ⋮ ⎥ ⎢ ⋮                   ⋮       ⋱        ⋮ ⎥
+                ⎢𝒖(𝒙 )⎥ ⎢𝑢 (𝒙 )          𝑢2 (𝒙𝑝 )   ⋯     𝑢𝑝 (𝒙𝑝 )⎥⎦
+                ⎣ 𝑝⎦ ⎣ 1 𝑝                                         𝑝×𝑝
+
+With the preceding definitions at hand, the sparsification problem can be formulated as follows:
+        min     ‖𝒘‖0
+        𝒘,𝑿
+
+         s.t.   𝒓 = 𝒖𝑇(𝑿)𝒘 − 𝒃 = 𝟎
+                                                                                                                                                         (52)
+                𝒘≥𝟎
+                𝑿⊂𝛺
+   Recall that ‖𝒘‖0 stands for the number of nonzero entries of 𝒘. Thus, the goal in the preceding optimization problem is to find
+the sparsest vector of positive weights, along with their associated positions within the domain, that render the integration residual 𝒓
+equal to zero.
+
+Remark 4.1. The differences between the sparsification problem presented above and the one described in the introductory section
+(see Problem (8)) are three. Firstly, in the preceding problem, 𝒘 ∈ R𝑝 , i.e., the number of weights is equal to the number of basis
+functions to be integrated 𝑝, whereas in Problem (8), this number is equal to the total number of FE Gauss points 𝑀 (it is assumed
+that 𝑝 ≪ 𝑀). Secondly, the integration residual in Problem (52) appears in the form of an equality constraint, while in Problem
+(8) appears as an inequality constraint. And thirdly, and most importantly, in Problem (52), the positions of the cubature points
+are considered design variables—in contrast to the situation encountered in Problem (8), in which the points are forced to coincide
+with the FE Gauss points, and thus, the only design variables are the weights.
+
+4.2. Proposed sparsification algorithm
+
+
+
+Algorithm 1: Proposed two-stage procedure for solving the sparsification problem (52).
+ 1 Function [𝑿, 𝒘, ] ← SPARSIFglo(𝑿 ∗ ,𝒘∗ ,𝑁𝑠𝑡𝑒𝑝𝑠 ,,)
+      Data: 𝑿 ∗ = {𝒙∗1 , 𝒙∗2 … 𝒙∗𝑝 }(𝒙∗𝑔 ∈ 𝛺) and 𝒘∗ = [𝑤∗1 , 𝑤∗2 , …, 𝑤∗𝑝 ] (𝑤∗𝑔 > 0): DECM cubature rule (obtained by function (41)).
+              𝑁𝑠𝑡𝑒𝑝𝑠 > 1: number of steps used to solve the nonlinear problem (in the second stage) associated to the residual
+              constraint 𝒓 = 𝟎. : Remaining variables controlling the solution of this nonlinear problem. : data structures
+              containing variables needed to evaluate the residual 𝒓 at any point 𝒙 ∈ 𝛺 (such as the basis matrix itself 𝑼 and
+              the vector of exact integrals 𝒃, among others).
+      Result: Sparsest weight vector 𝒘 = [𝑤1 , 𝑤2 , …, 𝑤𝑝 ] (𝑤𝑔 ≥ 0) and associated positions 𝑿 = {𝒙1 , 𝒙2 … 𝒙𝑝 }(𝒙𝑔 ∈ 𝛺) such
+                that 𝒓 = 𝒖𝑇 (𝑿)𝒘 − 𝒃 = 𝟎.
+ 2     𝑜𝑙𝑑 ← ∅ // Initializations
+ 3    𝑁 ← 1 // First stage. Number of steps employing in solving the nonlinear problem 𝒓 = 0 is set to 1.
+ 4    [𝑿 𝑛𝑒𝑤 , 𝒘𝑛𝑒𝑤 ,  𝑛𝑒𝑤 ] ← SPARSIF(𝑿 ∗ ,𝒘∗ ,𝑁,,, 𝑜𝑙𝑑 ) // SPARSIF() is described in Algorithm 2
+ 5    [𝑿, 𝒘, ] ← SPARSIF(𝑿 𝑛𝑒𝑤 ,𝒘𝑛𝑒𝑤 ,𝑁𝑠𝑡𝑒𝑝𝑠 ,,, 𝑛𝑒𝑤 ) // Second stage. Number of steps equal to the value specified
+          in the input arguments (typically 𝑁𝑠𝑡𝑒𝑝𝑠 ∼ 20)
+
+     The proposed approach for arriving at the solution of the preceding problem is to construct a sequence of 𝑝-points cubature rules
+
+
+        {𝑿 0 , 𝒘0 }, {𝑿 1 , 𝒘1 } … {𝑿 𝑖 , 𝒘𝑖 } … {𝑿 𝑝−𝑚 , 𝒘𝑝−𝑚 }                                                                                         (53)
+
+such that
+
+        ‖𝒘𝑘+1 ‖0 = ‖𝒘𝑘 ‖0 − 1                                                                                                                            (54)
+
+that is, such that each weight vector in the sequence has one non-zero less than the previous one. The first element in the sequence
+will be taken as the cubature rule provided by the DECM (see Section 3):
+
+        𝑿0 = 𝑿∗,             𝒘0 = 𝒘∗ .                                                                                                                   (55)
+
+The algorithm proceeds from this initial point by the recursive application of an operation consisting in driving the weight of one
+single point to zero (while forcing the remaining points and weights to obey the constraints appearing in Problem (52)); this step
+will be symbolized hereafter as the function
+
+        [, 𝑿 𝑛𝑒𝑤 , 𝒘𝑛𝑒𝑤 ,  𝑛𝑒𝑤 ] ← 𝙼𝙰𝙺𝙴𝟷𝚉𝙴𝚁𝙾(𝑿 𝑜𝑙𝑑 , 𝒘𝑜𝑙𝑑 , 𝑁𝑠𝑡𝑒𝑝𝑠 , , ,  𝑜𝑙𝑑 ).                                                                    (56)
+
+                                                                             12
+J.A. Hernández et al.                                                                   Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+This function takes as inputs a given cubature rule {𝑿 𝑜𝑙𝑑 , 𝒘𝑜𝑙𝑑 }, and tries to return a cubature rule {𝑿 𝑛𝑒𝑤 , 𝒘𝑛𝑒𝑤 } with at least one
+less nonzero weight. The success of this operation is indicated by the output Boolean variable  ( = 𝑓 𝑎𝑙𝑠𝑒 if it fails in producing
+a sparser cubature rule).
+    The other inputs in (56) are the following: (1) 𝑁𝑠𝑡𝑒𝑝𝑠 : number of steps used to solve the nonlinear problem associated to the
+residual constraint 𝒓 = 𝟎. (2) : Remaining variables controlling the solution of this nonlinear problem (such as the convergence
+tolerance for the residual). (3)  and  𝑜𝑙𝑑 are data structures containing the variables needed to evaluate the residual 𝒓 at any
+point 𝒙 ∈ 𝛺.  encompasses those variables that do not change during the execution (such as the basis matrix itself 𝑼 , the vector
+of exact integrals 𝒃, see Eq. (43), the nodal coordinates of the FE mesh, the connectivity table, the Gauss coordinates, and in the
+case of analytical evaluation, the product 𝑽 𝑠 ∶= 𝑽 𝑺 −1 appearing in Eqs. (30) and (31)).  𝑜𝑙𝑑 , on the other hand, comprises element
+variables that are computed on demand,6 such as the inverse of the moment matrix in Eq. (38) and the scaling factors in Eq. (36)
+(required for the interpolation described in Section 2.3.2).
+Algorithm 2: Sparsification process, given an initial cubature rule {𝑿 𝑜𝑙𝑑 , 𝒘𝑜𝑙𝑑 } and a number of steps 𝑁 ( invoked in Line
+5 of Algorithm 1) .
+ 1 Function [𝑿, 𝒘,  𝑛𝑒𝑤 ] ← SPARSIF(𝑿 𝑜𝑙𝑑 ,𝒘𝑜𝑙𝑑 ,𝑁,,, 𝑜𝑙𝑑 )
+      Data: 𝑿 𝑜𝑙𝑑 ⊂ 𝛺, 𝒘𝑜𝑙𝑑 ∈ R𝑝 . 𝑁 and : Variables controlling the solution of the nonlinear problem 𝒓 = 𝟎.  and  𝑜𝑙𝑑 :
+            data structures containing variables needed to evaluate the residual 𝒓 at any point 𝒙 ∈ 𝛺.
+      Result: Sparsest weight vector 𝒘 ∈ R𝑝 and associated positions 𝑿 such that 𝒓 = 𝒖𝑇 (𝑿)𝒘 − 𝒃 = 𝟎.  𝑛𝑒𝑤 : updated
+              structure data with information necessary for performing element interpolation.
+ 2     ← 𝑡𝑟𝑢𝑒
+ 3    while  = 𝑡𝑟𝑢𝑒 do
+ 4       [, 𝑿 𝑛𝑒𝑤 , 𝒘𝑛𝑒𝑤 ,  𝑛𝑒𝑤 ] ← 𝙼𝙰𝙺𝙴𝟷𝚉𝙴𝚁𝙾(𝑿 𝑜𝑙𝑑 , 𝒘𝑜𝑙𝑑 , 𝑁, , ,  𝑜𝑙𝑑 ) // Described in Algorithm 3.
+ 5       if  = false then return // 𝙼𝙰𝙺𝙴𝟷𝚉𝙴𝚁𝙾() has failed to produce a cubature rule with one nonzero weight less.
+ 6
+ 7           if 𝑤𝑛𝑒𝑤
+                 𝑖   ≥ 𝟎, ∀𝑖 then 𝑿 ← 𝑿 𝑛𝑒𝑤 ; 𝒘 ← 𝒘𝑛𝑒𝑤 // The weights solution 𝒘 can only have positive weights
+ 8
+ 9         𝑿 𝑜𝑙𝑑 ← 𝑿 𝑛𝑒𝑤 ; 𝒘𝑜𝑙𝑑 ← 𝒘𝑛𝑒𝑤 ;  𝑜𝑙𝑑 ←  𝑛𝑒𝑤 // Update positions, weights and element interpolation data.
+10      end
+
+    Due to its greedy or ‘‘myopic’’ character, the DECM tends to produce weights distribution in which most of the weights are
+relatively small in comparison with the total volume of the domain. We have empirically observed that the readjustment problem
+associated to the elimination of these small weights is moderately nonlinear, and in general, one step suffices to ensure convergence.
+However, as the algorithm advances in the sparsification process, the weights to be zeroed become larger, and, as a consequence,
+the readjustment problem becomes more nonlinear. In this case, to ensure convergence, it is necessary to reduce the weights
+progressively. To account for this fact, we have devised the two-stage procedure described in Algorithm 1. In the first stage (see
+Line 4), the sparsification process (sketched in turn in Algorithm 2) is carried out by decreasing the weight of each chosen weight
+in one single step. In the second stage, see Line 5, we take the cubature rule produced in the first stage, and try to further decrease
+the number of nonzero weights by using a higher number of steps 𝑁𝑠𝑡𝑒𝑝𝑠 > 1.
+
+5. Local sparsification problem
+
+    After presenting the global sparsification procedure, we now focus on fleshing out the details of the fundamental building block
+of such a procedure, which is the above mentioned function 𝙼𝙰𝙺𝙴𝟷𝚉𝙴𝚁𝙾(), appearing in Line 4 of Algorithm 2.
+    The procedural steps are described in the pseudocode of Algorithm 3. Given a cubature rule {𝑿 𝑜𝑙𝑑 , 𝒘𝑜𝑙𝑑 }, with ‖𝒘𝑜𝑙𝑑 ‖0 = 𝑚
+(2 ≤ 𝑚 ≤ 𝑝), we seek a new cubature rule {𝑿, 𝒘} with ‖𝒘‖0 = 𝑚 − 1. Notice that there are 𝑚 different routes for eliminating a
+nonzero weight—as many as nonzero weights. It may be argued that the higher the contribution of a given point to the residual
+𝒓, the higher the difficulty of converging to feasible solutions using as initial point the cubature rule {𝑿 𝑜𝑙𝑑 , 𝒘𝑜𝑙𝑑 }. To account for
+this fact, we sort the indexes of the points with nonzero weights in ascending order according to its contribution to the residual
+                 𝑖 ‖𝒖(𝒙𝑖 )‖2 , see Line 4). The actual subroutine that performs the zeroing operation is 𝚂𝙾𝙻𝚅𝙴𝚁𝙴𝚂() in Line 9. If this
+(which is 𝑠𝑖 = 𝑤𝑜𝑙𝑑     𝑜𝑙𝑑
+
+subroutine fails to determine a feasible solution in which the chosen weight is set to zero, then the operation is repeated with the
+next point in the sorted list, and so on until arriving at the desired sparser solution (if such a solution exists at all)
+
+5.1. Modified Newton–Raphson algorithm
+
+    We now move to the above mentioned subroutine 𝚂𝙾𝙻𝚅𝙴𝚁𝙴𝚂(), appearing in Line 9 of Algorithm 3—and with pseudo-code
+explained in Algorithm 4. This subroutine is devoted to the calculation of the position and weights of the remaining points when
+the weight of the chosen ‘‘control’’ point R (R ∈ {1, 2 … 𝑝}, 𝑤𝑜𝑙𝑑
+                                                               R
+                                                                   ≠ 0) is set to zero—by solving the nonlinear equation corresponding
+to the integration conditions 𝒓(𝑿, 𝒘) = 𝒖𝑇 (𝑿)𝒘 − 𝒃 = 𝟎.
+
+
+   6 In the proposed algorithm, we compute the necessary interpolation variables for each element of the mesh dynamically, as they are needed, rather than
+
+precomputing them all at once. Indeed, each time the position of the points is updated, we check which elements of the mesh contain the updated points. If all
+the elements have been previously visited, we use the information stored in  𝑜𝑙𝑑 to perform the interpolation; otherwise, we compute the required interpolation
+variables for the new elements and update  𝑜𝑙𝑑 into  𝑛𝑒𝑤 with the new data.
+
+
+                                                                              13
+J.A. Hernández et al.                                                             Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+Algorithm 3: Given a cubature rule {𝑿 𝑜𝑙𝑑 , 𝒘𝑜𝑙𝑑 }, this algorithm tries to determine a cubature rule {𝑿, 𝒘} with one additional
+zero weight (invoked in Line 5 of Algorithm 2).
+ 1 Function [, 𝑿, 𝒘, ] ← MAKE1ZERO(𝑿 𝑜𝑙𝑑 ,𝒘𝑜𝑙𝑑 ,𝑁,,, )
+      Data: Similar to inputs in Algorithm 2.
+      Result: 𝑿 ∈ 𝛺 and 𝒘 ∈ R𝑝 such that 𝒓 = 𝒖𝑇 (𝑿)𝒘 − 𝒃 = 𝟎. If  = 𝑡𝑟𝑢𝑒, then ‖𝒘‖0 = ‖𝒘𝑜𝑙𝑑 ‖0 − 1 (i.e., the output vector
+                   weight 𝒘 has one more zero that the input weight 𝒘𝑜𝑙𝑑 ); otherwise, 𝒘 ← 𝒘𝑜𝑙𝑑 , 𝑿 ← 𝑿 𝑜𝑙𝑑
+ 2    F ← Indexes nonzero entries of 𝒘𝑜𝑙𝑑 // F ⊂ {1, 2 … 𝑝}
+ 3    [𝒖𝑜𝑙𝑑
+         F
+             , ∙, ∙] ← EVALBASIS (𝑿 𝑜𝑙𝑑     F
+                                              ,,) // Evaluate basis functions 𝒖 at points 𝑿 𝑜𝑙𝑑           𝑜𝑙𝑑      𝑜𝑙𝑑      𝑜𝑙𝑑
+                                                                                                     F = {𝑿 F(1) , 𝑿 F(2) … 𝑿 F(𝑚) } (using the
+           procedure described in Section 2.3) . 𝒖𝑜𝑙𝑑            F is a 𝑚 × 𝑝 matrix, 𝑚 being the number of  nonzero       entries     of 𝒘𝑜𝑙𝑑
+ 4    𝑠𝑖 ← 𝑤𝑜𝑙𝑑  𝑖   ‖𝒖𝑜𝑙𝑑 (𝑖, ∶)‖ (𝑖 = 1, 2 … 𝑚) // 𝒖𝑜𝑙𝑑 (𝑖, ∶) denotes the 𝑖-th row of 𝒖𝑜𝑙𝑑
+                       F          2                   F                                   F
+ 5    𝒊 ← Sort {𝑠1 , 𝑠2 … 𝑠𝑚 } in ascending order; return indexes describing the arragement
+ 6     ← 𝑓 𝑎𝑙𝑠𝑒; 𝑗 ← 1 // Initializations
+ 7    while 𝑗 ≤ 𝑚 AND  = 𝑓 𝑎𝑙𝑠𝑒 do
+ 8          R ← 𝒇 (𝑗) // Index of candidate weight to be zeroed (R ∈ {1, 2 … 𝑝})
+ 9          [, 𝑿, 𝒘, ] ← SOLVERES (R, 𝑿 𝑜𝑙𝑑 , 𝒘𝑜𝑙𝑑 , 𝑁, , , ) // See Algorithm 4
+10          𝑗 ← 𝑗 + 1 // If  = 𝑓 𝑎𝑙𝑠𝑒, trying next candidate.
+11    end
+
+
+
+Algorithm 4: Given a cubature rule {𝑿 𝑜𝑙𝑑 , 𝒘𝑜𝑙𝑑 } and an index R ∈ {1, 2 … 𝑝}, where 𝑤𝑜𝑙𝑑
+                                                                                       R
+                                                                                           ≠ 0, this algorithm determines a
+cubature rule {𝑿, 𝒘} with one additional zero at point R ( 𝑤R = 0) .
+ 1 Function [, 𝑿, 𝒘, ] ← SOLVERES(R,𝑿 𝑜𝑙𝑑 ,𝒘𝑜𝑙𝑑 ,𝑁,,, )
+      Data: R ∈ {1, 2 … 𝑝}: Candidate index. Remaining inputs: similar to inputs of function in Algorithm 3.
+      Result: 𝑿 ∈ 𝛺 and 𝒘 ∈ R𝑝 such that 𝒓 = 𝒖𝑇 (𝑿)𝒘 − 𝒃 = 𝟎. If  = 𝑡𝑟𝑢𝑒, then ‖𝒘‖0 = ‖𝒘𝑜𝑙𝑑 ‖0 − 1 and 𝑤R = 0
+ 2    𝑛 ← 1;  ← 𝑡𝑟𝑢𝑒; 𝑤𝑟𝑒𝑓 ← 𝑤𝑜𝑙𝑑   R
+                                       ; 𝑿 ← 𝑿 𝑜𝑙𝑑 ; 𝒘 ← 𝒘𝑜𝑙𝑑 // Initializations
+ 3    while 𝑛 ≤ 𝑁 AND  = 𝑡𝑟𝑢𝑒 do
+ 4        𝑤R = 𝑤𝑟𝑒𝑓 (1 − 𝑛∕𝑁)
+ 5        [, 𝑿, 𝒘, ,P] ← NEWTONRmod (𝑿, 𝒘,R,,,) // Modified Newton-Raphson, see Algorithm 5
+ 6        𝑛←𝑛+1
+ 7    end
+ 8    if  = 𝑓 𝑎𝑙𝑠𝑒 then 𝑿 ← 𝑿 𝑜𝑙𝑑 ; 𝒘 ← 𝒘𝑜𝑙𝑑 // No feasible solution found.
+ 9
+
+
+
+
+     To facilitate convergence, the weight 𝑤R is gradually reduced at a rate dictated by the number of steps 𝑁 (so that 𝑤R =
+𝑤𝑜𝑙𝑑
+ R
+     (1 − 𝑛∕𝑁) at step 𝑛, see Line 4).
+     Suppose we have converged to the solution {𝑿 (𝑛−1) , 𝒘(𝑛−1) } and we want to determine the solution for the next step 𝑛 using a
+Newton–Raphson iterative scheme, modified so as to account for the constraints that the points must remain within the domain, and
+that the weights should be positive (although this latter constraint will be relaxed, as explained in what follows). The pseudo-code
+of this modified Newton–Raphson scheme is described in turn in Algorithm 5. The integration residual at iteration 𝑘 ≤ 𝐾𝑚𝑎𝑥 is
+computed in Line 7. This residual admits the following decomposition in terms of unknown and known variables:
+
+        𝒓 = 𝒖𝑇 (𝑿)𝒘 − 𝒃 = 𝒖𝑇 (𝑿 L )𝒘L + 𝒖𝑇 (𝑿 P )𝒘P + 𝒖𝑇 (𝑿 𝑅 )𝑤𝑅 − 𝒃.                                                                             (57)
+
+Here, L ⊂ {1, 2 … 𝑝} denotes the set of points whose positions and weights are unknown, while P ⊂ {1, 2 … 𝑝} is the set in which the
+positions are fixed, but the weights are unknown. At the first iteration, P = ∅ (see Line 2). The unknown weights will be collectively
+denoted hereafter by 𝒘S = [𝒘𝑇L , 𝒘𝑇P ]𝑇 , and the vector of unknowns (including positions and weights) by 𝒒 ∶= [𝑿 𝑇L , 𝒘𝑇S ]𝑇 .
+     If the Euclidean norm of the residual is not below the prescribed error tolerance (Line 7), we compute, as customary in
+Newton-Raphson procedures, a correction 𝜟𝒒 = [𝛥𝑿 𝑇L , 𝛥𝒘𝑇S ]𝑇 by obtaining one solution of the underdetermined linear equation
+
+        𝑱̂ 𝜟𝒒 = −𝒓.                                                                                                                                (58)
+
+Here, 𝑱̂ stands for the block matrix of the Jacobian matrix 𝑱 ∈ R𝑝×(𝑑+1)𝑝 formed by the rows corresponding to the indexes of the
+unknown positions 𝑿 L and the unknown weights 𝒘S , i.e:
+             [              ]
+        𝑱̂ ∶= 𝑱 𝑿 L     𝑱 𝒘S ,                                                                                                                     (59)
+
+                                                                         14
+J.A. Hernández et al.                                                                      Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+Algorithm 5: Modified Newton-Rapshon algorithm for solving the constrained nonlinear equation 𝒓 = 𝒖𝑇 (𝑿)𝒘 − 𝒃 = 𝟎, using
+as initial guess {𝑿 𝑜𝑙𝑑 , 𝒘𝑜𝑙𝑑 }. The unknowns are the position and weights of the nonzero entries of 𝒘𝑜𝑙𝑑 , except for 𝒘𝑜𝑙𝑑
+                                                                                                                         R
+                                                                                                                             , which
+is given (this function is invoked in Line 5 of Algorithm 4).
+ 1 Function [, 𝑿, 𝒘, ] ← NEWTONRmod(𝑿 𝑜𝑙𝑑 , 𝒘𝑜𝑙𝑑 ,R,,, )
+      Data: {𝑿 𝑜𝑙𝑑 , 𝒘𝑜𝑙𝑑 }: Cubature rule previous step. R ∈ {1, 2 … 𝑝}: Index controlled point.  = {𝐾𝑚𝑎𝑥 , 𝜖𝑁𝑅 , 𝑁𝑛𝑒𝑔 }, 𝐾𝑚𝑎𝑥 :
+            Maximum number of iterations; 𝜖𝑁𝑅 : Tolerance convergence residual; 𝑁𝑛𝑒𝑔 : Maximum number of negative
+            weights allowed during iterations;  and : data structures containing variables needed to evaluate the residual
+            𝒓 at any point 𝒙 ∈ 𝛺
+      Result:  = 𝑡𝑟𝑢𝑒: The Newton-based iterative algorithm has converged to a feasible solution {𝑿, 𝒘} of the equation
+              𝒓 = 𝒖(𝑿)𝑇 𝒘 − 𝒃 = 𝟎, where 𝑤R = 𝑤𝑜𝑙𝑑     R
+                                                            is given.
+ 2    P ← ∅ // Indexes of points with fixed position but unknown weights
+ 3    L ← Indexes nonzero entries of 𝒘𝑜𝑙𝑑 , excluding R
+ 4    𝑘 ← 1;  ← 𝑓 𝑎𝑙𝑠𝑒; S ← L ; 𝜖𝑠𝑣𝑑 ← 10−10 // Initializations
+ 5    while 𝑘 ≤ 𝐾𝑚𝑎𝑥 AND  = 𝑓 𝑎𝑙𝑠𝑒 do
+ 6       [𝒖(𝑿 𝑜𝑙𝑑 ), 𝛁𝒖(𝑿 𝑜𝑙𝑑 ), ] ← EVALBASIS (𝑿 𝑜𝑙𝑑 ,,) // Determine basis functions and gradients at 𝑿 𝑜𝑙𝑑
+ 7       𝒓 ← 𝒖𝑇 (𝑿 𝑜𝑙𝑑 )𝒘𝑜𝑙𝑑 − 𝒃 // Integration residual
+ 8       if ‖𝒓‖2 ≤ 𝜖𝑁𝑅 then
+ 9            ← 𝑡𝑟𝑢𝑒; 𝑿 ← 𝑿 𝑜𝑙𝑑 ; 𝒘 ← 𝒘𝑜𝑙𝑑 // Converged solution
+10       else
+11           𝑱 𝑺 ← [𝑱 𝑿 𝑺 , 𝑱 𝒘𝑺 ] // Jacobian matrix (indexes 𝑺 ). 𝑱 𝑿 and 𝑱 𝒘 are defined in Eqs. (60) and (61)
+12           𝐸𝑓 𝑒𝑎𝑠 ← 𝑓 𝑎𝑙𝑠𝑒 // 𝐸𝑓 𝑒𝑎𝑠 ← 𝑓 𝑎𝑙𝑠𝑒 while tentative solution not feasible
+13           while 𝑘 ≤ 𝐾𝑚𝑎𝑥 AND 𝐸𝑓 𝑒𝑎𝑠 = 𝑓 𝑎𝑙𝑠𝑒 do
+14                𝑱̂ ← [𝑱 𝑿 L , 𝑱 𝒘S ] // L ⊆ S (L: indexes unknown weights and positions)
+15                [𝑼 𝐽 , 𝑺 𝐽 , 𝑮𝑇 ] ← SVD(𝑱̂ ,𝜖𝑠𝑣𝑑 ) // 𝑱̂ ≈ 𝑼 𝐽 𝑺 𝐽 𝑮 with relative error 𝜖𝑠𝑣𝑑 = 10−10
+ 16               𝑛𝑑𝑜𝑓 𝑠 ← (𝑑 + 1)length(L) + length(P ) // Number of unknowns (𝑑 : no of spatial dimensions)
+ 17               if 𝑛𝑑𝑜𝑓 𝑠 < length(𝑺 𝐽 ) then
+ 18                    break // Overdetermined system (no solution). Exiting internal loop without convergence
+ 19               else
+ 20                    𝒄 ← −𝑺 −1    𝑇                                    −1 𝑇
+                                𝐽 𝑼 𝐽 𝒓 // 𝑼 𝐽 𝑺 𝐽 𝑮𝜟𝒒 = −𝒓 ⇒ 𝑮𝜟𝒒 = −𝑺 𝐽 𝑼 𝐽 𝒓
+ 21                    𝜟𝒒 ← Sparse solution of 𝑮𝜟𝒒 = 𝒄 obtained via QR pivoting // In Matlab: 𝜟𝒒 = 𝑮∖𝒄
+ 22                    𝑿 L ← 𝑿 𝑜𝑙𝑑
+                                 L
+                                   + 𝜟𝒒 𝑥 ; 𝒘S ← 𝒘𝑜𝑙𝑑  S
+                                                          + 𝜟𝒒 𝑤 // 𝜟𝒒 𝑥 = 𝜟𝒒(1 ∶ (𝑑 + 1)length(L)),𝜟𝒒 𝑤 :remaining entries
+ 23                    𝑚𝑛𝑒𝑔 ← Number of negative entries of 𝒘
+ 24                    if 𝑚𝑛𝑒𝑔 ≥ 𝑁𝑛𝑒𝑔 then break
+ 25                    Y ← Indexes points outside the domain( 𝑿 Y(𝑖) ∉ 𝛺)
+ 26                    if Y ≠ ∅ then
+ 27                        P ← P ∪ Y; L ← L ⧵ Y S ← L ∪ P // Repeat iteration with 𝑿 P fixed in previous position
+ 28                    else
+ 29                        𝑿 𝑜𝑙𝑑 ← 𝑿; 𝒘𝑜𝑙𝑑 ← 𝒘; 𝐸𝑓 𝑒𝑎𝑠 = 𝑡𝑟𝑢𝑒 // All points inside, update and exit internal loop
+ 30                    end
+ 31                    𝑘←𝑘+1
+ 32               end
+33            end
+34            if 𝐸𝑓 𝑒𝑎𝑠 = 𝑓 𝑎𝑙𝑠𝑒 then break (no feasible solution found, exiting without convergence)
+35         end
+36      end
+
+
+
+
+where
+                   ⎡𝑤1 𝛁𝑇𝑢1 (𝒙1 )   𝑤2 𝛁𝑇𝑢1 (𝒙2 )   …    𝑤𝑝 𝛁𝑇𝑢1 (𝒙𝑝 )⎤
+                   ⎢                                                   ⎥
+               𝜕𝒓    𝑤 𝛁𝑇𝑢 (𝒙 )     𝑤2 𝛁𝑇𝑢2 (𝒙2 )   …    𝑤𝑝 𝛁𝑇𝑢2 (𝒙𝑝 )⎥
+        𝑱 𝑿 ∶=    =⎢ 1 2 1                                                             ,                                                                    (60)
+               𝜕𝑿 ⎢      ⋮               ⋮          ⋱         ⋮        ⎥
+                   ⎢𝑤 𝛁𝑇𝑢 (𝒙 )      𝑤2 𝛁𝑇𝑢𝑝 (𝒙2 )   …    𝑤𝑝 𝛁𝑇𝑢𝑝 (𝒙𝑝 )⎥⎦
+                   ⎣ 1 𝑝 1                                                     𝑝×𝑑 𝑝
+
+and
+                            ⎡𝑢1 (𝒙1 )   𝑢1 (𝒙2 )    …   𝑢1 (𝒙𝑝 )⎤
+                            ⎢                                    ⎥
+               𝜕𝒓            𝑢 (𝒙 )     𝑢2 (𝒙2 )    …   𝑢2 (𝒙𝑝 )⎥
+        𝑱 𝒘 ∶=    = 𝒖 (𝑿) = ⎢ 2 1
+                     𝑇
+                                                                           .                                                                                (61)
+               𝜕𝒘           ⎢ ⋮            ⋮        ⋱      ⋮ ⎥
+                            ⎢𝑢 (𝒙 )     𝑢𝑝 (𝒙2 )    …   𝑢𝑝 (𝒙𝑝 )⎥⎦
+                            ⎣ 𝑝 1                                    𝑝×𝑝
+
+                                                                               15
+J.A. Hernández et al.                                                                 Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+Recall that the gradients of the basis functions can be determined by Eq. (31), if the analytical expressions of the integrand functions
+are available, or by interpolation via Eq. (34)—using the values of the basis functions at the Gauss points of the element containing
+the corresponding point. These operations are encapsulated in the function 𝙴𝚅𝙰𝙻𝙱𝙰𝚂𝙸𝚂(), invoked in Line 6
+     Once we have computed 𝜟𝒒 from Eq. (58), we update the positions of the points and the weights in Line 22. Since the basis
+functions are only defined inside the domain 𝛺 (this is one of the constraints appearing in the sparsification problem (52)), it
+is necessary to first identify (Line 25) and then correct the positions of those points that happen to fall outside the domain. The
+identification is made by determining which finite elements contain the points in their new positions; for the sake of computational
+efficiency, the search is limited to a patch of elements centered at the element containing the point at the previous iteration, and
+located within a radius ‖𝛥𝑿 𝐼 ‖2 (𝐼 ∈ L)—the mesh connectivities, stored in the data structure , greatly expedites this search task.
+If it happens that a given point is not inside any element (𝑿 𝐼 ∉ 𝛺 for some 𝐼 ∈ L), then we set 𝑿 𝐼 ← 𝑿 𝑜𝑙𝑑 𝐼 , P ← P ∪ 𝐼, and L ← L ⧵ 𝐼
+(see Line 27). Notice that this amounts to ‘‘freezing’’ the position of this critical point at the value of the previous iteration during
+the remaining iterations of the current step.7 This operation is to be repeated until all the points lie within the domain—ensuring
+this is the job of the internal while loop starting in Line 13.
+     The other constraint defining a feasible solution in the sparsification problem (52) is the positiveness of the weights. However,
+we argued in Section 1.4.1 that, since the volume is exactly integrated, the tendency when one of the weights is reduced is that the
+remaining weights increase to compensate for the loss of volume. Furthermore, according to the sorting criterion employed in Line
+4 of Algorithm 3, negative weights are the first to be zeroed in each local sparsification step, and, thus, tend to disappear as the
+algorithm progresses. For these reasons, the solution procedure does not incorporate any specific strategy for enforcing positiveness
+of the weights—rather, we limit ourselves to keep the number of negative weights below a user-prescribed threshold 𝑀𝑛𝑒𝑔 during
+the iterative procedure (Line 24 in Algorithm 5). Nevertheless, as a precautionary measure, Line 7 in Algorithm 2 prevents negative
+weights from appearing in the final solution.
+
+
+5.2. Properties of Jacobian matrix and maximum sparsity
+
+
+   It only remains to address the issue of how to solve the system of linear Eq. (58). Solving this system of equations is worthy of
+special consideration because of two reasons: firstly, the system is underdetermined (more unknowns than equations), and, secondly,
+the Jacobian matrix 𝑱̂ may become rank-deficient during the final steps of the sparsification process, specially in 2D and 3D problems.
+
+
+5.2.1. Rank deficiency
+    That the Jacobian matrix 𝑱̂ may become rank-deficient can be readily demonstrated by analyzing the case of the integration of
+polynomials in Cartesian domains. A polynomial of order 𝑡 gives rise to 𝑝 = (𝑡 + 1)𝑑 (𝑑 = 1, 2 or 3) integration conditions (as many
+as monomials). If one assumes that the Jacobian matrix 𝑱̂ remains full rank during the entire sparsification process, then it follows
+that the number of optimal points one can get under such an assumption, denoted henceforth by 𝑚𝑒𝑓 𝑓 , is when 𝑱̂ becomes square8
+(or underdetermined with less than 𝑑 surplus unknowns); this condition yields
+                         𝑝            (𝑡 + 1)𝑑
+        𝑚𝑒𝑓 𝑓 = 𝚌𝚎𝚒𝚕(       ) = 𝚌𝚎𝚒𝚕(          )                                                                                                       (62)
+                        𝑑+1            𝑑+1
+where 𝚌𝚎𝚒𝚕() rounds its argument to the nearest integer greater or equal than itself. For 1D polynomials (𝑑 = 1), it is readily seen
+that 𝑚𝑒𝑓 𝑓 coincides with the number of points of the well-known (optimal) Gauss quadrature rule; for instance, for 𝑡 = 3 (cubic
+polynomials), the above equation gives 𝑚𝑒𝑓 𝑓 = 4∕2 = 2 integration points. This implies that in this 1D case, the Jacobian matrix
+does remain full rank during the process, as presumed. However, this does not hold in the 2D and 3D cases. For instance, for 3D
+cubic polynomials (𝑡 = 3, 𝑑 = 3), the above equation yields 𝑚𝑒𝑓 𝑓 = (1 + 3)3 ∕(1 + 3) = 16 points, yet it is well known that 8-points
+tensor product rule (2 × 2 × 2) can integrate exactly cubic polynomials in any cartesian domain. This means that, in this 3D case,
+from the rule with 16 nonzero weights, to the cubature rule with 8 nonzero weights, the Jacobian matrix 𝑱̂ must remain necessarily
+rank-deficient.
+   To account for this potential rank-deficiency, we determine the truncated SVD of 𝑱̂ (with error threshold 𝜖𝑆𝑉 𝐷 = 10−10 to avoid
+near-singular cases) in Line 15 of Algorithm 5: 𝑱̂ ≈ 𝑼 𝐽 𝑺 𝐽 𝑮. Replacing 𝑱̂ by this decomposition in Eq. (58), and pre-multiplying
+both sides of the resulting equation by 𝑺 −1  𝑇                                          𝑇
+                                          𝐽 𝑼 𝐽 , we obtain, by virtue of the property 𝑼 𝐽 𝑼 𝐽 = 𝑰:
+
+        𝑮𝜟𝒒 = 𝒄,                                                                                                                                       (63)
+
+where 𝑮 denotes the transpose of the orthogonal matrix of right-singular vectors of 𝑱̂ , while 𝒄 = −𝑺 −1  𝑇
+                                                                                                      𝐽 𝑼 𝐽 𝒓, 𝑺 𝐽 being the diagonal
+matrix of singular values, and 𝑼 𝐽 the matrix of left singular vectors.
+
+
+
+  7 This can be done because system (58) is underdetermined, and therefore, one can constrain some points not to move and still find a solution. It should be
+
+noticed that these constrained points are freed at the beginning of each step, see Line 2.
+  8 Because if there are less unknowns than equations, there are no solution to the equation 𝒓 = 𝟎.
+
+
+
+                                                                             16
+J.A. Hernández et al.                                                                       Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+
+
+Fig. 3. Integration of univariate Lagrange polynomials of degree 𝑝 = 5. (a) Original integrand functions 𝑎1 , 𝑎2 … 𝑎6 . (b) Orthogonal basis functions 𝑢1 , 𝑢2 . . . 𝑢6
+derived from the weighted SVD described in step 5 of Box 5.1. The CECM operates on these basis functions rather than on the original integrand functions in
+Fig. 3(a).
+
+
+
+
+5.2.2. Underdetermination and sparse solutions
+    Let us discuss now the issue of underdeterminacy. It is easy to show that the preceding system of equations remains
+underdetermined during the entire sparsification process, with a degree of underdeterminacy (surplus of unknowns over number of
+equations) decaying at each sparsification step until the optimum is reached, when 𝑮 becomes as square as possible. For instance,
+at the very first step of the process, in a problem with 𝑝 basis functions, 𝑱̂ is by construction9 full rank (i.e., there are 𝑝 linearly
+independent equations), while the number of unknowns is (𝑝 − 1)(1 + 𝑑) (𝑚 = 𝑝 − 1 points with 𝑑 unknowns coordinates associated
+to the position of each point and one unknown associated to its weight). Thus, the solution space in this case is of dimension
+(𝑑(𝑝 − 1) − 1).
+    To update the weights and the positions, we need to pick up one solution from this vast space. The standard approach in Newton’s
+method for underdetermined systems (and also the method favored in the literature on generalized Gaussian quadratures [28,29,31])
+is to use the least 𝓁2 -norm solution, which is simply 𝜟𝒒 ∶= 𝑮+ 𝒄, where 𝑮+ = 𝑮𝑇 (𝑮𝑮𝑇 )−1 is the pseudo-inverse of 𝑮 (notice that in
+our case10 𝑮+ = 𝑮𝑇 ). However, we do not use this approach here because the resulting solution tends to be dense, and this implies
+that the positions of all the cubature points have to updated at all iterations. This is a significant disadvantage in our interpolatory
+framework, since updating the position of one point entails an interpolation error of greater or lesser extent depending on the
+functions being interpolated and the distance from the FE Gauss points. Thus, it would be beneficial for the overall accuracy of the
+method to determine solutions that minimize the number of positions being updated at each iteration—incidentally, this would also help
+to reduce the computational effort associated to the spatial search carried out in Line 25 of Algorithm 5. This requisite natural calls
+for solution methods that promote sparsity. For this reason, we use here (see Line 21 in Algorithm 5) the QR factorization with column
+pivoting (QRP) proposed in Golub et al. [36] (page 300, Algorithm 5.6.1), which furnishes a solution with as many nonzero entries
+as equations.11 An alternative strategy would be to determine the least 𝓁1 -norm solution, which, as discussed in Section 1.2, also
+promotes sparsity [9,12]. However, computing this solution would involve addressing a convex, nonquadratic optimization problem
+at each iteration, and this would require considerably more effort and sophistication than the simple QRP method employed in Line
+21.
+
+
+
+5.3. Summary
+
+
+    By way of conclusion, we summarize in Box 5.1, all the operations required to determine an optimal cubature rule using as
+initial data the location of the FE Gauss points, their corresponding weights, and the values at such Gauss points of the functions
+we wish to efficiently integrate.
+
+
+
+6. Numerical assessment
+
+
+   A repository containing both the Continuous Empirical Cubature Method (CECM), as well as the Sequential Randomized SVD
+(SRSVD), allowing to reproduce the following examples is publicly available at https://github.com/Rbravo555/CECM-continuous-
+empirical-cubature-method
+
+                                                                                  17
+J.A. Hernández et al.                                                                       Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+      1. Given the coordinates of the nodes of the finite element mesh, the array of element connectivities, and the position of
+         the Gauss points for each element in the parent domain, determine the location of such points in the physical domain:
+         𝑿𝐹 𝐸 = {𝒙̄ 11 , 𝒙̄ 12 , … 𝒙̄ 𝑒𝑖 …}. Likewise, compute the vector of (positive) finite element weights (𝑾 𝐹 𝐸 ∈ R𝑀 ) for each of these
+         points as the product of the corresponding Gauss weights and the Jacobian of the transformation from the parent domain to
+         the physical domain.
+      2. Determine the values at all Gauss points 𝑿𝐹 𝐸 of the parameterized function 𝒂 ∶ 𝛺 ×  → R𝑛 we wish to efficiently integrate
+         for the chosen parameters {𝝁1 , 𝝁2 … 𝝁𝑃 } ⊂ , and store the result in matrix 𝑨𝐹 𝐸 ∈ R𝑀×𝑃 𝑛 (see Eq. (4)). In the case of
+         hyperreduced-order models, the analytical expression of the integrand functions is normally not available as an explicit
+         function of the input parameters, and constructing matrix 𝑨𝐹 𝐸 entails solving the corresponding governing equations for
+         the chosen input parameters. If the matrix proves to be too large to fit into main memory, it should be partitioned into
+         column blocks 𝑨𝐹 𝐸 1 , 𝑨𝐹 𝐸 2 , … 𝑨𝐹 𝐸 𝑝 . Such blocks need not be loaded into main memory all at once.
+                                                           √
+      3. Compute the weighted matrix 𝑨            ̄ ∶= diag 𝑾 𝐹 𝐸 𝑨 (see Eq (15)) (alternatively, one may directly store in Step 2, rather than
+                ̄ itself; this is especially convenient when the matrix is treated in a partitioned fashion, because it avoids loading the
+         𝑨𝐹 𝐸 , 𝑨
+         submatrices twice).
+      4. Determine the SVD of 𝑨   ̄ (𝑨̄ ≈ 𝑼̄ 𝑺𝑽 ), with relative truncation tolerance 𝜖𝑠𝑣𝑑 equal to the desired error threshold for the
+         integration (see Eq. (17)). If the matrix is relatively small, one can use directly standard SVD implementations (see function
+         SVDT in Algorithm 7 of Appendix). If the matrix is large but still fits into main memory without compromising the machine
+         performance, the incremental randomized SVD proposed in Appendix (function RSVDinc, described in Algorithm 9) may
+         be used instead. Lastly, if the matrix does not fit into main memory, and is therefore provided in a partitioned format, the
+         Sequential Randomized SVD described also in Appendix (function SRSVD() in Algorithm 6) is to be used.
+                                                                                                   √      −1
+      5. Determine a 𝑾 𝐹 𝐸 -orthogonal basis matrix for the range of 𝑨𝐹 𝐸 by making 𝑼 = diag( 𝑾 𝐹 𝐸 ) 𝑼̄ . Following the guidelines
+         outlined in Section 2.2, augment 𝑼 with one additional column if necessary so that the column space of 𝑼 ∈ R𝑀×𝑝 contains
+         the constant function.
+      6. Apply the Discrete Empirical Cubature Method (DECM, see Section 3) to compute a set of indexes 𝒛 and positive weights 𝒘∗
+         such that 𝑼 (𝒛, ∶)𝑇 𝒘∗ = 𝑼 𝑇 𝑾 𝐹 𝐸 (see Eq. (41)).
+      7. Using as initial solution the weights 𝒘∗ obtained by the DECM, as well as the corresponding positions 𝑿 ∗ , solve the
+         sparsification problem (52) by means of function SPARSIFglo in Algorithm 1:
+
+                    [𝑿, 𝒘, ] ← SPARSIFglo(𝑿 ∗ , 𝒘∗ , 𝑁𝑠𝑡𝑒𝑝𝑠 , , )
+
+         The desired cubature rule is given by 𝒘𝑐𝑒𝑐𝑚 = [𝑤𝑔1 , 𝑤𝑔2 , … 𝑤𝑔𝑚 ] (𝑤𝑔𝑖 > 0) and 𝑿 𝑐𝑒𝑐𝑚 = {𝒙𝑔1 , 𝒙𝑔2 , … 𝒙𝑔𝑚 }, where 𝑔1 , 𝑔2 … 𝑔𝑚
+         denote the indexes of the nonzero entries of the (sparse) output weight vector 𝒘.
+
+Box 5.1:      Algorithmic steps involved in the proposed Continuous Empirical Cubature Method (CECM).
+
+
+
+6.1. Univariate polynomials
+
+    We begin the assessment of the proposed methodology by examining the example used for motivating the proposal: the
+integration of univariate polynomials in the domain 𝛺 = [−1, 1]. The employed finite element mesh features 𝑁𝑒𝑙 = 200 equally-
+sized elements, and 𝑟 = 4 Gauss points per element, resulting in a total of 𝑀 = 800 Gauss points. Given a degree 𝑝 > 0, and a set of
+𝑃 = 𝑝 + 1 equally space nodes 𝑥1 , 𝑥2 … 𝑥𝑃 , we seek the optimal integration rule for the Lagrange polynomials
+
+                     ∏
+                     𝑃
+                           𝑥 − 𝑥𝑗
+         𝑎𝑖 (𝑥) =                   ,         𝑖 = 1, 2 … 𝑃                                                                                                       (64)
+                           𝑥 − 𝑥𝑗
+                    𝑗=1,𝑖≠𝑗 𝑖
+
+(graphically represented in Fig. 3(a) for degree up to 𝑝 = 5).
+    The value of these Lagrange polynomials at the 𝑀 Gauss points are stored in the matrix 𝑨𝐹 𝐸 ∈ R𝑀×𝑃 , which is then subjected
+to the weighted SVD (step 5 in Box 5.1) for determining 𝐿2 -orthogonal basis functions 𝑢1 , 𝑢2 . . . 𝑢𝑃 —plotted in Fig. 3(b) for the
+case 𝑝 = 1, 2 … 5. The truncation tolerance in the SVD of expression (17) is set in this case to 𝜖𝑠𝑣𝑑 = 0, for we seek quadrature rules
+that exactly integrate any polynomial up to the specified degree. The resulting basis matrix 𝑼 (obtained by Eq. (20) from the left
+singular vectors of the above mentioned SVD), along with the full-order weight vector 𝑾 𝐹 𝐸 ∈ R𝑀 , are then used to determine an
+interpolatory quadrature rule by means of the DECM (step 6 in Box 5.1). As commented in Section 3, this algorithm selects one
+point at each iteration, until arriving at as many points as basis functions. By way of illustration, we show in Fig. 4 the iterative
+sequence leading to the interpolatory quadrature rule with 6 points (i.e., for polynomials up to degree 5).
+
+
+  9   On the grounds that 𝒖(𝑿 ∗ ) is also full rank because otherwise Eq. (42) would not hold.
+                                                                                                                                +    𝑇    𝑇
+ 10   In this regard, it should be pointed out that Refs. [28,29,31] calculate the pseudo-inverse of the Jacobian matrix as 𝑱̂ = 𝑱̂ (𝑱̂ 𝑱̂ )−1 , thus ignoring the fact
+that, as we have argued in the foregoing, 𝑱̂ might become rank-deficient, and therefore, 𝑱̂ 𝑱̂ 𝑇 cannot be inverted.
+  11 In Matlab, this QRP solution is the one obtained in using the ‘‘backslash’’ operator (or 𝚖𝚕𝚍𝚒𝚟𝚒𝚍𝚎(𝑮, 𝒄)).
+
+
+
+                                                                                  18
+J.A. Hernández et al.                                                                   Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+
+
+Fig. 4. Location (𝑥) and corresponding weights (𝑤) selected by the DECM (see Box 5.1, step 6), at each iteration, for the case of polynomials of degree 𝑝 = 5.
+The final integration rule (iteration 6, graph 4(f)) is the starting point for the subsequent sparsification problem (illustrated, in turn, in Fig. 5).
+
+
+Table 1
+Quadrature rules computed by the CECM for univariate polynomials of degree up to 𝑝 = 12. The rightmost column represents the relative deviations with respect
+to the optimal Gaussian rules (for polynomials of odd degree), calculated as 𝑒2 = (‖𝑿 𝑐𝑒𝑐𝑚 − 𝑿 𝑔𝑎𝑢𝑠𝑠 ‖22 + ‖𝒘𝑐𝑒𝑐𝑚 − 𝒘𝑔𝑎𝑢𝑠𝑠 ‖22 )/(‖𝑿 𝑔𝑎𝑢𝑠𝑠 ‖22 + ‖𝒘𝑔𝑎𝑢𝑠𝑠 ‖22 ).
+ Degree     Positions                    Weights                Error (Gs.)        Degree     Positions                  Weights                 Error (Gs.)
+ 1          −7.31662253127291E−17        2                      2.2504e−16                    −0.906179845938664         0.236926885056189
+            −0.718298153787432           0.784973499347808                                    −0.538469310105683         0.478628670499367
+ 2                                                                                 9                                                             4.8426e−16
+            0.464059849765363            1.21502650065219                                     3.18949244021535E−16       0.568888888888889
+            −0.577350269189626           1                                                    0.538469310105683          0.478628670499366
+ 3                                                              1.6653e−16
+            0.577350269189626            1                                                    0.906179845938664          0.236926885056189
+            −0.966877924131567           0.25396505608136                                     −0.940907514603222         0.151215583523548
+ 4
+            −0.266817254357718           1.00671682129073                                     −0.694289509608625         0.336602757683989
+            0.695455188587597            0.739318122627913                         10         −0.287589748592848         0.462395955495934
+            −0.774596669241483           0.555555555555556                                    0.194969778013914          0.482737964706169
+ 5                                                              8.4549e−16
+            5.19179955929866E−17         0.88888888888889                                     0.637318996155301          0.382659779209725
+            0.774596669241483            0.555555555555556                                    0.927198931106149          0.184387959380636
+            −0.837102793435635           0.405516777593141                                    −0.932469514203152         0.17132449237917
+
+ 6          −0.245834821655188           0.717131675886906                                    −0.661209386466264         0.360761573048139
+            0.45930568155797             0.62534095948649                          11         −0.238619186083197         0.467913934572691       1.0484e−15
+
+            0.906836939036126            0.252010587033462                                    0.238619186083197          0.46791393457269
+            −0.861136311594053           0.347854845137454                                    0.661209386466265          0.360761573048139
+
+ 7          −0.339981043584856           0.652145154862546      5.8993e−16                    0.932469514203152          0.17132449237917
+            0.339981043584856            0.652145154862545                                    −0.967242104087041         0.088484427217067
+            0.861136311594053            0.347854845137454                                    −0.803941159117123         0.240851330885801
+            −0.998731268512389           0.081227685280535                         12         −0.493300094782076         0.37168382888409
+            −0.719380135473419           0.445922523698483                                    −0.083660679344391         0.434164516926175
+ 8
+            −0.166434516034323           0.623254258303059                                    0.346567257597574          0.411907795624614
+            0.446668026062019            0.562352205951177                                    0.712911972240284          0.308489844409304
+            0.885864638161693            0.287243326766745                                    0.943166559093504          0.144418256052949
+
+
+
+
+    The final step in the process is the sparsification of the vector of DECM weights to produce the final CECM rule (step 7 in Box
+5.1). Table 1 shows the location and weights obtained in this sparsification for polynomials up to degree 𝑝 = 12. The parameters
+used in this process are: 𝐾𝑚𝑎𝑥 = 40, 𝜖𝑁𝑅 = 10−8 , 𝑁𝑛𝑒𝑔 = 5 and 𝑁𝑠𝑡𝑒𝑝𝑠 = 20 (the definition of these parameters is given in Algorithm
+5), and we use analytical evaluation of the integrand and their derivatives through formulas (30) and (31), respectively.
+   It can be inferred from the information displayed in Table 1 that, for polynomials of even degree, the CECM provides rules
+whose number of points is equal to (𝑝 + 2)∕2, whereas for polynomials of odd order, the number of points is equal to (𝑝 + 1)∕2 in all
+cases. Thus, for instance, both CECM rules derived from polynomials of degree 4 and 5 possess 3 points; notice that the rule for the
+
+                                                                              19
+J.A. Hernández et al.                                                                     Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+
+
+Fig. 5. Location and weights of the quadrature rules generated during the sparsification process for the case of univariate polynomials of degree 𝑝 = 5 in
+𝛺 = [−1, 1]. Variable 𝑡 represents the number of passes over the loop that selects the weights to be zeroed in Algorithm 3 (see line 7), whereas 𝑘 indicates the
+total number of iterations of the modified Newton–Raphson scheme in Algorithm 5. The initial integration rule, displayed in Fig. 5(a) is the one corresponding
+to the last iteration of the DECM, displayed previously in Fig. 4(f). The red point in each graph indicates the point whose weight is to be zeroed in the following
+step. The final quadrature rule is the one shown in graph 5(d). The values of the coordinates and weights are given in Table 1, in which one can see that this
+quadrature rule is indeed the optimal 3-points Gauss rule. (For interpretation of the references to color in this figure legend, the reader is referred to the web
+version of this article.)
+
+
+
+
+polynomials of degree 4 is asymmetric, whereas the one for polynomials of degree 5 is symmetrical. Furthermore, comparison of
+this symmetrical rule with the corresponding Gauss rule with the same number of points12 reveals that they are identical (relative
+error below 10−15 ). The same trend is observed for the remaining CECM rules for polynomials of odd degree. To further corroborate
+this finding, we extended the study to cover the cases of polynomials from 𝑝 = 13 to 𝑝 = 25, and the result was invariably the same.
+Thus, we can assert that, at least for univariate polynomials, the proposed CECM is able to arrive at the optimal cubature rule, that
+is, the rule with the minimal number of points . To gain further insight into the performance of the method, we present in Fig. 5
+the sequence of rules produced during the sparsification process (from the 6-points DECM rule (Fig. 5(a)) to the optimal 3-points
+(Gauss) rule of Fig. 5(d).
+
+6.2. Multivariate polynomials
+
+   Let us now extend the preceding assessment to the integration of multivariate Lagrange polynomials in 2D and 3D cartesian
+domains—for which it is known that the optimal rules are tensor product of univariate Gauss rules [27]. More specifically, we
+shall focus here on bivariate and trivariate Lagrange polynomials on biunit squares (𝛺 = [−1, 1] × [−1, 1]) and cubes (𝛺 =
+[−1, 1] × [−1, 1] × [−1, 1]), respectively.
+   Given a degree 𝑝, and a set of 𝑝 + 1 equally spaced nodes for each direction, let us define the monomials:
+                     ∏
+                     𝑃
+                              𝑥 − 𝑥ℎ
+         𝛤𝑖 (𝑥) =                     ,         𝑖 = 1, 2 … (𝑝 + 1)                                                                                           (65)
+                    ℎ=1,𝑖≠ℎ
+                              𝑥𝑖 − 𝑥ℎ
+                      ∏𝑃
+                              𝑦 − 𝑦ℎ
+         𝛤𝑗 (𝑦) =                     ,          𝑗 = 1, 2 … (𝑝 + 1)                                                                                          (66)
+                    ℎ=1,𝑗≠ℎ
+                              𝑦𝑗 − 𝑦ℎ
+                      ∏𝑃
+                              𝑧 − 𝑧ℎ
+         𝛤𝑘 (𝑧) =                     ,          𝑘 = 1, 2 … (𝑝 + 1).                                                                                         (67)
+                    ℎ=1,𝑘≠ℎ
+                              𝑧𝑘 − 𝑧ℎ
+
+The expression for the 𝑃 = (𝑝 + 1)2 integrand functions for the case of bivariate polynomials is given by
+
+         𝑎𝑙 (𝑥, 𝑦) = 𝛤𝑖 (𝑥)𝛤𝑗 (𝑦),            𝑙 = (𝑗 − 1)(𝑝 + 1) + 𝑖,   𝑖, 𝑗 = 1, 2 … (𝑝 + 1),                                                               (68)
+whereas for trivariate polynomials, the 𝑃 = (𝑝 + 1)3 integrand functions adopt the expression
+
+         𝑎𝑙 (𝑥, 𝑦, 𝑧) = 𝛤𝑖 (𝑥)𝛤𝑗 (𝑦)𝛤𝑘 (𝑧),           𝑙 = (𝑘 − 1)(𝑝 + 1)2 + (𝑗 − 1)(𝑝 + 1) + 𝑖,    𝑖, 𝑗, 𝑘 = 1, 2 … (𝑝 + 1).                                 (69)
+
+
+
+ 12   A procedure for determining Gauss rules of arbitrary number of points is given in Ref. [27], page 86.
+
+
+                                                                                 20
+J.A. Hernández et al.                                                              Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+Table 2
+Cubature rules computed by the CECM for bivariate polynomials of degree up to 𝑝 = 7 (for both variables) in 𝛺 = [−1, 1] × [−1, 1]. The rightmost column
+represents the relative deviations with respect to the optimal Gauss product rules (for polynomials of odd degree).
+ d     Positions                           Weights         Error (Gs.)         d     Positions                             Weights          Error (Gs.)
+       x                 y                                                           x                  y
+ 1     0.000000000       −0.000000000      4.000000000     1.1104e−15                0.835410647        0.241939775        0.295169258
+       0.706474840       0.648819610       0.707815861                               0.238387911        0.241939775       0.521300430
+
+ 2     0.505956954       −0.513753481      1.262661689                               0.839282581        −0.465525643      0.250410863
+       −0.471826192      0.648819610       1.059826914                               0.255295202        −0.465525643      0.443797308
+       −0.658817575      −0.513753481      0.969695536                               0.463842461        0.836215301        0.255076972
+       0.577350269       0.577350269       1.000000000                               0.909197293        0.836215301        0.100975680
+                                                                               6
+ 3     0.577350269       −0.577350269      1.000000000     2.0914e−15                0.528704543        −0.910089745      0.157360912
+       −0.577350269      0.577350269       1.000000000                               0.952103717        −0.910089745      0.044168747
+       −0.577350269      −0.577350269      1.000000000                               −0.471295457       0.241939775       0.451263578
+       0.235019870       0.887041325       0.346272588                               −0.242986893       0.836215301       0.293371414
+       0.928559333       0.872658207       0.111090783                               −0.444666035       −0.465525643      0.391121725
+       0.235019870       0.192355601       0.936139040                               −0.205611449       −0.910089745      0.185331125
+ 4     0.928559333       0.175016914       0.279848771                               −0.913220650       0.241939775       0.173212013
+       −0.703200858      0.889364290       0.251544803                               −0.899639238       −0.465525643      0.166229135
+       −0.703200858      0.195018638       0.687833785                               −0.836453352       0.836215301       0.165982881
+       0.235019870       −0.713942525      0.682449449                               −0.828149253       −0.910089745      0.105227960
+       0.928559333       −0.718476493      0.203099967                               0.861136312        0.861136312        0.121002993
+       −0.703200858      −0.713255984      0.501720814                               0.339981044        0.861136312        0.226851852
+       0.774596669       0.774596669       0.308641975                               0.861136312        0.339981044        0.226851852
+       −0.000000000      0.774596669       0.493827160                               0.339981044        0.339981044       0.425293303
+       0.774596669       −0.000000000      0.493827160                               −0.339981044       0.861136312       0.226851852
+ 5     0.000000000       −0.000000000      0.790123457     5.9957e−16                0.861136312        −0.339981044      0.226851852
+                                                                               7                                                            5.7779e−16
+       −0.774596669      0.774596669       0.308641975                               −0.339981044       0.339981044       0.425293303
+       0.774596669       −0.774596669      0.308641975                               0.339981044        −0.339981044      0.425293303
+       −0.774596669      0.000000000       0.493827160                               −0.861136312       0.861136312       0.121002993
+       −0.000000000      −0.774596669      0.493827160                               −0.339981044       −0.339981044      0.425293303
+       −0.774596669      −0.774596669      0.308641975                               0.861136312        −0.861136312      0.121002993
+                                                                                     −0.861136312       0.339981044       0.226851852
+                                                                                     0.339981044        −0.861136312      0.226851852
+                                                                                     −0.861136312       −0.339981044      0.226851852
+                                                                                     −0.339981044       −0.861136312      0.226851852
+                                                                                     −0.861136312       −0.861136312      0.121002993
+
+
+
+
+    We use structured meshes of 20 × 20 quadrilateral elements for the square, and 20 × 20 × 20 hexahedra elements for the cube,
+with Gauss integration rules for each element of 2 × 2 and 2 × 2 × 2 points, respectively. The parameters governing the performance
+of the CECM are the same employed in the univariate case. We examined the rules computed by the CECM for degrees up to 𝑝 = 12
+for both 2D and 3D cases (the same degree for all variables). For reasons of space limitation, we only display the coordinates and
+weights up to 𝑝 = 7 for the 2D case (see Table 2), and in Table 3 up to 𝑝 = 4 for the 3D case. The comparison with the product Gauss
+rules contained in both tables reveals the very same pattern observed in the case of univariate polynomials: for even degrees, the
+CECM produces asymmetrical rules, whereas for odd degrees, the CECM produces symmetrical rules identical to the corresponding
+product Gauss rules (featuring in both cases (𝑝 + 1)𝑑 ∕2𝑑 points, where 𝑑 = 2, 3). Although not shown here, the same trend was
+observed for the remaining polynomial degrees.
+    These results provide further confirmation of the ability of the proposed sparsification algorithm to arrive at the integration rules
+with minimal number of points. Figs. 6 and 7 depict the sparsification process for the case 𝑝 = 3 in 2D and 3D, respectively. As done
+previously in Fig. 5 for the univariate case, we show in each graph the number of trials required to find the point whose weight
+is to be zeroed (i.e., the number of times the method passes over the loop in line 7 of Algorithm 3), as well as the number of
+iterations required for zeroing the chosen weight (in the modified Newton–Raphson scheme of Algorithm 5). Whereas in the case
+of univariate polynomials, displayed previously in Fig. 5, the method succesfully determines the weights to be zeroed on the first
+trial, in the multivariate case several trials are necessary in some cases, especially when the algorithm approaches the optimum. For
+instance, to produce the rule with 8 points in the bivariate case, see Fig. 6(i), the algorithm tries 𝑡 = 5 different points until finding
+
+                                                                          21
+J.A. Hernández et al.                                                                      Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+
+
+Fig. 6. Locations and weights of the cubature rules generated during the sparsification process for the case of bivariate polynomials of degree 𝑝 = 3 in
+𝛺 = [−1, 1] × [−1, 1]. The red circle in each graph indicates the point whose weight is to be zeroed in the following step. Variables 𝑡 and 𝑘, on the other hand,
+have the same interpretation as in Fig. 5. The initial DECM rule has (𝑝 + 1)2 = 16 points (see Fig. 6(a)), while the final rule features (𝑝 + 1)2 ∕22 = 4 points, see
+graph 6(l). The exact values of the coordinates and weights are given in Table 2 (it can be seen that the CECM rule coincides with the standard 2 × 2 product
+Gauss rule). (For interpretation of the references to color in this figure legend, the reader is referred to the web version of this article.)
+
+
+
+
+the appropriate combination. Closer examination of the causes for this increase of iterative effort indicates that the most common
+cause is the violation of the constraint that the points must remain within the domain.
+
+6.3. Exponential–sinusoidal function
+
+    We next study the derivation of a cubature rule for the following parameterized, vector-valued function:
+        𝒂 ∶ 𝛺 ×  → R6 ,
+                                                                                                                                                               (70)
+             (𝒙, 𝝁) ↦ (𝑎1 , 𝑎2 , … , 𝑎6 )
+
+                                                                                 22
+J.A. Hernández et al.                                                                 Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+
+Table 3
+Cubature rules computed by the CECM for trivariate polynomials of degree up to 𝑝 = 4 in 𝛺 = [−1, 1] × [−1, 1] × [−1, 1]. The rightmost column represents the
+relative deviations with respect to the optimal Gauss product rules (for polynomials of odd degree).
+ d           Positions                                                                                           Weights                       Error (Gs.)
+             x                               y                                   z
+ 1           8.38519099255208E−17            −1.37013188830199E−16               2.54794197642291E−16            8.00000000000022              2.7534e−14
+             0.743706246140823               0.588904961511756                   0.484154086744496               0.86563029280071
+             0.743706246140821               −0.566022287327392                  0.831399263412485               0.499063612121599
+             −0.44820563907193               0.741835057873505                   0.830045419614278               0.613961492138332
+ 2
+             0.743706246140824               0.588904961511757                   −0.688486047024208              0.608724673042735
+             0.743706246140825               −0.56602228732739                   −0.400930513175059              1.03489533941434
+             −0.44820563907193               −0.449336183017346                  0.830045419614395               1.01362448933892
+             −0.448205639071929              0.739388192080586                   −0.401584450027124              1.274239461537
+             −0.448205639071928              −0.450823176382297                  −0.401584450027067              2.08986063960634
+             0.577350269189625               0.577350269189626                   0.577350269189626               0.999999999999999
+             0.577350269189626               0.577350269189626                   −0.577350269189626              0.999999999999999
+             −0.577350269189626              0.577350269189626                   0.577350269189626               1
+ 3                                                                                                                                             4.3425e−16
+             −0.577350269189626              0.577350269189626                   −0.577350269189626              1
+             0.577350269189626               −0.577350269189626                  0.577350269189626               1
+             0.577350269189626               −0.577350269189626                  −0.577350269189626              1
+             −0.577350269189626              −0.577350269189626                  0.577350269189626               1
+             −0.577350269189626              −0.577350269189626                  −0.577350269189626              1
+             0.691575606960029               0.160521574170478                   −0.261954268935127              0.701290700192769
+             −0.282918324688049              −0.217978724118607                  −0.27678081615893               1.00337289978755
+             0.691575606960029               −0.282053603748311                  0.696630178723833               0.561750852289478
+             −0.28291832468805               −0.211998475048984                  0.69305243630094                0.733763793522678
+             −0.282918324688049              0.707430491792361                   −0.27678081615893               0.734672939267592
+             0.691575606960029               −0.722360355870564                  −0.261954268935126              0.50651426374409
+             0.691575606960028               0.691783591238766                   0.696630178723832               0.412586162346216
+             0.691575606960028               0.861535244017794                   −0.261954268935126              0.294025738847668
+             −0.28291832468805               0.708932471043466                   0.693052436300939               0.536831048244394
+             0.691575606960028               0.067249317677481                   −0.960515811309942              0.175016341839065
+ 4
+             −0.282918324688048              −0.910801772049135                  −0.27678081615893               0.330495727456156
+             −0.282918324688049              0.26535993911279                    −0.980548984419782              0.246322371421189
+             −0.28291832468805               −0.904960687303036                  0.693052436300938               0.248651857974508
+             0.691575606960028               −0.988158764971828                  0.696630178723831               0.128498060521655
+             −0.989432805330447              −0.053487256448397                  −0.23226227865251               0.203195059703459
+             0.691575606960029               0.804707428230073                   −0.960515811309941              0.096280486097567
+             0.691575606960028               −0.750168356265182                  −0.960515811309941              0.118969763496464
+             −0.989432805330449              −0.053487256448396                  0.703880237838895               0.148998882881412
+             −0.28291832468805               −0.695806658208985                  −0.980548984419782              0.180892299291507
+             −0.989432805330447              0.754804289030939                   0.072783264075214               0.124784457736787
+             −0.282918324688049              0.96494897614471                    −0.980548984419783              0.062699664209236
+             −0.989432805330446              −0.797964254050424                  −0.226012314072442              0.11467159716885
+             −0.989432805330448              0.754804289030939                   0.807516321196852               0.067775700765236
+             −0.989432805330447              −0.053487256448394                  −0.925565909634688              0.06232167903138
+             −0.989432805330448              −0.797964254050423                  0.705427653813099               0.084038633103628
+             −0.989432805330448              0.754804289030939                   −0.748349786829047              0.085270559050749
+             −0.989432805330448              −0.797964254050424                  −0.918958907578276              0.036308460008693
+
+
+
+
+                                                                            23
+J.A. Hernández et al.                                                                     Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+
+
+Fig. 7. Locations and weights of the cubature rules generated during the sparsification process for the case of trivariate polynomials of degree 𝑝 = 3 in
+𝛺 = [−1, 1] × [−1, 1] × [−1, 1]. Variables 𝑡 and 𝑘 have the same interpretation as in Figs. 5 and 6. The initial DECM rule has (𝑝 + 1)3 = 64 points (see Fig. 7(a)),
+and the final rule (𝑝 + 1)3 ∕23 = 8 points, see graph 7(m). The exact values of the coordinates and weights are given in Table 3, wherein it can be seen that the
+computed rule does coincide with the standard 2 × 2 × 2 product Gauss rule.
+
+
+where
+        𝛺 = [−1, 1] × [−1, 1] × [−1, 1],              (spatial domain)                                                                                        (71)
+
+         = [1, 𝜋] × [1, 𝜋],                           (parametric domain)                                                                                    (72)
+
+        𝑎1 = 𝐵(𝑥1 )𝐶(𝑥1 , 𝜇1 )𝐸(𝑥1 , 𝜇1 ) + 1
+        𝑎2 = 𝐵(𝑥2 )𝐶(𝑥2 , 𝜇1 )𝐸(𝑥2 , 𝜇1 ) + 1
+        𝑎3 = 𝐵(𝑥1 )𝐶(𝑥1 , 𝜇1 )𝐸(𝑥2 , 𝜇1 ) + 1
+                                                                                                                                                              (73)
+        𝑎4 = 𝐵(𝑥2 )𝐶(𝑥2 , 𝜇1 )𝐸(𝑥1 , 𝜇1 ) + 1
+        𝑎5 = 𝐵(𝑥1 )𝐶(𝑥1 , 𝜇1 )𝐸(𝑥3 , 𝜇2 ) + 1
+        𝑎6 = 𝐵(𝑥3 )𝐶(𝑥3 , 𝜇2 )𝐸(𝑥2 , 𝜇1 ) + 1
+
+                                                                                24
+J.A. Hernández et al.                                                                        Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+Table 4
+Comparison of the performance of the proposed Sequential Randomized SVD (see Algorithm 6 in Appendix) with respect to the standard SVD in determining an
+approximate orthogonal basis matrix (truncation tolerance 𝜖𝑠𝑣𝑑 = 10−4 ) for the column space of the integrand matrix of the vector-valued function ( 6 components)
+defined in Eq. (70). The number of spatial integration points is 𝑀 = (30 ⋅ 3)3 = 729000, and the function is sampled at the points of uniform grids in parameter
+space of varying size (𝑛𝑠𝑎𝑚𝑝 × 𝑛𝑠𝑎𝑚𝑝 , see first column). The number of columns of the integrand matrix is therefore 𝑛𝑐𝑜𝑙 = 6𝑛2𝑠𝑎𝑚𝑝 , and its size (in gigabytes) equal
+to 8 ⋅ 10−9 𝑛𝑐𝑜𝑙 𝑀. For the matrix of 33.63 GB (last row) there is no information on either the computing time nor the rank (number of basis vectors) for the
+standard truncated SVD (using the builtin Matlab function svd, see Algorithm 7 in Appendix), because the computation exhausted the memory capabilities of
+                                                                                                                                               𝑎𝑣𝑔
+the employed 64 GB RAM computer. 𝑁𝑝𝑎𝑟𝑡 denotes the number of partitions of the integrand matrix in the case of the SRSVD, and 𝑁𝑖𝑡𝑒𝑟                the average number
+of iterations employed by the incremental randomized orthogonalization (see Algorithm 10 in Appendix) for all the partitions. The rightmost column represents
+the relative difference between the singular values computed by both methods (‖𝑺 𝑠𝑣𝑑 − 𝑺 𝑠𝑟𝑠𝑣𝑑 ‖2 ∕‖𝑺 𝑠𝑣𝑑 ‖2 ).
+ 𝑛𝑠𝑎𝑚𝑝          𝑛𝑐𝑜𝑙           Size (GB)          SVD                                SRSVD                                                        ERROR SING. VAL.
+                                                                                                    𝑎𝑣𝑔
+                                                  Time (s)           Rank            𝑁𝑝𝑎𝑟𝑡         𝑁𝑖𝑡𝑒𝑟         Time (s)          Rank
+ 4              96             0.56               2.1                36              1             3             2.5               36             5.05E−15
+ 6              216            1.26               5.4                53              1             3             5.9               53             5.26E−15
+ 8              384            2.24               11.4               70              1             2             6.6               70             4.86E−15
+ 11             726            4.23               28.2               90              3             1.67          11.9              90             5.93E−14
+ 16             1536           8.96               84.7               122             4             1.67          21.3              122            3.66E−14
+ 22             2904           16.94              234.0              131             9             1.22          35.3              131            2.62E−13
+ 31             5766           33.63              *                  *               16            1.06          65.2              133            *
+
+
+
+
+and
+         𝐵(𝑟) = 1 − 𝑟,            𝐶(𝑟, 𝑠) = cos 3𝜋𝑠(𝑟 + 1),                𝐸(𝑟, 𝑠) = 𝑒(−1+𝑟)𝑠 .                                                                  (74)
+    We use a structured spatial mesh of 30 × 30 × 30 hexahedra elements, each element being equipped with a product Gauss
+rule of 3 × 3 × 3 points. Unlike the case of polynomials discussed in the foregoing, where we knew beforehand which was the
+space of functions to be integrated – the SVD only played a secondary, orthogonalizing role therein –, in this problem we have to
+delineate first the space in which the integrand lives. This task naturally confronts us with the question of how dense should be the
+sampling of the parametric space so that the column space of the corresponding integrand matrix 𝑨𝐹 𝐸 becomes representative of
+this linear space. We address here this question by gradually increasing the number of sampled points in parametric space, applying
+the SVD with a fixed user-prescribed truncation tolerance to the corresponding integrand matrix (here we use 𝜖𝑆𝑉 𝐷 = 10−4 ), and
+then examining when the rank of the approximation (number of retained singular values) appears to converge to a maximum value.
+Since there are only two parameters here, it is computationally affordable13 to conduct this exploration by uniformly sampling the
+parametric space.
+    We show in Table 4 the result of this convergence study using both the standard SVD and the proposed Sequential Randomized
+SVD (described in Appendix). The study has been devised so that the size of the integrand matrix doubles at each refinement step.
+Likewise, the block partition of the integrand matrix in the case of the SRSVD has been taken so that the size of each block matrix
+is approximately 2 GB. This convergence study reveals that the dimension of the linear space in which the integrand lies (for the
+prescribed tolerance) is around 130. The study also serves to highlight the advantages of the proposed SRSVD in terms of both
+computing time and memory requirements: for the matrix of size 16.96 GB, the SRSVD is almost 7 times faster than the SVD, and
+for the largest matrix of 33.63 GB, the standard SVD cannot handle the operation because it exhausts the memory capabilities of
+the employed computer (which has 64 GB RAM14 ); the SRSVD, by contrast, returns the result in approximately 1 min. The reasons
+of this clear outperformance of the SRSVD over the SVD are further discussed in Appendix A.4 of Appendix.
+    Fig. 8(a) shows the DECM rule determined using the 133 left singular vectors provided by the SRSVD for the parametric grid
+of 31 × 31 points (see last row of Table 4), while Fig. 8(c) displays the final 38-points CECM rule obtained after the sparsification
+process—the reduction factor is approximately 3.4. The variables controlling the sparsification are the same employed in the
+polynomial case. Further information about the sparsification process are displayed in Figs. 8(b) and 8(d). The number of trials
+taken by the algorithm to find the weight to be zeroed (versus the percentage of zeroed weights) is shown in Fig. 8(b), whereas
+Fig. 8(d) represents the total number of accumulated nonlinear iterations (also versus the percentage of zeroed weights). It can be
+seen in Fig. 8(b) that approximately 90% of the weights are zeroed on the first trial; it is only in the last 10% that the number of
+trials increases considerably. The same behavior is observed in terms of accumulated nonlinear iterations in Fig. 8(d): while the
+first 90% of the points are zeroed in 5 iterations on average, for the last 10% of points, the number of iterations required for this
+very task raises sharply (close to 200 iterations in some cases). This is not only due to the increase of the number of attempts to
+zeroed the weights reflected in Fig. 8(b), but also because, at this juncture of the sparsification process, the weights of the points
+are relatively large and, to ensure converge, the problem of driving the integration residual to zero is solved in more than one step15
+(we take here 𝑁𝑠𝑡𝑒𝑝𝑠 = 20).
+    Obviously, this uneven distribution of iterations during the sparsification process translated into an equally uneven computing
+time distribution: zeroing the first 90% of weights took less than 1 min, whilst the remaining 10% required about 8 min.
+
+
+  13 Higher parameter dimensions may require more sophisticated sampling strategies, such as the greedy adaptive procedure advocated in Ref. [38] for
+
+reduced-order modeling purposes.
+  14 The code is implemented in Matlab, and executed in an Intel(R) Core(TM) i7-8700 CPU, 3.20 GHz with 64 Gb RAM (Linux platform).
+  15 The sparsification process enters the second stage in line 5 of Algorithm 1.
+
+
+
+                                                                                   25
+J.A. Hernández et al.                                                                   Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+
+
+Fig. 8. Cubature of the parameterized function defined in Eq. (70) in 𝛺 = [−1, 1] × [−1, 1] × [−1, 1]. The orthogonal basis vectors are determined by the SRSVD
+using a parametric grid of 31 × 31 points (see last row of Table 3). (a) Initial interpolatory DECM rule. (b) Number of passes over the loop that selects the
+weights to be zeroed in Algorithm 3 (see line 7) as a function of the percentage of zeroed weights. (c) Final CECM rule. (d) Total number of iterations of the
+modified Newton–Raphson scheme in Algorithm 5 as a function of the percentage of zeroed weights.
+
+
+
+
+Fig. 9. Assessment of the performance of the CECM in the hyperreduction of multiscale finite elements. (a) Periodic structure under study. (b) Fine-scale mesh
+of the unit cell for which the coarse-scale representation is required (𝑎 = 0.195 m, 𝛼 = 0.5135). The total number of Gauss points is 𝑀 = 42471. (c) Coarse-scale
+representation of the unit cell, possessing 8 degrees of freedom and a number of integration points to be determined by the CECM. (d) Deformational modes of
+the unit cell. The integral to be tackled by the CECM is the projection of the fine-scale nodal internal forces onto the span of these modes (see Eq. (75)).
+
+
+
+
+6.4. Hyperreduction of multiscale finite element models
+
+
+   We conclude the validation of the proposed CECM by illustrating its use in the hyperreduction of finite element models. More
+specifically, attention is concentrated in the derivation of low-dimensional surrogate models in the context of multiscale finite
+element methods. The employed multiscale methodology is the Empirical Interscale FE (EIFE) method developed by the first author
+
+                                                                               26
+J.A. Hernández et al.                                                                   Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+
+
+Fig. 10. Contour lines corresponding to the 16 basis functions for the integrand in Eq. (75), which represents the virtual work per unit volume (for the case
+in which the reduced basis 𝜱 is formed by the 𝑛 = 5 modes shown previously in Fig. 9.d).
+
+
+
+
+and co-worker in Refs. [39] (for beam elements) and Ref. [40] (for solid elements). The chosen example is the modeling of the
+periodic structure displayed in Fig. 9.a, made of tiling copies of the unit cell displayed in turn in Fig. 9.b. The FE mesh of this
+unit cell, also depicted in Fig. 9.b, is formed by 19,356 nodes, and 𝑁𝑒𝑙 = 4719 quadratic quadrilateral elements, with 𝑟 = 9 Gauss
+points per element (hence 𝑀 = 𝑁𝑒𝑙 𝑟 = 42471). The areas in which stress concentration are likely to appear are densely meshed to
+avoid both highly distorted elements and pronounced interelemental jumps—both issues are detrimental, not only to the accuracy
+of the FE analysis per se, but also to the accuracy of the final cubature rule. The goal in the EIFE method is to replace the fine-scale
+representation of the unit cell in Fig. 9.b by a surrogate coarse-scale element such as the one shown in Fig. 9.c. The coarsening
+process involves two sequential stages; the first stage involves the reduction of number of degrees of freedom (DOFs), and the
+second stage involves an additional reduction in complexity in terms of number of integration points for each term of the governing
+equations (this is why the second stage is called ‘‘hyperreduction’’). The particular details on how the first reduction of number
+of DOFs is carried out are of no concern here—the reader interested in such details is referred to Ref. [40]. It suffices to say that
+the process involves running firstly FE analyses in domains comprising several cells (such as the one in Fig. 9.a) under appropriate
+prescribed displacements, and then extracting characteristic deformational patterns of the unit cell in the center via the SVD. In
+the case studied here, in which the coarse model has 8 DOFs and the FE analyses are conducted, for simplicity of exposition,16 in
+the linear elastic regime (Young’s Modulus 𝐸 = 70000 MPa and Poisson’s ratio 𝜈 = 0.3, in plane strain), the resulting deformational
+patterns are the 𝑛 = 5 modes whose deformed shapes are displayed in Fig. 9.d.
+    Our interest lies in the hyperreduction stage, in which one has to devise efficient cubature rules for each one of the integrals
+appearing in the (reduced) governing equations. We focus here in the internal force term, but a similar procedure can be followed
+for the integrals associated to body forces and surface traction. The reduced internal forces are given by the projection onto the
+space spanned by the deformational modes 𝜱 of the FE nodal internal forces 𝑭 𝒊𝒏𝒕 :
+
+        𝜱𝑇 𝑭 𝒊𝒏𝒕 =           𝜱𝑇 𝑩 𝑇𝐹 𝐸 𝝈 𝑑𝛺.                                                                                                              (75)
+                        ∫𝛺
+Here, 𝑩 𝐹 𝐸 denotes the standard strain–displacement FE matrix (in its globally supported format), whereas 𝝈 is the stress vector.
+Our parametric integrand is therefore equal to 𝒂 = (𝑩 𝐹 𝐸 𝜱)𝑇 𝝈, the work per unit volume done over virtual strains of the form
+𝑩 𝐹 𝐸 𝜱𝑖 (𝑖 = 1, 2 … 𝑛) by the stresses 𝝈 caused in turn by strains also of the form 𝜺 = (𝑩 𝐹 𝐸 𝜱)𝒒 (Galerkin projection). It follows then
+that 𝝁 = 𝒒, that is, in this problem, the amplitude of the deformational modes in the expression for the stresses plays the role of
+input parameters. Since we are assuming linear elastic behavior, the number of possible stress states is equal to 𝑛 = 5 as well. This
+implies that the integrand matrix 𝑨𝐹 𝐸 is formed by 𝑛2 = 25 columns, which are all the possible combinations of stress modes times
+virtual strain modes. The SVD (step 4 in Box 5.1) of this matrix (using a fairly low truncation tolerance, 𝜖𝑠𝑣𝑑 = 10−10 , to eliminate
+numerical errors) reveals that there are redundant work modes: out of the 𝑛2 = 25 work modes, only 15 are linearly independent.17
+
+
+ 16  The procedure can be applied to any constitutive stress–strain law.
+ 17  It can be readily seen that the existence of these 10 redundant work patterns is nothing but the consequence of the symmetry of the elastic problem—Betti’s
+reciprocity theorem [41]. In general, if there are 𝑛 deformational modes, the number of independent work modes will be equal to (𝑛 + 1)𝑛∕2.
+
+
+                                                                              27
+J.A. Hernández et al.                                                                     Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+
+
+Fig. 11. Locations and weights of the cubature rules generated during the sparsification process for the case of the virtual internal work per unit volume in
+Eq. (75) (integrand functions shown previously in Fig. 10). The red circle in each graph indicates the point whose weight is to be zeroed in the following step.
+Variables 𝑡 and 𝑘, on the other hand, have the same interpretation as in Fig. 5. The initial DECM rule has 16 points (see Fig. 11(a)), while the final rule features
+𝑚 = 6 points, see Fig. 11(k). The total reduction in number of integration points is 𝑀∕𝑚 = 42471∕6 = 7078.5. (For interpretation of the references to color in
+this figure legend, the reader is referred to the web version of this article.)
+
+
+
+
+By augmenting the integrand basis with an additional vector for accounting for the integration of the volume (step 5 in Box 5.1),
+we end up with 16 basis functions for the integrand; the contour lines of these 16 functions are depicted in Fig. 10.
+    The 16-points interpolatory DECM rule corresponding to these 16 functions is displayed in turn in Fig. 11.a. The fact that the
+weights of 8 of the 16 points are comparatively small gives an indication that the number of points can be further reduced by
+the proposed sparsification process. The result of this sparsification process is displayed in Figs. 11.b to 11.k. The number of trials
+and accumulated nonlinear iterations are also shown in the captions of these Figures. As observed with the 3D analytical function
+in Section 6.3, the number of iterations required for the last 10% of the weights (which in this case is just the last step) requires
+significantly more iterations than the previous 90%. Nevertheless, the total computing time is not significant—less than 6 s for
+the entire procedure, including the computation of the DECM rule. To assess the final integration error, we compare the reduced
+stiffness matrix
+
+        𝜱𝑇 𝑲𝜱 =          𝜱𝑇 (𝑩 𝑇𝐹 𝐸 𝑪𝑩 𝐹 𝐸 )𝜱𝑇 𝑑𝛺.                                                                                                            (76)
+                    ∫𝛺
+(here 𝑲 is the nodal stiffness matrix of the unit cell, and 𝑪 the corresponding elasticity matrix) computed by both the original
+42471-points Gauss element rule and the 6-points CECM rule. The difference turns out to be below 0.005%. This result demonstrates
+that, one the one hand, that the computed 6-points CECM effectively encodes the physics of the coarsened unit cell, and on the other
+hand, that the proposed cubature algorithm is able to deal with complex domains in which the integrand function is only defined
+at some points of such domain—the FE Gauss points. In fact, it should be remarked that, since the tolerance employed in the
+SVD is negligible, this small error is to be exclusively attributed to the fitting procedure outlined in Section 2.3.2 for constructing
+approximations of the integrand at element level .
+
+                                                                                28
+J.A. Hernández et al.                                                      Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+    The assessment of the CECM-based hyperreduction has been carried out in the linear regime for simplicity. However, it is
+important to note that the true potential of hyperreduction becomes apparent when the integrand functions exhibits a nonlinear
+relationships with the unknowns. The reader interested in the application of the proposed CECM-hyperreduction to nonlinear
+scenarios is referred to the recent work by the first author [40], in which the methodology is applied to predict plastic yielding in
+multiscale problems.
+
+
+7. Conclusions
+
+
+    In this paper we presented the Continuous Empirical Cubature Method (CECM), a novel algorithm designed to enhance the
+efficiency of numerical integration rules. The CECM is a two-stage algorithm whose first stage consists on the application of a
+point selection strategy for obtaining an interpolatory rule—featuring as many points as functions to integrate. We have used for
+this purpose the Discrete Empirical Cubature Method (DECM) [2,16]. Then, for the second stage, we have applied a sparsification
+strategy whose aim is rendering to zero the associated weight of as many points as possible. To this end, the locations of the initially
+selected points were changed following a modified Newton–Raphson algorithm whose details have been outlined within the text
+(The code has also been made available at https://github.com/Rbravo555/CECM-continuous-empirical-cubature-method).
+   The versatility of the method was highlighted in the numerical assessment section, showcasing its effectiveness across a diverse
+range of problems. For the case of univariate and multivariate Lagrange polynomials, the CECM was able to recover the optimal
+Gaussian rule whenever the number of function to integrate was odd. For even number of functions to integrate, the number of
+points still coincides with the Gauss rule, although their locations differ. Reductions in required points were observed, with 1D
+domains requiring half, 2D domains requiring one fourth, and 3D domains requiring one eighth of the initial interpolatory rule.
+   Section 6.3 showcases an exponential-sinusoidal function in a 3D domain. For this case, the CECM reduced the number of points
+from 133 of the original DECM rule, to 38. This example also showcased an scenario where the size of the matrices involved
+would render infeasible the computation of the SVD on a regular desktop computer. The SVD was computed using the sequential
+randomized SVD (SRSVD) algorithm presented also in this paper. The SRSVD allowed to efficiently compute the required orthogonal
+basis for matrices of up to 33 GB in size (in a computer with a 64 GB RAM, in about 1 min).
+   Finally, the CECM was applied to an empirical interscale finite element (EIFE) example, for which the number of points was
+reduced from the original fine scale 42,471 points to a 6-point rule, while incurring a negligible integration error of 0.005%.
+   Overall, the CECM algorithm presents an innovative approach to generating optimal integration rules. Its incorporation into
+frameworks that allow input of quadrature points’ positions leads to substantial improvements in integral evaluation performance
+compared to standard interpolatory rules.
+
+
+Declaration of competing interest
+
+
+    The authors declare that they have no known competing financial interests or personal relationships that could have appeared
+to influence the work reported in this paper.
+
+
+Data availability
+
+
+    Data will be made available on request.
+
+
+Acknowledgments
+
+
+    This work is sponsored in part by the Spanish Ministry of Economy and Competitiveness, through the Severo Ochoa Programme
+for Centres of Excellence in R&D (CEX2018-000797-S)’’. The authors acknowledge the support of the European High-Performance
+Computing Joint Undertaking (JU) under grant agreement No. 955558 (the JU receives, in turn, support from the European Union’s
+Horizon 2020 research and innovation programme and Spain, Germany, France, Italy, Poland, Switzerland, Norway), as well as
+the R&D project PCI2021-121944, financed by MCIN/AEI/10.13039/501100011033 and by the ‘‘European Union NextGenera-
+tionEU/PRTR’’. J.A. Hernández expresses gratitude by the support of, on the one hand, the ‘‘MCIN/AEI/10.13039/501100011033/y
+por FEDER una manera de hacer Europa’’ (PID2021-122518OB-I00), and, on the other hand, the European Union’s Horizon 2020
+research and innovation programme under Grant Agreement No. 952966 (project FIBREGY). Lastly, both J.R. Bravo and S. Ares de
+Parga acknowledge the Departament de Recerca i Universitats de la Generalitat de Catalunya for the financial support through doctoral
+grants FI-SDUR 2020 and FI SDUR-2021, respectively.
+
+                                                                  29
+J.A. Hernández et al.                                                                   Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+Appendix. Sequential randomized SVD
+
+
+
+A.1. Overview
+
+   In this Appendix we explain and provide the implementational details (see Algorithm 6) of the proposed procedure for computing
+                                                                           ∑
+the SVD of a partitioned matrix 𝑨 = [𝑨1 , 𝑨2 … 𝑨𝑝 ] (𝑨𝑖 ∈ R𝑛×𝑚𝑖 , with 𝑚 = 𝑝𝑖=1 𝑚𝑖 ), alluded to in Remark 2.1. The method is based
+on the same idea behind other randomized algorithms [42], namely, that the SVD of a matrix 𝑨 (𝑨 = 𝑼 𝑺𝑽 𝑇 ) can be alternatively
+computed from the matrices of the SVD of 𝑳 = 𝑸𝑇 𝑨, 𝑸 ∈ R𝑛×𝑟 being an arbitrary orthogonal basis matrix for the column space of
+                                                                                             𝑇
+𝑨 (here 𝑟 ≤ min (𝑛, 𝑚) denotes the rank of the matrix). More specifically, given 𝑳 = 𝑼̄ 𝑺̄ 𝑽̄ , then 𝑼 = 𝑸𝑼̄ , 𝑺 = 𝑺̄ and 𝑽̄ = 𝑽 . The
+                                                             𝑇                     𝑇
+proof of this property follows from expressing 𝑨 as 𝑨 = 𝑸(𝑸 𝑨) and replacing 𝑸 𝑨 by its SVD:
+                             𝑇
+        𝑨 = 𝑸𝑸𝑇 = (𝑸𝑼̄ )𝑺̄ 𝑽̄ .                                                                                                                            (77)
+
+Both 𝑺̄ and 𝑽̄ arise from an SVD, and therefore, are diagonal with positive entries and orthogonal, respectively—and 𝑽̄ is a basis
+matrix for the row space of 𝑳 = 𝑸𝑇 𝑨, which is the same as the row space of 𝑨. Furthermore, 𝑼 is also an orthogonal matrix:
+                                   𝑇
+        𝑼 𝑇 𝑼 = (𝑸𝑼̄ )𝑇 (𝑸𝑼̄ ) = 𝑼̄ (𝑸𝑇 𝑸)𝑼̄ = 𝑰.                                                                                                          (78)
+
+Therefore, it follows from the uniqueness of the SVD (up to the signs of the left- and right-singular vectors) that the factorization
+        𝑇
+𝑼 𝑺̄ 𝑽̄ is the SVD of 𝑨, as asserted.
+                                                                                                                               ̄ the
+     It can be readily shown that this property also holds for the case in which truncation is introduced. Besides, since 𝑺 = 𝑺,
+truncation threshold for the SVD of 𝑳 is the same as the input truncation threshold,18 𝜖, that is,
+                        𝑇
+        ‖𝑳 − 𝑼̄ 𝑺̄ 𝑽̄ ‖𝐹 ≤ 𝜖‖𝑳‖𝐹 = 𝜖‖𝑨‖𝐹 .                                                                                                                 (79)
+
+    This general strategy for computing the SVD of a matrix proves advantageous only when the following two conditions are met.
+Firstly, the rank of the matrix 𝑟 should be significantly smaller19 than the number of columns and rows of the matrix—because
+otherwise the SVD of 𝑳 = 𝑸𝑇 𝑨 could become as costly as the original SVD. In the context of reduced-order models, this property
+is expected to hold—and if it does not, it means that the parameterized boundary value problem we intend to solve might not
+be amenable to dimensionality reduction. The other condition is that the computation of the orthogonal basis matrix 𝑸 should be
+efficient, in the sense that it should be carried out by an algorithm in which the asymptotic count of floating point operations (flops)
+is less than that required by the standard SVD itself.
+Algorithm 6: Sequential Randomized Singular Value Decomposition (SRSVD) of a partitioned matrix 𝑨 = [𝑨1 , 𝑨2 , … 𝑨𝑝 ].
+ 1   Function [𝑼 , 𝑺, 𝑽 ] ← SRSVD([𝑨1 , 𝑨2 , … 𝑨𝑝 ], 𝜖 )
+                                                                              ∑
+        Data: [𝑨1 , 𝑨2 , … 𝑨𝑞 ]: Partitioned matrix (with 𝑨𝑖 ∈ R𝑛×𝑚𝑖 , and 𝑚 = 𝑝𝑖=1 𝑚𝑖 ). 𝜖 ∈ [0, 1] : relative error threshold
+        Result: Truncated Singular Value Decomposition (with relative truncation threshold 𝜖) of 𝑨 ∈ R𝑛×𝑚 , i.e.: 𝑨 ≈ 𝑼 𝑺𝑽 𝑇 ,
+                where 𝑼 ∈ R𝑛×𝑘 is the orthogonal matrix of left singular vectors, 𝑺 ∈ R𝑘×𝑘 is the diagonal matrix of positive
+                singular values, and 𝑽 ∈ R𝑚×𝑘 is the orthogonal matrix of right singular vectors. Here 𝑘 ≤ min (𝑛, 𝑚) denotes the
+                number of retained singular vectors upon truncation, which is, by definition of SVD, the lowest number of
+                vectors such that ‖𝑨 − 𝑼 𝑺𝑽 𝑻 ‖𝐹 ≤ 𝜖‖𝑨‖𝐹 .
+
+ 2 [𝑸, 𝑳] ← SRORTH([𝑨1 , 𝑨2 , … 𝑨𝑝 ]) // Factorization 𝑨 = 𝑸𝑳, where 𝑸𝑇 𝑸 = 𝑰 ( see Algorithm 8)
+ 3 𝜖𝐿 ← 𝜖 ‖𝑳‖𝐹 ; 𝜇𝑚𝑎𝑐ℎ = max (𝑛, 𝑚) eps(‖𝑳‖𝐹 ) // Truncation thresholds (see definition of eps in Algorithm 7).
+    ̃ , 𝑺, 𝑽 ] ← SVDT (𝑳, 𝜖𝐿 ,𝜇𝑚𝑎𝑐ℎ ) // Truncated SVD (see Algorithm 7). .
+ 4 [𝑼
+ 5 𝑼 ← 𝑸𝑼   ̃ // Matrix of left singular vectors
+
+
+A.2. Sequential randomized orthogonalization
+
+A.2.1. Infinite-precision arithmetic
+   To meet this latter condition, we propose to determine 𝑸 by the Sequential Randomized Orthogonalization (SRORTH) invoked in
+Line 2 of Algorithm 6, and with pseudo-code outlined in Algorithm 8. The qualifier sequential refers to the fact that the method
+only processes one block matrix at a time, thus alleviating potential memory bottlenecks. On the other hand, we call it randomized
+because one of the factorizations employed by the algorithm is carried out by a modified version of the incremental randomized SVD
+proposed in Ref. [34].
+
+
+  18 This is not exactly true in the limiting case 𝜖 → 0, when the truncation criterion is established in terms of a machine-dependent precision parameter, which
+
+also depends on the size of the matrix being factorized (see Algorithm 6 Line 3) .
+  19 This first condition may be relaxed by making 𝑨 ≈ 𝑸𝑸𝑇 𝑨, that is, by determining an approximated basis matrix for the column space of 𝑨. However, it
+
+should be noticed that, in this case, the right-singular vector matrix 𝑽 ceases to be a basis matrix for the row space of 𝑨, and therefore, Eq. (30) would not
+hold.
+
+
+                                                                               30
+J.A. Hernández et al.                                                                        Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+Algorithm 7: Truncated Singular Value Decomposition (via standard, deterministic methods)
+ 1 Function [𝑼 , 𝑺, 𝑽 ] ← SVDT(𝑪, 𝜖, 𝜇𝑚𝑎𝑐ℎ ):
+      Data: 𝑪 ∈ R𝑚×𝑛 . Absolute tolerance threshold 𝜖 > 0. Machine-precision parameter 𝜇𝑚𝑎𝑐ℎ > 0 (optional input, default
+              value 𝜇𝑚𝑎𝑐ℎ = max(n,m)eps(‖𝑪‖𝐹 ), where eps(𝑥) denotes the machine-dependent floating-point relative
+              precision associated to 𝑥.
+      Result: Truncated SVD such that ‖𝑪 − 𝑼 𝑺𝑽 𝑇 ‖𝐹 ≤ 𝜖 (if 𝜖 ≤ 𝜇𝑚𝑎𝑐ℎ , the truncation criterion changes to the one specified
+                in Line 4).
+ 2    [𝑼 , 𝑺, 𝑽 ] ← svd(𝑪 ) // Thin SVD of 𝑪 (In matlab’s built-in function svd(𝑪 ,’econ’)
+ 3    if 𝜖 ≤ 𝜇𝑚𝑎𝑐ℎ then
+ 4          𝑘 ← Smallest singular value such that 𝑺(𝑘, 𝑘) ≥ 𝜇𝑚𝑎𝑐ℎ // Numerical rank
+ 5    else
+                                         √∑
+                                             𝑛            2
+ 6         𝑘 ← Find smallest 𝑘 such that     𝑖=𝑘+1 𝑺(𝑖, 𝑖) ≤ 𝜖 // Truncation level
+ 7       end
+ 8       𝑼 ← 𝑼 (∶, 1 ∶ 𝑘), 𝑽 ← 𝑽 (∶, 1 ∶ 𝑘), 𝑺 ← 𝑺(1 ∶ 𝑘, 1 ∶ 𝑘)
+
+
+
+
+    Let us describe first the overall structure of this orthogonalization procedure, without delving into the randomized part of the
+algorithm, which will be treated later on, in Appendix A.3. In essence, the procedure is a Gram–Schmidt orthogonalization which
+operates, rather than on single vectors, on block matrices. Accordingly, 𝑸 is constructed as the concatenation of basis matrices (one
+for each block matrix 𝑨𝑖 ):
+            [                         ]
+       𝑸 = 𝜟𝑸1 𝜟𝑸2 ⋯ 𝜟𝑸𝑝                                                                                                         (80)
+
+where 𝜟𝑸𝑇𝑖 𝜟𝑸𝑗 = 𝟎 if 𝑖 ≠ 𝑗, and 𝜟𝑸𝑇𝑖 𝜟𝑸𝑖 = 𝑰 (𝑖 = 1, 2 … 𝑝). In turn, these orthogonal submatrices are computed by the recursion
+                                                                                                     𝑇
+          𝜟𝑸1 = 𝙾𝚁𝚃𝙷(𝑨1 );                             𝑸(1) = 𝜟𝑸1 ;                   𝑷 1 = 𝑸(1) 𝑨1
+                                                                                                𝑇
+          𝜟𝑸2 = 𝙾𝚁𝚃𝙷(𝑨2 − 𝜟𝑸1 𝜟𝑸1 𝑇 𝑨2 );              𝑸(2) = [𝑸(1) , 𝜟𝑸2 ];          𝑷 2 = 𝑸(2) 𝑨2
+                                                       ⋮               ⋮
+                                            𝑇                                                    𝑇                                                            (81)
+          𝜟𝑸𝑖 = 𝙾𝚁𝚃𝙷(𝑨𝑖 − 𝑸(𝑖−1) 𝑸(𝑖−1) 𝑨𝑖 );          𝑸(𝑖) = [𝑸(𝑖−1) , 𝜟𝑸𝑖 ];        𝑷 𝑖 = 𝑸(𝑖) 𝑨𝑖
+                                                       ⋮               ⋮
+                                                𝑇
+          𝜟𝑸𝑝 = 𝙾𝚁𝚃𝙷(𝑨𝑝 − 𝑸(𝑝−1) 𝑸(𝑝−1) 𝑨𝑝 );          𝑸 = [𝑸, 𝜟𝑸𝑝 ];                 𝑷 𝑝 = 𝑸𝑇 𝑨 𝑝
+(here 𝙾𝚁𝚃𝙷(∙) symbolizes the function that determines an orthogonal basis matrix for the column space of its input). Notice that
+this procedure for determining 𝑸 need not store in the computer’s main memory the entire matrix, but just one block matrix at a
+time, as asserted earlier. The other matrix in the factorization, 𝑳 = 𝑸𝑇 𝑨, can be also constructed incrementally as the algorithm
+progresses.20 Indeed, by exploiting that 𝜟𝑸𝑇𝑗 𝑨𝑖 = 𝟎 if 𝑗 > 𝑖, we have that
+
+           ⎡𝜟𝑸𝑇 𝑨          𝜟𝑸𝑇1 𝑨2     ⋯        𝜟𝑸𝑇1 𝑨𝑝 ⎤ ⎡𝜟𝑸𝑇1 𝑨1     𝜟𝑸𝑇1 𝑨2          ⋯      𝜟𝑸𝑇1 𝑨𝑝 ⎤
+           ⎢ 1 1                                         ⎥ ⎢                                            ⎥
+           ⎢𝜟𝑸𝑇 𝑨          𝜟𝑸𝑇2 𝑨2     ⋯        𝜟𝑸𝑇2 𝑨𝑝 ⎥⎥ ⎢⎢ 𝟎        𝜟𝑸𝑇2 𝑨2          ⋯      𝜟𝑸𝑇2 𝑨𝑝 ⎥⎥
+         𝑳=⎢ 2 1                                          =                                               .                                                   (82)
+           ⎢                                             ⎥ ⎢                                            ⎥
+           ⎢ ⋮                 ⋮       ⋱          ⋮ ⎥ ⎢ ⋮                  ⋮            ⋱        ⋮ ⎥
+           ⎢ 𝑇                                           ⎥ ⎢                                            ⎥
+           ⎣𝜟𝑸𝑝 𝑨1         𝜟𝑸𝑇𝑝 𝑨1     ⋯        𝜟𝑸𝑇𝑝 𝑨𝑝 ⎦ ⎣ 𝟎              𝟎            ⋯      𝜟𝑸𝑇𝑝 𝑨𝑝 ⎦
+
+Inspection of the nonzero entries in each column of the right-most matrix of the above equation shows that these entries are
+expressible in terms of the matrices 𝑷 𝑖 (𝑖 = 1, 2 … 𝑝) appearing in the recursion formulas (81) as follows:
+
+                                                             ⎡𝜟𝑸𝑇 ⎤                                  ⎡𝜟𝑸𝑇 ⎤
+                                                             ⎢ 1⎥                                    ⎢ 1⎥
+                              ⎡ 𝑇⎤                           ⎢ 𝑇⎥                                    ⎢𝜟𝑸𝑇 ⎥
+         𝜟𝑸𝑇1 𝑨1 = 𝑷 1 ;      ⎢𝜟𝑸1 ⎥ 𝑨2 = 𝑷 2 ;       …      ⎢𝜟𝑸2 ⎥ 𝑨𝑖 = 𝑷 𝑖             …           ⎢ 2 ⎥ 𝑨𝑝 = 𝑷 𝑝 ,                                         (83)
+                              ⎢ 𝑇⎥                           ⎢    ⎥                                  ⎢    ⎥
+                              ⎣𝜟𝑸2 ⎦                         ⎢ ⋮ ⎥                                   ⎢ ⋮ ⎥
+                                                             ⎢ 𝑇⎥                                    ⎢ 𝑇⎥
+                                                             ⎣𝜟𝑸𝑖 ⎦                                  ⎣𝜟𝑸𝑝 ⎦
+
+A.2.2. Finite-precision arithmetic
+    The preceding recursive scheme would in principle work seamlessly in an ideal infinite-precision arithmetic scenario. Yet the devil
+is in the details, and when moving to the real case of finite-precision arithmetic, its performance is seriously afflicted by sensitivity to
+rounding errors and loss of orthogonality over multiple steps—as it occurs with the classical Gram–Schmidt orthogonalization [36].
+
+
+ 20   Note that this statement would cease to be true in the case of approximated basis matrices for the range of 𝑨 (𝑨 ≈ 𝑸𝑸𝑇 𝑨).
+
+
+                                                                                 31
+J.A. Hernández et al.                                                                     Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+The computational implementation described in Algorithm 8 incorporates ingredients that mitigate these deleterious effects. Re-
+orthogonalization is carried out in Line 8 by determining the component of 𝜟𝑸 which is orthogonal to the current basis 𝑸, and then
+applying the SVD again, setting the corrected 𝜟𝑸 equal to the matrix of left-singular vectors of such a decomposition. The effect
+of rounding errors, on the other hand, is treated by computing the orthogonal basis matrix 𝜟𝑸 as the left-singular vectors of the
+truncated SVD of 𝜟𝑨 = 𝑨𝑖 − 𝑸𝑸𝑇 𝑨𝑖 (see Line 12), but using as truncation tolerance a machine-dependent precision parameter based
+on the norm of 𝑨𝑖 :
+
+         𝜇𝑚𝑎𝑐ℎ = max(𝑛, 𝑚𝑖 ) 𝚎𝚙𝚜(‖𝑨𝑖 ‖𝐹 )                                                                                                                  (84)
+
+(see Line 10) rather than the default option, which would be in terms of the norm of the input matrix 𝜟𝑨 (the definition of 𝚎𝚙𝚜(𝑥)
+is given in the description of Algorithm 7).
+Algorithm 8: Sequential Randomized Orthogonalization of a partitioned matrix 𝑨 = [𝑨1 , 𝑨2 , … 𝑨𝑝 ] (employed in Line 2 of
+Algorithm 6).
+ 1    Function [𝑸, 𝑳] ← SRORTH([𝑨1 , 𝑨2 , … 𝑨𝑝 ])
+                                                                                ∑
+         Data: [𝑨1 , 𝑨2 , … 𝑨𝑝 ]: Partitioned matrix (with 𝑨𝑖 ∈ R𝑛×𝑚𝑖 ), and 𝑚 = 𝑝𝑖=1 𝑚𝑖 )
+         Result: Factorization 𝑨 = 𝑸𝑳, where 𝑸 ∈ R𝑛×𝑟 is an orthogonal basis matrix for the column space of 𝑨 (𝑟 ≤ min(𝑛, 𝑚) is
+                 the numerical rank of 𝑨), while 𝑳 = 𝑸𝑇 𝑨.
+ 2 𝑸 ← ∅, 𝑷 𝑖 ← ∅, 𝑖 = 1, 2 … 𝑝 // Initializations
+ 3 for 𝑖 = 1 to 𝑝 do
+ 4     𝜟𝑸 ← ∅ // Incremental basis matrix
+ 5     if 𝑖 = 1 then
+ 6         𝜟𝑨 ← 𝑨𝑖 ; 𝑟 ← ceil(0.01 min(𝑛, 𝑚𝑖 )) // 𝑟: Estimation rank 𝑨𝑖
+ 7     else
+ 8         𝜟𝑨 ← 𝑨𝑖 − 𝑸𝑸𝑇 𝑨𝑖 // Component of 𝑨𝑖 orthogonal to the column space of 𝑸
+ 9     end
+10     𝜇𝑚𝑎𝑐ℎ ← max(𝑛, 𝑚𝑖 ) eps(‖𝑨𝑖 ‖𝐹 ) // Machine-dependent precision parameter
+11     if ‖𝜟𝑨‖𝐹 > 𝜇𝑚𝑎𝑐ℎ then
+12         [𝜟𝑸,∙,∙ ] ← RSVDinc(𝜟𝑨, 0, 𝜇𝑚𝑎𝑐ℎ , 𝑟) // Incremental randomized SVD, see Algorithm 9
+13         if 𝑖 > 1 then [𝜟𝑸, ∙, ∙] ← SVDT((𝜟𝑸 − 𝑸𝑸𝑇 𝜟𝑸), 0) // Re-orthogonalization
+14
+15        𝑸 ← [𝑸, 𝜟𝑸] // Basis matrix augmented with the columns of 𝜟𝑸
+16    end
+17    𝑷 𝑖 ← 𝑸𝑇 𝑨𝑖
+18    𝑟 ← ncol(𝜟𝑸) // Number of columns of 𝜟𝑸 (estimation for the rank of the next submatrix in Line 12)
+19 end
+20 𝑳 ← Use 𝑷 1 , 𝑷 2 … 𝑷 𝑝 to construct 𝑳 according to expressions (82) and (83)
+
+
+
+
+A.3. Incremental randomized SVD
+
+   Let us focus now on the randomized ingredient of the method, which is the Incremental Randomized SVD (𝚁𝚂𝚅𝙳𝚒𝚗𝚌) invoked in
+Line 12 of Algorithm 8 for determining the basis matrix for 𝜟𝑨. As commented previously, this randomized SVD is partially based on
+the adaptive randomized algorithm proposed in Ref. [34], and it is the actual ingredient that renders the proposed scheme faster than
+the standard ‘‘deterministic’’ SVD when the rank of the input matrix is significantly smaller than the minor dimension of the matrix.
+The reason is that, as argued in Refs. [34] (see also [34,43]), the asymptotic cost of this type of randomization algorithms is (𝑛𝑚𝑟),
+𝑟 being the rank of the matrix—as opposed to the standard SVD, whose cost is independent of the rank and scales quadratically
+with its minor dimension.21
+Algorithm 9: Incremental Randomized SVD
+ 1 Function [𝜟𝑸, 𝑺, 𝑽 ] ← RSVDinc(𝜟𝑨, 𝜖, 𝜇,r ):
+      Data: 𝜟𝑨 ∈ R𝑛×𝑚𝑖 , tolerance threshold 𝜖 ≥ 0. OPTIONAL ARG.: 𝜇 > 0: machine precision parameter; 𝑟 ∶ estimation of
+            rank 𝜟𝑨 (default 𝑟 = ceil(0.05max(𝑛, 𝑚𝑖 )))
+      Result: Truncated SVD such that ‖𝜟𝑨 − 𝜟𝑸𝑺𝑽 𝑇 ‖𝐹 ≤ 𝜖
+ 2    [𝑯, 𝑩] ← RORTHinc(𝜟𝑨,𝜇,r ) // 𝑯 : Basis matrix for the column space of 𝜟𝑨, see Algorithm 10
+ 3    𝜖𝐵 ← 𝜖 ‖𝑩‖𝐹 ; 𝜇𝑚𝑎𝑐ℎ = max(𝑛, 𝑚𝑖 ) eps(‖𝑩‖𝐹 )
+ 4    [𝜟𝑸, 𝑺, 𝑽 ] ← SVDT(𝑩,𝜖𝐵 ,𝜇𝑚𝑎𝑐ℎ ) // Truncated SVD of 𝑩 = 𝑯 𝑇 𝜟𝑨, see Algorithm 7
+ 5    𝜟𝑸 ← 𝑯 𝜟𝑸;
+
+
+
+ 21   For a detailed account of the asymptotic costs of classical SVD, the reader is referred to Ref. [44], Lecture 31.
+
+
+                                                                                32
+J.A. Hernández et al.                                                        Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+   The pseudo-code of this randomized SVD is described in Algorithm 9. The basic steps are identical to the ones employed in
+the SRSVD of Algorithm 6, namely, (1) determination of an orthogonal basis matrix 𝑯 for the column space (range) of the input
+matrix 𝜟𝑨 in Line 2; and (2) Truncated SVD of 𝑩 = 𝑯 𝑇 𝜟𝑨 in Line 4. The computation of the basis matrix in the first step also
+shares common features with the one employed in the SRSVD of Algorithm 6. Indeed, as can be inferred from the pseudo-code
+of Algorithm 10 of the function devoted to this task (𝚁𝙾𝚁𝚃𝙷𝚒𝚗𝚌), the desired orthogonal basis matrix 𝜟𝑯 is built iteratively in a
+Gram–Schmid orthogonalization fashion:
+            [                       ]
+       𝜟𝑯 = 𝜟𝑯 1 𝜟𝑯 2 ⋯ 𝜟𝑯 𝑠 , where 𝜟𝑯 𝑇𝑖 𝜟𝑯 𝑗 = 𝟎 (𝑖 ≠ 𝑗),              𝜟𝑯 𝑇𝑖 𝜟𝑯 𝑖 = 𝑰.                                    (85)
+
+   The actual difference with SRORTH in Algorithm 8 is that, at a given iteration 𝑖, the corresponding orthogonal matrix 𝜟𝑯 𝑖 is
+not determined from a column partition of the input matrix, but rather as an orthogonal basis matrix for the range of the matrix
+defined by
+               1
+        𝒀𝑖 = √     𝜴𝑖 𝑪 𝑖 ,        𝑖 = 1, 2 … 𝑠                                                                                               (86)
+              𝑛𝛥𝑅𝑖
+(see Lines 4 and 5 in Algorithm 10). Here, 𝑪 𝑖 ∈ R𝑛×𝑚 is the residual matrix at iteration 𝑢, whereas 𝜴𝑖 is a 𝑛 × 𝛥𝑅𝑖 standard Gaussian
+test matrix (a random matrix whose entries are independent standard normal variables). The distinguishing feature of our algorithm
+with respect to the original scheme put forward in Ref. [34] is that, in our case, the number of columns 𝛥𝑅𝑖 of this random matrix
+changes during the iterations. In the first iteration (𝑖 = 1), we set 𝛥𝑅1 = 𝑅, 𝑅 being the number of columns of the incremental basis
+matrix of the previous block matrix (see Line 18 in Algorithm 8). As argued in Ref. [42], if this initial guess is well above the rank
+of input matrix 𝜟𝑨, it is highly probable that the basis matrix for the range of 𝒀 1 in Eq. (86) is the required orthogonal matrix 𝜟𝑯.
+Numerical experience shows that when the submatrices 𝑨𝑘−1 and 𝑨𝑘 (𝑘 = 2, 3 … p) correspond to input parameters that are close
+in parameter space, then this estimation is normally a reliable upper bound, and therefore, only one iteration is required.
+    If this first iteration is not sufficient to reduce the norm of the residual matrix 𝑪 𝑖 below the prescribed error threshold 𝜇 (see Line
+3 in Algorithm 10), then it is necessary to calculate a guess for the number of columns of the random matrix in the next iteration.
+Our proposal in this respect is to use the logarithmic estimation displayed in Line 12 of Algorithm 10. This estimation is based on
+the observation that, in most physical problems amenable to dimensionality reduction, the singular values of the integrand matrix
+decay in an exponential manner. Nevertheless, to avoid situation in which the estimated increments 𝛥𝑅𝑖 are either too large or too
+small, the minimum and maximum sizes of the increment, 𝛥𝑅𝑚 and 𝛥𝑅𝑀 respectively, can be also specified as optional arguments.
+    Lastly, it should be noted that this randomized factorization is also subject to the vagaries of finite precision arithmetics. To
+address this, Algorithm 10 includes a re-orthogonalization step in Line 8.
+Algorithm 10: Incremental Randomized orthogonalization, with steps of varying size
+ 1 Function [𝑯, 𝑩, 𝑐] ← RORTHinc(𝑪, 𝜇, 𝑅, 𝛥𝑅𝑚 , 𝛥𝑅𝑀 ):
+      Data: 𝑪 ∈ R𝑛×𝑚 , tolerance 𝜇 > 0; rank estimate 𝑅 < 𝑞 (where 𝑞 = min(𝑛, 𝑚)). Optional arguments 𝛥𝑅𝑚 , 𝛥𝑅𝑀 bounds for
+            rank increment 𝛥𝑅 (default 𝚌𝚎𝚒𝚕(0.01𝑞) and 𝚌𝚎𝚒𝚕(0.25𝑞))
+      Result: Orthogonal matrix 𝑯 such that ‖𝑪 − 𝑯𝑩‖𝐹 ≤ 𝜇, where 𝑩 = 𝑯 𝑇 𝑪
+ 2    𝑯 ← ∅; 𝑩 ← ∅; 𝛥𝑅 ← 𝑅 ; 𝑐 ← 𝜇 + 1 ; 𝑖 ← 1 ; 𝑞 ← min(𝑛, 𝑚)
+ 3    while 𝑐 ≥ 𝜇 do
+                            √
+ 4       𝛺 ← randn(𝑛, 𝛥𝑅)∕ 𝑛𝛥𝑅 // Draw a random 𝑛 × 𝛥𝑅 matrix
+ 5       [𝜟𝑯, ⋅, ⋅] ← SVDT(𝑪𝛺,0) // Orthogonal basis matrix for range (𝑪 𝛺)
+ 6       if 𝜟𝑯 = ∅ then break // Exiting the loop
+ 7
+ 8           if 𝑖 > 1 then [𝜟𝑯, ⋅, ⋅] ← SVDT(𝜟𝑯 − 𝑯(𝑯 𝑇 𝜟𝑯),0) // Re-orthogonalization
+ 9
+10         𝜟𝑩 ← 𝜟𝑯 𝑇 𝑪; 𝑪 ← 𝑪 − 𝜟𝑯𝜟𝑩; 𝑐 ← ‖𝑪‖𝐹 // Residual update
+                 [         ]        [           ]𝑇
+11         𝑯 ← 𝑯 𝜟𝑯 ; 𝑩 ← 𝑩 𝑇 𝜟𝑩 𝑇 ; // Basis matrix update
+                         𝑅 − 𝑅𝑖
+12         𝑅̄ ← 𝑅𝑖 +               (𝑙𝑜𝑔𝜇 − 𝑙𝑜𝑔𝑐𝑖 ); 𝑅̄ ← min(q,𝑅̄ ) // Logarithmic estimation rank
+                      𝑙𝑜𝑔𝑐 − 𝑙𝑜𝑔𝑐𝑖
+13          𝛥𝑅 ← min(𝛥𝑅𝑀 ,ceil(𝑅̄ − 𝑅)); 𝛥𝑅 ← max(𝛥𝑅𝑚 ,𝛥𝑅) ; 𝑅̄ ← 𝑅 + 𝛥𝑅
+14         𝑖 ← 𝑖 + 1; 𝑐𝑖 ← 𝑐; 𝑅𝑖 ← 𝑅; 𝑅 ← 𝑅̄
+15      end
+
+
+A.4. Numerical study
+
+   To compare the performance of the standard SVD and the proposed SRSVD, we use the convergence study presented in Table 4
+of Section 6.3 for determining an orthogonal basis functions for the parameterized, vector-valued function of Eq. (70). It can be
+gleaned from this table that the proposed SRSVD clearly outperforms the standard SVD, both in terms of computing time and
+memory requirements. For instance, for the 16 GB matrix, the SRSVD turns out to be almost 7 times faster than the standard
+SVD, and for the largest matrix of 33 GB, the standard SVD simply cannot handle the operation because it exhausts the memory
+capabilities of the employed 64 GB RAM computer. Furthermore, we can see that, in passing from the matrix of 16 GB to the
+matrix of 33 GB, the computing time of the SRSVD increases by a factor slightly below 2, a fact that indicates that the cost scales
+
+                                                                    33
+J.A. Hernández et al.                                                                   Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+approximately linearly with the number of columns—as opposed to the standard SVD, whose asymptotic costs scales quadratically
+with its minor dimension [44]. It is noteworthy also that, as the number of partitions increases, the number of iterations required
+by the incremental randomized orthogonalization of Algorithm 10 tends to one. This indicates that, as conjectured in Appendix A.3
+of Appendix, the rank of a given block matrix is a reliable upper bound for the rank of the orthogonal complement of the next
+block matrix in the sequence. Incidentally, this may explain in part why the asymptotic costs of the SQRSV appears to scale linearly
+with its minor dimension, for the standard randomized SVD itself exhibits this desirable feature [34]. Last but not least, we show
+in Table 4 the relative difference between the singular values computed by both approaches. The results reveal that the difference
+is negligible, a fact that supports the theoretical claim made at the outset of this Appendix, according to which the proposed SRSVD
+is not an approximate method for computing the truncated SVD of a matrix, but rather an alternative method to compute the exact
+factorization—one that exploits linear correlations existing between blocks of the matrix.
+
+References
+
+ [1] C. Farhat, P. Avery, T. Chapman, J. Cortial, Dimensional reduction of nonlinear finite element dynamic models with finite rotations and energy-based
+     mesh sampling and weighting for computational efficiency, Internat. J. Numer. Methods Engrg. 98 (9) (2014) 625–662.
+ [2] J.A. Hernández, M.A. Caicedo, A. Ferrer, Dimensional hyper-reduction of nonlinear finite element models via empirical cubature, Comput. Methods Appl.
+     Mech. Engrg. 313 (2017) 687–722.
+ [3] S. An, T. Kim, D. James, Optimizing cubature for efficient integration of subspace deformations, ACM Trans. Graph. 27 (5) (2009) 165.
+ [4] T. Kim, J. Delaney, Subspace fluid re-simulation, ACM Trans. Graph. 32 (4) (2013) 62.
+ [5] C.L. Lawson, R.J. Hanson, Solving Least Squares Problems, Vol. 161, SIAM, 1974.
+ [6] C. von Tycowicz, C. Schulz, H.P. Seidel, K. Hildebrandt, An efficient construction of reduced deformable objects, ACM Trans. Graph. 32 (6) (2013) 213.
+ [7] Z. Pan, H. Bao, J. Huang, Subspace dynamic simulation using rotation-strain coordinates, ACM Trans. Graph. 34 (6) (2015) 242.
+ [8] D.L. Donoho, For most large underdetermined systems of linear equations the minimal 1-norm solution is also the sparsest solution, Commun. Pure Appl.
+     Math. J. Issued Courant Inst. Math. Sci. 59 (6) (2006) 797–829.
+ [9] S. Boyd, L. Vandenberghe, Convex Optimization, Cambridge Univ Pr, 2004.
+[10] T. Blumensath, M.E. Davies, Normalized iterative hard thresholding: Guaranteed stability and performance, IEEE J. Sel. Top. Signal Process. 4 (2) (2010)
+     298–309.
+[11] J. Yang, Y. Zhang, Alternating direction algorithms for ∖ell_1-problems in compressive sensing, SIAM J. Sci. Comput. 33 (1) (2011) 250–278.
+[12] S.S. Chen, D.L. Donoho, M.A. Saunders, Atomic decomposition by basis pursuit, SIAM Rev. 43 (1) (2001) 129–159.
+[13] T. Chapman, P. Avery, P. Collins, C. Farhat, Accelerated mesh sampling for the hyper reduction of nonlinear computational models, Internat. J. Numer.
+     Methods Engrg. (2016).
+[14] J.A. Hernández, J. Oliver, A.E. Huespe, M.A. Caicedo, J. Cante, High-performance model reduction techniques in computational multiscale homogenization,
+     Comput. Methods Appl. Mech. Engrg. 276 (2014) 149–189.
+[15] J. Oliver, M. Caicedo, A. Huespe, J.A. Hernández, E. Roubin, Reduced order modeling strategies for computational multiscale fracture, Comput. Methods
+     Appl. Mech. Engrg. 313 (2017) 560–595.
+[16] J.A. Hernández, A multiscale method for periodic structures using domain decomposition and ECM-hyperreduction, Comput. Methods Appl. Mech. Engrg.
+     368 (2020) 113192.
+[17] A.T. Patera, M. Yano, An LP empirical quadrature procedure for parametrized functions, C. R. Math. 355 (11) (2017) 1161–1167.
+[18] M. Yano, A.T. Patera, An LP empirical quadrature procedure for reduced basis treatment of parametrized nonlinear PDEs, Comput. Methods Appl. Mech.
+     Engrg. 344 (2019) 1104–1123.
+[19] M. Yano, Discontinuous Galerkin reduced basis empirical quadrature procedure for model reduction of parametrized nonlinear conservation laws, Adv.
+     Comput. Math. (2019) 1–34.
+[20] S. Chaturantabut, D.C. Sorensen, Nonlinear model reduction via discrete empirical interpolation, SIAM J. Sci. Comput. 32 (5) (2010) 2737–2764.
+[21] K. Carlberg, C. Farhat, J. Cortial, D. Amsallem, The GNAT method for nonlinear model reduction: effective implementation and application to computational
+     fluid dynamics and turbulent flows, J. Comput. Phys. (2013).
+[22] P. Tiso, R. Dedden, D. Rixen, A modified discrete empirical interpolation method for reducing non-linear structural finite element models, in: International
+     Design Engineering Technical Conferences and Computers and Information in Engineering Conference, Vol. 55973, American Society of Mechanical
+     Engineers, 2013, V07BT10A043.
+[23] R. Everson, L. Sirovich, Karhunen–Loeve procedure for gappy data, J. Opt. Soc. Amer. A 12 (8) (1995) 1657–1664.
+[24] J. Rutzmoser, Model Order Reduction for Nonlinear Structural Dynamics (Ph.D. thesis), Technische Universität München, 2018.
+[25] C. Farhat, T. Chapman, P. Avery, Structure-preserving, stability, and accuracy properties of the energy-conserving sampling and weighting method for the
+     hyper reduction of nonlinear finite element dynamic models, Internat. J. Numer. Methods Engrg. 102 (5) (2015) 1077–1110.
+[26] D. Kim, J.P. Haldar, Greedy algorithms for nonnegativity-constrained simultaneous sparse recovery, Signal Process. 125 (2016) 274–289.
+[27] G.H. Golub, G. Meurant, Matrices, Moments and Quadrature with Applications, Princeton University Press, 2009.
+[28] J. Bremer, Z. Gimbutas, V. Rokhlin, A nonlinear optimization procedure for generalized Gaussian quadratures, SIAM J. Sci. Comput. 32 (4) (2010)
+     1761–1788.
+[29] H. Xiao, Z. Gimbutas, A numerical algorithm for the construction of efficient quadrature rules in two and higher dimensions, Comput. Math. Appl. 59 (2)
+     (2010) 663–676.
+[30] J. Ma, V. Rokhlin, S. Wandzura, Generalized Gaussian quadrature rules for systems of arbitrary functions, SIAM J. Numer. Anal. 33 (3) (1996) 971–996.
+[31] S. Mousavi, H. Xiao, N. Sukumar, Generalized Gaussian quadrature rules on arbitrary polygons, Internat. J. Numer. Methods Engrg. 82 (1) (2010) 99–113.
+[32] S. Mousavi, N. Sukumar, Numerical integration of polynomials and discontinuous functions on irregular convex polygons and polyhedrons, Comput. Mech.
+     47 (5) (2011) 535–554.
+[33] Z. Wang, B. McBee, T. Iliescu, Approximate partitioned method of snapshots for pod, J. Comput. Appl. Math. 307 (2016) 374–384.
+[34] P.G. Martinsson, S. Voronin, A randomized blocked algorithm for efficiently computing rank-revealing factorizations of matrices, 2015, arXiv preprint
+     arXiv:1503.07157.
+[35] G. Liu, S. Quek, the Finite Element Method: A Practical Course, Butterworth-Heinemann, 2003.
+[36] G.H. Golub, C.F. Van Loan, Matrix Computations, Vol. 3, JHU Press, 2012.
+[37] C. Davis, Theory of positive linear dependence, Amer. J. Math. (1954) 733–746.
+[38] T. Bui-Thanh, K. Willcox, O. Ghattas, B. van Bloemen Waanders, Goal-oriented, model-constrained optimization for reduction of large-scale systems, J.
+     Comput. Phys. 224 (2) (2007) 880–896.
+[39] A. Giuliodori, J.A. Hernández, E. Soudah, Multiscale modeling of prismatic heterogeneous structures based on a localized hyperreduced-order method,
+     Comput. Methods Appl. Mech. Engrg. 407 (2023) 115913.
+
+
+                                                                              34
+J.A. Hernández et al.                                                                Computer Methods in Applied Mechanics and Engineering 418 (2024) 116552
+
+
+[40] J.A. Hernández, A. Giuliodori, E. Soudah, Empirical interscale finite element method (EIFEM) for modeling heterogeneous structures via localized
+     hyperreduction, Comput. Methods Appl. Mech. Engrg. 418 (2024) 116492.
+[41] J.N. Reddy, Energy Principles and Variational Methods in Applied Mechanics, John Wiley & Sons, 2017.
+[42] N. Halko, P.G. Martinsson, J.A. Tropp, Finding structure with randomness: Probabilistic algorithms for constructing approximate matrix decompositions,
+     SIAM Rev. 53 (2) (2011) 217–288.
+[43] P.G. Martinsson, J.A. Tropp, Randomized numerical linear algebra: Foundations and algorithms, Acta Numer. 29 (2020) 403–572.
+[44] L.N. Trefethen, D. Bau, Numerical Linear Algebra, Vol. 50, Siam, 1997.
+
+
+
+
+                                                                            35
+

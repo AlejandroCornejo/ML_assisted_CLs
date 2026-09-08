@@ -1,0 +1,1320 @@
+           polymers
+Article
+A Physics-Informed Assembly of Feed-Forward
+Neural Network Engines to Predict Inelasticity in
+Cross-Linked Polymers
+Aref Ghaderi , Vahid Morovati              and Roozbeh Dargazany *
+ Department of Civil and Environmental Engineering, Michigan State University, East Lansing, MI 48824, USA;
+ ghaderi1@msu.edu (A.G.); morovati@msu.edu (V.M.)
+ * Correspondence: roozbeh@msu.edu
+                                                                                                   
+ Received: 19 October 2020; Accepted: 5 November 2020; Published: 9 November 2020                  
+
+
+ Abstract: In solid mechanics, data-driven approaches are widely considered as the new paradigm
+ that can overcome the classic problems of constitutive models such as limiting hypothesis,
+ complexity, and accuracy. However, the implementation of machine-learned approaches in material
+ modeling has been modest due to the high-dimensionality of the data space, the significant size
+ of missing data, and limited convergence. This work proposes a framework to hire concepts
+ from polymer science, statistical physics, and continuum mechanics to provide super-constrained
+ machine-learning techniques of reduced-order to partly overcome the existing difficulties. Using a
+ sequential order-reduction, we have simplified the 3D stress–strain tensor mapping problem into
+ a limited number of super-constrained 1D mapping problems. Next, we introduce an assembly of
+ multiple replicated neural network learning agents (L-agents) to systematically classify those mapping
+ problems into a few categories, each of which were described by a distinct agent type. By capturing all
+ loading modes through a simplified set of dispersed experimental data, the proposed hybrid assembly
+ of L-agents provides a new generation of machine-learned approaches that simply outperform most
+ constitutive laws in training speed, and accuracy even in complicated loading scenarios. Interestingly,
+ the physics-based nature of the proposed model avoids the low interpretability of conventional
+ machine-learned models.
+
+ Keywords: cross-linked polymer; constitutive model; data-driven; Mullins effect; neural network
+
+
+
+
+1. Introduction
+      The wide range applications of cross-linked polymers in several industries such as automotive,
+structural, medical, to name but a few, have made them an attractive area of research. These materials
+have a 3D network configuration consisting of randomly oriented long molecular chains, which are
+cross-linked, spiraled and tangled among themselves or neighbors. They are typically classified into
+filled and unfilled categories. Fillers, in most cases, can reinforce polymers (see Figure 1). Regarding the
+various applications of these materials, modeling their mechanical behavior in a broad range of strains
+is of great importance. In quasi-static deformations, these materials show hyper-elastic behavior.
+This behavior is dominantly governed by changes in network entropy, where the chains reorient in
+response to the applied macroscopic deformations. Farhangi et al. investigated the effect of fiber
+reinforced polymer tubes filled with recycled materials [1,2]. Izadi et al. investigated the effect
+of nanoparticles on mechanical properties of polymers [3–5]. Accordingly, several studies have
+investigated this hyper-elastic behavior based on phenomenological or micromechanical approaches
+which use statistics of molecular chains networks (see reviews [6,7]). Shojaeifar et al. [8,9] developed a
+model for modeling of visco-hyperelasticity of materials. Phenomenological approaches are empirical,
+
+
+Polymers 2020, 12, 2628; doi:10.3390/polym12112628                           www.mdpi.com/journal/polymers
+Polymers 2020, 12, 2628                                                                                        2 of 20
+
+
+
+simple, and less interpretable; however, micromechanical approaches are highly interpretable but
+complex because they consider the readjustment of kinks, the rearrangement of convolutions,
+reorientation, and uncoiling of molecular chains. Meanwhile, the emergence of machine-learned
+(ML) models has attracted much attention as a way to address the mentioned challenges of the
+phenomenological and micromechanical approaches.
+
+                                                                              Polymer chain    Chemical bond
+
+
+
+
+                                                          Cross-link         Nano particles
+
+
+
+                   Macro scale                      Micro scale                       Nano scale
+      Figure 1. Schematic illustration for micro-structure of filled elastomers which is depicted micro scale
+      and nano scale.
+
+      The exponential growth of computational power over the last decade has enabled the
+first-generation of ML models to be used in computational mechanics and polymer physics [10–13].
+Current ML models were often developed based on “black box” approaches, which, besides low
+interpretability, require a large volume of training data to prescribe a particular behavior [14,15].
+In solid mechanics, stress–strain tensors are only partially observable in lower-dimensions.
+Thus, obtaining data to feed the black-box ML model is exceptionally challenging. In general, one can
+classify current data-driven efforts in computational mechanics into three categories with lots of
+approaches placed between two categories (see review [16]).
+      - Model-free distance-minimization approaches were developed to circumvent the need for
+constitutive models by directly finding stress–strain pairs with the least distance to experimental
+data, which also satisfy compatibility and equilibrium constraints. This approach was initially set
+for nonlinear truss and linear elastic materials [17] and later was expanded to include hyper-elastic
+materials [18]. While being superior to other models by being statistically independent of any prior
+knowledge of the materials, the method has a few major limitations. It has an excessively high
+computational cost, strong sensitivity to data scattering, and in high-dimensional problems suffers
+from lack of data [19]. This approach is further amended by studies on the combination of data-driven
+identification and computational mechanics [20]. To reformulate the heuristic optimization approach
+adopted by [17], mixed-integer programming was used for its implementation [21]. Coelho and
+Breitkopf [22] in their book investigated the main approaches for constitutive modeling using
+optimization methods.
+      - Non-linear dimensionality reduction approaches seek to build a constitutive manifold from
+experimental data to describe an accurate approximation of the strain energy in different states of
+deformation. These approaches focus on describing the constitutive behavior through a set of shape
+functions, such as B-spline [23], with constants derived through the LSQ error minimization [24–26]
+or an ML approach [27]. Mainly derived from the WYPiWYG model [28], this approach focuses on
+solving the system of linear equations which consist of coefficients of shape functions, rather than
+nonlinear fitting a predefined model. In elasticity, manifold learning is more efficient and more accurate
+than black-box ML models and it has already been generalized to cover damage [29]. In Matous’s
+study, a manifold-based reduced order model was proposed [30]. This model relies on non-linear
+dimensionality reduction and the connection of macroscopic loading parameters to reduced space
+using an artificial neural network (ANN). Fritzen et. al [31] proposed a data-driven homogenization
+Polymers 2020, 12, 2628                                                                              3 of 20
+
+
+
+method for hyper-elastic solids using the reduced order method. In their work, the surrogate model
+combines radial basis functions and piece-wise cubic polynomials. The main problem with these
+approaches is the large number of tests needed for validation and their dependency on the assumption
+of constitutive manifolds with a particular functional structure [26].
+     - Autonomous approaches incorporate ML models as surrogate functions to capture the
+high-dimensional and non-smooth micro-scale behavior of material constituents, which has been
+shown to be a successful approach in multi-scale analysis [32]. Several multi-scale methods of
+analysis have been proposed based on the implementation of micro-scale ML models into the
+reduced-order FE simulations of the macro-scale approach [12]. This coupling allows for the
+scalable utilization of ML surrogate models. However, the validity range of current ML models
+is extremely limited due to a number of reasons: (i) the unconstrained search space of optimization
+variables, (ii) neglecting underlying physics, (iii) difficulties in deriving parameter feasibility ranges,
+and (iv) lack of transition models to reduce the order of the problem. Recently, by implementing the
+reinforcement learning concept, a new class of ML meta-models has been successfully developed
+based on (non)cooperative games, where the model trains a pair of L-agents to emulate a specific
+performance through turn-based trial and error [33]. This paradigm employs ML techniques to
+capture the behavior and interaction of micro-structures as a surrogate model. In Stoffel’s study [34],
+they replace the viscoplastic material law in finite element simulation with a feed-forward neural
+network to make an intelligent element. Another study [35] was conducted to predict the tension
+response of rubber by a feed-forward neural network. They used strain values and filler percentages
+as inputs generated from a regression model and stress as output. Kaliske and Zopf [36] proposed
+an inelastic model-free approach represented by recurrent neural networks for uncured elastomers.
+For history-dependent functions, naturally, recurrent neural networks offer attractive alternatives,
+but require enormous amounts of training paths of standardized lengths, which are highly non-trivial.
+In 2019, Haghighat et al. [37] proposed a physics-informed neural network that solves any given
+law of physics described by non-linear partial differential equations. Another study [38] showed the
+performance of this model for linear elasticity, and Xu et al. [39] modeled viscoelastic materials using
+physic constrained learning. Recently, we developed a Bayesian surrogate constitutive model based
+on Bayesian regression and Gaussian process [40] to consider uncertainty of a model [41]. A recent
+study [12] proposed a data-driven constitutive model by predicting a non-linear constitutive law using
+a neural network surrogate model constructed using a learning phase on a set of RVE non-linear
+computations. An investigation was conducted to formulate a constitutive model for rate-dependent
+materials by neural network and its implementation in finite element analysis. The challenge of a
+sufficient dataset for training, however, still remains [42].
+     Here, a cooperative multi-agent system B di = Aij , i ∈ {1, n} , j ∈ {1, m} is proposed to
+describe different features in material behavior by using n × m different machine-learned agents
+(L-agents) which learn from experimental datasets. To reduce problem dimensionality, the 3D matrix is
+represented by m 1D directions, which allows researchers to replicate each L-agent m times to represent
+the 1D behavior of the material. The proposed model trains each agent to emulate a certain material
+behavior with the objective function being the error between the overall prediction of the system and
+the experimental data. Model fusion is used to integrate all L-agents back into a centralized system.
+     The main contributions of this work are to infuse knowledge of physics into the model through
+certain modeling constraints: namely, (1) by providing a new data-driven model based on physics
+behind a machine learning process for predicting non-linear mechanical behavior of cross-linked
+polymers, (2) the first data-driven model that captures inelastic behavior of cross-linked polymers
+such as Mullins effect and permanent set, (3) a new paradigm with the upgrade-ability of model
+from hyper-elastic to damage behavior roots from easy transformation from the integration of
+micro-mechanics to the machine learning process, (4) proposing a new model with better training speed
+and accuracy compared to several well-known models. There are two types of cross-linked polymers.
+One type shows hyper-elastic behavior; however, another type does not have hyper-elasticity at all.
+Polymers 2020, 12, 2628                                                                                                                          4 of 20
+
+
+
+In this study, our focus is on cross-linked polymers which have hyper-elasticity such as rubbers and
+elastomers. This paper is organized as follows; in Section 2, the main concepts of non-linear behavior
+and deformation-induced damage in cross-linked polymers are introduced and described in detail.
+Section 3 explains the idea and formulation of the proposed model in detail. Model verification
+with experimental data on rubber inelasticity is discussed in Section 4. Section 5 provides some
+concluding remarks and outlines some perspectives. Finally, in the appendix section, we explain
+frame-independence, polyconvexity, and thermodynamic consistency.
+
+2. Non-Linear Features in Cross-Linked Polymers
+     Hyper-elasticity in most materials (i.e., cross-linked polymers) is defined by the nonlinear
+elastic behavior in large deformations. Meanwhile, cross-linked polymers often exhibit inelastic
+features in their hyper-elastic behavior, e.g., damage after first elongation known as Mullins
+effect [43,44]. This phenomenon happens to both types of filled and non-filled cross-linked polymers.
+To provide a better understanding of micro-structural sources of such inelastic effects, Figure 2
+shows some of the physical sources in amorphous polymeric systems such as chain breakage [45],
+chain disentanglement [46], molecules slipping [47], and rupture in cluster of fillers [48]. After primary
+loading, deformation-induced damage often leads to a residual strain known as permanent set.
+While the permanent set in unfilled rubber is negligible, it becomes prominent in most filled
+compounds. Figure 2e provides a schematic view on different inelastic features in the hyper-elastic
+behavior of a polymeric system.
+
+                                        Bond rupture                         Molecules slipping
+                           (a)                                 ( b)
+
+
+
+                                               deformation                            deformation
+
+
+
+
+                Filler rupture                         Disentanglement                         Mullins effect + Permanent set
+   ( c)                                      ( d)                                   ( e)
+                                                                                                                                Mullins Effect
+
+
+
+
+                                                                                                                       g
+                                                                                                                    in
+                                                                                                                 ad
+                                                                                                               Lo
+                                                                                     Stress
+
+
+
+
+                          deformation                          deformation
+                                                                                                               g
+                                                                                                              din
+                                                                                                         loa
+                                                                                                       Re
+
+
+
+
+                                                                                              Permanent Set           Stretch
+
+                     Figure 2. Schematic physical explanation of deformation induced damage.
+
+     To model the inelastic features in the behavior of cross-linked polymers, previous efforts were
+mostly focused on phenomenological and physics-based approaches. Physics-based approaches are
+often excessively complicated for real-time applications, and phenomenological models are not reliable
+outside design condition. Here, by coupling a physics-based approach to machine learned L-agents,
+we devise a knowledge-driven ML approach to address inelastic features in hyper-elastic behavior of
+cross-linked polymers. Therefore, to model the nonlinear behavior of cross-linked polymers, we select
+an appropriate neural network consisting of proper activation functions and the appropriate number
+Polymers 2020, 12, 2628                                                                              5 of 20
+
+
+
+of layers and neurons. In addition, to model damages, internal parameters of L-agents are designed
+based on the type of materials’ memory. In a material with full memory such as rubbery materials
+with damage, only the maximum status of history affects the next sequence. Using a micro-sphere as a
+directional model of polymer matrix guarantees modeling of inelastic features such as permanent set.
+These steps are explained in the next section in detail.
+
+3. Physics-Based Reduction
+     To model the second order stress–strain fields required for characterization of hyper-elastic
+material, current approaches ranging from phenomenological to data-driven, face one major challenge,
+namely lack of data on 3D structures. There are no tools to measure stress field across a structure,
+and for strain we can only measure the strain field for relatively simple structures using digital image
+correlation (DIC) techniques [49].
+     Helmholtz free energy Ψ is a function of both deformation and temperature. Differentiating Ψ with
+respect to kinematic state variables at constant temperature yields internal forces (i.e., stresses) defined
+per unit mass. For the case in which Ψ is solely a function of deformation (i.e., isothermal processes),
+the Helmholtz free energy referred to as the strain energy function.
+     For hyper-elastic materials, strain energy is derived directly from the Clausius–Planck form
+of the second law of thermodynamics through different work conjugate pairs, such as two-point
+strain/stress tensors (F/deformation gradient: P/first-order Piola stress), material strain/stress
+tensors (E/Lagrange strain: S/second-order Piola stress), and spatial strain/stress tensors (L/Hencky
+strain: τ/Kirchhoff stress). Strain energy function must accompany conditions like normalization,
+growth conditions, isotropy, objectivity, and polyconvexity, which guarantee the uniqueness of the
+solution (Appendixs A–C). In view of the lack of data on the stress fields, a proper modeling approach is
+expected to be able to only use the limited information obtained from the classical characterization tests
+on the collective sample behavior. In rare cases, a model can be provided by digital image correlation
+reconstruction of 2D strain fields, which shall be used for model validation but should not become
+necessary data for model fitting in view of the cost/complexity of the experiment. The challenge of
+significant missing data has been historically addressed by implementing knowledge of the material
+behavior in the model and to constrain the model in advance before having the data. Such a solution
+is not relevant in data-driven approaches due to the lack of infused knowledge of the material.
+Here, we propose addressing the challenge of significant missing data in high-dimensional data-driven
+approaches through a physics-driven order-reduction approach by infusing knowledge through
+implementation of the concepts of micro-sphere, network decomposition, continuum mechanics,
+and polymer physics. Accordingly, we developed a sufficiently constrained machine-learned model
+that can predict the material behavior solely based on the macro-scale collective behavior of the sample.
+Figure 3 demonstrates a schematic of the proposed model simplification idea.
+Polymers 2020, 12, 2628                                                                                                                                                                                                    6 of 20
+
+
+
+                                                                                    Polymer Matrix
+
+
+                                                                                                                                                                  Cooperative Learning
+                                                                                                                                                                   Multi-Agent System
+
+
+
+                                                                                                                                                                        Multi-Agent System
+
+
+
+                                                                                     Microsphere
+                                                                                                                                                                 L-Agent                   L-Agent
+                                                                                                                                                        1                   1         Ns             1
+
+                                                                                                         Sub-Network 1
+
+
+
+
+                                                                                                   Sub-Network 2
+
+
+
+
+                                                                                                                                                                 L-Agent N                 L-Agent N
+                                                                                                                                                        1                     d       Ns               d
+             Knowledge
+
+
+
+
+                                                                                                                                                                           Agent Team
+
+
+
+
+                                                                                                                                                                                                                Modeling
+                                                                                       Element
+
+                                                                                            Sub-Element 1
+
+                                                       Sub-Network 1
+                                                                                                                                                                             L-Agent 1
+                                                 Sub-Network 2
+
+
+
+
+                                                                                       Sub-Element Ns
+
+
+
+
+                                                                                                                                                                           L-Agent Nd
+
+
+                                                                                     Sub-Elements
+                                                                                                                                                                             Agent Type
+                                     Sub-Element 1
+                                                                                         Sub-Element 1
+
+
+
+
+                                Sub-Element Ns
+                                                                                                                                                                      L-Agent 1       L-Agent Ns
+                                                                                        Sub-Element Ns
+
+
+                                                                                                                                  1               3
+
+                                                                                                                         Order-Reduction       Model Fusion
+                                                                                                                                                                                  L-Agent
+                                                                                                                                           2
+                                                                                             Polymer Chains                                                                       1
+                                                                                                                                                             1
+                                                                                                                                                             𝒅𝒊                                            𝒅𝒊
+                                                                                                                                                        𝝀j                 WI11            WI21      𝝍j
+                                                                                                                                                                 𝒅𝒊
+                                  Sub-Element j                                                                                                       𝝀j 𝒎𝒂𝒙
+
+
+
+
+                     Figure 3. Schematic of the proposed model from order-reduction to model fusion.
+
+3.1. Continuum Mechanics
+      We introduce the first and the most important constraint from continuum mechanics’
+understanding on 3D mapping of second order stress/strain tensors. While F → P mapping generally
+needs a complicated fourth order tensor C = PF , in hyper-elastic materials, unlike hypo-elastic materials,
+the procedure can be simplified using an internal energy density function. Accordingly, we can use
+finite strain theory to simplify F → P mapping by introducing of the strain energy Ψm as the middle
+agent in mapping, where F → Ψm → P. The strain energy is a non-negative scalar-valued function
+Ψm (F) which can replace part of the process required to derive tensor-valued stress function P(F).
+The increment of Ψm denotes the stress required to change the strain field, and thus Ψm can be described
+with respect to any stress–strain work conjugates such as (i) two-point tensors, (ii) material tensors,
+or (iii) spatial tensors, as shown below:
+
+                                                                            ∂Ψm                                           ∂Ψm                                         ∂Ψm
+                                                                       P=       ,               S=                            ,                τ=                         .                                                   (1)
+                                                                             ∂F                                            ∂E                                          ∂L
+    One particular advantage of using Ψm as a middle agent is that it ensures the material objectivity,
+and thermodynamic consistency on all the derived constitutive models (see Truesdell et al. [50]).
+Polymers 2020, 12, 2628                                                                                         7 of 20
+
+
+
+Considering the physics of the problem, certain restrictions exist for strain energy which need to be
+enforced further in the data-driven model, namely
+
+                          Ψm (F) ≥ 0       when      F 6= 0                     Increase energy by deforming,
+                          Ψm (F) = 0       when      F=I                        Normalization condition,           (2)
+                      Ψm (F) → ∞           when      detF → ∞/0                 Growth condition.
+
+     Further restrictions can be introduced by finite strain theory to ensure stability of Ψm in large
+deformations of certain materials. For hyper-elastic materials, ellipticity is a major concern which
+can be enforced by verifying the strain energy in the absence of traction forces in two arbitrary
+directions [51]. Verifying this condition is generally labor-intensive, so polyconvexity is introduced
+as a stronger condition that entails ellipticity. It is also simpler to verify [52], as discussed in the
+Appendices A–C. Therefore, the first constraint that we enforce in our model, is enforcing agents to derive
+Ψm (F) such that it satisfies Equation (2) and polyconvexity condition.
+
+3.2. Micro-Sphere
+     The second constraint is implemented based on polymer physics, in particular topology of a
+cross-linked amorphous network. Knowing amorphous systems are isotropic at the virgin state,
+polymer chains are considered to be uniformly distributed in all spatial directions. Such homogenized
+spatial arrangement of polymer chains allows us to use the micro-sphere concept to represent the
+3D matrix as a homogeneous assembly of similar 1D elements that are distributed in different
+spatial directions over a micro-sphere (see Figure 3). This approach can transfer information from
+super-simplified 1D elements to generate complex 3D behavior of the matrix via homogenization over
+the unit-sphere. Furthermore, by discretizing the sphere into finite sections, the integration can be taken
+out numerically over Nd integration directions [di ]i=1...Nd with different weight factors [wi ]i=1...n [53].
+Accordingly, strain energy of the matrix Ψm with respect to its elements can be written as:
+
+                                                          Nd
+                                   1
+                                       Z
+                                                     d
+                           Ψm =                Ψdm dS ∼= ∑ w i Ψ m di ,              where   Ψm di = B di          (3)
+                                  4π       S              i =1
+
+where Ψm di is the energy of sub-matrix element in direction di , which will be represented by
+one team of L-agent B di , which represents an additive cooperation between multiple L-agents Ai• .
+                                                    RθRφ
+Equation (3) represents the integral S(θ, φ) = 0 0 sin (θ )dθdφ over the unit-sphere with the unit
+vector r = sin (θ ) cos (φ)ex + sin (θ ) sin (φ)ey + cos (φ)ez (see Figure 4). Assuming identical team in
+all directions in the virgin state, namely B di = B dj , initial isotropy is assured, although the material can
+quickly become anisotropic due to different loading on different directions. Moreover, since L-agents
+react to varying loading in each direction, the model can consider the onset of damage, deterioration,
+and propagation of cascading failure in materials with directional response.
+
+                                                                   ez
+
+
+                                                                        𝜃
+                                                                                dS
+                                                                            r
+
+                                                                                     ey
+                                                                   𝜙
+                                                              ex
+
+
+
+
+           Figure 4. The unit micro-sphere and the orientation vector in terms of spherical coordinates.
+Polymers 2020, 12, 2628                                                                                 8 of 20
+
+
+
+3.3. Network Decomposition
+     The third constraint is derived from statistical mechanics, namely by infusing the concept of
+superposition, which allows us to predict complicated patterns by superposing simple patterns on
+top of each other. The concept, also known as the network decomposition concept in constitutive
+modeling [54], will be carried out by representing the energy of an element,Ψm di by superposing the
+energy of multiple sub-elements, Ψm di = ∑ N j=1 Ψ j , where each sub-element is responsible for one
+                                               s    di
+
+simple inelastic feature. Representing each sub-element by one L-agent, we can calculate the energy
+of one element by a team of cooperative L-agents B di = [Aij ], and then replicating this cooperative
+team in different directions to provide us with the energy of the matrix. To this end, by substituting
+Equation (3), we can directly derive the energy of the matrix with respect to sub-elements and the
+L-agents which represent them as given here
+
+                                                             Nd Ns
+                                      1
+                                          Z
+                                                         d
+                             Ψm =                 Ψm d dS ∼= ∑ ∑ wi ψj di
+                                     4π       S             i =1 j =1
+                                     Nd Ns                                      Ns
+                             Ψm ≈ ∑ ∑ wi Aij               where        Ψm di = ∑ Aij .                    (4)
+                                    i =1 j =1                                   j =1
+
+where Ns is the number of sub-elements considered for each element. Consequently, we derived
+super-simplified scalar-to-scalar mapping behavior for each element, which can be represented by a
+simplified 2-layer feed-forward neural network L-agent Aij . While training data are only available
+on collective behavior of the L-agents, the input parameters can be defined for each L-agent team
+individually. Each L-agent, Aij := ψij (Ei , M j ), will be trained based on a set of non-kinematic input
+Ei and internal M j parameters, which depending on material memory (full or recent), can satisfy
+normalization, growth conditions, isotropy, objectivity, and polyconvexity.
+     The input vector is independent of the sub-element definition and should represent the problem
+setting, material or loading, e.g., stretch and time. Internal parameters are specifically hypothesized
+for the model to capture the evolution of damage and vary for each network. The behavior of all
+teams should be identical in the virgin state to represent initial isotropy, so one has Aij = Akj ∀i 6= k.
+Accordingly, we only assume different ANN types for L-agents associated to different sub-elements.
+All replicated agents associated to one sub-element are the same despite being distributed in different
+teams to represent different directions. For the replicated agents, only the inputs are different
+depending on their direction (see Figure 3). Therefore, the energy of one sub-element can be written as
+                                        d
+                                      ψj i = Aij = ANN j (Wj , Ei , M j ),                                 (5)
+
+where W j is the weight vector associated to L-agent A•j , and W = [W 1 ...W Ns ] is the weight matrix
+representing assembly of all W j . Consequently, based on Equations (1) and (4), the first Piola–Kirchhoff
+stress tensor P can be derived as:
+
+                                     ∂Ψm           Nd Ns    ∂Aij
+                               P=        − pF−T = ∑ ∑ wi         − pF−T ,                                  (6)
+                                      ∂F          i =1 j =1
+                                                             ∂F
+
+where p denotes the Lagrange multiplier to guarantee incompressibility of the material. To train
+the model, a cost function should be derived to quantify prediction error against experimental
+observations on collective sample behavior, e.g., uni-axial tensile test provides the 1D dataset S = [ P̃, λ̃],
+with nominal stress P̃ and stretch λ̃ in the direction of principal stretch. Here, the error has been
+quantified using least-square method by writing:
+                                                                             2
+                                      1         Nd Ns    ∂ψj di
+                             E ( W ) = ∑ g 1 ( ∑ ∑ wi              − T
+                                                                − pF )g1 − Pn  ,                           (7)
+                                      2 n =1   i =1 j =1
+                                                          ∂F
+Polymers 2020, 12, 2628                                                                                          9 of 20
+
+
+
+where P(1,1) := g1 Pg1 is the first component of the experimental macro-scale stress tensor P in loading
+direction g1 .
+     Neural network L-agents: Artificial neurons, also known as nodes, are the basic units in the
+neural system, which receive and transfer information to the other nodes through activation functions.
+Accordingly, the ability of “learning” of an ANN agent strongly depends on proper selection of the
+activation function for each node. Their purpose is to decide whether a neuron should be activated or
+not and introduce non-linearity into the output of a node. Therefore, they make the model to generalize
+or adapt to a variety of data and to differentiate between the output. The cost function is accounted for
+by estimating W using gradient descent (GD) algorithm, which gradually optimizes the initial guess
+towards the target values.
+     Material with full or recent memory: For history-dependent materials, parameters should be
+specifically chosen to represent material memory and then fed into the L-agents through internal
+parameters. However, different types of memory parameters may be required for describing different
+materials, e.g., for materials with recent memory such as visco-elastic materials, internal parameters
+should transfer information from each iteration to the next. In contrast, for materials with full memory
+such as elastomers, the internal parameters can be defined independent of the solution iterations as a
+damage-precursor of the external events, for example the maximum stretch in rubber material can be
+used as a damage precursor to show the history of maximum loading in each direction.
+
+4. Implementation to Rubber Inelasticity
+     To show the performance of the proposed model, inelastic behavior of rubber has been studied.
+The number of teams and their associated agents can be chosen based on the trade-off between accuracy
+and computational cost. Here, we choose 21 teams, each with two agents, which is a relatively small
+number [53] (21 integration-points discussed in Appendixs A–C). The inputs and internal parameters
+of L-agents are designed to capture the rubbers’ deformation with full memory through λ j−max
+parameters. To enable teams to predict different states of deformation, each team should be provided
+with the first and second invariants of deformation [55]. The condition is satisfied by providing input
+     d      d      di                         di     di   di
+set S1i = [λ1 i ; λ1− max ] to L-agent 1 and S2 = [ λ2 ; λ2−max ] to L-agent 2
+                                                                          p
+                                 λ1 di =                       λ 2 di =
+                                             p
+                                                 di Cdi ,                      di C−1 di ,      C = FT F            (8)
+
+where λ1 di and λ2 di are designed to lead to the first and second sub-elements and represent the I1 and
+I2 , respectively. For the ANN structure of L-agents, we consider one input layer, one hidden layer with
+four neurons and three activation functions soft plus (ψ(•) = ln(1 + e• )), sinusoid (ψ(•) = sin(•))
+and hyperbolic tangent (ψ(•) = tanh(•)). In summary, we represented the rubber matrix by the
+cooperative game of 21 teams of 2 agents through Aij , i ∈ {1, 21} , j ∈ {1, 2}. The final cost function
+after agent fusion is given by:
+
+                                                   1              21 2    ∂Aij ∂λ j di
+                            E ( W1 , W2 ) =          ∑
+                                                   2 n =1
+                                                          [g 1 ( ∑ ∑ wi
+                                                                          ∂λ j di ∂F
+                                                                                       − pF−T )g1 − Pn ]2 ,         (9)
+                                                                i =1 j =1
+
+subjected to weights related to λ1−max and λ2−max ⩽ 0, and weights related to λ1 and λ2 ⩾ 0 to
+satisfy thermodynamic consistency and polyconvexity, respectively. Equations (10) and (11) show the
+derivation of each sub-element’s energy with respect to deformation gradient. Accordingly, Figure 3
+shows the schematic concept of the derived model.
+
+                                    21       ∂A1i ∂λ1 di     21   ∂A1i 1
+                                    ∑ wi     ∂λ1 di ∂F
+                                                         = ∑ i ∂λ di λ di F (di ⊗ di ).
+                                                                w                                                 (10)
+                                   i =1                    i =1    1   1
+
+                          21        ∂Ai ∂λ2 di               21      ∂A2i        1
+                          ∑ wi ∂λ d2i ∂F               = − ∑ wi
+                                                                    ∂λ2   di
+                                                                               λ2 di
+                                                                                       F−1 F−T F−1 (di ⊗ di ).    (11)
+                          i =1           2                  i =1
+Polymers 2020, 12, 2628                                                                                     10 of 20
+
+
+
+4.1. Minimizing Data Requirement for Training
+
+4.1.1. Dataset Minimization
+     A critical step in the selection of the training dataset is to understand the role of the training
+points and assure their quality in the model predictions. Too little data may provide a false sense of
+confidence by preventing us from seeing the critical points, while low-quality data may provide faulty
+results which seems perfectly robust. For example, in the aforementioned model developed for rubber,
+                                                                                       d        d
+we have introduced two L-agent types which represents two sub-elements using S1i and S2i input
+                                                         d
+sets, respectively. In view of the definition of S2i , we know that it has a limited variation in uni-axial
+tensile loading which makes the contribution of the second L-agent almost limited in such loading.
+               d
+However, S2i significantly varies in bi-axial loading, which makes the contribution of second L-agent
+quite considerable in this case. Therefore, training with uni-axial data cannot provide the quality
+information needed for confidently training both agents since second-agent cannot be fully engaged.
+      In essence, we cannot train agents with the scenarios that they are not participating in or have minimal
+contribution. Thus, the confidence in training of agents is directly correlated to the quality of the training data,
+and the contribution of agents in those scenarios.However, by defining the quality of data with respect to
+the input required by each agent, we can quantify the confidence interval in which an agent can be
+trained with high confidence with respect to the provided data.
+      The confidence interval of a system is equal to that of its agent with least confidence.
+The confidence of an agent can be calculated with respect to the deformation range used in each
+direction for training of that agent. Since the reliability of the predictions of each agent is related to
+its training, we can linearly correlate the agent’s reliability to their training range. As an example,
+in case of uni-axial tension where the sample is stretched until χ x , maximum first deformation state
+(axial) is χ x which occurs in the loading direction, and minimum is √1χx , which occurs in the transverse
+                                                                              √
+directions. Similarly, the training domain for the second agent is [ χ1x , χ x ]. In case of bi-axial tension,
+range of agents deformations are [ χ12 , χbi. ] and [ χ1 , χ2bi. ].
+                                          bi.                bi.
+     If we train the model based on uni-axial tensile data until χ x , the model can predict different
+states of deformation based the ranges that the model has been calibrated based on that. In order to
+ensure accurate prediction of the model, the prediction ranges should be in the range that agent is
+trained. Thus, in the bi-axial prediction case, the model limits to
+                                                "            # 
+                                                                                   √
+                                                                        
+                                                   1              1
+                          Agent 1:                  2
+                                                       , χbi. ∈ √ , χ x −→ χbi. ≤ 4 χ x
+                                                  χbi.             χx
+                                                                 1 √               √
+                                                                     
+                                                   1      2
+                          Agent 2:                    ,χ      ∈    , χ x −→ χbi. ≤ 4 χ x .                     (12)
+                                                  χbi. bi.      χx
+
+     As it can be seen in Equation (12), these two ranges result into a same confidence interval for
+the agents. Accordingly, considering one of these agents confidence interval would be sufficient to
+calculate the network reliability. Likewise, these training/prediction domains can be calculated for
+different cases of training and predictions with different states of deformation, see Table 1. To show the
+confidence interval, we explore five different training datasets and their resulting agents. Using two
+sets of experiments for the training purpose can increase the predictability range of the model as
+each of the experiments can be activated in different ranges and agents. Note that the model may
+extrapolate and predict more than the confidence interval but that is not necessarily accurate.
+Polymers 2020, 12, 2628                                                                                  11 of 20
+
+
+
+                              Table 1. Prediction domain for train until stretch χ.
+
+                   Training
+                               Uni. 1 Tensile    Bi. 2    Pure Shear       Uni. Comp. 3   Plane Strain Comp.
+     Prediction
+         Uni. Tensile                 χ            χ            χ                √1               1
+                                                                                   χ              χ
+                                     √                         √
+               Bi.                   4 χ           χ           4 χ               √1               1
+                                                                                   χ              χ
+         Pure Shear                   χ            χ            χ                √1               1
+                                                                                   χ              χ
+            Uni. Comp.               √1            1            1
+                                                                                 χ                χ
+                                       χ           χ2           χ
+       Plane Strain Comp.            √1            1            1
+                                                                                 χ                χ
+                                       χ           χ2           χ
+                                      1. Uniaxial; 2. Biaxial; 3. Compression.
+
+
+1.    Training with uni-axial only vs. bi-axial only. Mars dataset which has three modes of pure shear,
+      uni-axial, and bi-axial tensile tests have been used [56]. In first case, the model is trained by bi-axial
+      data only until χ = 1.65 and validated against other modes (see Figure 5a). Confidence interval
+      in uni-axial and pure shear predictions is also limited to χ = 1.65.
+      In the second case, the model is trained by uni-axial data only until χ = 2.18 and validated
+      against other modes (see Figure 5b). Confidence interval in shear will be limited to χ = 2.18 but
+      in bi-axial will be dramatically reduced to χ = 1.21 due to the uncertainty in training L-agent 2.
+2.    Training with uni-axial only over a long range. Here, we showed that we can improve the
+      confidence interval of one agent not only by choosing the games in which it has high contribution,
+      but also by increasing the length of the game in which one agent has small contribution. In essence,
+      we can have a short game with high contribution, or long game with low contribution. In case of rubber,
+      uni-axial tension is a game in which the 2nd L-agent has a low contribution. Therefore, here we
+      show that for a sufficiently long game (uni-axial until χ = 7.7), we can increase the confidence
+      interval for the second L-agent (bi-axial until χ = 1.66), see Figure 5c Treloar dataset which has
+      three modes of pure shear, uni-axial, and bi-axial tensile tests that have been used [57].
+3.    Training with uni-axial tension and compression. Here, we showed that we can improve the
+      confidence interval by using multiple games to train the agents. So, here the model is trained
+      by uni-axial tensile (till χ = 3.7) and compression data (till χ = 0.4). The confidence in training
+      of the 1st L-agent is mainly defined by the uni-axial tensile test while that of the 2nd L-agent is
+      formed by compression test. The predictions of the trained agents were validated against other
+      modes (see Figure 5d), and as expected confidence interval in bi-axial until χ = 1.58 and pure
+      shear predictions is also limited to χ = 3.7. Heuillet dataset with three modes of pure shear,
+      uni-axial and bi-axial tensile tests have been used for training/validation [58].
+
+4.1.2. Accuracy within Confidence Interval
+     The proposed engine shows exceptional accuracy within the confidence interval which is
+comparable to some of the most comprehensive and most expensive knowledge-based models.
+We have shown the predictions of the models against different sets of data provided by Uramaya [59]
+and Mars [56], where the models were trained using bi-axial tests only, see Figure 6. Bi-axial tests were
+chosen to provide the longest confidence interval for other modes (see Table 1).
+     To show the performance of the proposed model, we compared the relative error of our
+model in fitting and predicting Treloar’s dataset with the non-affine micro-sphere model [60],
+WYPiWYG model [23], and network averaging tube model [61]. Note that the error reported for
+the non-affine micro-sphere model and network averaging tube models is fitting error not prediction
+error, since they have used all three uni-axial, bi-axial, and pure shear at the same time in their
+published results.
+Polymers 2020, 12, 2628                                                                                                                                                                                                                                  12 of 20
+
+
+
+                                                                Training with bi-axial only till 1.65                                                                       Training with uniaxial only till 2.18
+                              (a) 7                                                                                                      (b) 12
+                                                                  Experimental data - Biaxial                                                                                    Experimental data - Biaxial
+                                                   6              Experimental data - Shear
+                                                                                                                                                                  10             Experimental data - Shear
+
+
+
+                           Nominal Stress [Mpa]
+
+
+
+
+                                                                                                                                           Nominal Stress [Mpa]
+                                                                  Experimental data - Uniaxial                                                                                   Experimental data - Uniaxial
+                                                   5              Training                                                                                                       Training
+                                                                  Prediction                                                                                      8              Prediction
+                                                   4
+                                                                                                                                                                  6
+                                                   3
+                                                                                                                                                                  4
+                                                   2
+                                                   1                                                                                                              2
+                                                   0                                                                                                              0
+                                                             1         1.2         1.4 1.6 1.8                 2   2.2                                                      1        1.2        1.4        1.6 1.8              2        2.2
+                                                                                      Stretch                                                                                                             Stretch
+
+
+                        (c) 7
+                                                             Training with uniaxial only till 7.7                                      (d) Training with uniaxial tension + compression
+                                                                 Experimental data - Biaxial
+                                                                                                                                                                  2
+                                                   6
+
+
+
+
+                                                                                                                                          Nominal Stress [Mpa]
+                        Nominal Stress [Mpa]
+
+
+
+
+                                                                 Experimental data - Shear
+                                                                 Experimental data - Uniaxial
+                                                   5             Training                                                                                         1
+                                                                 Prediction
+                                                   4
+                                                   3                                                                                                              0                                   Experimental data - Biaxial
+                                                                                                                                                                                                      Experimental data - Shear
+                                                   2                                                                                                              -1                                  Experimental data - Uniaxial Tension
+                                                                                                                                                                                                      Experimental data - Uniaxial Compression
+                                                   1                                                                                                                                                  Training
+                                                                                                                                                                                                      Prediction
+                                                   0                                                                                                              -2
+                                                            1        2         3        4     5        6       7   8                                                       0.5       1       1.5        2 2.5              3      3.5        4
+                                                                                        Stretch                                                                                                        Stretch
+
+      Figure 5. Model training and prediction with (a) bi-axial tension training (filled natural rubber),
+      (b) uni-axial tension training (dataset [56]), (c) uni-axial tension training (Treloar’s dataset [57]),
+      (d) uni-axial tension and compression training (dataset [58]).
+
+                                                            Training with only bi-axial till 2.6                                                                                Training with only bi-axial till 1.65
+               (a) 7                               7
+
+                                                           Experimental data-Biaxial
+                                                                                                                          (b) 7
+                                         6                                                                                                               6
+            Nominal Stress [MPa]
+
+
+
+
+                                                                                                                          Nominal Stress [MPa]
+
+
+
+
+                                                   6
+                                                           Experimental data-Shear
+                                               5   5       Experimental data-Uniaxial                                                                      5
+                                                           Training
+                                         4         4
+                                                           Prediction                                                                                    4
+                                         3         3                                                                                                     3                                                      Experimental data-Biaxial
+                                         2         2                                                                                                    2                                                       Experimental data-Shear
+                                                                                                                                                                                                                Experimental data-Uniaxial
+                                          1        1                                                                                                      1                                                     Training
+                                         0                                                                                                                                                                      Prediction
+                                                   0                                                                                                    0
+                                                                                                                                                                       1         1.2          1.4          1.6        1.8            2           2.2
+                                                       1           1.5              2            2.5       3        3.5
+                                                                                      Stretch                                                                                                            Stretch
+      Figure 6. Model training and prediction of uni-axial, bi-axial, and pure shear: (a) Urayama’s dataset [59]
+      and (b) Mars’s dataset [56].
+
+     Although, the proposed model and WYPiWYG model use uni-axial data for training and
+predicting other states of deformation. Thus, results show the excellent performance of our model;
+however, the proposed model is not complicated and as data-dependent as other physics-based models
+(see Table 2).
+
+                                                       Table 2. Relative error for several well-known models for Treloar’s dataset.
+
+ Model Type                                                        AI                             Phenomenological                                                                                   Micro-Mechanical
+                                                                                                                                                                        Non-affine                                               Network averaging
+                                                   Proposed model                                WYPiWYG model [23]
+                                                                                                                                                                  micro-sphere model [60]                                         tube model [61]
+   Error(%)                                                       1.12                                     5.26                                                                          0.93                                                     2.11
+                                                                                                                                                                  Uni-axial + Pure shear                                       Uni-axial + Pure shear
+  Training Set                                              Uni-axial                                  Uni-axial
+                                                                                                                                                                        + Bi-axial                                                   + Bi-axial
+Polymers 2020, 12, 2628                                                                                                                                                                                                                           13 of 20
+
+
+
+     The compression behavior of rubber-like material is another aspect that plays an essential role in
+industrial applications. We trained the model with the dataset of uni-axial compression experiments
+and predicted the behavior of plane strain compression. Figure 7 shows the performance of the
+proposed model for compression tests. The error in training and prediction of the proposed model for
+Arruda–Boyce data is 0.73%, which compared to the non-affine micro-sphere model, which has 1.29%
+error, shows a significant performance of our less complicated model.
+
+                                                                                                                  Training with uniaxial compression till 0.14
+                                                                                              5
+                                                                                              0
+                                                                    Nominal Stress [Mpa]   -5
+                                                                                           -10
+                                                                                           -15
+                                                                                           -20                                     Experimental data - Uniaxial Compression
+                                                                                                                                  Experimental data - Plane Strain Compression
+                                                                                           -25                                    Training
+                                                                                                                                  Prediction
+                                                                                           -30
+                                                                                                                  0.1      0.3             0.5         0.7          0.9
+                                                                                                                                           Stretch
+
+      Figure 7. Model training with uni-axial compression and prediction of plane strain compression
+      (Arruda–Boyce’s dataset [62]).
+
+4.1.3. Damage Prediction and Deformation History
+     To further investigate the performance of the proposed model in material with full memory,
+we predicted the inelastic features in the behavior of filled elastomer, namely Mullins effect and
+permanent set. Figure 8 shows stress–stretch curves for this cross-linked polymer with experimental
+data of [59]. We used one set of bi-axial loading-unloading until χ = 2.7 for training and predicting
+inelastic effects in different states of deformation, e.g., uni-axial and pure shear at increasing stretch
+amplitudes which constitutes deformation histories.
+
+                              7                                                                                   6                                                                              5
+                                      Experimental data - Biaxial                                                         Experimental data - Shear                                                      Experimental data - Uniaxial
+                                                                                                                                                                          Nominal Stress [Mpa]
+
+
+
+
+                              6
+       Nominal Stress [Mpa]
+
+
+
+
+                                                                                           Nominal Stress [Mpa]
+
+
+
+
+                                      Training                                                                    5       Prediction                                                             4       Prediction
+                              5       Prediction
+                                                                                                                  4
+                                                                                                                                                                                                 3
+                              4
+                                                                                                                  3
+                              3                                                                                                                                                                  2
+                                                                                                                  2
+                              2
+                                                                                                                                                                                                 1
+                              1                                                                                   1
+                              0                                                                                   0                                                                              0
+
+                                  1     1.4        1.8       2.2    2.6                                               1    1.5         2         2.5      3         3.5                              1     1.4        1.8    2.2        2.6   3
+
+                                                   Stretch                                                                             Stretch                                                                         Stretch
+
+      Figure 8. Model training and prediction of uni-axial, bi-axial, and pure shear (Urayama’s dataset [59]).
+
+4.1.4. Convergence Outside of the Confidence Interval
+      To investigate the convergence of the proposed model outside of the confidence interval,
+prediction of the inelastic behavior on stretch amplitudes larger than the confidence interval was
+illustrated on two different sets of experimental data on rubber, Itskov’s [63] and Zhong’s [64] dataset.
+While we strongly recommend the users to stay within the confidence interval, the model prediction
+accuracy outside of the confidence interval shows the relevance and reliability of the model in extreme
+cases which is mainly a result of the constraints induced by the knowledge infused into the model.
+Results indicated the trend and proposed model performance (Figures 9 and 10). Here, we gradually
+reduce the confidence interval by using smaller ranges of training data to see the drop in quality
+of predictions. As expected, despite accuracy reduction, there is no significant change in the model
+predictions profile which is not usually the case for extrapolation methods. In Figure 9a, we trained
+Polymers 2020, 12, 2628                                                                                                                                                                                                                                                                                            14 of 20
+
+
+
+the model with the largest amplitude. As we expected, the error in training and prediction is 4.6%.
+As we reduce the amplitude of training in Figure 9, we see that the error has increased generally.
+There is an instability in the errors and overestimating in Figure 9b,c, which come from numerical
+simplification and choosing the same neural network structures and activation functions for different
+sets of data for training. The important point is that we want to show that the model is accurate for
+different modes of training. To ensure our result is general for different elastomers, we did the same
+training procedure for another dataset (Figure 10). The result shows the same results as the last dataset.
+
+
+             (a)                                                                                                                                                           (b) 6
+                                                                  Experimental Data - Uniaxial                                                                                                                         Experimental Data - Uniaxial
+                                         4
+
+
+
+
+                                                                                                                                                                          Nominal Stress [MPa]
+                                                                                                                                                                                                                       Training
+                                                                  Training                                                                                                                           5
+           Nominal Stress [MPa]
+
+
+
+
+                                                                  Prediction                                                                                                                                           Prediction
+
+                                        3                                                                                                                                                            4
+                                                                                                                                                                                                     3
+                                       2
+                                                                                                                                                                                                     2
+                                    1
+                                                                                                                                                                                                     1
+                                                                                                                      Error: 4.6%                                                                                                                                                      Error: 4.3%
+                                  0                                                                                                                                                                  0
+                                                             1                  1.2               1.4                 1.6                                  1.8                                                 1                                1.2                   1.4              1.6                   1.8
+                                                                                                 Stretch                                                                                                                                                             Stretch
+
+
+       (c) 6                                                                                                                                                      (d)
+                                                                                                                                                                                                 5
+                                                                 Experimental Data - Uniaxial                                                                                                                          Experimental Data - Uniaxial
+                                                                                                                                                                  Nominal Stress [MPa]
+
+
+
+
+                                                                 Training                                                                                                                                              Training
+                                  5
+       Nominal Stress [MPa]
+
+
+
+
+                                                                 Prediction                                                                                                                      4                     Prediction
+
+                                  4                                                                                                                                                              3
+                                  3
+                                                                                                                                                                                                 2
+                                  2
+                                  1                                                                                                                                                              1
+                                                                                                                    Error: 6.5%                                                                                                                                                        Error: 6.3%
+                                  0                                                                                                                                                              0
+                                                             1                  1.2              1.4                 1.6                              1.8                                                 1                             1.2                           1.4              1.6                   1.8
+                                                                                                Stretch                                                                                                                                                              Stretch
+
+      Figure 9. Model training and prediction of cyclic uni-axial tension with step-wise increasing of
+      amplitude (Itskov’s dataset [63]).
+
+
+                                      (a) 4                                                                             (b)                                                                                                           (c) 4
+                                                                                                                                             4
+                                                                   Training                                                                          Training                                                                                                  Training
+                                                                                                                      Nominal Stress [MPa]
+
+
+
+
+                                                                                                                                                                                                                                                               Prediction
+                                                                                                                                                                                                                                Nominal Stress [MPa]
+
+
+
+
+                                                                   Prediction                                                                        Prediction
+                                  Nominal Stress [MPa]
+
+
+
+
+                                                         3                                                                                   3                                                                                                         3
+
+
+                                                         2                                                                                   2                                                                                                         2
+
+
+                                                         1                                                                                   1                                                                                                         1
+
+                                                                                                Error: 2.9%                                                                                               Error: 2.8%                                                                   Error: 5.11%
+                                                         0                                                                                   0                                                                                                         0   0
+
+
+
+
+                                                             1     1.5     2      2.5      3    3.5   4       4.5                                1   1.5     2       2.5                         3       3.5       4      4.5                              1   1.5     2    2.5    3    3.5    4       4.5
+                                                                                      Stretch                                                                               Stretch                                                                                          Stretch
+
+
+      Figure 10. Model training and prediction of cyclic uni-axial tension with step-wise increasing of
+      amplitude (dataset [64]).
+
+5. Conclusions
+     A physics-informed data-driven constitutive model for cross-linked polymers is developed by
+embedding neural networks into a multi-scale model. We propose a systematic approach to reduce the
+order of the constitutive mapping by leveraging existing knowledge of polymer science, continuum
+physics, and statistical mechanics. We use our model to predict the mechanical behavior of filled
+elastomers. The results indicate that our model can easily capture multiple inelastic effects in the
+behavior of the materials, is significantly less data-dependent, has lower dimensionality, and is
+interpretable. To illustrate the superior performance of knowledge-driven models developed by this
+Polymers 2020, 12, 2628                                                                                    15 of 20
+
+
+
+approach, its predictions are bench-marked against several experimental datasets. We compare the
+stress responses from Treloar’s dataset in our model with several well-known models to show the
+accuracy and simplicity of our model. In summary, our model provides a hyper-elastic constitutive
+model which captures damage of polymer chains for cross-linked elastomers for quasi-static loading.
+In the future, the proposed model can be further extended to include the effect of the deformation rate.
+The modular platform nature of the proposed model allows the addition of such effects.
+
+Author Contributions: Conceptualization, A.G. V.M., and R.D.; methodology, A.G., V.M., and R.D.; software,
+A.G.; validation, A.G.; formal analysis, A.G.; investigation, A.G., V.M.; resources, R.D.; data curation, A.G.;
+writing—original draft preparation, A.G., V.M.; writing—review and editing, R.D.; visualization, A.G.; supervision,
+R.D.; project administration, R.D.; funding acquisition, R.D. All authors have read and agreed to the published
+version of the manuscript.
+Funding: This research received no external funding.
+Conflicts of Interest: The authors declare no conflict of interest.
+
+Appendix A. Frame Independency
+     Frame objectivity, during rigid body motion, requires strain energy of the material to remain
+unchanged. Thus, the material response should not depend on the choice of the reference frame.
+The strain energy frame independency can be written as
+
+                                               Ψm (QF) = Ψm (F),                                             (A1)
+
+where Q is the rotation tensor. Therefore, a constitutive law is frame independent if energy is left
+rotationally invariant. The mentioned condition is satisfied when the strain energy is a function of the
+right Cauchy–Green deformation tensor C, due to
+
+                                   C+ = (F+ ) T F+ = F T Q T QF = F T F = C,                                 (A2)
+
+which F+ = FQ. The proposed model is a function of right Cauchy–Green deformation tensor.
+Therefore, the frame independency condition is satisfied automatically.
+
+Appendix B. Thermodynamic Consistency
+
+Appendix B.1. Polyconvexity
+     Polyconvexity is one of the known conditions which ensure the thermodynamic consistency. In this
+section, we briefly describe sufficient but not necessary free energy function conditions which guarantee
+the existence of minimizers of some variational principles. In order to understand polyconvexity, we start
+with some properties of convexity. Consider that Ψm (F) is the strain energy function on set of K. We can
+say Ψm (F) is convex on set of K if hessian matrix of Ψm (F) be positive in that set.
+
+                                             D2 Ψm (F). ( H, H ) ⩾ 0,                                        (A3)
+
+and for proof of polyconvexity, we can mention that F → Ψm (F) is polyconvex if and only if there
+exists a function G such that
+                                           Ψm (F) = G (F, adjF, detF) ,                                      (A4)
+                                                          F −1
+and the function G is convex. In addition, adjF = detF and the implication chain shows relations from
+convexity to ellipticity.
+
+                          convexity → polyconvexity → quasiconvexity → ellipticity
+Polymers 2020, 12, 2628                                                                                                                  16 of 20
+
+
+
+      The Hessian matrix of the strain energy is positive if
+
+                                           2                                   ~          ~
+        ∂Ψm 2             Nd      ∂ψj di         Nd     ∂ANNj (Wj , λ j di , λ j max di )
+                     = ∑ wi                    = ∑ wi                                             > 0,     f or j = 1, 2, ..., Ns ,        (A5)
+        ∂ 2 λ j di      i =1      ∂ 2 λ j di    i =1                   ∂λ j di
+
+     If weights, which connect the input of λ j to other neurons, are positive, the proposed model holds
+the condition of polyconvexity.
+
+Appendix B.2. Second Law of Thermodynamic
+     As a result that all of the constitutive models should satisfy the second law of thermodynamic,
+the satisfaction of this law should be checked for the proposed model. On the other hand,
+checking Clausius–Duhem inequality would be enough for this. As a result that λ j max is an internal
+variable in the strain energy function of cross-linked polymers, we can reduce the second law of
+thermodynamics to Clausius–Duhem inequality that shows thermodynamic consistency of the model
+in direction di . This inequality can be written as
+
+                                          ∂Ψm
+                                                      ≤0               ∀d                f or j = 1, 2, ..., Ns ,                          (A6)
+                                      ∂λ jmax di
+
+If we consider the energy of matrix as
+
+                                                                 Nd Ns    
+                                                           Ψ m = ∑ ∑ ψ j di w i ,                                                          (A7)
+                                                                   i =1 j =1
+
+which
+                                                       d                            ~         ~
+                                                       ψj = ANNj (Wj , λ j di , λ j max di ),                                              (A8)
+
+thus, Clausius–Duhem can be written as
+
+
+                                                                               ~          ~
+     ∂Ψm             Nd          ∂ψj di          Nd     ∂ANNj (Wj , λ j di , λ j max di )
+                = ∑ wi                         = ∑ wi                                             ≤ 0,              f or j = 1, 2, ..., Ns , (A9)
+  ∂λ j max di        i =1      ∂λ j max di      i =1               ∂λ j max di
+
+     If weights that connect the input of λ j max to other neurons are negative, the proposed model holds
+the condition of thermodynamic consistency.
+
+Appendix C. Integration Point of Micro-Sphere Approach
+
+                               Table A1. Integration points and weighting factors of the unit-sphere.
+
+                          i           d i (1)                d i (2)                    d i (3)                 wi
+                          1           0.0                     0.0                        1.0             0.0265214244093
+                          2           0.0                     1.0                        0.0             0.0265214244093
+                          3           1.0                     0.0                        0.0             0.0265214244093
+                          4           0.0               0.707106781187             0.707106781187        0.0199301476312
+                          5           0.0               0.707106781187             0.707106781187        0.0199301476312
+                          6     0.707106781187                0.0                  0.707106781187        0.0199301476312
+                          7     0.707106781187                0.0                  0.707106781187        0.0199301476312
+                          8     0.707106781187          0.707106781187                   0.0             0.0199301476312
+                          9     0.707106781187          0.707106781187                   0.0             0.0199301476312
+Polymers 2020, 12, 2628                                                                                             17 of 20
+
+
+
+                                                     Table A1. Cont.
+
+                    i         d i (1)              d i (2)              d i (3)               wi
+                   10     0.836095596749     0.387907304067       0.387907304067       0.0250712367487
+                   11     0.836095596749     0.387907304067       0.387907304067       0.0250712367487
+                   12     0.836095596749     0.387907304067       0.387907304067       0.0250712367487
+                   13     0.836095596749     0.387907304067       0.387907304067       0.0250712367487
+                   14     0.387907304067     0.836095596749       0.387907304067       0.0250712367487
+                   15     0.387907304067     0.836095596749       0.387907304067       0.0250712367487
+                   16     0.387907304067     0.836095596749       0.387907304067       0.0250712367487
+                   17     0.387907304067     0.836095596749       0.387907304067       0.0250712367487
+                   18     0.387907304067     0.387907304067       0.836095596749       0.0250712367487
+                   19     0.387907304067     0.387907304067       0.836095596749       0.0250712367487
+                   20     0.387907304067     0.387907304067       0.836095596749       0.0250712367487
+                   21     0.387907304067     -0.387907304067      0.836095596749       0.0250712367487
+
+
+References
+1.    Farhangi, V.; Karakouzian, M.; Geertsema, M. Effect of Micropiles on Clean Sand Liquefaction Risk Based
+      on CPT and SPT. Appl. Sci. 2020, 10, 3111. [CrossRef]
+2.    Farhangi, V.; Karakouzian, M. Effect of fiber reinforced polymer tubes filled with recycled materials and
+      concrete on structural capacity of pile foundations. Appl. Sci. 2020, 10, 1554. [CrossRef]
+3.    Izadi, A.; Anthony, R.J. A plasma-based gas-phase method for synthesis of gold nanoparticles. Plasma Proc. Polym.
+      2019, 16, e1800212. [CrossRef]
+4.    Sinha, M.; Izadi, A.; Anthony, R.; Roccabianca, S. A novel approach to finding mechanical properties of
+      nanocrystal layers. Nanoscale 2019, 11, 7520–7526. [CrossRef] [PubMed]
+5.    Izadi, A.; Toback, B.; Sinha, M.; Millar, A.; Bigelow, M.; Roccabianca, S.; Anthony, R. Mechanical and Optical
+      Properties of Stretchable Silicon Nanocrystal/Polydimethylsiloxane Nanocomposites. Phys. Status Solidi (a)
+      2020, 217, 2000015. [CrossRef]
+6.    Marckmann, G.; Verron, E. Comparison of hyperelastic models for rubber-like materials. Rubber Chem. Technol.
+      2006, 79, 835–858. [CrossRef]
+7.    Steinmann, P.; Hossain, M.; Possart, G. Hyperelastic models for rubber-like materials: Consistent tangent
+      operators and suitability for Treloar’s data. Arch. Appl. Mech. 2012, 82, 1183–1217. [CrossRef]
+8.    Shojaeifard, M.; Sheikhi, S.; Baniassadi, M.; Baghani, M. On finite bending of visco-hyperelastic materials:
+      A novel analytical solution and FEM. Acta Mech. 2020, 231, 3435–3450. [CrossRef]
+9.    Shojaeifard, M.; Baghani, M.; Shahsavari, H. Rutting investigation of asphalt pavement subjected to moving
+      cyclic loads: An implicit viscoelastic–viscoplastic–viscodamage FE framework. Int. J. Pavement Eng. 2020,
+      21, 1393–1407. [CrossRef]
+10.   Liu, W.K.; Karniakis, G.; Tang, S.; Yvonnet, J. A Computational Mechanics Special Issue on: Data-Driven Modeling
+      and Simulation—Theory, Methods, and Applications; Springer: Berlin/Heidelberg, Germany, 2019.
+11.   Montáns, F.J.; Chinesta, F.; Gómez-Bombarelli, R.; Kutz, J.N. Data-driven modeling and learning in science
+      and engineering. CR Mécanique 2019, 347, 845–855. [CrossRef]
+12.   Lu, X.; Giovanis, D.G.; Yvonnet, J.; Papadopoulos, V.; Detrez, F.; Bai, J. A data-driven computational
+      homogenization method based on neural networks for the nonlinear anisotropic electrical response of
+      graphene/polymer nanocomposites. Comput. Mech. 2019, 64, 307–321. [CrossRef]
+13.   Chen, G.; Li, T.; Chen, Q.; Ren, S.; Wang, C.; Li, S. Application of deep learning neural network to identify collision
+      load conditions based on permanent plastic deformation of shell structures. Comput. Mech. 2019, 64, 435–449.
+      [CrossRef]
+14.   Vahidi-Moghaddam, A.; Mazouchi, M.; Modares, H. Memory-augmented system identification with
+      finite-time convergence. IEEE Control Syst. Lett. 2020, 5, 571–576. [CrossRef]
+15.   Tamhidi, A.; Kuehn, N.; Ghahari, S.F.; Taciroglu, E.; Bozorgnia, Y. Conditioned Simulation of Ground Motion
+      Time Series using Gaussian Process Regression. engrXiv 2020. [CrossRef]
+Polymers 2020, 12, 2628                                                                                           18 of 20
+
+
+
+16.   Bock, F.E.; Aydin, R.C.; Cyron, C.J.; Huber, N.; Kalidindi, S.R.; Klusemann, B. A review of the application of
+      machine learning and data mining approaches in continuum materials mechanics. Front. Mater. 2019, 6, 110.
+      [CrossRef]
+17.   Kirchdoerfer, T.; Ortiz, M. Data-driven computational mechanics. Comput. Methods Appl. Mech. Eng. 2016,
+      304, 81–101. [CrossRef]
+18.   Nguyen, L.T.K.; Keip, M.A. A data-driven approach to nonlinear elasticity. Comput. Struct. 2018, 194, 97–115.
+      [CrossRef]
+19.   Leygue, A.; Coret, M.; Réthoré, J.; Stainier, L.; Verron, E. Data-based derivation of material response.
+      Comput. Methods Appl. Mech. Eng. 2018, 331, 184–196. [CrossRef]
+20.   Stainier, L.; Leygue, A.; Ortiz, M. Model-free data-driven methods in mechanics: Material data identification
+      and solvers. Comput. Mech. 2019, 64, 381–393. [CrossRef]
+21.   Kanno, Y. Mixed-integer programming formulation of a data-driven solver in computational elasticity.
+      Optim. Lett. 2019, 13, 1505–1514. [CrossRef]
+22.   Breitkopf, P.; Coelho, R.F. Multidisciplinary Design Optimization in Computational Mechanics; John Wiley &
+      Sons: Hoboken, NJ, USA, 2013.
+23.   Amores, V.J.; Benítez, J.M.; Montáns, F.J. Average-chain behavior of isotropic incompressible polymers
+      obtained from macroscopic experimental data. A simple structure-based WYPiWYG model in Julia language.
+      Adv. Eng. Softw. 2019, 130, 41–57. [CrossRef]
+24.   Ibanez, R.; Abisset-Chavanne, E.; Aguado, J.V.; Gonzalez, D.; Cueto, E.; Chinesta, F. A manifold learning
+      approach to data-driven computational elasticity and inelasticity. Arch. Comput. Methods Eng. 2018, 25, 47–57.
+      [CrossRef]
+25.   Ibañez, R.; Borzacchiello, D.; Aguado, J.V.; Abisset-Chavanne, E.; Cueto, E.; Ladevèze, P.; Chinesta, F. Data-driven
+      non-linear elasticity: Constitutive manifold construction and problem discretization. Comput. Mech. 2017,
+      60, 813–826. [CrossRef]
+26.   Amores, V.J.; Benítez, J.M.; Montáns, F.J. Data-driven, structure-based hyperelastic manifolds: A macro-micro-
+      macro approach to reverse-engineer the chain behavior and perform efficient simulations of polymers.
+      Comput. Struct. 2020, 231, 106209. [CrossRef]
+27.   Ibáñez, R.; Abisset-Chavanne, E.; González, D.; Duval, J.L.; Cueto, E.; Chinesta, F. Hybrid constitutive
+      modeling: Data-driven learning of corrections to plasticity models. Int. J. Mater. Form. 2019, 12, 717–725.
+      [CrossRef]
+28.   Latorre, M.; Montáns, F.J. WYPiWYG hyperelasticity without inversion formula: Application to passive
+      ventricular myocardium. Comput. Struct. 2017, 185, 47–58. [CrossRef]
+29.   Miñano, M.; Montáns, F.J. WYPiWYG damage mechanics for soft materials: A data-driven approach.
+      Arch. Comput. Methods Eng. 2018, 25, 165–193. [CrossRef]
+30.   Bhattacharjee, S.; Matouš, K. A nonlinear manifold-based reduced order model for multiscale analysis of
+      heterogeneous hyperelastic materials. J. Comput. Phys. 2016, 313, 635–653. [CrossRef]
+31.   Fritzen, F.; Kunc, O. Two-stage data-driven homogenization for nonlinear solids using a reduced order
+      model. Eur. J. Mech. A/Solids 2018, 69, 201–220. [CrossRef]
+32.   Reimann, D.; Chandra, K.; Vajragupta, N.; Glasmachers, T.; Junker, P.; Hartmaier, A. Modeling macroscopic
+      material behavior with machine learning algorithms trained by micromechanical simulations. Front. Mater.
+      2019, 6, 181. [CrossRef]
+33.   Wang, K.; Sun, W.; Du, Q. A cooperative game for automated learning of elasto-plasticity knowledge graphs
+      and models with AI-guided experimentation. Comput. Mech. 2019, 64, 467–499. [CrossRef]
+34.   Stoffel, M.; Bamer, F.; Markert, B. Neural network based constitutive modeling of nonlinear viscoplastic
+      structural response. Mech. Res. Commun. 2019, 95, 85–88. [CrossRef]
+35.   Kopal, I.; Labaj, I.; Harničárová, M.; Valíček, J.; Hrubỳ, D. Prediction of the tensile response of carbon black
+      filled rubber blends by artificial neural network. Polymers 2018, 10, 644. [CrossRef]
+36.   Zopf, C.; Kaliske, M. Numerical characterisation of uncured elastomers by a neural network based approach.
+      Comput. Struct. 2017, 182, 504–525. [CrossRef]
+37.   Raissi, M.; Perdikaris, P.; Karniadakis, G.E. Physics-informed neural networks: A deep learning framework
+      for solving forward and inverse problems involving nonlinear partial differential equations. J. Comput. Phys.
+      2019, 378, 686–707. [CrossRef]
+Polymers 2020, 12, 2628                                                                                    19 of 20
+
+
+
+38.   Haghighat, E.; Raissi, M.; Moure, A.; Gomez, H.; Juanes, R. A deep learning framework for solution and
+      discovery in solid mechanics: Linear elasticity. arXiv 2020, arXiv:2003.02751.
+39.   Xu, K.; Tartakovsky, A.M.; Burghardt, J.; Darve, E. Inverse Modeling of Viscoelasticity Materials using
+      Physics Constrained Learning. arXiv 2020, arXiv:2005.04384.
+40.   Ghaderi, A.; Morovati, V.; Dargazany, R. A Bayesian Surrogate Constitutive Model to Estimate Failure
+      Probability of Rubber-Like Materials. arXiv 2020, arXiv:2010.13241.
+41.   Tooranjipour, P.; Vatankhah, R.; Arefi, M.M. Prescribed performance adaptive fuzzy dynamic surface control
+      of nonaffine time-varying delayed systems with unknown control directions and dead-zone input. Int. J.
+      Adapt. Control Signal Proc. 2019, 33, 1134–1156. [CrossRef]
+42.   Jung, S.; Ghaboussi, J. Neural network constitutive model for rate-dependent materials. Comput. Struct.
+      2006, 84, 955–963. [CrossRef]
+43.   Mullins, L. Softening of rubber by deformation. Rubber Chem. Technol. 1969, 42, 339–362. [CrossRef]
+44.   Bahrololoumi, A.; Morovati, V.; Poshtan, E.A.; Dargazany, R. A multi-physics constitutive model to predict
+      quasi-static behaviour: Hydrolytic aging in thin cross-linked polymers. Int. J. Plast. 2020, 130, 102676.
+      [CrossRef]
+45.   Bueche, F. Molecular basis for the Mullins effect. J. Appl. Polym. Sci. 1960, 4, 107–114. [CrossRef]
+46.   Hanson, D.E.; Hawley, M.; Houlton, R.; Chitanvis, K.; Rae, P.; Orler, E.B.; Wrobleski, D.A. Stress softening
+      experiments in silica-filled polydimethylsiloxane provide insight into a mechanism for the Mullins effect.
+      Polymer 2005, 46, 10989–10995. [CrossRef]
+47.   Houwink, R. Slipping of molecules during the deformation of reinforced rubber. Rubber Chem. Technol. 1956,
+      29, 888–893. [CrossRef]
+48.   Kraus, G.; Childers, C.; Rollmann, K. Stress softening in carbon black-reinforced vulcanizates. Strain rate
+      and temperature effects. J. Appl. Polym. Sci. 1966, 10, 229–244. [CrossRef]
+49.   Dalémat, M.; Coret, M.; Leygue, A.; Verron, E. Measuring stress field without constitutive equation.
+      Mech. Mater. 2019, 136, 103087. [CrossRef]
+50.   Truesdell, C. The Elements of Continuum Mechanics: Lectures given in August-September 1965 for the Department
+      of Mechanical and Aerospace Engineering Syracuse University Syracuse, New York; Springer Science & Business
+      Media: New York, NY, USA, 2012.
+51.   Holzapfel, G.A.; Gasser, T.C.; Ogden, R.W. A new constitutive framework for arterial wall mechanics and a
+      comparative study of material models. J. Elast. the Phys. Sci. Solids 2000, 61, 1–48.
+52.   Hartmann, S.; Neff, P. Polyconvexity of generalized polynomial-type hyperelastic strain energy functions for
+      near-incompressibility. Int. J. Solids Struct. 2003, 40, 2767–2791. [CrossRef]
+53.   Bažant, P.; Oh, B. Efficient numerical integration on the surface of a sphere. ZAMM-J. Appl. Math. Mech./ Z.
+      für Angew. Math. Mech. 1986, 66, 37–49. [CrossRef]
+54.   Dargazany, R.; Khiem, V.N.; Itskov, M. A generalized network decomposition model for the quasi-static
+      inelastic behavior of filled elastomers. Int. J. Plast. 2014, 63, 94–109. [CrossRef]
+55.   Lambert-Diani, J.; Rey, C. New phenomenological behavior laws for rubbers and thermoplastic elastomers.
+      Eur. J. Mech. A/Solids 1999, 18, 1027–1043. [CrossRef]
+56.   Mars, W.; Fatemi, A. Observations of the constitutive response and characterization of filled natural rubber
+      under monotonic and cyclic multiaxial stress states. J. Eng. Mater. Technol. 2004, 126, 19–28. [CrossRef]
+57.   Treloar, L.R.G. The Physics of Rubber Elasticity; Oxford University Press: Oxford, UK, 1975.
+58.   Heuillet, P.; Dugautier, L. Mod é lization of the hyper é elastic behavior of rubbers and é lastom é
+      thermoplastic, compact or cellular. Mech. Eng. Rubbers Thermoplast. Elastomers 1997.
+59.   Mai, T.T.; Morishita, Y.; Urayama, K. Novel features of the Mullins effect in filled elastomers revealed by
+      stretching measurements in various geometries. Soft Matter 2017, 13, 1966–1977. [CrossRef]
+60.   Miehe, C.; Göktepe, S.; Lulei, F. A micro-macro approach to rubber-like materials—part I: The non-affine
+      micro-sphere model of rubber elasticity. J. Mech. Phys. Solids 2004, 52, 2617–2660. [CrossRef]
+61.   Khiêm, V.N.; Itskov, M. Analytical network-averaging of the tube model: Rubber elasticity. J. Mech.
+      Phys. Solids 2016, 95, 254–269. [CrossRef]
+62.   Arruda, E.M.; Boyce, M.C. A three-dimensional constitutive model for the large stretch behavior of rubber
+      elastic materials. J. Mech. Phys. Solids 1993, 41, 389–412. [CrossRef]
+Polymers 2020, 12, 2628                                                                                     20 of 20
+
+
+
+63.   Itskov, M.; Knyazeva, A. A rubber elasticity and softening model based on chain length statistics. Int. J.
+      Solids Struct. 2016, 80, 512–519. [CrossRef]
+64.   Zhong, D.; Xiang, Y.; Yin, T.; Yu, H.; Qu, S.; Yang, W. A physically-based damage model for soft elastomeric
+      materials with anisotropic Mullins effect. Int. J. Solids Struct. 2019, 176, 121–134. [CrossRef]
+
+Publisher’s Note: MDPI stays neutral with regard to jurisdictional claims in published maps and institutional
+affiliations.
+
+                           c 2020 by the authors. Licensee MDPI, Basel, Switzerland. This article is an open access
+                          article distributed under the terms and conditions of the Creative Commons Attribution
+                          (CC BY) license (http://creativecommons.org/licenses/by/4.0/).
+

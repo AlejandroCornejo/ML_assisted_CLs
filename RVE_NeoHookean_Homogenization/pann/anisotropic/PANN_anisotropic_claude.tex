@@ -59,14 +59,14 @@ convex core, an input-convex Kolmogorov--Arnold network (ICKAN).
 Benchmarked on a test trajectory against a projection-based
 hyper-reduced-order model in both its Newton-corrected (HPROM--ANN) and
 direct (D-HPROM--ANN) operating modes, and against a direct regression
-baseline, the admissibility certificate proves necessary in practice:
-the uncertified regression baseline matches or exceeds every certified
+baseline, the admissibility certificate proves necessary in practice,
+because the uncertified regression baseline matches or exceeds every certified
 model's test-trajectory accuracy while directly violating thermodynamic
 consistency, and a matched uncertified flexible PANN fails a rank-one
 convexity check on $7\%$ of sampled deformation states despite equally
 strong accuracy. Deployed as the macroscopic material law of an
 unrelated structural benchmark, Cook's membrane, this same distinction
-determines whether the structural solve itself succeeds: the certified
+determines whether the structural solve itself succeeds. The certified
 models converge in three Newton iterations at every ramped load step,
 while the uncertified flexible PANN fails to converge at the very first
 step -- a real structural consequence of the missing certificate, even
@@ -88,7 +88,7 @@ Multiscale (FE$^2$-type) computational homogenization
 resolves each macroscopic material point by solving a nonlinear boundary
 value problem on a representative volume element (RVE), so that the
 macroscopic constitutive response is not postulated but computed from the
-microstructure directly. This is expensive: every macroscopic Gauss point,
+microstructure directly. This is expensive. Every macroscopic Gauss point,
 at every load step and every Newton iteration, requires its own converged
 microscale solve. Two largely separate lines of work have grown up around
 reducing this cost, and they sit on opposite sides of the classic
@@ -103,30 +103,74 @@ learn a bare regression map from strain to stress; the physics-augmented
 neural network (PANN) literature that has grown from
 it~\cite{Klein2022,Linden2023,Asad2022} instead builds physical structure
 into the learned energy potential itself: thermodynamic consistency,
-objectivity, material-frame symmetry, a stress-free reference state,
+objectivity, tensor symmetry, a stress-free reference state,
 polyconvexity, and a growth condition, so that the surrogate is
 trustworthy by construction, not merely accurate where it happens to have
 been trained.
 
-The intrusive route, by contrast, keeps the RVE's finite element
-structure and governing equations explicit, and instead compresses the
-linear algebra: a projection-based reduced-order model (PROM) restricts
-the unknown displacement field to a low-dimensional subspace identified
-by proper orthogonal decomposition (POD) of precomputed snapshots,
-tracing back to the reduced-model multiscale method of Yvonnet and
+The intrusive route, by contrast, leverages prior knowledge of the
+RVE's own governing equations to construct a structured
+low-dimensional representation of its state space, rather than
+treating the microscale solve as a black box. A projection-based
+reduced-order model (PROM) restricts the unknown displacement field to
+a low-dimensional subspace identified by proper orthogonal
+decomposition (POD) of precomputed snapshots, and projects the
+governing equilibrium equations onto that same subspace (Galerkin
+projection) to obtain a small, closed system of equations, tracing
+back to the reduced-model multiscale method of Yvonnet and
 He~\cite{Yvonnet2007} and developed since for nonlinear multiscale
 structural problems~\cite{Zahr2017,He2020,Fritzen2016,Hernandez2014,Hernandez2020}.
-A single linear subspace, however, is generally not enough to reach high
-accuracy for a genuinely nonlinear problem (the Kolmogorov $n$-width
-barrier), which more recent work addresses by correcting the subspace
-with a trained nonlinear-manifold map (the PROM-ANN/HPROM-ANN framework
-of Barnett, Farhat and Maday~\cite{Barnett2022,Barnett2023}) and by
-replacing the full Gauss-point residual assembly with a sparse, learned
-cubature rule via the empirical cubature method (ECM) and its
-manifold-adaptive-weight extension
-(MAW--ECM)~\cite{Hernandez2017,HernandezMAWECM}. Throughout this route,
+A single linear subspace, however, generally cannot compress a
+genuinely nonlinear problem's solution manifold efficiently. Its
+Kolmogorov $n$-width decays slowly, which restricts the efficiency of
+linear-subspace reduction for a problem this nonlinear, since
+achieving good accuracy can require keeping the retained dimension
+itself large. This cost does not stop at
+reconstruction accuracy, because hyperreduction's own online cost
+scales with the reduced mesh size and the retained dimension together,
+so keeping that dimension large also keeps the reduced mesh of
+retained elements large and erodes the very speedup hyperreduction is
+meant to provide. More recent work addresses the first cost by
+correcting the subspace itself. Efforts here are diverse. Notable
+examples partition it into a library of local
+reduced bases selected online according to the current
+state~\cite{Amsallem2012}, replace it with a single quadratic
+correction~\cite{Barnett2022}, or learn a more expressive
+nonlinear-manifold correction with a deep autoencoder, evaluated
+online through a manifold Galerkin or manifold least-squares
+Petrov--Galerkin projection~\cite{Lee2020,Romor2025}. This paper
+instead builds on the PROM-ANN/HPROM-ANN framework of Barnett, Farhat
+and Maday~\cite{Barnett2023} (later extended to interpretable
+Gaussian-process and radial-basis-function closures, dubbed
+PROM-GPR/RBF, by Ares De Parga et al.~\cite{AresDeParga2026}), which
+models the correction as the
+closure error of the original affine subspace instead of replacing the
+subspace outright. The second cost is
+addressed by replacing the full Gauss-point residual assembly with a
+sparse, learned rule from the \emph{project-then-approximate}
+hyperreduction family, such as the empirical cubature method
+(ECM)~\cite{Hernandez2017} and/or the energy-conserving sampling and
+weighting (ECSW) method~\cite{Farhat2014,Farhat2015,Grimberg2021}.
+This same PROM-ANN/RBF/GPR family has shown that pairing ECSW
+hyperreduction with a closure-based approximation manifold clearly
+shrinks the reduced mesh needed, against both the linear (affine)
+approximation and other
+nonlinear manifolds such as the quadratic
+one~\cite{Barnett2022,Barnett2023,Chmiel2024,AresDeParga2026}. This
+project's own RVE, however, is solved once per macroscopic Gauss point
+rather than once overall, so even a reduced mesh already shrunk this
+way is repeated many times over online. Hern\'andez asks whether a
+commensurate reduction can be pushed further
+still~\cite{HernandezMAWECM}, and answers it with the
+manifold-adaptive-weight extension of ECM (MAW--ECM), which lets the
+cubature weights themselves vary along the low-dimensional manifold
+instead of staying fixed. Demonstrated there with a PROM-RBF decoder
+and ECM specifically, though the underlying reduced-mesh problem is
+the same one ECSW solves, MAW--ECM, used throughout this paper,
+compresses the already-shrunk reduced mesh by a further
+$80$--$97\%$. Throughout this route,
 the true microscale equilibrium equations are still being solved, just
-in compressed and hyperreduced form: the RVE's own physics is never
+in compressed and hyperreduced form. The RVE's own physics is never
 bypassed.
 
 Both routes are active research areas in their own right, and both are
@@ -146,7 +190,7 @@ two broad strategies in the current literature yet achieve all six
 properties together for a general anisotropic material.
 
 The first keeps polyconvexity exact but ties it to a named symmetry
-group: Klein et al.~\cite{Klein2022} and Linden et
+group. Klein et al.~\cite{Klein2022} and Linden et
 al.~\cite{Linden2023} give exact, architecturally-certified constructions
 for isotropic and transversely isotropic materials via a
 structural-tensor integrity basis, recently widened to cubic and
@@ -157,7 +201,7 @@ there does not exist a set of invariants to describe the anisotropy of
 materials with arbitrary microstructures,'' and flag a general,
 symmetry-agnostic construction as an open problem. The second keeps a
 more flexible or general anisotropy representation but gives up
-something else: Kalina et al.~\cite{Kalina2024} learn the structural
+something else. Kalina et al.~\cite{Kalina2024} learn the structural
 tensor's own parameters jointly with the network, more flexible than a
 fixed structural tensor, but explicitly decline polyconvexity, ``too
 restrictive, especially for multiscale modeling''; As'ad, Avery and
@@ -242,8 +286,9 @@ specifically:
  not required by polyconvexity and is, for this RVE's own ground truth,
  false (Section~\ref{sec:c5-wrong}).
  \item A direct, quantitative demonstration that test-trajectory accuracy alone
- cannot certify admissibility: a pure-regression baseline with no energy
- potential is the \emph{most} accurate of all six model variants while
+ cannot certify admissibility, because a pure-regression baseline with no energy
+ potential is the \emph{most} accurate of the four PANN constitutive-law
+ tiers while
  directly violating (C1) (Section~\ref{sec:c1-regression}), and an
  otherwise-identical uncertified free model matches the certified models'
  accuracy while failing a rank-one convexity check on $7\%$ of sampled
@@ -255,33 +300,26 @@ specifically:
  \item A genuine FE$^2$ demonstration, in the same spirit as As'ad et
  al.~\cite{Asad2022} and Klein et al.~\cite{Klein2022}, that the
  certificate's value is not confined to the standalone constitutive
- surrogate (Section~\ref{sec:cook}): every model this paper builds,
- including the projection-based ROM/HPROM surrogates of
- Section~\ref{sec:rom-comparison} nested as the actual microscale solver
- at every macroscopic Gauss point, and the true, non-reduced RVE FOM
- itself nested the same way, is deployed as the macroscopic material law
- of a large-deformation Cook's-membrane benchmark. The certified cores
- and both ROM/HPROM surrogates converge in three Newton iterations at
- every load step, matching the true FOM's own behavior, while the
- uncertified free model fails to converge at the very first step even
- though a direct rank-one check finds no violation at the specific
- states it visits there, a real structural consequence of the missing
- certificate that a pointwise check at the solution alone would miss;
- comparing every model directly against the
- true FE$^2$ answer this way also exposes a small-strain accuracy gap in
- the certified cores invisible to their own test-trajectory metric,
- traced to the training loss and partly corrected with one additional,
- cheap-to-compute loss term.
+ surrogate (Section~\ref{sec:cook}). Every model this paper builds, the
+ projection-based ROM/HPROM surrogates of
+ Section~\ref{sec:rom-comparison}, and the true, non-reduced RVE FOM
+ itself are all nested as the actual microscale solver at every
+ macroscopic Gauss point of a large-deformation Cook's-membrane
+ benchmark, compared directly against the true multiscale answer rather
+ than only against each other for the first time. The certified cores
+ and both ROM/HPROM surrogates match the true FOM's own Newton
+ convergence behavior; the uncertified free model does not.
 \end{enumerate}
-The full-order model, the linear and nonlinear projection-based reduced
-models, and the empirical-cubature hyperreduction used to build
-HPROM--ANN (Sections~\ref{sec:background} and~\ref{sec:rom-comparison})
-are established tools from the literature, applied here but not
-contributed by this work; they are cited to their sources throughout,
-and Section~\ref{sec:results} states this provenance explicitly.
+The full-order model, implemented in Kratos
+Multiphysics~\cite{Dadvand2010}, the linear and nonlinear
+projection-based reduced models, and the manifold-adaptive-weight
+empirical-cubature hyperreduction used to build HPROM--ANN
+(Sections~\ref{sec:background} and~\ref{sec:rom-comparison}) are
+established tools from the literature, applied here but not
+contributed by this work; they are cited to their sources throughout.
 
-\paragraph{Outline.} Section~\ref{sec:background} fixes notation for the
-RVE and its FOM. Section~\ref{sec:checklist} states the admissibility
+\paragraph{Outline.} Section~\ref{sec:background} introduces the RVE
+and its FOM, fixing notation for both. Section~\ref{sec:checklist} states the admissibility
 checklist precisely. Section~\ref{sec:theory} fixes kinematic and stress
 conventions and then takes each checklist item in turn, as
 Sections~\ref{sec:c1}--\ref{sec:c6}, with Section~\ref{sec:c5-construction}
@@ -290,9 +328,10 @@ detailed comparison against the eight directly comparable PANN
 constructions of Table~\ref{tab:literature}, establishing exactly what is
 already proven, what is imprecise, and what remains open in each.
 Section~\ref{sec:rom-comparison}
-fixes notation for the PROM and HPROM--ANN used as an independent,
-non-ANN-constitutive-law comparison point. Section~\ref{sec:experiments}
-describes the training loss and protocol, reports the test-trajectory comparison of all six model variants, repeats the
+introduces the PROM and HPROM--ANN pipeline used as an independent,
+non-ANN-constitutive-law comparison point, fixing notation for both.
+Section~\ref{sec:experiments}
+describes the training loss and protocol, reports the test-trajectory comparison of all seven model variants, repeats the
 polyconvexity proofs for a second, ICKAN core, and uses an uncertified
 baseline to show directly what the certificate protects against.
 Section~\ref{sec:cook} deploys every model this paper builds, plus the
@@ -311,9 +350,7 @@ This section fixes notation and gives a self-contained, high-level account
 of the RVE and its full-order model (FOM),
 which every model in this paper (the PANN as well as the projection-based
 and hyper-reduced comparison models of Section~\ref{sec:rom-comparison})
-is ultimately trained on, evaluated against, or built from. None of the
-constructions in this section are a contribution of this work; they are
-established tools, cited to their sources, applied here to a specific RVE.
+is ultimately trained on, evaluated against, or built from.
 
 \subsection{The representative volume element and its full-order model}
 \label{sec:background-fom}
@@ -327,9 +364,9 @@ while the remaining boundary and interior nodes, including the nodes on
 the hole, are left free. We write $\bm u$ for the full nodal
 displacement field over every node of the mesh (this is what is plotted
 in Fig.~\ref{fig:displacement-field}), partitioned into its Dirichlet and
-free parts as $\bm u=(\bm u_d,\bm u_f)$: on the Dirichlet boundary,
+free parts as $\bm u=(\bm u_d,\bm u_f)$. On the Dirichlet boundary,
 $\bm u_d$ is prescribed exactly, node by node, by the affine
-macro-strain map determined by $\bm\varepsilon$: affine in the
+macro-strain map determined by $\bm\varepsilon$. This map is affine in the
 reference-configuration position $\bm X$ of each Dirichlet node for a
 \emph{fixed} $\bm\varepsilon$, but \emph{not} a linear function of
 $\bm\varepsilon$ itself, since (made explicit below) it is built from
@@ -339,7 +376,7 @@ $E_{11},E_{22},\gamma_{12}$, while $\bm u_f\in\mathbb R^{n_L}$, the
 free-node values, are unknown. The
 finite element (Galerkin) discretization of
 the governing balance of linear momentum reduces, in the quasi-static
-setting used here (no inertia, no explicit time dependence: the
+setting used here (no inertia, no explicit time dependence, since the
 test load path is a pseudo-time sequence of equilibrium states,
 not a genuine initial-value problem), to the nodal equilibrium residual
 \begin{equation}
@@ -358,7 +395,7 @@ solved by Newton--Raphson for $\bm u_f$ at every prescribed $\bm\varepsilon$ alo
 load path; this is the FOM, and it is what generates every training
 snapshot and every test-trajectory ground-truth number (energy, stress, and their
 components) used elsewhere in this paper. Throughout this paper,
-$\bm\varepsilon$ denotes this prescribed, exact boundary strain: the
+$\bm\varepsilon$ denotes this prescribed, exact boundary strain. The
 deformation gradient $\bm F=\bm U=\sqrt{2\bm E(\bm\varepsilon)+\bm I}$
 (the unique symmetric, rotation-free square root) is used to build the
 affine map $\bm u_d(\bm X)=(\bm F-\bm I)\bm X$ directly, so the outer
@@ -367,22 +404,23 @@ construction, unlike the homogenized macro-\emph{stress}, which is a
 computed output with more than one admissible definition. For $\bm
 u_d$ to be well-defined at all, the prescribed $\bm\varepsilon$ must
 satisfy $\bm C(\bm\varepsilon):=\bm I+2\bm E(\bm\varepsilon)\succ0$, so
-that a real, symmetric square root $\bm F$ exists; the implementation
-enforces this explicitly (an out-of-range $\bm\varepsilon$ raises an
-error rather than silently returning a spurious $\bm F$), and every
+that a real, symmetric square root $\bm F$ exists. Every
 trajectory actually used for training or testing (Fig.~\ref{fig:training-trajectories})
 stays at moderate strain magnitudes that satisfy it comfortably, far
 from this boundary. The
 homogenized macro-stress
-reported throughout is \emph{not} the naive volume average of
-$\{\bm S_{e,g}\}$ (see the distinction drawn in
-Section~\ref{sec:results}), but the reaction-force-based, exactly
-energy-conjugate quantity described there; a volume-averaged
+used to build this project's training data, the test-trajectory
+comparisons of Section~\ref{sec:results}, and the genuine FE$^2$
+comparison of Section~\ref{sec:cook} alike is \emph{not} the naive
+volume average of $\{\bm S_{e,g}\}$ (see the distinction drawn there),
+but the reaction-force-based, exactly energy-conjugate quantity
+described there, applied consistently throughout this paper rather
+than switched per section. A volume-averaged
 homogenized \emph{strain} of the converged solution can likewise be
 computed and differs measurably from $\bm\varepsilon$ for this
 mixed Dirichlet/free RVE (the free hole boundary is not affine-constrained,
 so the classical boundary-average identity that would equate the two
-does not apply), but this paper does not use that quantity anywhere:
+does not apply), but this paper does not use that quantity anywhere, since
 $\bm\varepsilon$, being the independent (prescribed) variable rather
 than a computed output, requires no such choice.
 
@@ -399,7 +437,7 @@ applied $\bm\varepsilon$ and the volume-averaged, computed strain/stress
 quantities are kept explicitly distinct above and in
 Section~\ref{sec:results}. The reaction-force
 procedure used there does not rely on periodicity anywhere in its
-derivation: it follows from the envelope theorem at any converged
+derivation. It follows from the envelope theorem at any converged
 equilibrium state, for any boundary-condition type, so the same
 machinery applies unchanged to RVEs for which a periodic idealization
 is not assumed or not available, such as a finite specimen, an RVE
@@ -434,7 +472,7 @@ Every model compared in this paper, the four PANN tiers of
 Section~\ref{sec:c1-regression} as well as the POD basis, the decoder
 $\mathcal N$, and the ECM/MAW--ECM cubature rules behind HPROM--ANN
 (Section~\ref{sec:rom-comparison}), is built from the same underlying
-dataset: converged FOM solves of \eqref{eq:fom-residual} along
+dataset. Converged FOM solves of \eqref{eq:fom-residual} along
 prescribed macro-strain paths $\bm\varepsilon(t)=(E_{11}(t),E_{22}(t),\gamma_{12}(t))$,
 each solved state contributing one labeled triple (applied strain,
 energy-conjugate stress, stored energy) to the dataset. This section
@@ -442,12 +480,12 @@ describes, once and explicitly, how those paths were chosen and how
 large the resulting dataset is; Section~\ref{sec:training} states how it
 is then split and used to train each model.
 
-Figure~\ref{fig:training-trajectories} shows the full training domain:
-ten trajectories forming five tension/compression pairs, one pair per
+Figure~\ref{fig:training-trajectories} shows the full training domain.
+Ten trajectories form five tension/compression pairs, one pair per
 swept shear level $\gamma_{12}\in\{0,\pm0.05,\pm0.1\}$, the two members
 of a pair sharing the same shear target but opposite normal-strain
 branches. Every
-trajectory is genuinely three-dimensional, not a single planar slice: it
+trajectory is genuinely three-dimensional, not a single planar slice. It
 first ramps $\gamma_{12}$ from $0$ to its target value at
 $E_{11}=E_{22}=0$, then sweeps $(E_{11},E_{22})$ in a boustrophedon
 (zig-zag) pattern within that fixed-shear plane, at a fixed row spacing
@@ -491,12 +529,12 @@ which holds $\gamma_{12}$ fixed while sweeping $(E_{11},E_{22})$, the
 test path mixes all three strain components together in a single
 loading-then-unloading cycle that starts and ends at the origin,
 reaching $E_{11}\in[-0.05,1.6]$, $E_{22}\in[-0.05,1.12]$,
-$\gamma_{12}\in[-0.075,0.06]$: it visits tension, compression, and shear
+$\gamma_{12}\in[-0.075,0.06]$. It visits tension, compression, and shear
 simultaneously rather than one at a time, a qualitatively harder
 generalization test than interpolating within any single training
-trajectory's own fixed-shear plane, visible directly in
-Figure~\ref{fig:test-trajectory}: a handful of straight probes between
-extreme mixed states, not an area sweep at fixed shear.
+trajectory's own fixed-shear plane. Figure~\ref{fig:test-trajectory}
+shows this directly, with a handful of straight probes between
+extreme mixed states rather than an area sweep at fixed shear.
 
 \begin{figure}[h]
 \centering
@@ -536,7 +574,7 @@ Section~\ref{sec:related-klein-linden}.}
 \section{The admissibility checklist}
 \label{sec:checklist}
 This paper organizes six requirements for an admissible hyperelastic
-surrogate $W$, with $\bm\sigma=\partial W/\partial\bm\varepsilon$, into a
+surrogate $W$, with $\bm S=\partial W/\partial\bm\varepsilon$, into a
 single checklist for clarity of exposition. Each requirement is
 individually well established and is discussed with its own citation in
 the section devoted to it below; the six-item grouping itself is this
@@ -544,7 +582,9 @@ paper's own organizing device, not a claim that this exact
 enumeration is issued by some external authority:
 \begin{enumerate}
  \item[\textbf{(C1)}] \textbf{Thermodynamic consistency} (reduced
- Clausius--Duhem inequality): $\bm\sigma^T\dot{\bm\varepsilon}-\dot W\geq0$.
+ Clausius--Duhem inequality): $\bm S^T\dot{\bm\varepsilon}-\dot W\geq0$, an
+ identical equality for any hyperelastic model with $\bm
+ S=\partial W/\partial\bm\varepsilon$ (Section~\ref{sec:c1}).
  \item[\textbf{(C2)}] \textbf{Objectivity}: $W(\bm Q\bm F)=W(\bm F)$ for
  every $\bm Q\in\SO$, i.e.\ every rigid rotation superposed on the
  current configuration.
@@ -552,7 +592,7 @@ enumeration is issued by some external authority:
  stress tensor satisfies $\bm S=\bm S^T$ (equivalently, in the Voigt
  notation~\eqref{eq:stress} used throughout, there is no independently
  parameterized $S_{21}\neq S_{12}$).
- \item[\textbf{(C4)}] \textbf{Normalization}: $\bm\sigma(\bm 0)=\bm0$ and
+ \item[\textbf{(C4)}] \textbf{Normalization}: $\bm S(\bm 0)=\bm0$ and
  $W(\bm0)=0$.
  \item[\textbf{(C5)}] \textbf{Polyconvexity}, in the sense of
  Ball~\cite{Ball1977}: see Section~\ref{sec:c5-definition} for its
@@ -570,7 +610,7 @@ structural stretch diverges) is likewise architectural rather than a
 trained or fitted behavior, though, as Section~\ref{sec:c6} makes
 precise, this stops short of the Sobolev-exponent matching a fully
 rigorous existence proof would additionally require.
-(C5) requires the most care: Section~\ref{sec:c5} gives Ball's precise
+(C5) requires the most care. Section~\ref{sec:c5} gives Ball's precise
 definition, the correct (weaker) necessary condition we actually
 falsify-test, and the explicit construction that proves our model
 polyconvex in Ball's sense; it also shows that a strictly stronger
@@ -603,7 +643,7 @@ The database and the model use the engineering-shear coordinate
 so that the work identity
 \begin{equation}
  dW=S_{11}\,dE_{11}+S_{22}\,dE_{22}+S_{12}\,d\gamma_{12},\qquad
- \bm\sigma:=\frac{\partial W}{\partial\bm\varepsilon}
+ \bm S:=\frac{\partial W}{\partial\bm\varepsilon}
  =\begin{bmatrix}S_{11}\\S_{22}\\S_{12}\end{bmatrix}
  \label{eq:stress}
 \end{equation}
@@ -616,160 +656,24 @@ document is $\partial W/\partial\bm\varepsilon$ of the same scalar $W$.
 \label{sec:c1}
 For a purely elastic RVE with no internal (dissipative) state variables,
 the reduced isothermal Clausius--Duhem inequality is
-$\mathcal D:=\bm\sigma^T\dot{\bm\varepsilon}-\dot W\geq0$.  Since
+$\mathcal D:=\bm S^T\dot{\bm\varepsilon}-\dot W\geq0$.  Since
 $W=W(\bm\varepsilon(t))$ and $W$ is differentiable,
 \begin{equation}
  \dot W=\frac{\partial W}{\partial\bm\varepsilon}\cdot\dot{\bm\varepsilon}
- =\bm\sigma^T\dot{\bm\varepsilon}
+ =\bm S^T\dot{\bm\varepsilon}
 \end{equation}
 identically, for \emph{any} smooth scalar potential $W$ and \emph{any}
 strain history $\bm\varepsilon(t)$, by the chain rule alone.  Hence
-$\mathcal D\equiv0\geq0$: the inequality holds with equality, and the
+$\mathcal D\equiv0\geq0$; the inequality holds with equality, and the
 model is thermodynamically consistent (fully reversible, zero
 dissipation) for the same reason every hyperelastic (Green-elastic) model
-is: because the stress is defined as $\partial W/\partial\bm\varepsilon$
+is, because the stress is defined as $\partial W/\partial\bm\varepsilon$
 in \eqref{eq:stress} and not as an independently parameterized function.
 This is not a property that training can violate or that needs to be
 checked numerically; it is a property of the functional form
-\eqref{eq:stress} itself.
-
-\subsubsection{A pure-regression baseline: violating (C1) directly}
-\label{sec:c1-regression}
-Section~\ref{sec:c1} shows (C1) holds for \emph{any} model of the form
-$\bm S=\partial W/\partial\bm\varepsilon$, regardless of which $W$ is
-learned. It says nothing about a model that is not of this form. As'ad et
-al.~\cite{Asad2022} motivate their own hyperelastic-ANN construction by
-first exhibiting exactly such a model, a plain regression network that
-maps strain directly to stress with no potential anywhere, as their
-baseline ``regression ANN'', the bottom tier of a three-tier ablation
-(regression ANN, hyperelastic ANN, convex hyperelastic ANN) that
-motivates each of their architectural commitments in turn. This section
-repeats that ablation for this project's own RVE and its own admissibility
-checklist, adding a fourth tier below the two certified polyconvex cores
-and the uncertified free baseline of Section~\ref{sec:non-polyconvex}:
-
-\begin{itemize}
- \item \textbf{Tier 1 (this section)}: a pure-regression MLP, widths
- $(\RegressionWidths{})$, mapping normalized $[E_{11},E_{22},\gamma_{12}]$
- straight to normalized $[S_{11},S_{22},S_{12}]$: the stress output is a
- direct forward pass, never a gradient of anything. No energy functional
- exists in this model at all.
- \item \textbf{Tier 2}: the free hyperelastic PANN of
- Section~\ref{sec:non-polyconvex}, an unconstrained energy $W_\theta$,
- so (C1) holds, but nothing else in (C4)--(C6) is guaranteed.
- \item \textbf{Tiers 3a/3b}: the certified polyconvex ICNN and ICKAN of
- Sections~\ref{sec:c5-construction} and~\ref{sec:ickan}, satisfying all
- six checklist items exactly.
-\end{itemize}
-
-We can test (C1) directly rather than just argue it. For a genuine hyperelastic
-model, integrating $\dot W=\bm S\cdot\dot{\bm\varepsilon}$
-(Section~\ref{sec:c1}) along any closed strain loop $\mathcal L$ (a path
-in strain space with the same start and end point) gives
-\begin{equation}
- \oint_{\mathcal L}\bm S\cdot d\bm\varepsilon
- =\oint_{\mathcal L}dW
- =W(\bm\varepsilon_{\rm end})-W(\bm\varepsilon_{\rm start})=0,
- \label{eq:cyclic}
-\end{equation}
-exactly, for \emph{every} closed loop, independently of which admissible
-$W$ produced $\bm S$: this is a direct corollary of (C1), not a new
-physical assumption. For the tier-1 pure-regression model, $\bm S$ is not the
-gradient of anything, so nothing in its construction forces
-\eqref{eq:cyclic}, and there is no reason to expect it numerically. We
-evaluate \eqref{eq:cyclic} by trapezoidal quadrature ($\CyclicPointsPerEdge{}$
-points per edge, justified below) on four closed strain loops entirely
-inside the training range (Figure~\ref{fig:cyclic-loops}): a small
-axis-aligned normal-strain square, a smooth curve that starts and
-returns to the undeformed reference state $\bm\varepsilon=\bm0$ itself
-while moving through all three strain components at once, a shear loop,
-and an irregular triangle mixing normal and shear strain, for all four
-tiers, using each model's own stress output (a direct forward pass for
-tier 1, $\partial W_\theta/\partial\bm
-\varepsilon$ by automatic differentiation for tiers 2--3b).
-
-\begin{figure}[h]
-\centering
-\includegraphics[width=\linewidth]{c1_cyclic_loops_claude.pdf}
-\caption{The four closed strain loops evaluated in Table~\ref{tab:cyclic}:
-a genuine 3D view (left) and the three pairwise projections (right),
-so every loop's shape is visible from some panel without ambiguity. The
-small square and the shear loop each vary only two of the three strain
-components (they collapse to a flat segment in whichever projection does
-not involve their varying components); the origin-anchored ellipse and
-the mixed triangle both move in all three simultaneously, and only the
-ellipse starts and returns to the true reference state
-$\bm\varepsilon=\bm0$ (the black marker).}
-\label{fig:cyclic-loops}
-\end{figure}
-
-\begin{table}[h]
-\centering
-\caption{Cyclic work $\oint_{\mathcal L}\bm S\cdot d\bm\varepsilon$ (Pa)
-around four closed strain loops, trapezoidal quadrature,
-$\CyclicPointsPerEdge{}$ points per edge. Exactly zero is expected, by
-\eqref{eq:cyclic}, for tiers 2--3b; nothing constrains tier 1.
-Convergence of this resolution is verified in
-Figure~\ref{fig:cyclic-convergence}.}
-\label{tab:cyclic}
-\begin{tabular}{lrrrr}
-\toprule
-Loop & Pure regression (tier 1) & Free (tier 2) & ICNN (tier 3a) & ICKAN (tier 3b)\\
-\midrule
-Small normal square & $\CyclicSmallSquareRegression$ & $\CyclicSmallSquareFree$ & $\CyclicSmallSquareIcnn$ & $\CyclicSmallSquareIckan$\\
-Origin-anchored ellipse & $\CyclicEllipseRegression$ & $\CyclicEllipseFree$ & $\CyclicEllipseIcnn$ & $\CyclicEllipseIckan$\\
-Shear loop & $\CyclicShearRegression$ & $\CyclicShearFree$ & $\CyclicShearIcnn$ & $\CyclicShearIckan$\\
-Mixed triangle & $\CyclicTriangleRegression$ & $\CyclicTriangleFree$ & $\CyclicTriangleIcnn$ & $\CyclicTriangleIckan$\\
-\bottomrule
-\end{tabular}
-\end{table}
-
-For context, a typical energy density for this RVE (the training-set
-energy scale used to normalize the loss) is $\CyclicTypicalEnergyScale{}$: the
-tier-1 residual on the two normal-strain loops and the shear loop is five
-to six orders of magnitude smaller than this scale
-($\CyclicRegressionWorstFraction{}$ of it at worst). We verified
-$\CyclicPointsPerEdge{}$ points per edge is well converged by refining
-the quadrature on the mixed triangle (the least regular of the four
-loops) by $4\times$ at each step, $200$ to $\CyclicPointsPerEdge{}$
-points per edge (Figure~\ref{fig:cyclic-convergence}).
-
-\begin{figure}[h]
-\centering
-\includegraphics[width=.72\linewidth]{c1_cyclic_convergence_claude.pdf}
-\caption{Residual magnitude on the mixed-triangle loop vs.\ quadrature
-points per edge, log-log, at the four refinement levels
-$\CyclicRefinementLevels{}$. The three energy-based tiers fall on the
-slope expected of $\mathcal O(h^2)$ trapezoidal quadrature error (dotted
-reference line) and are converging to the true value of exactly zero;
-the tier-1 residual does not move. The free-hyperelastic tier's
-residual (tier 2, evaluated in float32) levels off around
-$10^{-1}$--$1\,\mathrm{Pa}$ at the finest level rather than continuing
-to shrink, consistent with floating-point precision rather than
-remaining quadrature error; the two float64 tiers (3a/3b) keep
-converging cleanly throughout.}
-\label{fig:cyclic-convergence}
-\end{figure}
-
-The three energy-based tiers shrink at almost exactly the $16\times$-per-step
-rate that $\mathcal O(h^2)$ trapezoidal error predicts, converging to
-the true value of zero; the tier-1 residual, having no potential to
-converge to in the first place, does not move: the signature of a
-genuine curl in its stress field, not finite-sample noise.
-
-Accuracy does not reveal this violation; if anything, it hides it.
-Table~\ref{tab:master} reports the tier-1 model's own test-trajectory accuracy: $\RegressionStressError{}$ overall stress error
-and $\RegressionVonMisesError{}$ von Mises error, better than every
-other tier in this study, including both certified polyconvex cores.
-This is the sharpest version yet of the point made in
-Section~\ref{sec:non-polyconvex} with the free baseline: an aggregate
-accuracy metric on a test trajectory not only fails to detect the
-absence of a physical constraint, it can reward the model that discards
-the most physics, because a direct regression has no architectural
-constraint competing with the stress fit at all. The cyclic-work test
-of Table~\ref{tab:cyclic} measures something accuracy cannot: it is the
-only test in this paper that checks (C1) itself, by direct observation
-rather than as a metric to be optimized.
+\eqref{eq:stress} itself. Section~\ref{sec:c1-regression} demonstrates
+this concretely: a trained baseline with no potential at all violates
+(C1) directly, and does so in a way accuracy metrics alone do not reveal.
 
 \subsection{(C2) Objectivity}
 \label{sec:c2}
@@ -793,7 +697,7 @@ The word ``symmetry'' is used for two unrelated properties in continuum
 mechanics, and the checklist item (C3) refers to the first, not the
 second:
 \begin{itemize}
- \item \textbf{Tensor symmetry}, $\bm\sigma=\bm\sigma^T$: a basic
+ \item \textbf{Tensor symmetry}, $\bm S=\bm S^T$: a basic
  consequence of balance of angular momentum in the absence of body
  couples.  It must hold for \emph{any} admissible constitutive model,
  including anisotropic ones.
@@ -801,18 +705,18 @@ second:
  \emph{material} symmetry group (e.g.\ the $D_4$ group of a square
  lattice), $W(C_{11},C_{22},C_{12})=W(C_{22},C_{11},-C_{12})$.  This is a
  \emph{modelling choice}, not a conservation law, and this project
- deliberately does \emph{not} impose it: the RVE is treated as a general
+ deliberately does \emph{not} impose it. The RVE is treated as a general
  anisotropic material, because a square-shaped numerical cell does not by
  itself make the effective homogenized material isotropic or $D_4$
  symmetric.
 \end{itemize}
 Tensor symmetry (the actual content of C3) holds identically in this
-model: the second Piola stress is parameterized by exactly the three
+model. The second Piola stress is parameterized by exactly the three
 independent numbers $(S_{11},S_{22},S_{12})$ of \eqref{eq:stress}, which
 are then placed into the symmetric matrix
 $\begin{pmatrix}S_{11}&S_{12}\\S_{12}&S_{22}\end{pmatrix}$.
 There is no separate, independently learned $S_{21}$ that could disagree
-with $S_{12}$: $\bm\sigma=\bm\sigma^T$ by the structure of the
+with $S_{12}$: $\bm S=\bm S^T$ by the structure of the
 parameterization, not as an approximate or penalized identity. Material
 symmetry ($D_4$) is a different, optional property that this model does
 not claim.
@@ -837,7 +741,7 @@ of (C4) requires no special argument about the structural directions.
 
 \subsubsection{The stress value: not trivial, and this is where the balanced directions matter}
 Differentiating \eqref{eq:pc-energy} and evaluating at $\bm\varepsilon=\bm0$
-does \emph{not} automatically give zero: it requires the gradient of
+does \emph{not} automatically give zero, because it requires the gradient of
 the $\Phi_\theta$ term to be exactly cancelled by the gradient of the
 $-r\log J$ term, and the latter only ever points in one fixed,
 isotropic direction (equal normal parts, zero shear). The argument that
@@ -994,7 +898,7 @@ Define
  \frac{\partial\Phi_\theta}{\partial E_{22}}\right)\right|_{\bm\varepsilon=\bm0}.
  \label{eq:pressure-cancellation}
 \end{equation}
-Then $\bm\sigma(\bm0)=\bm0$ exactly.
+Then $\bm S(\bm0)=\bm0$ exactly.
 \end{proposition}
 \begin{proof}
 \begin{enumerate}
@@ -1042,7 +946,7 @@ that $r\,(1,1,0)^T$ equals $\Phi_\theta$'s own reference gradient
 $(2\lambda,2\lambda,0)^T$ from Step~1. Summing all three terms
 of~\eqref{eq:pc-energy} at $\bm\varepsilon=\bm0$ then gives
 \begin{equation}
- \bm\sigma(\bm0)=\underbrace{(2\lambda,2\lambda,0)^T}_{\text{from }\Phi_\theta}
+ \bm S(\bm0)=\underbrace{(2\lambda,2\lambda,0)^T}_{\text{from }\Phi_\theta}
  \;-\;r\,\underbrace{(1,1,0)^T}_{\text{from }-r\log J}
  \;+\;\underbrace{\beta(J-1)\nabla J|_{J=1}}_{=\,0\text{, since }J=1}
  =\bm0. \qedhere
@@ -1075,10 +979,10 @@ arguments such that
  \times\R^{2\times2}\times\R.
  \label{eq:poly-def}
 \end{equation}
-This is an existence-theory condition: Ball used it (together with
+This is an existence-theory condition; Ball used it (together with
 suitable growth, Section~\ref{sec:c6}) to prove, via the direct method of
 the calculus of variations, that minimizers of the total elastic energy
-exist. It says nothing by itself about the sign of $\partial\bm\sigma/
+exist. It says nothing by itself about the sign of $\partial\bm S/
 \partial\bm\varepsilon$ at a given deformation state. The correct
 hierarchy (Ball~\cite{Ball1977}; see also Dacorogna's standard reference
 on the calculus of variations) is
@@ -1098,7 +1002,7 @@ Polyconvexity~\eqref{eq:poly-def} is not the only architectural route to
 a well-posed hyperelastic model, and it is worth being precise about how
 it relates to a different, strictly stronger condition used elsewhere in
 the literature: a globally symmetric positive definite (SPD) tangent,
-$\bm D=\partial\bm\sigma/\partial\bm\varepsilon\succ0$ everywhere.
+$\bm D=\partial\bm S/\partial\bm\varepsilon\succ0$ everywhere.
 \label{sec:related-asad}As'ad, Avery and Farhat~\cite{Asad2022} adopt
 exactly this stronger condition for their own anisotropic fabric RVE,
 built with the same FE$^2$ pipeline used here and validated inside an
@@ -1117,7 +1021,7 @@ elasto-plastic anisotropic response. Both are legitimate, coherent design
 choices, not errors, and As'ad et al.'s choice buys real robustness in
 their finite-element examples (Newton's method diverges for a non-convex
 ANN under load, converges for their convex-in-$\bm E$ one), but neither
-is polyconvexity: Ball's existence theorem needs
+is polyconvexity. Ball's existence theorem needs
 only~\eqref{eq:poly-def} together with growth, not a globally SPD
 tangent, so the two conditions are logically independent, and the
 SPD-tangent route remains available only because, unlike plain convexity
@@ -1129,7 +1033,7 @@ singular matrix $\tfrac12(\bm F+(-\bm F))=0$; convexity in the already-objective
 $\bm C$ has no such obstruction).
 
 For this RVE specifically, however, the SPD-tangent route is not
-available: the independent FOM tangent audit of this project measures
+available. The independent FOM tangent audit of this project measures
 $\bm D=\partial\bm S/\partial\bm\varepsilon$ by finite differences at
 several deformation states, including a test-trajectory state
 where the \emph{smallest eigenvalue of $\bm D$ is $\FomStageTenTangentMinimum$},
@@ -1179,11 +1083,11 @@ positive weights $w_{ki}$ satisfying the balance condition
 \end{equation}
 with the three direction systems (angles in degrees) and weights recorded
 in Table~\ref{tab:direction-systems}, chosen without reference to any
-material symmetry group: Section~\ref{sec:direction-selection} gives the
+material symmetry group; Section~\ref{sec:direction-selection} gives the
 explicit, reproducible procedure that produced them. A symmetric,
 direction-built structural tensor entering the energy alongside the
 classical isotropic invariants is a classical device, not one introduced
-here: it traces to Boehler~\cite{Boehler1987} and
+here, since it traces to Boehler~\cite{Boehler1987} and
 Spencer~\cite{Spencer1971,Spencer1984}. A discrete set of weighted
 directions satisfying an exactness condition analogous
 to~\eqref{eq:balanced-directions}, there for scalar polynomial quadrature
@@ -1196,7 +1100,7 @@ prior polyconvex constructions handle the same requirement. Klein et
 al.~\cite{Klein2022} (the primary reference for the correct polyconvexity
 definition used throughout Section~\ref{sec:c5}) give two ICNN
 constructions restricted a priori to a symmetry group $\mathcal G\subset
-SO(3)$ (cubic, transversely isotropic) via a structural tensor: their
+SO(3)$ (cubic, transversely isotropic) via a structural tensor. Their
 invariant-based model $W^I$ gets objectivity, material symmetry, and
 polyconvexity exactly, but not the reference state, and they say why
 directly: an exact stress-free correction ``preserves polyconvexity when
@@ -1220,7 +1124,7 @@ material symmetry at all'' (Appendix~\ref{app:klein-trivial} examines
 what their own machinery would already imply in this limit, and why we
 do not credit it as an achieved result). This is the open problem this
 paper answers for a $2$D RVE with no assumed symmetry
-class:\label{sec:related-gap} the balanced, non-$D_4$-closed direction
+class.\label{sec:related-gap} The balanced, non-$D_4$-closed direction
 systems of Table~\ref{tab:direction-systems} replace the structural
 tensor and are not tied to any symmetry group, while
 Proposition~\ref{prop:isotropic-features} still supplies the isotropic
@@ -1271,7 +1175,7 @@ corresponding entry of $\bm I$:
 For a generic angle triple, $A$ is invertible and
 \eqref{eq:weight-system} has a unique solution $\bm w_k$ from a single
 $3\times3$ linear solve, but that solution is not guaranteed to be
-admissible: the construction additionally needs $w_{ki}>0$ (used
+admissible, because the construction additionally needs $w_{ki}>0$ (used
 explicitly in the proof of Proposition~\ref{prop:polyconvex}, where
 positivity of the weights is what lets a sum of convex terms stay
 convex), and nothing in \eqref{eq:weight-system} forbids a negative or
@@ -1298,7 +1202,7 @@ not a load-bearing one. Second, and more fundamentally, this paper does
 $15$-dimensional feature vector~\eqref{eq:features} is injective (that
 two different admissible $\bm C$ can never produce identical features),
 nor that three direction systems are the minimum or optimal number for
-this construction: a single system already supplies an admissible,
+this construction. A single system already supplies an admissible,
 polyconvex model, and more than three would remain admissible by the
 identical argument. Three systems were adopted because, empirically,
 they gave the anisotropic expressivity needed to fit this RVE's own
@@ -1406,7 +1310,7 @@ widths $(\IcnnWidths{})$ between the $15$-dimensional feature layer and
 the scalar output, Softplus activations, every weight matrix non-negative;
 only a representative subset of units per layer is drawn), the
 resulting polyconvex energy \eqref{eq:pc-energy}, and the stress
-$\bm\sigma=\partial W_{\rm pc}/\partial\bm\varepsilon$ obtained from it
+$\bm S=\partial W_{\rm pc}/\partial\bm\varepsilon$ obtained from it
 by automatic differentiation, with no independently parameterized
 stress network.}
 \label{fig:icnn-diagram}
@@ -1424,8 +1328,8 @@ non-decreasing throughout. They report the same failure mode for Tac et
 al.\ (2021), whose model uses the non-polyconvex invariant $\bar
 I_2=\tfrac12(\tr\bar C)^2-\tfrac12\tr\bar C^2$ as a direct input
 (Hartmann and Neff, cited by Klein et al.\ as their Lemma~2.4). Both
-illustrate the same point this construction is built to avoid:
-polyconvexity is a property of the specific functional form all the way
+illustrate the same point this construction is built to avoid.
+Polyconvexity is a property of the specific functional form all the way
 down to the activation function and the input invariants, not a label
 attachable to an architecture in general.
 
@@ -1657,7 +1561,7 @@ $h(J)$ in isolation; see Figure~\ref{fig:volumetric-isolated} for that.}
 
 Placing this against the third cluster of Section~\ref{sec:introduction},
 which gets polyconvexity right but rarely exercises (C6) in
-practice:\label{sec:related-cann} Linka \& Kuhl~\cite{Linka2023}, Tac et
+practice.\label{sec:related-cann} Linka \& Kuhl~\cite{Linka2023}, Tac et
 al.~\cite{Tac2023}, and Thakolkaran et al.~\cite{Thakolkaran2025} all
 correctly use the additive, block-decoupled sufficient condition for
 polyconvexity (convex, non-decreasing scalar functions of $I_1$, of a
@@ -1691,18 +1595,17 @@ failure on in-distribution data.
 \label{sec:rom-comparison}
 This section fixes notation for the PROM used in
 Section~\ref{sec:experiments} as an independent, non-ANN-constitutive-law
-comparison point for the PANN of Section~\ref{sec:theory}. None of the
-constructions in this section are a contribution of this work; they are
-established tools, cited to their sources, applied here to the RVE and
-FOM of Section~\ref{sec:background-fom}. The section builds a single
-online pipeline in three stages, not three competing constructions: a
+comparison point for the PANN of Section~\ref{sec:theory}, applied here
+to the RVE and FOM of Section~\ref{sec:background-fom}. The section
+builds a single online pipeline in three stages, not three competing
+constructions: a
 base, linear projection-based reduced basis (below); corrected by a
 trained nonlinear-manifold decoder, PROM-ANN
 (Section~\ref{sec:background-decoder}); evaluated with a hyper-reduced
 cubature rule, HPROM-ANN (Section~\ref{sec:background-ecm}). HPROM--ANN
 and D-HPROM--ANN, evaluated separately in Section~\ref{sec:results}, are
 in turn two \emph{operating modes} of that same hyper-reduced pipeline
-and the same trained decoder, not two different models: HPROM--ANN runs
+and the same trained decoder, not two different models; HPROM--ANN runs
 the decoder's prediction through the usual Newton correction
 of~\eqref{eq:prom-residual} to convergence, while D-HPROM--ANN simply
 skips that correction and uses the decoder's own prediction directly, on
@@ -1747,10 +1650,12 @@ Newton--Raphson. As documented for this exact class of problem
 (propagating features, evolving nonlinear regions) by
 Barnett and Farhat~\cite{Barnett2022} and by Hern\'andez's own metamaterial and
 damage examples~\cite{HernandezMAWECM}, a single linear subspace
-of dimension small enough to be worth reducing to is generally \emph{not}
-enough to reach high accuracy for a nonlinear problem (the Kolmogorov
-$n$-width barrier): the number of retained modes needed for good accuracy
-can remain uncomfortably large. The nonlinear-manifold construction of
+of dimension small enough to be worth reducing to generally cannot
+compress a nonlinear problem's solution manifold efficiently (the
+Kolmogorov $n$-width barrier), which restricts the efficiency of
+linear-subspace reduction here too, since achieving good accuracy can
+require keeping the retained dimension itself large. The
+nonlinear-manifold construction of
 this paper, PROM-ANN, addresses exactly this point.
 
 \subsection{Nonlinear-manifold PROM: PROM-ANN}
@@ -1760,9 +1665,12 @@ small \emph{primary} (retained) part and a larger \emph{secondary}
 (discarded) part whose amplitude is reconstructed by a trained nonlinear map,
 introduced for fluid-dynamics PMOR as the PROM-ANN/HPROM-ANN framework
 by Barnett, Farhat and Maday~\cite{Barnett2023} and generalized to
-interpretable Gaussian-process and radial-basis-function closures by Ares De
-Parga et al.~\cite{AresDeParga2026}. PROM-ANN denotes this paper's own
-instance of that framework: the same base PROM above, still using every
+interpretable Gaussian-process and radial-basis-function closures by
+Ares De Parga et al.~\cite{AresDeParga2026} for settings with fewer
+affordable training snapshots. This project's own RVE is cheap enough
+to sample densely, so the original neural-network regressor is used
+throughout instead. PROM-ANN denotes this paper's own instance of that
+framework, the same base PROM above, still using every
 Gauss point of the original mesh, but with the discarded modes'
 amplitude reconstructed by a trained decoder instead of being dropped
 outright. The total basis is partitioned as
@@ -1782,7 +1690,7 @@ It is natural to ask why the primary coordinates are not simply the
 first three raw POD coordinates. The raw POD coordinates $\mathbf
 Q_{\rm tot}=\mathbf V_{\rm tot}^T\mathbf S$
 of a snapshot matrix $\mathbf S$ are optimal, by construction, for
-linear reconstruction accuracy: no other rank-$n$ subspace captures more
+linear reconstruction accuracy, since no other rank-$n$ subspace captures more
 snapshot energy. They are not, however, optimized for what the decoder
 in~\eqref{eq:decoder} actually needs downstream: a coordinate that a
 regression map $\bm\varepsilon\mapsto\bm q$ can learn accurately.
@@ -1803,7 +1711,7 @@ macro-strain path as closely as possible in a least-squares sense,
 while remaining an exact orthonormal change of basis within the
 primary subspace (so~\eqref{eq:decoder}'s reconstruction accuracy is
 unaffected). The middle panel of Figure~\ref{fig:pod-coordinates} shows
-the effect on this RVE's own data: the same ten training trajectories,
+the effect on this RVE's own data. The same ten training trajectories,
 expressed in the structured coordinates, recover the simple,
 near-affine sweep pattern of the macro-strain domain itself, at a
 verified affine-fit accuracy of $6.9\times10^{-4}$ relative
@@ -1811,7 +1719,7 @@ $L^2$ error ($R^2\geq0.99999$ componentwise) and a
 primary/secondary orthogonality residual of
 $2.3\times10^{-15}$ (machine precision). This is exactly
 what makes the direct macro-strain-to-coordinate regression
-in~\eqref{eq:decoder} tractable: $\mathcal N$ only has to learn the
+in~\eqref{eq:decoder} tractable, because $\mathcal N$ only has to learn the
 much smaller residual nonlinearity between this already near-affine
 structured coordinate and the discarded secondary amplitudes, not the
 raw POD manifold's own curvature.
@@ -1897,8 +1805,8 @@ $\{\omega_g\}_{g\in\mathcal Z}$:
 \label{eq:ecm-residual}
  \sum_{g\in\mathcal Z}\big(\mathbf V^T\bm r_g\big)(\bm u_f;\bm\varepsilon)\,\omega_g=\bm 0,
  \qquad
- \bm S_{\rm macro}(\bm\varepsilon)\approx\frac{1}{|\Omega_0|}\sum_{g\in\mathcal
- Z_\sigma}\bm S_g(\bm u_f;\bm\varepsilon)\,\omega_{\sigma,g},
+ \bm S_{\rm macro}(\bm\varepsilon)\approx\sum_{g\in\mathcal
+ Z_\sigma}\bm c_g(\bm u_f;\bm\varepsilon)\,\omega_{\sigma,g},
 \end{equation}
 one rule ($\mathcal Z$, weights $\omega_g$) tailored to integrate the
 projected \emph{equilibrium} residual accurately, and, in general, a second,
@@ -1906,7 +1814,26 @@ independently constructed rule ($\mathcal Z_\sigma$, weights
 $\omega_{\sigma,g}$) tailored to the homogenized-\emph{stress} output
 functional: the two point sets and weight sets are not required to
 coincide, and Fig.~\ref{fig:ecm-supports} shows both retained element sets
-for this RVE side by side.
+for this RVE side by side. Here $\bm c_g$ is the reaction-force,
+energy-conjugate stress contribution of Gauss point $g$'s own element,
+not the naive Gauss-point stress $\bm S_g$ itself: by the envelope
+theorem at an equilibrium point, $\bm c_g(\bm\varepsilon)=\bm
+d(\bm\varepsilon)^T\bm r_g/(h|\Omega_0|)$, where $\bm
+d(\bm\varepsilon):=\partial\bm u_{\rm dir}/\partial\bm\varepsilon$ is the
+closed-form affine Dirichlet map's own strain sensitivity, gathered onto
+$g$'s Dirichlet-connected local degrees of freedom, and $h$ is the RVE
+thickness; summing $\bm c_g$ over \emph{every} Gauss point, not only
+$\mathcal Z_\sigma$, reproduces the exact reaction-force sum over the
+Dirichlet boundary, and Section~\ref{sec:results} verifies this identity
+numerically to floating-point precision before trusting the sparse rule
+built from it. Every Gauss point outside the reaction-force-decoupled
+domain, i.e.\ not touching a Dirichlet-constrained node through any of
+its element's own degrees of freedom, has $\bm c_g\equiv\bm 0$
+identically, so $\mathcal Z_\sigma$ is naturally restricted to Gauss
+points on elements adjacent to the Dirichlet boundary; the equilibrium
+rule $\mathcal Z$ carries no such restriction, since every Gauss point
+contributes to the projected residual in general
+(Fig.~\ref{fig:ecm-supports} shows both).
 
 \begin{figure}[h]
 \centering
@@ -1981,7 +1908,7 @@ resulting weight field is kept, subject to the same non-negativity and
 moment-matching constraints as phase one, until the final target size
 of $10$ points is reached. This graph-regularized second phase is what
 actually supplies the manifold-adaptive smoothness Hern\'andez's
-construction is designed to give: it is a genuine, non-trivial
+construction is designed to give; it is a genuine, non-trivial
 regularization step acting jointly across training states, not a
 relabeling of independent per-state ECM solves.
 
@@ -2061,7 +1988,7 @@ statistical one, made because it measurably improves accuracy on the
 quantity of engineering interest, and it does not touch
 \eqref{eq:pc-energy} at all. It is worth describing carefully, because
 none of the polyconvex-PANN constructions of Table~\ref{tab:literature}
-discuss a risk we found here: per-component loss normalization, used in
+discuss a risk we found here. Per-component loss normalization, used in
 its most extreme form by As'ad et al.~\cite{Asad2022}, can measurably
 hurt accuracy on the physically relevant equivalent stress when the
 material's stress components differ by orders of magnitude.
@@ -2151,29 +2078,44 @@ loss differentiates the energy twice; its best epoch by the tracked
 training score is $\BestEpoch{}$. The test trajectory is not
 used, in any form, during training.
 
-\subsection{Test-trajectory assessment: all six model variants}
+\subsection{Test-trajectory assessment: all seven model variants}
 \label{sec:results}
 Table~\ref{tab:master} reports relative $L^2$ errors against the direct
 FOM labels, including the plane-stress equivalent (von Mises) stress
-\eqref{eq:von-mises}, for all six model variants considered in this
+\eqref{eq:von-mises}, for all seven model variants considered in this
 paper: the four ANNs of Section~\ref{sec:c1-regression} (tiers
-1--3b), and the two hyper-reduced projection-based ROMs used elsewhere in
+1--3b), a purely-linear hyper-reduced ROM used as a control, and the
+two ANN-augmented hyper-reduced projection-based ROMs used elsewhere in
 this project as an independent, non-ANN-constitutive-law point of
-comparison on the identical test path. HPROM--ANN and D-HPROM--ANN
-are two operating modes of the same hyper-reduced solver and the same
-trained solution-manifold ANN (mapping macro-strain directly to reduced
-POD coordinates via the primary/secondary decoder of
+comparison on the identical test path. Linear-HPROM, the simplest of
+the three, hyper-reduces the full $39$-mode linear free-dof POD basis
+$\phi_f$ directly: no primary/secondary split, no decoder, no manifold
+ANN of any kind, only a Newton corrector against a fixed,
+classically-selected ECM residual rule ($237$ elements) and the
+reaction-force stress read off a second, disjoint, fixed ECM rule
+($37$ elements, the same rule Section~\ref{sec:rom-comparison} already
+uses for HPROM--ANN/D-HPROM--ANN's own stress output). HPROM--ANN
+and D-HPROM--ANN instead replace $\phi_f$ with a trained
+solution-manifold ANN (mapping macro-strain directly to reduced POD
+coordinates via the primary/secondary decoder of
 Section~\ref{sec:background-decoder}, unrelated to the constitutive-law
-ANNs of tiers 1--3b), rather than two different models: HPROM--ANN runs
-the full ECM-weighted Newton corrector to convergence at every step (up
-to $25$ iterations), while D-HPROM--ANN sets the corrector iteration
-count to zero and simply evaluates the manifold ANN's direct
-macro-strain-to-reduced-state prediction, with no equilibrium solve at
-all. Both reconstruct stress from the true microscale Neo-Hookean law at
-ECM-selected Gauss points rather than from a learned constitutive
-surrogate, so they measure a different source of error, hyper-reduction
-and manifold-regression error, than tiers 1--3b's constitutive-surrogate
-error. (This construction is not itself a contribution of this paper;
+ANNs of tiers 1--3b), and are two operating modes of that same
+hyper-reduced solver and the same trained manifold ANN, rather than two
+different models. HPROM--ANN runs the full ECM-weighted Newton
+corrector to convergence at every step (up to $25$ iterations), while
+D-HPROM--ANN sets the corrector iteration count to zero and simply
+evaluates the manifold ANN's direct macro-strain-to-reduced-state
+prediction, with no equilibrium solve at all. All three reconstruct
+stress from the true microscale Neo-Hookean law at ECM-selected Gauss
+points rather than from a learned constitutive surrogate, so they
+measure a different source of error, hyper-reduction and (for the
+ANN-augmented pair) manifold-regression error, than tiers 1--3b's
+constitutive-surrogate error; comparing Linear-HPROM against
+HPROM--ANN/D-HPROM--ANN isolates whether the manifold ANN, rather than
+the linear basis truncation it exists to compensate, is the limiting
+factor in the latter two rows' own accuracy. Section~\ref{sec:cook}
+returns to this question once Cook's membrane gives it a sharper answer.
+(This construction is not itself a contribution of this paper;
 Section~\ref{sec:rom-comparison} fixes its notation, cites its sources
 in full, and places it against the broader reduced-order-modeling
 literature.)
@@ -2185,7 +2127,7 @@ tiers 1--3b are trained and evaluated against (the same
 regression-vs.-conjugate distinction of Section~\ref{sec:c1-regression},
 one level up the pipeline). For a mixed Dirichlet/free boundary-value
 problem these two macroscopic stress definitions need not agree, and
-empirically they do not: a direct check found the two differing by
+empirically they do not; a direct check found the two differing by
 roughly $30\%$ on this RVE. Comparing HPROM--ANN's raw output against the
 other five rows below would therefore not be comparing like with like,
 so instead we compute the same energy-conjugate quantity for
@@ -2202,7 +2144,7 @@ states reported below.
 \begin{table}[h]
 \centering
 \caption{Test-trajectory relative $L^2$ errors against direct FOM labels, all
-six model variants.}
+seven model variants.}
 \label{tab:master}
 \begin{tabular}{lrrrrrr}
 \toprule
@@ -2212,17 +2154,23 @@ Pure regression (tier 1) & -- & \RegressionStressError & \RegressionSxxError & \
 Free hyperelastic ANN (tier 2) & \FreeMatchedEnergyError & \FreeMatchedStressError & \FreeMatchedSxxError & \FreeMatchedSyyError & \FreeMatchedSxyError & \FreeMatchedVonMisesError\\
 Polyconvex ICNN (tier 3a) & \FinalEnergyError & \FinalStressError & \FinalSxxError & \FinalSyyError & \FinalSxyError & \FinalVonMisesError\\
 Polyconvex ICKAN (tier 3b) & \IckanEnergyError & \IckanStressError & \IckanSxxError & \IckanSyyError & \IckanSxyError & \IckanVonMisesError\\
+Linear-HPROM & -- & \LinearHpromStressError & \LinearHpromSxxError & \LinearHpromSyyError & \LinearHpromSxyError & \LinearHpromVonMisesError\\
 HPROM--ANN & -- & \HpromIterStressError & \HpromIterSxxError & \HpromIterSyyError & \HpromIterSxyError & \HpromIterVonMisesError\\
 D-HPROM--ANN & -- & \DHpromStressError & \DHpromSxxError & \DHpromSyyError & \DHpromSxyError & \DHpromVonMisesError\\
 \bottomrule
 \end{tabular}
 \end{table}
 Tier 1 has no energy column, since Section~\ref{sec:c1-regression} shows
-no potential exists in that model, and HPROM--ANN and D-HPROM--ANN have
-none either: the reaction-force procedure above recovers the
-energy-conjugate stress directly from boundary reactions, and extending
-it to a comparable normalized energy is a natural refinement we did not
-attempt here. Tier 2's componentwise $S_{11}$, $S_{22}$ errors are
+no potential exists in that model, and Linear-HPROM, HPROM--ANN, and
+D-HPROM--ANN have none either, because the reaction-force procedure
+above recovers the energy-conjugate stress directly from boundary
+reactions, and extending it to a comparable normalized energy is a
+natural refinement we did not attempt here. Linear-HPROM matches or
+beats every other row on this test trajectory, including the two
+certified PANN cores, at every stress component; Section~\ref{sec:cook}
+returns to why once the same three ROM/HPROM rows are pushed through a
+genuine FE$^2$ demonstration, where the gap widens rather than closes.
+Tier 2's componentwise $S_{11}$, $S_{22}$ errors are
 somewhat elevated relative to the two certified cores
 (0.6--0.9\% vs.\ 0.4--0.65\%) but remain sub-percent; the qualitatively
 different result is its $S_{12}$ error, more than an order of magnitude
@@ -2231,11 +2179,15 @@ to the certified tiers, discussed in Section~\ref{sec:non-polyconvex}.
 
 The full six-model test-trajectory comparison (energy for the three
 energy-capable tiers, and every stress component and the von Mises
-equivalent for all six model variants of Table~\ref{tab:master}) is
+equivalent for six of Table~\ref{tab:master}'s seven model variants,
+Linear-HPROM excepted) is
 given later in Figure~\ref{fig:full-comparison}, once
 Section~\ref{sec:non-polyconvex} has introduced the sixth (uncertified)
 variant; the corresponding relative-$L^2$-error bars are in
-Figure~\ref{fig:full-comparison-bars}.
+Figure~\ref{fig:full-comparison-bars}. Section~\ref{sec:cook} reports
+Linear-HPROM's own comparison separately, alongside the same two
+ROM/HPROM rows, once Cook's membrane gives that specific three-way
+comparison a genuine structural test to run on.
 
 Figure~\ref{fig:volumetric} above already shows this trained response
 along the same pure-dilatation path; no FOM reference is shown there
@@ -2256,7 +2208,7 @@ the volumetric barrier, carries over unchanged to the ICKAN core
 following Thakolkaran et al.~\cite{Thakolkaran2025}, and explains why
 the same propositions apply to it without modification
 (Section~\ref{sec:related-cann} places this relative to the ICKAN
-literature). Measurement confirms it directly: the reference stress
+literature). Measurement confirms it directly. The reference stress
 norm for the trained ICKAN model is $\IckanReferenceStressNorm$, at
 machine precision, exactly as for the ICNN model.
 
@@ -2279,6 +2231,136 @@ $(\IcnnWidths{})$, though each epoch costs more because of the spline
 evaluations. Both certificates are architectural and independent of
 which core is used, so choosing between them in practice comes down to
 parameter budget and training cost rather than admissibility.
+
+\subsection{A pure-regression baseline: violating (C1) directly}
+\label{sec:c1-regression}
+Section~\ref{sec:c1} shows (C1) holds for \emph{any} model of the form
+$\bm S=\partial W/\partial\bm\varepsilon$, regardless of which $W$ is
+learned. It says nothing about a model that is not of this form. As'ad et
+al.~\cite{Asad2022} motivate their own hyperelastic-ANN construction by
+first exhibiting exactly such a model, a plain regression network that
+maps strain directly to stress with no potential anywhere, as their
+baseline ``regression ANN'', the bottom tier of a three-tier ablation
+(regression ANN, hyperelastic ANN, convex hyperelastic ANN) that
+motivates each of their architectural commitments in turn. Table~\ref{tab:master}
+above already reports this same pure-regression baseline (tier 1) --
+mapping normalized $[E_{11},E_{22},\gamma_{12}]$ straight to normalized
+$[S_{11},S_{22},S_{12}]$ via a direct forward pass, never a gradient of
+anything, with no energy functional anywhere in the model -- alongside
+the free hyperelastic PANN (tier 2, Section~\ref{sec:non-polyconvex}
+below) and the two certified polyconvex cores (tiers 3a/3b,
+Sections~\ref{sec:c5-construction} and~\ref{sec:ickan}). On that
+test-trajectory accuracy comparison alone, tier 1 looks like the best
+choice in the study, not the worst.
+
+We can test (C1) directly rather than just argue it. For a genuine hyperelastic
+model, integrating $\dot W=\bm S\cdot\dot{\bm\varepsilon}$
+(Section~\ref{sec:c1}) along any closed strain loop $\mathcal L$ (a path
+in strain space with the same start and end point) gives
+\begin{equation}
+ \oint_{\mathcal L}\bm S\cdot d\bm\varepsilon
+ =\oint_{\mathcal L}dW
+ =W(\bm\varepsilon_{\rm end})-W(\bm\varepsilon_{\rm start})=0,
+ \label{eq:cyclic}
+\end{equation}
+exactly, for \emph{every} closed loop, independently of which admissible
+$W$ produced $\bm S$, because this is a direct corollary of (C1), not a new
+physical assumption. For the tier-1 pure-regression model, $\bm S$ is not the
+gradient of anything, so nothing in its construction forces
+\eqref{eq:cyclic}, and there is no reason to expect it numerically. We
+evaluate \eqref{eq:cyclic} by trapezoidal quadrature ($\CyclicPointsPerEdge{}$
+points per edge, justified below) on four closed strain loops entirely
+inside the training range (Figure~\ref{fig:cyclic-loops}): a small
+axis-aligned normal-strain square, a smooth curve that starts and
+returns to the undeformed reference state $\bm\varepsilon=\bm0$ itself
+while moving through all three strain components at once, a shear loop,
+and an irregular triangle mixing normal and shear strain, for all four
+tiers, using each model's own stress output (a direct forward pass for
+tier 1, $\partial W_\theta/\partial\bm
+\varepsilon$ by automatic differentiation for tiers 2--3b).
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{c1_cyclic_loops_claude.pdf}
+\caption{The four closed strain loops evaluated in Table~\ref{tab:cyclic}:
+a genuine 3D view (left) and the three pairwise projections (right),
+so every loop's shape is visible from some panel without ambiguity. The
+small square and the shear loop each vary only two of the three strain
+components (they collapse to a flat segment in whichever projection does
+not involve their varying components); the origin-anchored ellipse and
+the mixed triangle both move in all three simultaneously, and only the
+ellipse starts and returns to the true reference state
+$\bm\varepsilon=\bm0$ (the black marker).}
+\label{fig:cyclic-loops}
+\end{figure}
+
+\begin{table}[h]
+\centering
+\caption{Cyclic work $\oint_{\mathcal L}\bm S\cdot d\bm\varepsilon$ (Pa)
+around four closed strain loops, trapezoidal quadrature,
+$\CyclicPointsPerEdge{}$ points per edge. Exactly zero is expected, by
+\eqref{eq:cyclic}, for tiers 2--3b; nothing constrains tier 1.
+Convergence of this resolution is verified in
+Figure~\ref{fig:cyclic-convergence}.}
+\label{tab:cyclic}
+\begin{tabular}{lrrrr}
+\toprule
+Loop & Pure regression (tier 1) & Free (tier 2) & ICNN (tier 3a) & ICKAN (tier 3b)\\
+\midrule
+Small normal square & $\CyclicSmallSquareRegression$ & $\CyclicSmallSquareFree$ & $\CyclicSmallSquareIcnn$ & $\CyclicSmallSquareIckan$\\
+Origin-anchored ellipse & $\CyclicEllipseRegression$ & $\CyclicEllipseFree$ & $\CyclicEllipseIcnn$ & $\CyclicEllipseIckan$\\
+Shear loop & $\CyclicShearRegression$ & $\CyclicShearFree$ & $\CyclicShearIcnn$ & $\CyclicShearIckan$\\
+Mixed triangle & $\CyclicTriangleRegression$ & $\CyclicTriangleFree$ & $\CyclicTriangleIcnn$ & $\CyclicTriangleIckan$\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For context, a typical energy density for this RVE (the training-set
+energy scale used to normalize the loss) is $\CyclicTypicalEnergyScale{}$: the
+tier-1 residual on the two normal-strain loops and the shear loop is five
+to six orders of magnitude smaller than this scale
+($\CyclicRegressionWorstFraction{}$ of it at worst). We verified
+$\CyclicPointsPerEdge{}$ points per edge is well converged by refining
+the quadrature on the mixed triangle (the least regular of the four
+loops) by $4\times$ at each step, $200$ to $\CyclicPointsPerEdge{}$
+points per edge (Figure~\ref{fig:cyclic-convergence}).
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=.72\linewidth]{c1_cyclic_convergence_claude.pdf}
+\caption{Residual magnitude on the mixed-triangle loop vs.\ quadrature
+points per edge, log-log, at the four refinement levels
+$\CyclicRefinementLevels{}$. The three energy-based tiers fall on the
+slope expected of $\mathcal O(h^2)$ trapezoidal quadrature error (dotted
+reference line) and are converging to the true value of exactly zero;
+the tier-1 residual does not move. The free-hyperelastic tier's
+residual (tier 2, evaluated in float32) levels off around
+$10^{-1}$--$1\,\mathrm{Pa}$ at the finest level rather than continuing
+to shrink, consistent with floating-point precision rather than
+remaining quadrature error; the two float64 tiers (3a/3b) keep
+converging cleanly throughout.}
+\label{fig:cyclic-convergence}
+\end{figure}
+
+The three energy-based tiers shrink at almost exactly the $16\times$-per-step
+rate that $\mathcal O(h^2)$ trapezoidal error predicts, converging to
+the true value of zero; the tier-1 residual, having no potential to
+converge to in the first place, does not move: the signature of a
+genuine curl in its stress field, not finite-sample noise.
+
+Accuracy does not reveal this violation; if anything, it hides it.
+Table~\ref{tab:master} reports the tier-1 model's own test-trajectory accuracy: $\RegressionStressError{}$ overall stress error
+and $\RegressionVonMisesError{}$ von Mises error, better than every
+other tier in this study, including both certified polyconvex cores.
+This is the sharpest version yet of the point made in
+Section~\ref{sec:non-polyconvex} with the free baseline. An aggregate
+accuracy metric on a test trajectory not only fails to detect the
+absence of a physical constraint, it can reward the model that discards
+the most physics, because a direct regression has no architectural
+constraint competing with the stress fit at all. The cyclic-work test
+of Table~\ref{tab:cyclic} measures something accuracy cannot -- it is the
+only test in this paper that checks (C1) itself, by direct observation
+rather than as a metric to be optimized.
 
 \subsection{What breaks without the certificate: a non-polyconvex baseline}
 \label{sec:non-polyconvex}
@@ -2333,7 +2415,7 @@ example violation is
 \end{equation}
 a moderate, unremarkable compressive-shear state ($\det \bm F\approx0.24$),
 not an extreme or contrived one. This is exactly what
-Section~\ref{sec:c5-implies} argues: rank-one convexity is the correct
+Section~\ref{sec:c5-implies} argues. Rank-one convexity is the correct
 necessary consequence of polyconvexity, and without an architectural
 guarantee it can fail at ordinary deformation states while every accuracy
 metric looks fine. The certified models in this paper do not merely
@@ -2349,7 +2431,7 @@ free hyperelastic ANN, the two certified polyconvex cores, and both
 HPROM--ANN operating modes): the three second Piola--Kirchhoff components
 $S_{11}$, $S_{22}$, $S_{12}$ and the von Mises equivalent $\sigma_{\rm
 eq}$, each shown for all six variants, plus energy $W$, shown only for the
-three energy-capable tiers (tier 2, tier 3a, tier 3b): the tier-1
+three energy-capable tiers (tier 2, tier 3a, tier 3b), since the tier-1
 pure-regression model and both HPROM--ANN modes recover stress directly,
 without an underlying scalar potential, so no energy curve exists for
 them to plot (Section~\ref{sec:c1-regression} for tier 1;
@@ -2382,29 +2464,30 @@ one; only the cyclic-work and rank-one curvature audits can.}
 \subsection{A genuine FE\texorpdfstring{$^2$}{\textsuperscript{2}} demonstration: Cook's membrane}
 \label{sec:cook}
 Every result so far certifies the energy functional itself, or evaluates
-it at the level of the RVE's own test trajectory. As'ad et
-al.~\cite{Asad2022} and Klein et al.~\cite{Klein2022} go one step
-further and show that an uncertified model can make Newton's method
-fail inside an actual structural solve; this section does that too, but
-also goes a step further still. At every macroscopic Gauss point of a
+it at the level of the RVE's own test trajectory. Sections~\ref{sec:c1-regression}
+and~\ref{sec:non-polyconvex} showed that two of the four PANN tiers,
+tier 1 and tier 2, pass every one of those checks while actually violating
+a real admissibility property; the question this section asks is whether
+that abstract violation has any concrete structural consequence. As'ad et
+al.~\cite{Asad2022} and Klein et al.~\cite{Klein2022} already show that an
+uncertified model can make Newton's method fail inside an actual structural
+solve; this section does that too, but also goes a step further still. At every macroscopic Gauss point of a
 structural solve, the macroscopic Newton loop needs a homogenized stress
 and tangent from ``the microscale.'' This section supplies that need
-three distinct ways, all deployed on the identical macroscopic problem so
+four distinct ways, all deployed on the identical macroscopic problem so
 they can be compared directly against one another, and against the true
-multiscale answer, rather than only against each other's own test trajectory: (i) each of the four PANN tiers (regression, tier 1; free
-hyperelastic, tier 2; polyconvex ICNN, tier 3a; polyconvex ICKAN, tier
-3b), evaluated directly -- a fully-amortized, trained surrogate for the
-\emph{entire} microscale solve, effectively free online, since every bit
-of microscale physics it uses was compressed into its trained weights
-offline; (ii) D-HPROM--ANN and HPROM--ANN (Section~\ref{sec:rom-comparison}),
-nested as the actual RVE-level solver at every Gauss point -- a genuine,
-if reduced-order, online microscale solve, not a stand-in, denoted
-D-HPROM--ANN-FE$^2$ and HPROM--ANN-FE$^2$ below to distinguish this
+multiscale answer, rather than only against each other's own test
+trajectory: (i) the true, non-reduced $990$-element RVE FOM itself,
+nested at every Gauss point, denoted FOM-FE$^2$, the actual multiscale
+ground truth this whole hierarchy approximates; (ii) each of the four
+PANN tiers, evaluated directly, a fully-amortized surrogate for the
+\emph{entire} microscale solve; (iii) Linear-HPROM-FE$^2$, the same
+nesting with Section~\ref{sec:results}'s manifold-ANN-free control; and
+(iv) HPROM--ANN and D-HPROM--ANN (Section~\ref{sec:rom-comparison}),
+also nested as the actual RVE-level solver at every Gauss point, denoted
+HPROM--ANN-FE$^2$ and D-HPROM--ANN-FE$^2$ below to distinguish this
 nested deployment from the same trained models' test-trajectory
-evaluation of Table~\ref{tab:master}; and (iii) the
-true, non-reduced $990$-element RVE FOM itself, nested the same way, with
-no reduction of any kind, denoted FOM-FE$^2$ -- the actual multiscale
-ground truth this whole hierarchy approximates. To our knowledge this is the first time a
+evaluation of Table~\ref{tab:master}. To our knowledge this is the first time a
 physics-augmented constitutive surrogate, a reduced-order projection-based
 surrogate, and a genuinely nested full-order microscale solve have all
 been compared directly, on the identical macroscopic problem, rather than
@@ -2417,25 +2500,24 @@ large-deformation benchmark in the nonlinear finite-element literature,
 not tied to any single surveyed paper. It has no hole and no periodic
 structure, and its dominant loading is tensile, matching, rather than
 fighting, this project's own training range
-(Section~\ref{sec:data-campaign}): the compressive and shear excursions
-this panel actually develops stay inside, or close to, the training
-window, so the comparison below is not a test of extrapolation. The
+(Section~\ref{sec:data-campaign}): every strain component Cook visits,
+taken on its own, stays inside the trained window. Section~\ref{sec:cook-gap}
+below shows that this framing, true as far as it goes, misses the
+combination of components that actually matters. The
 final load ($2.08\times10^8\,\mathrm N$, ramped linearly over $20$
-steps) was chosen for exactly this reason: it is the largest load, on
+steps) was chosen precisely because it is the largest load, on
 this mesh, for which the certified models' own strain state
 ($E_{11}\in[-0.039,0.012]$, $\gamma_{12}\in[-0.032,0.059]$) stays inside
 the trained range of Section~\ref{sec:data-campaign}, while still
 producing genuinely large deformation (a tip displacement of
 $3.1$--$3.3\,\mathrm m$ on this $48$--$60\,\mathrm m$ panel, depending on
-which of the seven rows of Table~\ref{tab:cook-fe2} below is asked).
+which of the eight rows of Table~\ref{tab:cook-fe2} below is asked).
 
 \paragraph{Setup.} The panel is meshed, generated directly for this
 geometry rather than imported, with $128$ six-node quadratic triangles
 ($384$ Gauss points, $n_x=n_y=8$), coarser than this project's usual
-mesh density, for tractability: even at this resolution, nesting the
-true, non-reduced RVE FOM at every Gauss point (the FOM-FE$^2$ row of
-Table~\ref{tab:cook-fe2}) costs on the order of a day of wall-clock
-time (see below). All seven rows use the identical mesh, load ramp, and
+mesh density, for tractability at the microscale RVE resolves within
+it. All eight rows use the identical mesh, load ramp, and
 Total-Lagrangian Newton-Raphson driver, built on this project's own
 Kratos Multiphysics~\cite{Dadvand2010} assembler
 (Section~\ref{sec:background-fom}), differing only in which function
@@ -2443,15 +2525,31 @@ supplies the stress and tangent at each Gauss point: each trained PANN's
 own automatic-differentiation stress and tangent (Section~\ref{sec:results},
 verified against finite differences before use: relative tangent error
 $1.1\times10^{-10}$ for the ICNN and ICKAN cores, $1.4\times10^{-4}$ for
-the float32 free and regression models) for the first four rows; the
+the float32 free and regression models) for the first four rows; and the
 consistent, non-finite-difference analytic tangent derived in
-Appendix~\ref{app:consistent-tangent} for D-HPROM--ANN and HPROM--ANN;
-and a central finite-difference tangent, the only option available, for
-the true FOM itself. Every load step uses the same convergence tolerance
-(relative residual $10^{-4}$) and the same secant line search used
-throughout this project's solvers, except for the true-FOM row, run
-without line search (plain Newton already converges it, and line search
-would triple that row's own already-considerable cost).
+Appendix~\ref{app:consistent-tangent} for Linear-HPROM, HPROM--ANN, and
+D-HPROM--ANN. The true FOM row uses an analogous analytic tangent of its
+own, obtained via the implicit function theorem on the RVE's own
+already-assembled tangent stiffness (one sparse linear solve against it,
+replacing what a central-finite-difference tangent needs instead: six
+extra full nonlinear RVE re-solves per Gauss point) -- the reason this
+row's own wall time below is minutes, not the day or so a
+finite-difference tangent would cost at this resolution. Every load step
+uses the same convergence tolerance (relative residual $10^{-4}$) and
+the same secant line search used throughout this project's solvers,
+except for the true-FOM row, run without line search (plain Newton
+already converges it, and line search would triple that row's own
+already-considerable cost). The $S$-error column reports the
+energy-conjugate (reaction-force) macro-stress throughout, for every
+row: the three RVE-nesting rows compute it exactly as
+Section~\ref{sec:results} does for Table~\ref{tab:master}, and the four
+PANN tiers already predict it directly, by training construction, so no
+correction applies to them. FOM-FE$^2$'s own reference value uses the
+identical reaction-force formula, not the naive Gauss-point volume
+average this project uses elsewhere as a cheap online proxy
+(Section~\ref{sec:rom-comparison}); the two differ by under $0.01\%$ on
+this problem, so the choice barely moves any row's number, but keeping
+one convention throughout is the honest default.
 
 \begin{figure}[H]
 \centering
@@ -2463,33 +2561,26 @@ sharing the diagonal of every coarse cell.}
 \label{fig:cook-reference-mesh}
 \end{figure}
 
-\paragraph{Results.} The four PANN tiers, D-HPROM--ANN, and HPROM--ANN
-behave exactly as their test-trajectory accuracy (Table~\ref{tab:master})
-would suggest, and the true FOM, once nested the same way at every Gauss
-point, joins the same qualitative pattern. The two certified cores, both
-ROM/HPROM surrogates, and the true FOM itself converge at every one of the
-$20$ load steps, in exactly three Newton iterations each, with no change in
-iteration count from the smallest to the largest load. The two uncertified
-tiers both fail to converge already at the \emph{first} load step, only
-$5\%$ of the final load, but not in the same way, and, importantly, without
-either one diverging: neither residual grows without bound or produces a
-non-finite state, in contrast to the outright divergence As'ad et
-al.~\cite{Asad2022} and Klein et al.~\cite{Klein2022} report for their own
-uncertified baselines. Instead, each stalls at its own small but
-non-vanishing plateau; following the same protocol throughout, both are
-pushed through the entire $20$-step ramp regardless, capping every step at
-$30$ iterations and simply carrying whatever iterate resulted into the next,
-larger load step, and reach a bounded final state without ever diverging.
-A direct rank-one convexity check at the exact Gauss-point states each
-law's own Cook run visits (the energy-free curvature formula of
-Appendix~\ref{app:consistent-tangent}, since two of the six laws have no
-energy potential to differentiate twice) finds no violation anywhere,
+\paragraph{Results.} The true FOM itself, every row that carries a
+polyconvexity certificate, and all three ROM/HPROM rows (Linear-HPROM,
+HPROM--ANN, and D-HPROM--ANN) converge at every one of the $20$ load
+steps, in exactly three Newton iterations each, with no change in
+iteration count from the smallest to
+the largest load. The two uncertified tiers fail to converge already at
+the \emph{first} load step, only $5\%$ of the final load, but without
+either one diverging, in contrast to the outright divergence As'ad et
+al.~\cite{Asad2022} and Klein et al.~\cite{Klein2022} report for their
+own uncertified baselines; each stalls instead at its own small,
+non-vanishing plateau, and, following the same protocol throughout, both
+are pushed through the entire $20$-step ramp regardless, reaching a
+bounded final state without ever diverging. A direct rank-one convexity
+check at the exact Gauss-point states each law's own Cook run visits
+(the energy-free curvature formula of
+Appendix~\ref{app:consistent-tangent}) finds no violation anywhere,
 including at the free model's own stalled state: this failure is a
 genuine structural consequence of the missing certificate, not one a
-pointwise check at the solution itself would catch. Table~\ref{tab:cook-fe2} reports the full seven-way comparison: Newton
-behavior, final tip displacement, and wall-clock time for the complete
-$20$-step ramp on this project's own workstation, no parallelization
-attempted.
+pointwise check at the solution itself would catch. Table~\ref{tab:cook-fe2}
+reports the full eight-way comparison.
 
 \begin{table}[H]
 \centering
@@ -2497,23 +2588,33 @@ attempted.
 points), full $20$-step ramp, every model this paper has trained or built
 as the macroscopic material law, plus the true, non-reduced FE$^2$ solve
 (first row, FOM-FE$^2$) nested the same way at every Gauss point, as the
-actual multiscale ground truth this whole hierarchy approximates. The
-two ROM/HPROM rows use the float64, consistent-tangent variant of each
-surrogate (Appendix~\ref{app:consistent-tangent}).}
+actual multiscale ground truth this whole hierarchy approximates and the
+baseline the last three columns measure against. Tip $u_y$ err.\ is the
+relative error of the tip-edge range's midpoint, the single number the
+range column itself reports as a range; $S$ err.\ is the relative $L^2$
+error of the full $384$-Gauss-point final-state stress field, the
+energy-conjugate (reaction-force) convention throughout (Setup
+paragraph above). The three RVE-nesting rows use the float64,
+consistent-tangent variant of each surrogate
+(Appendix~\ref{app:consistent-tangent}).}
 \label{tab:cook-fe2}
-\begin{tabular}{lccc}
+\footnotesize
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{lcccrrr}
 \toprule
-Model & Newton behavior & Tip $u_y$ range [m] & Wall time (20 steps) \\
+Model & Newton behavior & Tip $u_y$ range [m] & Wall time & Speedup & Tip $u_y$ err.\ & $S$ err.\ \\
 \midrule
-FOM-FE$^2$$^\ddagger$ & converged, 3 it./step & 3.0777--3.2116 & 76\,992.2~s \\
-Regression (tier 1) & stalled, every step$^\dagger$ & 3.070--3.202 & 0.4~s$^{\dagger\S}$ \\
-Free hyperelastic (tier 2) & stalled, every step$^\dagger$ & 3.114--3.251 & 1.3~s$^{\dagger\S}$ \\
-Polyconvex ICNN (tier 3a) & converged, 3 it./step & 3.0979--3.2330 & 2.6~s$^\S$ \\
-Polyconvex ICKAN (tier 3b) & converged, 3 it./step & 3.1678--3.3019 & 8.7~s$^\S$ \\
-HPROM--ANN-FE$^2$ & converged, 3 it./step & 3.0700--3.2019 & 3\,995.1~s \\
-D-HPROM--ANN-FE$^2$ & converged, 3 it./step & 3.0958--3.2284 & 1\,230.0~s \\
+FOM-FE$^2$$^\ddagger$ & converged, 3 it./step & 3.0778--3.2117 & 1\,614.0~s & -- & -- & -- \\
+Regression (tier 1) & stalled, every step$^\dagger$ & 3.0701--3.2018 & 1.3~s$^{\dagger\S}$ & 1\,218.1 & 0.28\% & 0.12\% \\
+Free hyperelastic (tier 2) & stalled, every step$^\dagger$ & 3.1142--3.2507 & 5.0~s$^{\dagger\S}$ & 320.6 & 1.20\% & 2.90\% \\
+Polyconvex ICNN (tier 3a) & converged, 3 it./step & 3.0979--3.2330 & 2.5~s$^\S$ & 646.9 & 0.66\% & 0.29\% \\
+Polyconvex ICKAN (tier 3b) & converged, 3--4 it./step & 3.1678--3.3019 & 8.1~s$^\S$ & 198.3 & 2.87\% & 4.62\% \\
+Linear-HPROM-FE$^2$ & converged, 3 it./step & 3.0757--3.2090 & 141.5~s & 11.4 & 0.07\% & 0.03\% \\
+HPROM--ANN-FE$^2$ & converged, 3 it./step & 3.1328--3.2697 & 65.5~s & 24.6 & 1.80\% & 0.36\% \\
+D-HPROM--ANN-FE$^2$ & converged, 3 it./step & 3.1663--3.3036 & 25.1~s & 64.3 & 2.87\% & 0.73\% \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 
 \vspace{4pt}
 \footnotesize $^\dagger$Pushed through the full ramp regardless of
@@ -2521,159 +2622,263 @@ per-step convergence; the short wall time reflects failing fast, not
 efficient convergence, and is not comparable to the converged rows.
 $^\ddagger$The full, non-reduced $990$-element RVE, nested at every one of
 the $384$ Gauss points with no surrogate or reduction of any kind, its
-tangent obtained by central finite differences (no analytic microscale
-tangent is available); wall time is the actual, measured total for the
-complete $20$-step ramp, not an extrapolation.
-$^\S$Mean of $10$ independent repetitions (standard deviation
-$0.08$--$0.45\,\mathrm s$ across the four rows), not a single run, for a
-more representative wall time.
+tangent obtained analytically via the implicit function theorem on its
+own already-assembled tangent stiffness (Setup paragraph above); wall
+time is the actual, measured total for the complete $20$-step ramp, not
+an extrapolation; being the ground truth itself, it has no speedup or
+error entries of its own.
+$^\S$Mean of $10$ independent repetitions, not a single run, for a more
+representative wall time.
 \end{table}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=.85\linewidth]{cook_deformed_field_claude.pdf}
+\includegraphics[width=\linewidth]{cook_deformed_field_claude.pdf}
 \caption{Cook's membrane, real deformed configurations at full load,
 colored by displacement magnitude, every row of Table~\ref{tab:cook-fe2}
-(true FOM first, centered). Every row, including the two uncertified
+in this paper's canonical model order (FOM-FE$^2$ first). Every row,
+including the two uncertified
 tiers -- pushed through the full ramp despite never converging
 per-step, not stopped at their own first stalled step -- is visually
 indistinguishable from the true FOM.}
 \label{fig:cook-deformed}
 \end{figure}
 
-The uncertified tiers' wall time is misleadingly small: it reflects
-failing fast, twenty stalled load steps with no Newton progress beyond a
-fixed plateau, not efficient convergence. Among the rows that do converge,
-the price of fidelity to the true microscale physics is stark and entirely
-monotonic with how much of that physics each row actually resolves online:
-the certified/ICKAN cores, a fully-amortized surrogate for the whole
-microscale problem, cost seconds; D-HPROM--ANN and HPROM--ANN, each solving,
-or, for D-HPROM--ANN, directly reconstructing, a genuine reduced state at
-every Gauss point and every Newton iteration, cost minutes to just over an
-hour; the true, non-reduced FOM, solving the actual $990$-element RVE from
-scratch at every one of those same calls, costs the better part of a day
-($21.4\,\mathrm h$).
-This is the real price of the FOM-FE$^2$ ground-truth row of
-Table~\ref{tab:cook-fe2}, and exactly why it is only computed once, here,
-rather than treated as a routine comparison point throughout this paper.
-Scaling this kind of nested computation further -- a costlier RVE, more
-scales, or both -- would likely need to lean on strategies such as As'ad
-and Farhat's~\cite{AsadFarhat2026} staggered training, shown for a
-yarn-resolved woven fabric to keep offline cost scaling linearly rather
-than exponentially in the number of scales involved; the comparison above
-does not need it at this project's own scale.
-
-\begin{table}[H]
-\centering
-\caption{Speedup and accuracy against the true FOM (first row of
-Table~\ref{tab:cook-fe2}), every other row. Tip $u_y$ error is the
-relative error of the tip-edge range's midpoint, the single number
-Table~\ref{tab:cook-fe2} reports as a range; stress field error is the
-relative $L^2$ error of the full $384$-Gauss-point final-state stress
-field against the true FOM's own.}
-\label{tab:cook-fe2-accuracy}
-\begin{tabular}{lrrr}
-\toprule
-Model & Speedup & Tip $u_y$ err.\ & Stress field err.\ \\
-\midrule
-Regression (tier 1) & $1.9\times10^5$ & 0.28\% & 0.12\% \\
-Free hyperelastic (tier 2) & $5.9\times10^4$ & 1.20\% & 2.90\% \\
-Polyconvex ICNN (tier 3a) & $3.0\times10^4$ & 0.66\% & 0.29\% \\
-Polyconvex ICKAN (tier 3b) & $8.9\times10^3$ & 2.87\% & 4.62\% \\
-HPROM--ANN-FE$^2$ & 19.3 & 0.28\% & 0.37\% \\
-D-HPROM--ANN-FE$^2$ & 62.6 & 0.55\% & 0.60\% \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\paragraph{Speedup and accuracy against the true answer.} Table~\ref{tab:cook-fe2-accuracy}
-makes the cost/accuracy trade quantitative. Every row, certified or
-not, matches the true FOM's tip displacement to within $2.9\%$ and its
-full $384$-point stress field to within $4.7\%$. The certified cores
-reach this accuracy roughly four orders of magnitude faster than the
-true FOM (speedups of $0.9$--$3.0\times10^4$); both ROM/HPROM
-surrogates trade most of that speedup, to $19$--$63\times$, for the
-tightest accuracy of any row. That the
-uncertified tiers are comparably accurate here is not a contradiction
-of Section~\ref{sec:non-polyconvex}'s own point but a restatement of
-it: accuracy alone does not expose a missing certificate. What the
-missing certificate actually costs, on this problem, is the Newton
-solve itself failing to converge (the Results paragraph above), not the
-accuracy of whatever state the solver is eventually pushed to.
+Wall time is entirely monotonic with how much microscale physics each
+row resolves online: the PANN tiers, a fully-amortized surrogate for the
+whole microscale problem, cost seconds (the uncertified tiers' own low
+number reflects failing fast, twenty stalled steps with no Newton
+progress, not efficient convergence); the three ROM/HPROM rows, each
+solving, or for D-HPROM--ANN directly reconstructing, a genuine reduced
+state at every Gauss point and Newton iteration, cost tens of seconds to
+a couple of minutes; the true FOM, solving the actual $990$-element RVE
+from scratch at every one of those same calls, costs $1\,614.0\,\mathrm
+s$ ($26.9\,\mathrm{min}$), the real price of the FOM-FE$^2$ ground-truth
+row -- an order of magnitude more than the slowest ROM row, but, thanks
+to the analytic tangent above replacing the finite-difference one this
+row used to require, no longer the multi-hour cost that would otherwise
+dominate this comparison. Scaling this kind of nested computation
+further would likely need staggered training such as As'ad and
+Farhat's~\cite{AsadFarhat2026}; the comparison above does not need it at
+this project's own scale.
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=.85\linewidth]{cook_vonmises_field_claude.pdf}
+\includegraphics[width=\linewidth]{cook_vonmises_field_claude.pdf}
 \caption{Cook's membrane, equivalent (von Mises) stress field at each
 row's own reported final state, same rows and layout as
-Fig.~\ref{fig:cook-deformed}. The stress hotspot near the clamped
-top-left corner, and its overall spatial pattern, match closely across
-every row, including the two uncertified tiers -- consistent with
-Table~\ref{tab:cook-fe2-accuracy}'s own full-field error, under $5\%$
-for every row.}
+Fig.~\ref{fig:cook-deformed}.}
 \label{fig:cook-vonmises}
 \end{figure}
 
-\paragraph{Small-strain accuracy and a corrective loss term.} The
-certified cores' accuracy is not uniform across the strain range. At the
-small strains Cook's own first load step visits ($|\bm\varepsilon|$ from
-$6\times10^{-7}$ to $3\times10^{-3}$), both carry an $8$--$15\%$ stress
-error against the true FOM, an order of magnitude worse than their
-test-trajectory error (Table~\ref{tab:master}); the two ROM/HPROM
-surrogates and the uncertified tier-2 free model all stay within $3\%$
-there. We attribute this to two compounding factors. The
-loss~\eqref{eq:loss} normalizes the stress term by the aggregate
-mean-squared target \emph{over the whole training set}
-(Section~\ref{sec:loss}), so small-stress, small-strain states carry
-almost no training signal; and, since the free model does not share
-this weakness despite an identical loss, the input-convexity constraint
-itself costs some representational flexibility near the reference
-state, a real price of the certificate distinct from the aggregate
-accuracy cost already reported as negligible.
+\paragraph{What the gap between the three ROM/HPROM rows actually shows.}
+\label{sec:cook-gap}
+Every certified or reduced-order row matches the true FOM's tip
+displacement to within $2.9\%$ and its full stress field to within
+$4.7\%$, except Linear-HPROM, an order of magnitude tighter than every
+other row at $0.07\%$/$0.03\%$. Figure~\ref{fig:cook-error-per-step}
+shows why this is not incidental. It isolates the three rows sharing the
+identical linear basis $\phi_f$ and Newton-corrector architecture,
+differing only in whether a manifold ANN corrects the reduced
+coordinate: Linear-HPROM's error is flat, if anything falling, across
+the full load ramp, while HPROM--ANN's and D-HPROM--ANN's both grow
+monotonically with load. This localizes the source of the gap. D-HPROM--ANN
+never solves an equilibrium correction, so its accuracy depends only on
+the manifold ANN's own one-shot prediction, not on the size of any
+hyper-reduced residual rule; that it degrades the same way HPROM--ANN
+does rules out hyper-reduction as the cause. And since Linear-HPROM
+reuses the identical $39$-mode basis these two ANN-based rows also draw
+on, just without the manifold correction, its own near-perfect accuracy
+rules out that basis's own approximation power, the Kolmogorov $n$-width
+limit at $n=39$, as the cause too. What is left is the manifold ANN's
+own regression, mapping the low-dimensional primary coordinate this
+project compresses $\phi_f$ into back onto the secondary modes it
+discards, introduced specifically to push the effective basis size
+below what a linear reconstruction needs, at a regression's own price:
+it degrades wherever training coverage is thin.
 
-Only the loss-weighting factor is directly correctable, without
-touching the polyconvexity construction, the features, or the training
-data. We add one further term,
-\begin{equation}
- \mathcal L_{\rm tan0}=\frac{\big\|\mathbb C_\theta(\bm 0)-\mathbb
- C_0\big\|^2}{\|\mathbb C_0\|^2},\qquad
- \mathcal L=\EnergyWeight\,\mathcal L_W+\mathcal L_{S,\rm agg}+w_{\rm tan0}\,\mathcal L_{\rm tan0},
- \label{eq:loss-tan0}
-\end{equation}
-matching the model's own tangent at zero strain, $\mathbb C_\theta(\bm
-0)$, against the RVE's true linear-elastic-limit tangent $\mathbb C_0$ --
-the one reference value in this paper needing no nonlinear FOM solve at
-all, since three linear RVE solves, one per unit macro-strain direction,
-give it exactly. Retraining the certified ICNN and ICKAN cores with
-$w_{\rm tan0}=5$ (found by a small sweep, Appendix~\ref{app:smallstrain-sweep},
-not fine-tuned further) drops their first-load-step error to
-$0.2$--$1.3\%$ and $0.9$--$2.8\%$ respectively; this is the version
-Table~\ref{tab:cook-fe2} reports throughout. The correction has a real
-cost elsewhere: both models' error on the full test trajectory of
-Table~\ref{tab:master} rises from sub-percent to the low single digits,
-since the new term competes for the same limited model capacity. Since
-that metric is not sensitive to the small-strain regime this term
-targets, Table~\ref{tab:master} keeps the original, $w_{\rm tan0}=0$
-cores; Table~\ref{tab:cook-fe2-corrected} quantifies the trade directly.
+\begin{figure}[H]
+\centering
+\includegraphics[width=.72\linewidth]{cook_error_per_step_claude.pdf}
+\caption{Tip $u_y$ relative error against FOM-FE$^2$, by load step, for
+the three rows sharing $\phi_f$: Linear-HPROM (no manifold ANN),
+HPROM--ANN (ANN prediction plus Newton correction), and D-HPROM--ANN
+(direct ANN prediction, no equilibrium correction).}
+\label{fig:cook-error-per-step}
+\end{figure}
+
+Figure~\ref{fig:coverage-gap} shows exactly where. The ten training
+trajectories (Section~\ref{sec:data-campaign}) each ramp one or two
+strain components while holding the third fixed at one of five discrete
+shear levels; none combines all three continuously. Cook's own
+macro-strain states, in the same coordinates, form a compact cluster
+that cuts diagonally across those five levels near the origin, precisely
+the combination the training data never visits. This is not a failure
+of the RVE's admissibility, its POD basis, or its offline training
+procedure in general; it is a training-coverage gap specific to this one
+downstream use, diagnosable and fixable, targeted trajectories through
+that same diagonal corner, not more of the existing ones, rather than a
+larger hyper-reduction rule, which Table~\ref{tab:cook-fe2} already
+shows does not close it. We leave that retraining to future work
+(Section~\ref{sec:limitations}) and report the gap here rather than
+past it.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=.92\linewidth]{training_coverage_gap_claude.pdf}
+\caption{Training trajectories (colored, one per trajectory) against
+Cook's own macro-strain states at full load (red), in the macro-strain
+coordinates $(E_{11},E_{22},\gamma_{12})$ near the origin. Left: a 3D
+view. Right: the $E_{11}$--$\gamma_{12}$ projection, where each
+trajectory's own fixed shear level appears as a horizontal line Cook's
+cluster cuts across.}
+\label{fig:coverage-gap}
+\end{figure}
+
+HPROM--ANN's own Newton correction, absent from D-HPROM--ANN, recovers
+part of this loss (Figure~\ref{fig:cook-error-per-step}) by pulling the
+ANN's prediction back toward equilibrium every step, at the cost of the
+extra wall time Table~\ref{tab:cook-fe2} already prices in; it does not
+recover all of it, since the correction still starts from, and is still
+weighted by, the same manifold ANN.
+
+\paragraph{Small-strain accuracy.} The certified PANN cores separately
+carry an $8$--$15\%$ stress error at Cook's own smallest-strain first
+load step, an order of magnitude worse than their test-trajectory error,
+which Appendix~\ref{app:smallstrain-sweep} traces to the training loss's
+own aggregate normalization underweighting small-stress states, and
+corrects with a small additional zero-strain-tangent loss term
+(dropping the error to $0.2$--$2.8\%$, the version Table~\ref{tab:cook-fe2}
+reports throughout), at the cost of a low-single-digit rise in the
+test-trajectory error of Table~\ref{tab:master}, which keeps the
+uncorrected cores since that metric is insensitive to the regime the
+correction targets; Appendix~\ref{app:smallstrain-sweep} gives the full
+trade and the sweep that chose the correction's own weight.
+
+\subsection{Toward a second geometry: the cruciform specimen}
+\label{sec:cruciform}
+Cook's membrane above shares one feature with this project's own
+training trajectories that a genuinely independent test should not:
+tensile, near-monotonic loading. We built a second macroscopic problem,
+a planar cruciform (cross-shaped) specimen, four arms in tension or
+compression around a central body, displacement-driven outward along
+its own axis at all four arm tips (a symmetric biaxial pull, the
+central node the only other Dirichlet condition), specifically because
+its sharp, unfilleted internal corners generate a richer, more
+localized combination of normal and shear strain than Cook's own
+smoother geometry does, a harder test of the same three-way ROM/HPROM
+comparison above.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=.55\linewidth]{cruciform_reference_mesh_claude.pdf}
+\caption{The cruciform specimen's reference mesh ($200$
+Tri6 elements), chosen by a mesh-convergence study with the cheap ICNN
+core as the macroscopic law: the sharp internal corners are a genuine,
+non-mesh-convergent geometric stress concentration, so this resolution
+is a tractability choice, not a converged one, and every row below is
+compared on the identical mesh rather than against its own converged
+limit.}
+\label{fig:cruciform-mesh}
+\end{figure}
+
+\paragraph{Setup.} All six rows use the identical mesh
+(Fig.~\ref{fig:cruciform-mesh}), the identical load ramp (the four tips
+driven to a final displacement of $1.2\,\mathrm m$ over $20$ steps), and
+the same Total-Lagrangian Newton--Raphson driver, convergence tolerance
+(relative residual $10^{-4}$), and secant line search as Cook's membrane
+above, including the true-FOM row: this geometry's FOM-FE$^2$ row uses
+an analytic tangent obtained via the implicit function theorem on the
+RVE's own already-assembled tangent stiffness (one sparse linear solve
+against it, in place of what a central-difference tangent would need,
+six extra full nonlinear RVE re-solves per Gauss point). Since this
+problem is displacement-, not force-, controlled, Table~\ref{tab:cruciform-fe2}
+reports the tip reaction force $F_x$ in place of Table~\ref{tab:cook-fe2}'s
+tip-displacement range, the physically meaningful output scalar for a
+prescribed-displacement problem; the $S$-error column reports the
+energy-conjugate (reaction-force) macro-stress throughout, exactly as
+in Table~\ref{tab:cook-fe2}.
+
+\paragraph{Results.} Tiers 1 and 2 are not carried forward to this second
+geometry: Sections~\ref{sec:c1-regression} and~\ref{sec:non-polyconvex}
+already disqualified them on certificate grounds, and
+Section~\ref{sec:cook-gap} showed the consequence is not merely
+theoretical, since both stall from their very first load step at Cook's
+membrane. The remaining six rows -- the true FOM, the two certified
+polyconvex cores, and the three ROM/HPROM surrogates -- converge cleanly
+at every one of the $20$ load steps on this harder geometry too, in
+$3$--$5$ Newton iterations each, with no stalling and no divergence
+anywhere. Table~\ref{tab:cruciform-fe2} reports the full six-way
+comparison.
 
 \begin{table}[H]
 \centering
-\caption{The small-strain correction's effect on Cook's membrane,
-$n_x=n_y=8$: tip $u_y$ range for the two certified cores as originally
-trained ($w_{\rm tan0}=0$) versus corrected via~\eqref{eq:loss-tan0} at
-$w_{\rm tan0}=5$, the version Table~\ref{tab:cook-fe2} reports. Both
-converge in exactly three Newton iterations at every load step either
-way.}
-\label{tab:cook-fe2-corrected}
-\begin{tabular}{lcc}
+\caption{Cruciform specimen at $n_{\rm body}=6$ ($200$ elements, $600$ Gauss
+points), full $20$-step ramp, every model this paper carries forward as a
+macroscopic material law after Sections~\ref{sec:c1-regression}--\ref{sec:cook}
+disqualify tiers 1--2 (Table~\ref{tab:cook-fe2} still reports both), plus
+the true, non-reduced FE$^2$ solve
+(first row, FOM-FE$^2$) nested the same way at every Gauss point. Tip
+reaction-force $F_x$ is the total force at the pulled tip; $S$ err.\ is the
+relative $L^2$ error of the full $600$-Gauss-point final-state stress
+field, the energy-conjugate (reaction-force) convention throughout (Setup
+paragraph above).}
+\label{tab:cruciform-fe2}
+\footnotesize
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{lcccrrr}
 \toprule
-Model & Tip $u_y$ range [m], original & Tip $u_y$ range [m], corrected (Table~\ref{tab:cook-fe2}) \\
+Model & Newton behavior & Tip $F_x$ [MN] & Wall time & Speedup & Tip $F_x$ err.\ & $S$ err.\ \\
 \midrule
-Polyconvex ICNN (tier 3a) & 3.4705--3.6070 & 3.0979--3.2330 \\
-Polyconvex ICKAN (tier 3b) & 3.5222--3.6593 & 3.1678--3.3019 \\
+FOM-FE$^2$$^\ddagger$ & converged, 4 it./step & -1297.1 & 40\,093.7~s & -- & -- & -- \\
+Polyconvex ICNN (tier 3a) & converged, 4 it./step & -1255.1 & 4.0~s & $1.0\times10^4$ & 3.24\% & 3.43\% \\
+Polyconvex ICKAN (tier 3b) & converged, 3--4 it./step & -1204.8 & 19.2~s & $2.1\times10^3$ & 7.11\% & 7.26\% \\
+Linear-HPROM-FE$^2$ & converged, 4 it./step & -1297.7 & 338.7~s & 118.4 & 0.04\% & 0.14\% \\
+HPROM--ANN-FE$^2$ & converged, 4--5 it./step & -1265.3 & 163.2~s & 245.7 & 2.45\% & 4.72\% \\
+D-HPROM--ANN-FE$^2$ & converged, 4 it./step & -1269.4 & 55.8~s & 718.5 & 2.13\% & 2.75\% \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
+
+\vspace{4pt}
+\footnotesize $^\ddagger$The full, non-reduced $990$-element RVE, nested
+at every one of the $600$ Gauss points with no surrogate or reduction of
+any kind; wall time is the actual, measured total for the complete
+$20$-step ramp, not an extrapolation; being the ground truth itself, it
+has no speedup or error entries of its own.
 \end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{cruciform_deformed_field_claude.pdf}
+\caption{Cruciform specimen, real deformed configurations at full load,
+colored by displacement magnitude, every row of Table~\ref{tab:cruciform-fe2}
+in this paper's canonical model order (FOM-FE$^2$ first). Every row is
+visually indistinguishable from the true FOM.}
+\label{fig:cruciform-deformed}
+\end{figure}
+
+As at Cook's membrane, Linear-HPROM is again the most accurate
+reduced-order row ($0.04\%$/$0.14\%$), an order of magnitude tighter
+than every other non-FOM row, consistent with Section~\ref{sec:cook-gap}'s
+own diagnosis that the manifold ANN's regression, not the linear basis
+or the hyper-reduction rule, is the accuracy bottleneck the two
+ANN-based rows share. Wall time follows the same monotonic pattern as
+Cook's own: seconds for the PANN tiers, tens of seconds to minutes for
+the three ROM/HPROM rows, and $11.1\,\mathrm h$ for the true FOM nested
+at all $600$ Gauss points, the real price of resolving the true
+microscale problem at every Newton iteration of every load step.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{cruciform_vonmises_field_claude.pdf}
+\caption{Cruciform specimen, equivalent (von Mises) stress field at each
+row's own reported final state, same rows and layout as
+Fig.~\ref{fig:cruciform-deformed}. Stress concentrates sharply at the
+four unfilleted arm/body junctions in every row, the geometric feature
+that motivated this second demonstration.}
+\label{fig:cruciform-vonmises}
+\end{figure}
 
 \section{Limitations and future work}
 \label{sec:limitations}
@@ -2691,7 +2896,7 @@ Repeating the same protocol on an RVE with no symmetry at all, an
 off-center or elliptical hole, or a random inclusion pattern, would
 close this gap directly.
 
-A second gap is more theoretical: as noted in
+A second gap is more theoretical. As noted in
 Section~\ref{sec:direction-selection}, this paper does not prove that
 two distinct admissible $\bm C$ always produce distinct feature
 vectors~\eqref{eq:features}, nor that three direction systems are the
@@ -2711,20 +2916,20 @@ single test trajectory; a broader set of test paths, including
 states well outside the convex hull of the training trajectories, would
 give a fuller picture of extrapolation behavior.
 
-None of this weakens the results already reported: every admissibility
+None of this weakens the results already reported, because every admissibility
 proof in Sections~\ref{sec:c1}--\ref{sec:c6} holds unconditionally,
 independent of which RVE, which direction systems, or which downstream
 solver is used. These are open extensions, and we would rather name
 them here than leave a reader to find them.
 
 Section~\ref{sec:cook} already takes the further step of nesting
-D-HPROM--ANN, HPROM--ANN, and the true, non-reduced RVE FOM itself as the
-RVE-level solver inside the macroscopic Newton loop of its own benchmark,
-at every macroscopic Gauss point, rather than deploying any surrogate
-directly, at one fixed mesh ($n_x=8$, $384$ Gauss points) shared by all
-seven rows of Table~\ref{tab:cook-fe2}. We do not report a
+the true, non-reduced RVE FOM itself, Linear-HPROM, HPROM--ANN, and
+D-HPROM--ANN as the RVE-level solver inside the macroscopic Newton loop of
+its own benchmark, at every macroscopic Gauss point, rather than
+deploying any surrogate directly, at one fixed mesh ($n_x=8$, $384$
+Gauss points) shared by all eight rows of Table~\ref{tab:cook-fe2}. We do not report a
 mesh-convergence study of this benchmark, and make no claim that its
-macroscopic answer is itself resolution-independent: that question is
+macroscopic answer is itself resolution-independent; that question is
 orthogonal to the one the comparison is built to ask. Its purpose is to
 rank fidelity tiers -- fully-amortized surrogate, reduced, and true FOM --
 against one another at a single shared macroscopic discretization, not to
@@ -2768,20 +2973,20 @@ The remaining two results sections make the case for a certificate,
 rather than an accuracy check, from two independent directions, using
 the four-tier ablation of Section~\ref{sec:c1-regression}: pure
 regression, free hyperelastic ANN, polyconvex ICNN, polyconvex ICKAN.
-Section~\ref{sec:c1-regression} shows a direct, quantitative violation:
-the tier-1 pure-regression model has no energy potential at all, and a
+Section~\ref{sec:c1-regression} shows a direct, quantitative violation.
+The tier-1 pure-regression model has no energy potential at all, and a
 trapezoidal cyclic-work test $\oint_{\mathcal L}\bm S\cdot d\bm\varepsilon$
 around closed strain loops, refined to distinguish a genuine curl from
 quadrature error, finds a stable, non-vanishing residual for it, and a
 residual that vanishes under refinement for the three energy-based
-tiers: a direct, measured failure of (C1). Section~\ref{sec:non-polyconvex}
-shows the analogous failure one level up the hierarchy, for (C5): an
+tiers -- a direct, measured failure of (C1). Section~\ref{sec:non-polyconvex}
+shows the analogous failure one level up the hierarchy, for (C5). An
 otherwise identically trained, uncertified flexible PANN (tier 2)
 matches or slightly beats the certified models on every reported
 accuracy metric, while failing the rank-one necessary condition of
 polyconvexity on $\FreeRankOneViolationFraction$ of sampled states, at
 ordinary, non-extreme deformations. In both cases the accuracy metrics
-of Table~\ref{tab:master} are silent, or actively misleading: the tier-1
+of Table~\ref{tab:master} are silent, or actively misleading, since the tier-1
 pure-regression model is in fact the most accurate of the four ANNs on
 the test trajectory, by every reported metric. Accuracy and the
 admissibility certificates simply answer different questions. Only a
@@ -2806,7 +3011,7 @@ Section~\ref{sec:rom-comparison}, and the true, non-reduced RVE FOM
 itself, as the actual RVE-level solver at every macroscopic Gauss point
 -- a genuine FE$^2$ computation, not a direct deployment -- confirms this
 is not an artifact of deploying the certified PANN directly rather than
-solving a genuine microscale problem: both ROM/HPROM surrogates converge
+solving a genuine microscale problem. Both ROM/HPROM surrogates converge
 in the same three Newton iterations as the certified cores, once matched
 to the arithmetic precision the small-strain regime requires, and the
 same energy-free rank-one test, extended to all six model variants
@@ -2874,7 +3079,7 @@ $x$ and, separately, of $-x$ is strictly more expressive than a
 monotone function of $x$ alone.
 
 $Q_{k,2}^H$ is a different case, and we state this plainly rather than
-let the argument above appear to cover it as well: the first identity
+let the argument above appear to cover it as well. The first identity
 in~\eqref{eq:redundancy} has coefficient $+1$, with no negative sign
 to obstruct reconstruction. A monotone network already has direct,
 unconstrained access to $+Q_{k,2}^F$ with an arbitrary non-negative
@@ -2882,7 +3087,7 @@ coefficient, so assigning independent non-negative weights to
 $Q_{k,2}^F$ and to $Q_{k,2}^H=Q_{k,2}^F$ is exactly equivalent to
 assigning their sum to $Q_{k,2}^F$ alone. Supplying $Q_{k,2}^H$ as a
 separate coordinate therefore changes nothing about the class of
-functions the trained network can represent: unlike $Q_{k,3}^H$, it
+functions the trained network can represent; unlike $Q_{k,3}^H$, it
 is not merely redundant in information but redundant in
 \emph{expressiveness} too. It is retained in the deployed architecture
 for uniformity with the other per-system coordinates, not for any
@@ -2901,7 +3106,7 @@ contains the seed of a fully general, no-symmetry construction
 satisfying (C1), (C2), (C4)--(C6), a nice illustration of just how
 general their underlying integrity basis is. They do not state,
 highlight, verify, or numerically exercise this reading anywhere in
-their paper: every one of their worked examples (their Section~5) uses
+their paper, since every one of their worked examples (their Section~5) uses
 the cubic group specifically. Crediting them with having solved the
 general case would therefore over-credit an inference they never made
 or checked, which is why the main text states our own contribution as
@@ -2920,7 +3125,7 @@ to the microscopic first Piola--Kirchhoff stress gives a
 volume-averaged macro-stress that is automatically energy-conjugate.
 Because the Green--Lagrange strain $\bm E=\tfrac12(\bm F^T\bm F-\bm I)$
 is a \emph{nonlinear}, quadratic function of $\bm F$, this identity
-does not by itself give $\langle\bm E\rangle=\bm E(\bar{\bm F})$: the
+does not by itself give $\langle\bm E\rangle=\bm E(\bar{\bm F})$; the
 two differ, in general, by a Jensen-type gap driven by the fluctuation
 $\bm F-\bar{\bm F}$. The exact, elementary averaging identity that
 transfers without approximation under periodicity is the one stated
@@ -2971,24 +3176,52 @@ $\bm\mu(\bm\varepsilon)$.
 is explicit, $d\bm u_f/d\bm\varepsilon=\partial\bm u_f^{\rm
 aff}/\partial\bm\varepsilon+\mathbf J(\bm\mu(\bm\varepsilon))\mathbf A$
 directly, with $\mathbf A:=d\bm\mu/d\bm\varepsilon$ the fixed offline
-coefficient matrix. The macroscopic output itself is one further,
-adaptively-weighted average, $\bm h(\bm\varepsilon)=|\Omega_0|^{-1}\sum_eA_e\,
-\omega_{\sigma,e}(\bm\varepsilon)\,\overline{\bm v}_e(\bm\varepsilon)$
-(either $\bm h=\bm S_{\rm macro}$ or the homogenized strain, both of this
-same form, and both restricted in practice to $\mathcal Z_\sigma$), so a
+coefficient matrix. The homogenized \emph{strain} output is one further,
+adaptively-weighted average, $\bm h_\varepsilon(\bm\varepsilon)=|\Omega_0|^{-1}\sum_eA_e\,
+\omega_{\varepsilon,e}(\bm\varepsilon)\,\overline{\bm v}_e(\bm\varepsilon)$,
+restricted in practice to $\mathcal Z_\varepsilon$, so a
 second product rule applies,
 \begin{equation}
- \frac{d\bm h}{d\bm\varepsilon}=\frac1{|\Omega_0|}\sum_eA_e\Big[\frac{d\omega_{\sigma,e}}{d\bm\varepsilon}\,\overline{\bm v}_e+\omega_{\sigma,e}\,\frac{d\overline{\bm v}_e}{d\bm\varepsilon}\Big],
+ \frac{d\bm h_\varepsilon}{d\bm\varepsilon}=\frac1{|\Omega_0|}\sum_eA_e\Big[\frac{d\omega_{\varepsilon,e}}{d\bm\varepsilon}\,\overline{\bm v}_e+\omega_{\varepsilon,e}\,\frac{d\overline{\bm v}_e}{d\bm\varepsilon}\Big],
  \label{eq:appendix-outer-chain}
 \end{equation}
 where $d\overline{\bm v}_e/d\bm\varepsilon$ is element $e$'s own
 Gauss-point mean of $\mathbb C_g\bm B_{e,g}(d\bm u_f/d\bm\varepsilon)_e$
 ($\mathbb C_g:=\partial\bm S_g/\partial\bm E_g$, the true microscale
 Neo-Hookean tangent, already assembled at every Gauss point for the stress
-itself), and $d\omega_{\sigma,e}/d\bm\varepsilon$ is the trained MAW--ECM
+itself), and $d\omega_{\varepsilon,e}/d\bm\varepsilon$ is the trained MAW--ECM
 weight regressor's own Jacobian (Section~\ref{sec:background-ecm}), again
 by automatic differentiation. Every factor above is closed-form or
 autograd-exact; none is finite-differenced.
+
+The homogenized \emph{stress} $\bm S_{\rm macro}$ instead uses the
+reaction-force rule of~\eqref{eq:ecm-residual}, $\bm
+S_{\rm macro}(\bm\varepsilon)=\sum_{g\in\mathcal Z_\sigma}\bm
+c_g(\bm\varepsilon)\,\omega_{\sigma,g}(\bm\varepsilon)$, a product rule of
+the same shape but over a different integrand,
+\begin{equation}
+ \frac{d\bm S_{\rm macro}}{d\bm\varepsilon}=\sum_{g\in\mathcal
+ Z_\sigma}\Big[\frac{d\bm c_g}{d\bm\varepsilon}\,\omega_{\sigma,g}+\bm
+ c_g\,\frac{d\omega_{\sigma,g}}{d\bm\varepsilon}\Big],
+ \label{eq:appendix-rf-outer-chain}
+\end{equation}
+where $d\bm c_g/d\bm\varepsilon$ has two contributions by the product
+rule applied to $\bm c_g=\bm d(\bm\varepsilon)^T\bm r_g/(h|\Omega_0|)$
+itself: the Dirichlet map's own sensitivity $\bm d(\bm\varepsilon)$
+differentiated again (a second derivative of a closed-form affine map,
+obtained by one central difference of the already-analytic
+$\partial\bm d/\partial\bm\varepsilon$, not of any FEM solution), and
+$\bm r_g$ differentiated through $d\bm u_f/d\bm\varepsilon$ exactly as
+$\overline{\bm v}_e$ is above. Both tangent paths were checked against
+central finite differences on real trained-model states before use: the
+value-level identity underlying $\bm c_g$ (Section~\ref{sec:results})
+holds to a relative error of $\HpromControlFomStressError$ on a
+held-out training-trajectory subset, and the derivative-level check for
+$d\bm S_{\rm macro}/d\bm\varepsilon$ itself, given in full at the end of
+this appendix, holds to $7\times10^{-10}$--$3\times10^{-6}$ across five
+test states, so~\eqref{eq:appendix-rf-outer-chain} is exact, not a
+finite-difference proxy, wherever it replaces~\eqref{eq:appendix-outer-chain}
+for the stress output specifically.
 
 \paragraph{HPROM--ANN: the implicit step.} Now $\bm q^*(\bm\varepsilon)$
 solves~\eqref{eq:appendix-rr} identically in $\bm\varepsilon$;
@@ -3020,23 +3253,30 @@ u_f^{\rm aff}(\bm\varepsilon)$,
 the same already-assembled element tangent contracted with the affine
 lifting's own, closed-form strain sensitivity ($\partial\bm
 F/\partial\bm\varepsilon$). Once $d\bm q^*/d\bm\varepsilon$ is known
-from~\eqref{eq:appendix-ift}, the outer chain
-rule~\eqref{eq:appendix-outer-chain} applies unchanged, with $\mathbf
+from~\eqref{eq:appendix-ift}, both outer chain
+rules,~\eqref{eq:appendix-outer-chain} for the homogenized strain
+and~\eqref{eq:appendix-rf-outer-chain} for the reaction-force stress,
+apply unchanged, with $\mathbf
 J(\bm q^*)\,d\bm q^*/d\bm\varepsilon$ in place of $\mathbf
-J(\bm\mu(\bm\varepsilon))\mathbf A$: the two operating modes share their
-entire outer, homogenization-level derivative, differing only in how $d\bm
+J(\bm\mu(\bm\varepsilon))\mathbf A$ wherever $d\bm u_f/d\bm\varepsilon$
+enters either one: the two operating modes share both entire outer,
+homogenization-level derivatives, differing only in how $d\bm
 q/d\bm\varepsilon$ is obtained.
 
 Both tangents were checked against central finite differences on the real
 trained models (not a synthetic sanity check) before use: relative error
-$6\times10^{-4}$--$8\times10^{-4}$ for D-HPROM--ANN and
-$4\times10^{-5}$--$2\times10^{-3}$ for HPROM--ANN, at strains at or below
-this project's own training range; D-HPROM--ANN's degrades to a few percent
-at strains far outside it ($|\bm\varepsilon|\sim1$, roughly twenty times
-any strain Section~\ref{sec:cook}'s benchmark actually develops),
-consistent with reduced trust in the trained decoder's own derivative that
-far into extrapolation rather than an error
-in~\eqref{eq:appendix-ift}--\eqref{eq:appendix-drrde} itself.
+$7\times10^{-10}$--$3\times10^{-6}$ for both HPROM--ANN and D-HPROM--ANN,
+at strains at or below this project's own training range. Repeating the
+same check for D-HPROM--ANN at strains far outside it ($|\bm\varepsilon|\sim
+1$, roughly twenty times any strain Section~\ref{sec:cook}'s benchmark
+actually develops) gives comparably small relative error
+($10^{-6}$--$2\times10^{-5}$); at one such point, however, the decoder's
+own gradient magnitude jumps by more than three orders of magnitude
+relative to its in-range values, a sign of the trained decoder itself
+entering an untrustworthy extrapolation regime, not of an error
+in~\eqref{eq:appendix-ift}--\eqref{eq:appendix-drrde}, which continues to
+differentiate whatever the network computes correctly, whether or not that
+output is itself trustworthy.
 
 \paragraph{An energy-free rank-one test.} Section~\ref{sec:c5-implies}'s
 rank-one check is stated as an energy second derivative,
@@ -3079,8 +3319,20 @@ variants no energy-based check can reach at all.
 
 \subsection{The small-strain tangent-term weight sweep}
 \label{app:smallstrain-sweep}
-This expands the brief mention in Section~\ref{sec:cook} of how
-$w_{\rm tan0}=5$ in~\eqref{eq:loss-tan0} was chosen. Both certified cores
+This expands the brief mention in Section~\ref{sec:cook} of the
+zero-strain-tangent loss term,
+\begin{equation}
+ \mathcal L_{\rm tan0}=\frac{\big\|\mathbb C_\theta(\bm 0)-\mathbb
+ C_0\big\|^2}{\|\mathbb C_0\|^2},\qquad
+ \mathcal L=\EnergyWeight\,\mathcal L_W+\mathcal L_{S,\rm agg}+w_{\rm tan0}\,\mathcal L_{\rm tan0},
+ \label{eq:loss-tan0}
+\end{equation}
+matching the model's own tangent at zero strain, $\mathbb C_\theta(\bm
+0)$, against the RVE's true linear-elastic-limit tangent $\mathbb C_0$ --
+the one reference value in this paper needing no nonlinear FOM solve at
+all, since three linear RVE solves, one per unit macro-strain direction,
+give it exactly -- and of how its own weight, $w_{\rm tan0}=5$, was
+chosen. Both certified cores
 were retrained at six weights, $w_{\rm tan0}\in\{0,0.3,1,2,3,5\}$,
 identical in every other respect to Section~\ref{sec:experiments}'s own
 protocol ($w_{\rm tan0}=0$ reproduces the original models of
@@ -3124,7 +3376,7 @@ Gauss-point strains (Section~\ref{sec:cook}); Cook full $u_y$ is the tip
 displacement range from a full 20-step Cook run with that checkpoint as
 the macroscopic law. $w_{\rm tan0}=0$ reproduces Table~\ref{tab:master}'s
 original models exactly; $w_{\rm tan0}=5$ is the value used for the
-corrected cores of Table~\ref{tab:cook-fe2-corrected}.}
+certified-core rows of Table~\ref{tab:cook-fe2}.}
 \label{tab:smallstrain-sweep}
 \begin{tabular}{lrrrrrr}
 \toprule
@@ -3198,16 +3450,33 @@ and Engineering}, 276:149--189, 2014.
 J.~A. Hern\'andez. A multiscale method for periodic structures using
 domain decomposition and ECM-hyperreduction. \emph{Computer Methods in
 Applied Mechanics and Engineering}, 368:113192, 2020.
+\bibitem{Amsallem2012}
+D. Amsallem, M.~J. Zahr, and C. Farhat. Nonlinear model order
+reduction based on local reduced-order bases. \emph{International
+Journal for Numerical Methods in Engineering}, 92(10):891--916, 2012.
 \bibitem{Barnett2022}
 J. Barnett and C. Farhat. Quadratic approximation manifold for
 mitigating the Kolmogorov barrier in nonlinear projection-based model
 order reduction. \emph{Journal of Computational Physics}, 464:111348,
 2022.
+\bibitem{Lee2020}
+K. Lee and K.~T. Carlberg. Model reduction of dynamical systems on
+nonlinear manifolds using deep convolutional autoencoders.
+\emph{Journal of Computational Physics}, 404:108973, 2020.
+\bibitem{Romor2025}
+F. Romor, G. Stabile, and G. Rozza. Explicable hyper-reduced order
+models on nonlinearly approximated solution manifolds of compressible
+and incompressible Navier--Stokes equations. \emph{Journal of
+Computational Physics}, 524:113729, 2025.
 \bibitem{Barnett2023}
 J. Barnett, C. Farhat, and Y. Maday. Neural-network-augmented
 projection-based model order reduction for mitigating the Kolmogorov
 barrier to reducibility. \emph{Journal of Computational Physics},
 492:112420, 2023.
+\bibitem{Chmiel2024}
+M.~R. Chmiel, J.~L. Barnett, and C. Farhat. Assessment of
+projection-based model order reduction for a benchmark hypersonic flow
+problem. In \emph{AIAA SciTech 2024 Forum}, p.~0250, 2024.
 \bibitem{Hernandez2017}
 J.~A. Hern\'andez, M.~A. Caicedo, and A. Ferrer. Dimensional
 hyper-reduction of nonlinear finite element models via empirical

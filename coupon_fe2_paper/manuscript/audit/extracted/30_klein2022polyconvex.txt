@@ -1,0 +1,1601 @@
+                                                           J. Mech. Phys. Solids 159 (2022) 104703
+
+
+                                                          Contents lists available at ScienceDirect
+
+
+                                  Journal of the Mechanics and Physics of Solids
+                                                  journal homepage: www.elsevier.com/locate/jmps
+
+
+
+
+Polyconvex anisotropic hyperelasticity with neural networks
+Dominik K. Klein a ,∗, Mauricio Fernández b , Robert J. Martin c , Patrizio Neff c ,
+Oliver Weeger a
+a Cyber-Physical Simulation Group, Department of Mechanical Engineering & Centre for Computational Engineering,
+
+Technical University of Darmstadt, Dolivostr. 15, 64293 Darmstadt, Germany
+b Access e.V., Intzestr. 5, 52072 Aachen, Germany
+c
+  Chair for Nonlinear Analysis and Modeling, Faculty of Mathematics, University of
+Duisburg–Essen, Thea-Leymann-Str. 9, 45127 Essen, Germany
+
+
+
+ARTICLE               INFO                              ABSTRACT
+
+Dataset link: https://github.com/CPShub/sim-            In the present work, two machine learning based constitutive models for finite deformations
+data                                                    are proposed. Using input convex neural networks, the models are hyperelastic, anisotropic
+Keywords:                                               and fulfill the polyconvexity condition, which implies ellipticity and thus ensures material
+Constitutive modeling                                   stability. The first constitutive model is based on a set of polyconvex, anisotropic and objective
+Nonlinear elasticity                                    invariants. The second approach is formulated in terms of the deformation gradient, its cofactor
+Anisotropic hyperelasticity                             and determinant, uses group symmetrization to fulfill the material symmetry condition, and
+Polyconvexity                                           data augmentation to fulfill objectivity approximately. The extension of the dataset for the data
+Ellipticity                                             augmentation approach is based on mechanical considerations and does not require additional
+Material stability                                      experimental or simulation data. The models are calibrated with highly challenging simulation
+Soft materials
+                                                        data of cubic lattice metamaterials, including finite deformations and lattice instabilities. A
+Metamaterials
+                                                        moderate amount of calibration data is used, based on deformations which are commonly
+Invariants
+Structural tensors                                      applied in experimental investigations. While the invariant-based model shows drawbacks
+Parameter identification                                for several deformation modes, the model based on the deformation gradient alone is able
+Data-driven modeling                                    to reproduce and predict the effective material behavior very well and exhibits excellent
+Machine learning                                        generalization capabilities. In addition, the models are calibrated with transversely isotropic
+Input convex neural networks                            data, generated with an analytical polyconvex potential. For this case, both models show
+                                                        excellent results, demonstrating the straightforward applicability of the polyconvex neural
+                                                        network constitutive models to other symmetry groups.
+
+
+
+
+1. Introduction
+
+     In the last decades, a vast amount of highly specialized materials has been developed and, with advancing requirements
+in engineering applications, the trend is growing. In particular, with recent advances in additive and advanced manufacturing
+technologies, flexible and functional mechanical metamaterials and composites are being developed (Surjadi et al., 2019). As a
+consequence, numerous constitutive models have been formulated, each specifically designed for the mechanical characteristics of
+a comparatively small class of (soft) materials (Chagnon et al., 2015; Xiang et al., 2020). However, while the specific formulations
+may be different, the theoretical considerations that lead to physically sensible and mathematically well-posed models stay the same,
+i.e., ellipticity, thermodynamic consistency, objectivity, material symmetry, etc. (Holzapfel, 2000).
+
+
+  ∗ Corresponding author.
+     E-mail address: klein@cps.tu-darmstadt.de (D.K. Klein).
+
+https://doi.org/10.1016/j.jmps.2021.104703
+Received 20 June 2021; Received in revised form 29 October 2021; Accepted 29 October 2021
+Available online 20 November 2021
+0022-5096/© 2021 Elsevier Ltd. All rights reserved.
+D.K. Klein et al.                                                                   Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+     Recent progress in the field of machine learning (ML) has sparked the development of data-driven numerical methods that avoid
+the explicit formulation of constitutive models and purely operate on discrete stress–strain data (Carrara et al., 2020; Kirchdoerfer
+and Ortiz, 2016; Nguyen and Keip, 2018), as well as of data-driven constitutive models that employ reduced bases (Fritzen et al.,
+2019; Fritzen and Kunc, 2018; Yvonnet and He, 2007), polynomials (Khajehtourian and Kochmann, 2020; Yvonnet et al., 2009), or
+artificial neural networks (ANNs) (Flaschel et al., 2021; Le et al., 2015; Liu et al., 2020; Yang et al., 2019) for the representations of
+nonlinear energy potentials or stress–strain relationships. In particular, the latter approach offers a high flexibility and applicability
+to a wide range of materials due to the universal approximation properties of ANNs (Hornik, 1991). Furthermore, they can also be
+formulated to fulfill important material theoretical considerations, e.g., the material symmetry condition (Fernández et al., 2021b;
+Linka et al., 2020). In González et al. (2019), an analytical model was extended using ML methods. While preserving favorable
+properties of the analytical model, the ML extension can improve the models performance and, thus, the applicability to different
+materials, which is shown in González et al. (2020) for vascular soft tissues. In Fernández et al. (2021b), two anisotropic material
+models for finite deformations are proposed. The first model is based on an analytical model (Itskov, 2001), whose function space
+is extended using ANNs. While preserving favorable analytical properties of the model, the flexibility is significantly improved. For
+the second approach, the method of group symmetrization is introduced to fulfill the material symmetry. With the six independent
+components of the right Cauchy–Green tensor 𝐶 = 𝐹 𝑇 𝐹 as input quantity for an ANN, the model offers a highly flexible, objective
+hyperelastic potential, which is able to reproduce the challenging effective behavior of cubic beam-lattice metamaterials, including
+lattice instabilities. The model proposed by Linka et al. (2020) uses structural tensors, c.f. Zheng and Spencer (1993), processed
+through ANNs, to formulate a set of invariants reflecting the intrinsic material anisotropy and, using these invariants as input for
+another ANN, predicts the potential of the hyperelastic structure. By using a Lagrangian multiplier to enforce incompressibility,
+c.f. Holzapfel (2000, Section 6.3), the model is applicable to elastomeric material behavior, and shows excellent results for Treloar’s
+experimental data on vulcanized rubber. Both the models introduced in Fernández et al. (2021b) and Linka et al. (2020) include the
+objectivity and material symmetry condition in their formulation. In Heider et al. (2020), a neural network based constitutive model
+for anisotropic elastoplastic materials is proposed, and different methods are examined to fulfill the objectivity condition, e.g., the
+representation of stress and strain tensors in their spectral decomposition for the input and output data of the neural network.
+     In the context of finite elasticity theory, existence and stability of solutions for boundary-value problems are strongly linked to
+the notion of polyconvexity introduced by Ball (1977, 1976). From a material theory point of view, polyconvexity is advantageous
+since it implies ellipticity of the corresponding constitutive model, while being more straightforward to include into the model
+formulation than the ellipticity condition itself. Ellipticity ensures material stability (Neff et al., 2015; Zee and Sternberg, 1983),
+and is thus important for numerical applications such as the finite element method. As will be shown for the model of Fernández
+et al. (2021b), the polyconvexity condition is easily violated when using unrestricted ANNs without caution. As this may lead to
+a loss of ellipticity and thus to material instability, the polyconvexity condition should be treated with special care in the model
+formulation.
+     The theoretical aspects of polyconvexity are still subject to current research (Ghiba et al., 2018; Martin et al., 2020a,b), and the
+formulation of polyconvex models remains a challenging task (Martin et al., 2018, 2019). For a long time after its initial conception,
+the polyconvexity condition was practically restricted to isotropic material response, as no anisotropic formulation was available
+that ensured at the same time: polyconvexity, objecticity, material symmetry and a stress-free reference configuration. In fact, the
+fulfillment of multiple constitutive requirements at the same time can be seen as ‘‘the main open problem of the theory of material
+behavior’’, c.f. Truesdell and Noll (2004, Section 20). In a landmark paper, Schröder and Neff (2003) derived a formulation which
+fulfills all of the former mentioned requirements, quickly followed by Ehret and Itskov (2007), Hartmann and Neff (2003), Itskov
+and Aksel (2004), Kambouchev et al. (2007), Schröder (2010), Schröder et al. (2005) and Schröder et al. (2008). It was shown
+that questions of material stability could neatly be avoided while being able to match experimental data (Balzani et al., 2006). The
+approaches are based on second and fourth order structural tensors, which can reproduce a wide range of anisotropies. Combining
+the structural tensors with the right Cauchy–Green deformation tensor, sets of invariants can be derived. By a suitable construction
+of polynomials of these invariants, constitutive models can be created which fulfill all of the former mentioned restrictions. By using
+polyconvex invariants instead of non-polyconvex invariants, constitutive models can be improved (Cai et al., 2021). Subsequently,
+also finite strain finite element methods tailored to the discretization of polyconvex material models were developed (Bonet et al.,
+2015; Pfefferkorn and Betsch, 2019).
+     It must be emphasized, however, that the polyconvexity condition is a purely mathematical framework that ensures ellipticity,
+but unlike ellipticity, to the best knowledge of the authors, is not a fundamental physical requirement. For example, polyconvexity
+imposes restrictions upon arbitrarily large strains that will never occur in actual experiments. Here, we adopt polyconvexity as
+a suitable means to ensure overall material stability, i.e., to avoid loss of ellipticity. Otherwise, this would be cumbersome to be
+checked a posteriori. Note that the only real physical requirement is satisfaction of ellipticity in a compact set including the identity.
+But even this can be very challenging without polyconvexity (Neff et al., 2016, 2015).
+     Coming back to the field of ML, the difficulty of formulating physically sensible models, e.g., material models which fulfill
+multiple constitutive requirements, is still an open problem (E et al., 2020; Karniadakis et al., 2021; Wang et al., 2020; Willard
+et al., 2020). Several constitutive modeling approaches found in the literature consider convexity properties, however, none of
+them known to the authors fulfills the polyconvexity condition. In Ghaderi et al. (2020), an attempt is made to formulate polyconvex
+potentials based on ANNs. However, for the neural network core, non-convex activation functions are used such as the hyperbolic
+tangent, and consequently, the potential proposed in Ghaderi et al. (2020) violates the polyconvexity condition, which follows from
+Corollary A.4. In Vlassis et al. (2020), a feed-forward neural network (FFNN) based hyperelastic model for anisotropic material
+behavior is proposed, and the convexity of the resulting potential w.r.t. the right Cauchy–Green tensor 𝐶 is examined for a special
+
+                                                                    2
+D.K. Klein et al.                                                                   Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+material. However, while the potentials are convex in 𝐶 for some examined deformation modes, the model only approximates the
+convexity condition and, consequently, it may be violated for other deformations. Furthermore, convexity in 𝐶 does not ensure
+polyconvexity, as not all components of 𝐶 are convex in the deformation gradient 𝐹 . Therefore, convexity in 𝐶 does not imply
+ellipticity, and exhibits no physical significance at all. The constitutive model proposed in Xu et al. (2021) identifies the Cholesky
+factor of a tangent stiffness matrix to describe the behavior of the material. By using symmetric positive definite neural networks, the
+formulation is closely linked to convex potentials, and numerical robustness of the model is ensured. While the model was able to
+predict both time-dependent and plastic problems, it requires a large amount of data for the calibration. A FFNN based constitutive
+model for nearly incompressible anisotropic hyperelasticity is proposed in Tac et al. (2021). By using additional terms in the objective
+function which enforce semi positive-definiteness of the FFNN’s Hessian, the neural network is approximately convex. However, the
+polyconvexity of the invariants which are used as input quantities for the neural network is not examined. For example, the invariant
+        (     )2
+𝐼̄2 = 21 tr 𝐶̄ − 12 tr 𝐶̄ 2 with 𝐶̄ = 𝐽 −2∕3 𝐶 is not polyconvex (Hartmann and Neff, 2003, Lemma 2.4). Therefore, in Tac et al. (2021),
+the polyconvexity condition is violated by the choice of input arguments.
+    In the present work, two polyconvex constitutive models are introduced, which are both based on input convex neural networks
+(ICNNs), see Amos et al. (2017), and formulated for hyperelastic, anisotropic material behavior and finite deformations. ICNNs
+are a special class of FFNNs which are, through a suitable network architecture, constructed as convex functions. As already
+discussed, there is a variety of data-driven or machine learning methods which are used for constitutive modeling. However, for
+the construction of polyconvex potentials, convex FFNNs (̂   = ICNNs) are a very natural choice, as the simple mathematical structure
+of FFNNs offers a straightforward application of analytically received convexity conditions, c.f. Appendix. While there are several
+applications for ICNNs in, e.g., convex optimization (Amos et al., 2017; Calafiore et al., 2020a,b), the application towards polyconvex
+constitutive models has, to the best of the authors’ knowledge, not been studied yet. The first model developed in this work is
+based on a set of invariants already introduced in Schröder et al. (2010), which fulfills the objectivity and material symmetry
+condition by construction. Using ICNNs, substantially more complex functions for the potential compared to polynomial approaches
+can be created, while preserving the polyconvexity of the model. While this model can be seen as a straightforward extension
+of invariant-polynomials to the more flexible function space ANNs offer, the second constitutive model is specifically designed
+for machine learning. Formulated directly in the deformation gradient, its cofactor and determinant, the objectivity condition is
+not fulfilled by construction. That objectivity, i.e., invariance of the energy 𝑊 (𝑄 𝐹 ) = 𝑊 (𝐹 ) under rotations 𝑄 ∈ SO(3), is not
+automatically satisfied, may be surprising at first glance. Usually, hyperelastic formulations come with objectivity built in a priori.
+Indeed, objectivity is not derived from an experimental observation, but is a physical law, c.f. sections 17 and 19 in Truesdell and
+Noll (2004). However, in consideration of a useful model for a compact set of deformation gradients 𝐹 = 𝐷𝜑, the possible error
+in not exactly satisfying objectivity remains controllable. The benefit in giving up exact objectivity is the increased flexibility in
+combining all the needed constitutive requirements. We remind that the major obstacle in originally extending polyconvexity to the
+anisotropic setting was coming from exact objectivity combined with the stress-free reference configuration and material symmetry.
+Here, the objectivity condition is approximated using data augmentation, following Ling et al. (2016). The approach is based on
+mechanical considerations, and requires no further simulation or experimental data. The anisotropy is taken into account with the
+group symmetrization already introduced in Fernández et al. (2021b).
+    Both models can be calibrated with a moderate amount of data, which is shown for the highly challenging behavior of cubic
+beam-lattice metamaterials, using synthetic homogenization data. Modern additive and advanced manufacturing methods allow
+for a variety of tailored materials with specifically designed microstructure, consisting of, e.g., beams and shells, which leads to
+mechanical characteristics not encountered in classical materials, e.g., due to lattice instabilities within the microstructures (Bertoldi
+et al., 2017; Glaesener et al., 2020; Jiang, 2016; Khajehtourian and Kochmann, 2021; Lee et al., 2012; Liu et al., 2016). Nonlinear
+multiscale simulations for this class of metamaterials can be executed by homogenizing the microstructure (Matous et al., 2016)
+either in a current multiscale setting using the FE2 method (Glaesener et al., 2020), or sequentially based on the formulation of
+an effective constitutive model (Fernández et al., 2021b; Jamshidian et al., 2020; Khajehtourian and Kochmann, 2020), as applied
+here.
+    The outline of the manuscript is as follows. In Section 2, the present work starts with a short introduction to the basics of
+constitutive modeling relevant to this work. In Section 3, the lack of polyconvexity for models with unrestricted ANN architecture
+is discussed, and the two polyconvex ML based models are introduced. Finally, in Section 4, the models are calibrated to the highly
+challenging, homogenized behavior of cubic lattice metamaterials and compared with each other and to a conventional polyconvex
+model. The application to another material symmetry, i.e., transverse isotropy, is demonstrated in Section 5. In Section 6, some
+issues raised by the use of ML techniques in nonlinear elasticity theory are discussed. After the conclusion in Section 7, some
+general properties of ICNNs are introduced and discussed in the Appendix.
+
+Notation. Throughout this work, tensor compositions and contractions are denoted by (𝐴 𝐵)𝑖𝑗 = 𝐴𝑖𝑘 𝐵𝑘𝑗 , 𝑎 ⋅ 𝑏 = 𝑎𝑖 𝑏𝑖 = ⟨𝑎, 𝑏⟩,
+𝐴 ∶ 𝐵 = 𝐴𝑖𝑗 𝐵𝑖𝑗 and (A ∶ 𝐴)𝑖𝑗 = A𝑖𝑗𝑘𝑙 𝐴𝑘𝑙 , respectively, with vectors 𝑎 and 𝑏, second order tensors 𝐴 and 𝐵 and fourth order
+tensor A. The tensor product is denoted by ⊗, the second order identity tensor by 1. The first Fréchet derivative of a function
+𝑓 w.r.t. 𝑋 is denoted by 𝐷𝑋 𝑓 , the second Fréchet derivative (or Hessian) is denoted by 𝐷𝑋    2 𝑓 . For the function composition
+
+𝑓 (𝑔(𝑥)) the compact notation 𝑓 ◦𝑔◦𝑥 is applied. The set of invertible second order tensors with positive determinant is denoted
+              {                    }                                                 {                                }
+by GL+ (3) ∶= 𝑋 ∈ R3×3 | det 𝑋 > 0 , the special orthogonal group in R3 by SO(3) ∶= 𝑋 ∈ R3×3 | 𝑋 𝑇 𝑋 = 1, det 𝑋 = 1 .
+
+                                                                    3
+D.K. Klein et al.                                                                    Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+2. Basics of material theory
+
+      The hyperelastic potential
+
+         𝑊 ∶ GL+ (3) → R ,           𝐹 ↦ 𝑊 (𝐹 )                                                                                                 (1)
+
+corresponds to the strain energy density stored in the body 𝛺 ⊂            R3 due to the deformation 𝜑 ∶ 𝛺 → R3 , and depends on the
+deformation gradient 𝐹 = 𝐷𝜑 (Holzapfel, 2000). To ensure a physically sensible and mathematically well-posed formulation, several
+restrictions on the potential must be considered. The restrictions relevant to the present work are shortly introduced in the following:
+    The reference configuration of the body must be stress-free, i.e., for the first Piola–Kirchhoff stress
+
+         𝑆 = 𝐷𝐹 𝑊 (𝐹 )                                                                                                                          (2)
+
+it holds that 𝑆(1) = 0 (Holzapfel, 2000). In fact, this is implied by the condition that the potential (1) attains its unique, global
+minimum at the identity, i.e., 𝑊 (1) = 0 and 𝑊 (𝐹 ) ≥ 0 (Holzapfel, 2000). The principle of objectivity (Truesdell and Noll, 2004)
+states that the material behavior has to be independent of the observer, which means that the potential is invariant under the
+transformation
+
+         𝑊 (𝑄 𝐹 ) = 𝑊 (𝐹 )        ∀𝐹 ∈ GL+ (3) , 𝑄 ∈ SO(3) .                                                                                    (3)
+
+Following (2), this implies the invariance of the stress tensor under transformations according to
+
+         𝑆(𝑄 𝐹 ) = 𝑄 𝑆(𝐹 )        ∀𝐹 ∈ GL+ (3) , 𝑄 ∈ SO(3) .                                                                                    (4)
+
+For models formulated in terms of the right Cauchy–Green tensor 𝐶 = 𝐹 𝑇 𝐹 , i.e., as 𝑊 = 𝑊 (𝐶), the material objectivity condition is
+automatically fulfilled, which is an advantage compared to models depending directly on the deformation gradient. For anisotropic
+materials with symmetry group  ⊂ SO(3), the strain energy must be invariant under the symmetry transformation (Haupt, 2002)
+
+         𝑊 (𝐹 𝑄) = 𝑊 (𝐹 )         ∀𝐹 ∈ GL+ (3) , 𝑄 ∈  ⊂ SO(3) ,                                                                                (5)
+
+which implies the stress invariance condition
+
+         𝑆(𝐹 𝑄) = 𝑆(𝐹 ) 𝑄 ∀𝐹 ∈ GL+ (3) , 𝑄 ∈  ⊂ SO(3) .                                                                                        (6)
+
+      The growth condition
+                                                (                  )
+                                                          1
+         𝑊 (𝐹 ) → ∞ as        det 𝐹 → 0+            ⇔         →∞                                                                                (7)
+                                                        det 𝐹
+captures the physical consideration that for infinitely large volumetric compression, an infinite amount of energy is required. There
+are several other growth conditions known in constitutive modeling, which regard the material behavior for very large deformations
+and are often referred to as coercivity conditions. 1 However, while the case of large volumetric compression (7) is important to
+consider especially for highly compressible materials, coercivity conditions regard material behavior which usually lies outside the
+considered deformation modes. Therefore, they are of rather theoretical interest, and will not be considered throughout this work.
+   In finite elasticity theory, the existence of minimizers for the underlying variational functionals is guaranteed if the energy
+potential (1) fulfills the polyconvexity condition introduced by Ball (1977, 1976) and an additional coercivity condition (Kružík
+                                         ( )
+and Roubíček, 2019). The potential 𝑊 𝐹 is polyconvex if and only if there exists a function  ∶ R3×3 × R3×3 × R → R such that
+
+         𝑊 (𝐹 ) = (𝐹 , Cof 𝐹 , det 𝐹 ) ,                                                                                                       (8)
+
+so that  is convex in its arguments (𝐹 , Cof 𝐹 , det 𝐹 ). The function  is in general non-unique (Schröder and Neff, 2003). Due to
+the reason mentioned above, the coercivity condition is not considered in this work. For convex functions which are sufficiently
+smooth, the Hessian matrix is positive semi-definite (Silhavy, 2014), and the polyconvexity condition can be formulated as
+
+         𝛿𝜉 ⋅ 𝐷𝜉2 (𝜉) ⋅ 𝛿𝜉 ≥ 0     ∀ 𝜉, 𝛿𝜉 ,                                                                                                   (9)
+
+with the rearranged arguments 𝜉 = (𝐹 , Cof 𝐹 , det 𝐹 ) ∈ R19 and 𝛿𝜉 ∈ R19 (Ebbing, 2010). From this point on, the notation
+𝜉 = (𝐹 , Cof 𝐹 , det 𝐹 ) ∈ R19 will be used to address the argument in the polyconvexity contexts more compactly. Polyconvexity
+implies ellipticity, while being more straightforward to include into the model formulation than the ellipticity condition itself. The
+ellipticity (or rank-one convexity) condition (Neff et al., 2015; Zee and Sternberg, 1983)
+
+         (𝑎 ⊗ 𝑏) ∶ 𝐷𝐹2 𝑊 (𝐹 ) ∶ (𝑎 ⊗ 𝑏) ≥ 0         ∀ 𝑎, 𝑏 ∈ R3                                                                                (10)
+
+ensures material stability of the constitutive model.
+
+
+
+  1   For a coercive function, 𝑓 (𝑥) → ∞ as ‖𝑥‖ → ∞ holds.
+
+
+                                                                       4
+D.K. Klein et al.                                                                                Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+3. Polyconvex constitutive models based on FFNNs
+
+    Feed-forward neural networks (FFNNs) are universal approximators (Hornik, 1991), meaning that they can represent continuous
+functions of arbitrary complexity. FFNN based constitutive models exploit this important property by using them as highly flexible
+functions within the model formulations, e.g., to represent the energy potential 𝑊 defined in (1). This is in contrast to conventional
+approaches, which rely on a human choice for the representation of 𝑊 , thus potentially reducing the possible function space.
+Furthermore, through the right choice of network architecture, FFNNs can be constructed as convex functions, which is an often
+required property in the context of constitutive modeling.
+    In finite elasticity theory, the construction of potentials which are convex in the deformation gradient, its cofactor and
+determinant is of special interest, which is referred to as polyconvexity (Ball, 1976). By using convex FFNNs, i.e., ICNNs, hyperelastic
+potentials can be generated which satisfy the polyconvexity condition, see (8). Polyconvexity implies ellipticity, and thus ensures
+material stability of the constitutive models. The convexity condition is not trivially fulfilled by arbitrary FFNNs. Consequently, for
+FFNN based models found in the literature a loss of polyconvexity can often be detected, which may lead to a loss of ellipticity and
+thus material instability. This is now discussed for the approach of Fernández et al. (2021b).
+    Fernández et al. (2021b) introduced several ML based constitutive models, from which we will examine the potential model.
+The model uses a FFNN core for the hyperelastic potential, with the right Cauchy–Green tensor 𝐶 = 𝐹 𝑇 𝐹 as input, and fulfills the
+material symmetry condition (5) with a group symmetrization of the potential, see Eq. (20). With the six independent components
+of 𝐶 as input, the model fulfills the objectivity condition (3) per construction. The internal FFNN used in this work is built upon
+multiple compositions of the Softplus function, cf. (A.12), with unrestricted weights. This model violates the polyconvexity condition
+in two aspects. First of all, only the principal diagonal elements of the right Cauchy–Green tensor 𝐶 are convex in the deformation
+gradient 𝐹 , while the remaining elements of 𝐶 are neither convex nor concave.2 Additionally, compositions of Softplus functions
+with arbitrary parameters are not convex, as is discussed in Corollaries A.4 and A.8 in the Appendix. Furthermore, while the
+metamaterials under consideration in Fernández et al. (2021b) are highly compressible, the volume compression condition (7) is
+not considered in the model formulation. Therefore the model does not ensure a physical sensible behavior for the limiting case of
+infinitely large volumetric compression.
+    A brief introduction to convex FFNNs, i.e., ICNNs, and the notation used throughout this work can be found in the Appendix.
+In Corollaries A.4 and A.6 the standard conditions for the fulfillment of convexity are provided. Activation functions fulfilling
+these conditions are presented in Theorem A.7 and Corollary A.8. These activation functions lead to the ICNN cores discussed in
+Proposition A.9. In a nutshell, an ICNN is easily constructed based on standard FFNNs with input vector 𝑋 based on the following
+restrictions:
+
+      • the first hidden layer 𝐴1 is neuron-wise convex with respect to 𝑋 (e.g., by employing convex activation functions as Softplus,
+        𝑠(𝑥) = log(1 + exp(𝑥)), in each neuron)
+      • from the second 𝐴2 to the last hidden layer 𝐴𝐻 , each hidden layer is neuron-wise convex and non-decreasing with respect to
+        the previous hidden layer (e.g., by employing 𝑠(𝑥) with non-negative weights in each neuron)
+      • the scalar-valued output layer 𝑎 is convex and non-decreasing with respect to the last hidden layer.
+
+These restrictions imply that the composition 𝑎◦𝐴𝐻 ◦ … ◦𝐴2 ◦𝐴1 ◦𝑋 = 𝑎(𝑋)
+                                                                      ̄   is convex in 𝑋. These architectures are shortly denoted
+as ICNNs from now on. For several passages, the abbreviation  = 𝐴𝐻 ◦ … ◦𝐴1 will be used for the core (i.e., the hidden layers) of
+the ICNN. The collection of all weights and biases of the ICNN will be abbreviated by the internal parameter vector 𝑝.
+    We now present two polyconvex ICNN-based approaches for anisotropic hyperelastic constitutive modeling, extending the works
+of Schröder et al. (2010) and Fernández et al. (2021b).
+
+3.1. Model based on invariants
+
+Polyconvex model based on invariants. In Schröder et al. (2010), a polyconvex potential for trigonal, tetragonal and cubic symmetry
+groups is proposed, see also (Ebbing, 2010). In the following, we will shortly describe the cubic potential. It is formulated in
+polynomials of invariants, which are based on a combination of the right Cauchy–Green tensor and an anisotropic structural tensor.
+The fourth order tensor G is called a structural tensor of the material symmetry group  ⊂ SO(3) if
+
+         G = 𝑄 ∗ G ∀ 𝑄 ∈  ⊂ SO(3) ,                                                                                                                       (11)
+
+where ∗ denotes the Rayleigh product (Bertram, 2021). For some material symmetry groups, second order structural tensors are
+sufficient to represent the symmetry, while for other symmetries, the introduction of fourth or sixth order tensors is required (Zheng
+and Spencer, 1993). For cubic symmetry, a fourth-order structural tensor is required. In Schröder et al. (2010), the fourth order
+structural tensor
+                    ∑
+                    3
+         Gcub =           𝑒𝑖 ⊗ 𝑒𝑖 ⊗ 𝑒𝑖 ⊗ 𝑒𝑖                                                                                                                (12)
+                    𝑖=1
+
+
+
+  2   This does not mean that objectivity and polyconvexity contradict each other, it rather shows how challenging it is to combine both requirements.
+
+
+                                                                              5
+D.K. Klein et al.                                                                   Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+is used for the cubic group 7 , with 𝑒𝑖 being the basis vectors of a Cartesian coordinate system. A description of the cubic group 7
+can be found in Ebbing (2010, Section 3.7). Using the structural tensor (12), a set of five polyconvex invariants can be derived as
+        𝐼1 = tr 𝐶 ,              𝐼2 = tr (Cof 𝐶) ,           𝐼3 = det 𝐶 ,
+                                                                                                                                              (13)
+           𝐽7 = 𝐶 ∶ Gcub ∶ 𝐶 ,                𝐽11 = Cof 𝐶 ∶ Gcub ∶ Cof 𝐶 .
+The first three invariants are the well-known isotropic invariants, while the remaining two invariants possess the cubic symmetry.
+The invariants 𝐼1 and 𝐽7 are convex in 𝐹 , the invariants 𝐼2 and 𝐽11 are convex in Cof 𝐹 , and the invariant 𝐼3 is convex in det 𝐹 . Since
+the invariants are formulated in the right Cauchy–Green tensor, they fulfill the principle of objectivity. Based on these invariants,
+Schröder et al. (2010) proposed the potential
+                  ∑𝑛 (                                                                      )
+          SNE               1       (𝛼 +1)       3       (𝛽 +1)      1       (𝜂 +1) 9 −𝛾
+       𝑊cub   =𝜅                𝛼
+                                   𝐼1 𝑟 +            𝛽
+                                                        𝐼2 𝑟 +           𝜂
+                                                                            𝐽7 𝑟 + 𝐼3 𝑟 ,                                             (14)
+                  𝑟=1
+                       (𝛼𝑟 + 1)3 𝑟          (𝛽𝑟 + 1)3 𝑟         (𝜂𝑟 + 1)3 𝑟         𝛾𝑟
+
+where we introduced the additional parameter 𝜅. With 𝜅 > 0, 𝛼𝑟 , 𝛽𝑟 , 𝜂𝑟 ≥ 0 and 𝛾𝑟 ≥ −1∕2, 𝛾𝑟 ≠ 0, the potential is polyconvex,
+coercive and has a stress-free reference configuration.
+
+Extension with neural networks. A vector of group specific objective invariants (𝜉) is defined, where each component of (𝜉) is
+convex in 𝜉, i.e., (𝜉) is a polyconvex vector-valued function. For instance,  = (𝐼1 , 𝐼2 , 𝐼3 , 𝐽7 , 𝐽11 ) can be considered for cubic
+materials. This motivates the model
+
+        0 (𝜉; 𝑝) = 𝑎 ◦  ◦  ◦ 𝜉 ,                                                                                                           (15)
+
+where the layers 𝑎◦ in (15) are restricted to convex and non-decreasing activation functions, since  represents the first convex
+layer, see Remark A.10 for a discussion. The model (15) is polyconvex due to the usage of ICNNs und fulfills the objectivity and
+material symmetry conditions due to the considered invariants.
+
+Growth condition. The volumetric growth condition (7) can be fulfilled with coercive functions. However, since ICNNs are not
+necessarily coercive, they are not suited to fulfill this condition, and therefore, an analytical term should be added to the potential
+(15) according to
+
+        𝑊 = 0 (𝜉; 𝑝) + 𝑊vol (det 𝐹 ) ,                                                                                                       (16)
+
+where we choose the polyconvex term (Hartmann and Neff, 2003)
+                     (                )2
+                                1
+      𝑊vol (det 𝐹 ) = det 𝐹 +       −2 .                                                                                                      (17)
+                              det 𝐹
+Computation of stress. The scalar-valued function 𝑊 given by (16), which consists of the neural network 0 from (15) and the
+volumetric growth term 𝑊vol from (17), is then interpreted as a hyperelastic potential, see (1), and the first Piola–Kirchhoff stress
+𝑆 = 𝐷𝐹 𝑊 (𝐹 ) is calculated as its gradient, see (2). In the present work, automatic differentiation (Baydin et al., 2018) is used, which
+is widely available in modern machine learning libraries. This approach is, of course, not only applicable to the present model but
+to any differentiable model built in a ML library providing automatic differentiation.
+
+Reference state. In the reference configuration 𝐹 = 1, the model (16) is not stress-free by construction. However, elastic stress–strain
+data received from numerical or experimental investigations will always have the property 𝑆(1) = 0. When the model is calibrated
+with this data, it also approximates the stress behavior for 𝐹 = 1, thus fulfilling 𝑆(1) = 0 in an approximate fashion. In Fernández
+et al. (2021b) a projection approach is proposed which fulfills the stress-free reference configuration in an exact way. While this
+approach preserves polyconvexity when formulated in terms of 𝐹 instead of 𝐶, it is not compatible with the methods of incorporating
+objectivity and material symmetry which are used in the present work, and therefore cannot be applied.
+
+3.2. Model based on the deformation gradient
+
+Model formulation. Based on the definition of polyconvexity (8), the most straightforward inputs for a polyconvex FFNN-based
+model are the deformation gradient, its cofactor and determinant itself. Thus, when 𝜉 = (𝐹 , Cof 𝐹 , det 𝐹 ) ∈ R19 is used as input
+for an ICNN 𝑎(𝜉)
+               ̄ = 𝑎◦◦𝜉, the output 𝑎(𝜉)
+                                       ̄   is convex in 𝜉 and the resulting potential is polyconvex, but does not fulfill the material
+symmetry condition, in general.
+    Here, the group symmetrization of a function 𝜙(𝐹 ) with respect to a given finite group  ⊂ SO(3) with #() elements, as introduced
+in Fernández et al. (2021b) for ML-based models, is of interest
+                  1 ∑
+       𝜙 (𝐹 ) =          𝜙(𝐹 𝑄) ,                                                                                                 (18)
+                 #() 𝑄∈
+
+since the group symmetrized function 𝜙 (𝐹 ) fulfills the material symmetry conditions of the considered group. Application of group
+elements 𝑄 ∈  on 𝐹 , i.e, 𝐹 → 𝐹 𝑄, results in the linear transformation of 𝜉 = (𝐹 , Cof 𝐹 , det 𝐹 ) according to
+
+        𝜉 ∗𝑠 𝑄 = (𝐹 𝑄, (Cof 𝐹 ) 𝑄, det 𝐹 ),                                                                                                   (19)
+
+                                                                        6
+D.K. Klein et al.                                                                      Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+where we introduced the operator ∗𝑠 that specifies the transformation of 𝜉 by 𝑄, and exploited that Cof (𝐹 𝑄) = (Cof 𝐹 ) 𝑄 (Schröder
+and Neff, 2003). Such a linear transformation does not affect the convexity of the ICNN 𝑎(𝜉),
+                                                                                        ̄     see Corollary A.6 for an explicit proof.
+This implies that the following potential model
+                                       1 ∑
+       0 (𝜉; 𝑝) = 𝑎 ◦  ◦ 𝜉 , 𝑊 =           0 (𝜉 ∗𝑠 𝑄; 𝑝) + 𝑊vol                                                                (20)
+                                     # ()   𝑄∈
+
+is polyconvex and fulfills the material symmetry and volume compression conditions. It should be noted that compared to the
+previous invariant based model, the first hidden layer of the core  in (20) is not restricted to convex and non-decreasing activation
+functions, but only to convex functions. This allows more flexibility in the first hidden layer.
+
+Infinite groups and finite subgroups. The anisotropy of many materials can be described by finite groups, e.g., cubic, orthotropic or
+monoclinic materials, such that the group symmetrization (20) can be carried out for the exact fulfillment of the material symmetry
+condition (5). For some materials, the symmetry group is infinite, e.g., for transversely isotropic materials. For such cases, as also
+remarked in Fernández et al. (2021b), a pragmatic solution for the usage of the group symmetrization (20) can be obtained by
+consideration of a finite subgroup of the infinite group. For the case of transverse isotropy, a finite subgroup ∗ti ⊂ ti for chosen 𝑁
+can be simply constructed by
+               {                                   }         {                  }
+        ∗ti ∶= 𝑄𝛼𝑥 | 𝛼 = 2𝜋 𝑛∕𝑁 , 𝑛 = 1, 2, … , 𝑁   ⊂ ti ∶= 𝑄𝛼𝑥 | 𝛼 ∈ [0, 2 𝜋)                                                     (21)
+where 𝑄𝛼𝑥 denotes a rotation around the preferred axis 𝑥 by the angle 𝛼. The finite subgroup ∗ti contains 𝑁 equidistant elements of
+ti . As will be shown in Section 5, already 𝑁 = 6 elements can be sufficient for an excellent approximation of transverse isotropy.
+
+Computation of stress. As in the invariant-based, differentiable FFNN-based model, the present model uses automatic differentiation
+for the computation of the stresses.
+
+Objectivity. While the determinant of the deformation gradient is an invariant quantity with respect to change of observers, the
+deformation gradient itself and its cofactor depend on the choice of observer. Thus, the model 𝑊 as defined in (20) is generally not
+objective. While the objectivity condition could be fulfilled trivially by using the components of the right Cauchy–Green tensor 𝐶,
+this would violate the polyconvexity condition, as only the main diagonal elements of 𝐶 are convex in the deformation gradient.
+Consequently, in order to meet both polyconvexity and objectivity, we choose a quantity which is suitable to fulfill the polyconvexity
+condition, and take further steps to approximate the objectivity condition. Then, the objectivity of the model is approximated
+with a data augmentation approach, following Ling et al. (2016). Based on the existing calibration dataset for a single observer
+𝐷 = {𝐹 , 𝑆, 𝑊 }, the dataset is extended by a finite amount of additional observers according to
+             ⋃
+       𝐷̃=     {𝑄 𝐹 , 𝑄 𝑆, 𝑊 } ,  ⊂ SO(3) .                                                                                      (22)
+               𝑄∈
+
+For pragmatic reasons, a finite amount of randomly distributed rotation matrices is chosen. The data augmentation approach can be
+visualized as follows: Without data augmentation, the constitutive model is calibrated with a single observer. As ab initio, the model
+does not know how to extrapolate the learned material behavior to other observers, it is only applicable to the observer chosen in
+the calibration dataset. When the data augmentation approach (22) is applied, the model is calibrated with multiple observers. If
+the model is then evaluated with an arbitrary observer, the model will yield reasonable results, as the material behavior for any
+observer can be seen as the interpolation between the observers with which the model was calibrated. With a sufficient number
+of observers, the model can be trained to behave nearly independent of the observer, as will be demonstrated in the upcoming
+examples.
+    In fact, for hyperelastic potentials, it is sufficient to apply the objectivity condition (3) to the potential only, which directly implies
+the transformation rule for the stress tensor. In Ling et al. (2016) only the potential values were extended and no visualization of
+evaluation of the stress values was provided. However, the model quality can benefit from the additional information the stress
+tensor provides, and therefore, both quantities are used for the data augmentation in this work. While this approach increases the
+size of the training data and thus the required calibration time, it is important to note that the time required for the model evaluation
+is not affected, and that no additional simulation or experimental data is required.
+    Considering (3) and (4), objectivity could be further enforced by adding terms of the form |𝑊 (𝑄 𝐹 ) − 𝑊 (𝐹 )|2 and
+‖𝑆(𝑄 𝐹 ) − 𝑄 𝑆(𝐹 )‖2 to the objective function used for calibration of the model. As, in this approach, both 𝑊 and 𝑆 are received
+by the constitutive model, the choice of 𝐹 is not restricted to deformation states used in the calibration dataset. Consequently,
+𝐹 may be sampled in a sensible range of deformations in which the model is to be applied, e.g., following the sampling strategy
+as proposed by Kunc and Fritzen (2019), together with a finite amount of random rotation matrices 𝑄. This approach takes into
+account that objectivity is a physical requirement, which must be fulfilled independent of stress–strain data available for a specific
+material. However, in the present work, no additional term is added to the objective function, as the objectivity can already be
+approximated very well with the data augmentation approach (22), as will be shown in Section 4.3.
+
+4. Application to cubic metamaterials
+
+4.1. Homogenized behavior of soft beam-lattice metamaterials
+
+   The performance of the models proposed in the previous section is now examined in application to the homogenized behavior of
+beam-lattice structures with cubic anisotropy. In Fernández et al. (2021b), the homogenized behaviors of the cubic BCC cell and the
+
+                                                                      7
+D.K. Klein et al.                                                                                  Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+
+
+                                              Fig. 1.   Uniaxial deformation in 𝑥-direction for the BCC unit cell.3
+
+
+
+
+cubic X cell are numerically investigated for several calibration and test scenarios, with full data availability on the public GitHub
+repository https://github.com/CPShub/sim-data. The mechanical behavior of these metamaterials is highly nonlinear and exhibits
+several challenging characteristics like lattice instabilities, which makes it a good benchmark case for the models.
+    The cubic BCC structure consists of body-centered beams with additional beams along all edges. Identifying the smallest unit from
+which the structure is built, the BCC unit cell is obtained which, regarding the periodicity, contains beams only at three edges, see
+Fig. 1b. For large structures built from lattice metamaterials, it is convenient to formulate a constitutive model for the homogenized
+behavior of the cells, instead of simulating every single beam of the structure.
+    To determine the homogenized behavior of the BCC unit cell, finite element simulations are carried out, where effective
+deformation gradients 𝐹 are applied on the cell using displacements on the outer nodes of the beams. With periodic boundary
+conditions, the behavior of the unit cell within a larger structure can be simulated. The averaged, or effective, strain energy
+density 𝑊 can directly be calculated with the strain energy stored in the beams and the size of the cell. For the structures under
+consideration, the effective stress response 𝑆 of the cell can be computed with the reaction forces on the outer nodes and the size
+of the cell (Fernández et al., 2021b). In contrast to physical experiments, this numerical characterization yields not only the stress
+response of the material, but also the strain energy density, and the resulting dataset
+             {(           )    }
+       𝐷 = 𝐹1 , 𝑆 1 , 𝑊 1 , …                                                                                                      (23)
+
+consists of triplets for corresponding deformation gradient, effective stress and effective strain energy density for each simulation
+step and applied deformation.
+    For the calibration data used here, uniaxial, equibiaxial, planar, shear, and volumetric deformations were applied on the unit
+cell. These deformations can also be applied in physical experiments. The calibration dataset 𝐷𝐶 consists of 905 triplets. Beside the
+calibration data, three test cases were examined. For the first two test cases, biaxial deformations with different stretch ratios are
+applied on the unit cell, while the third test case is a combination of tension and shear deformation. All three test cases exhibit
+lattice instabilities and complex deformations, which are not included in the calibration data. The test dataset 𝐷𝑇 consists of 605
+datapoints. Further technical details on the simulations can be found in Fernández et al. (2021b). In the present work, the first test
+case of Fernández et al. (2021b) is referred to as ‘‘biaxial test’’, while the third test case is referred to as ‘‘mixed test’’. Especially
+the ‘‘mixed test’’ is a good benchmark case, as the combination of tension and shear is a very general deformation.
+    Due to the soft materials and high slenderness of the beams, lattice instabilities occur for several deformation modes. In Fernández
+et al. (2021b), the microstructure simulation were carried out with an experimentally validated nonlinear post-buckling analysis
+approach (Jamshidian et al., 2020). Taking a closer look at the uniaxial deformation of the BCC cell, it exhibits instabilities in both
+compression and tension, which are shown in Fig. 1. Even for small uniaxial compression, the load bearing beams show instabilities,
+while for tension the less stressed beams on the edges show instabilities, which results in a highly differing behavior of the cell for
+compression and tension, leading to distinctive changes in the slope of the stress components, see Fig. 2. This highly challenging
+behavior is observed for all deformation modes, in both the calibration and test cases.
+    The properties of the constitutive models are examined with the BCC cell, the behavior for the cubic X cell is only shortly
+discussed. The X cell consists of body-centered beams, without additional beams at the edges like the BCC cell. Therefore, less
+lattice instabilities occur compared to the BCC cell. While uniaxial and equibiaxial deformation gradients are quite similar, their
+stress response for the X cell differ by a factor of ten, which is a challenging behavior for constitutive models. Apart from this case,
+the stress response of all load scenarios has the same order of magnitude. Furthermore, the amount of data points is roughly equal
+for all load scenarios. Therefore, for the following investigations, no data normalization is applied. If necessary, strategies such as
+the 𝐿2 normalization of deformation cases proposed in Fernández et al. (2021a) could be applied.
+
+
+  3   Figure from Fernández et al. (2021b).
+
+
+                                                                                8
+D.K. Klein et al.                                                                                     Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+
+
+Fig. 2. Deformation (left side) and first Piola–Kirchhoff stress 𝑆 (right side) for uniaxial deformation of the cubic BCC cell. Lattice instabilities express themselves
+by nearly horizontal stress values of 𝑆11 (compression) and decreasing slope of 𝑆11 (tension). Stress in [hPa].
+
+
+
+
+4.2. Preparation of the models
+
+                    SNE ). The model proposed by Schröder et al. (2010) is used as an example for conventional polyconvex models
+Analytical model (𝑊cub
+formulated in terms of invariants. For the potential of the model (14), 𝑛 = 2 summands are used.
+
+FFNN model by Fernández et al. (2021b) (𝑊 C ). The potential model proposed by Fernández et al. (2021b) is used as an example for
+FFNN based models which are not polyconvex by construction. The model is similar to the one discussed in Section 3.2, with the
+difference that the six independent components of the right Cauchy–Green tensor are used as input, therefore the model is objective
+by construction. Following Fernández et al. (2021b), the models core is built from three layers with 16 nodes using Softplus functions
+in each layer, and unrestricted parameters.
+
+Polyconvex ICNN model based on invariants (𝑊    I
+                                              √ ). The set of cubic invariants introduced in Schröder et al. (2010), see Eq. (13), is
+used, with the additional invariant 𝐼3∗ = −2 𝐼3 . This additional polyconvex invariant can be received from the last summand in
+Eq. (14), and is important for the model to represent negative stress values. Using four isotropic invariants and two cubic invariants,
+                                                                     (                       )
+the input of the neural network is the vector of invariants  = 𝐼1 , 𝐼2 , 𝐼3 , 𝐼3∗ , 𝐽7 , 𝐽11 ∈ R6 . An ICNN core based on Softplus
+() functions, see (A.12), is used, with the number of layers in {2, 3} and the number of nodes in {8, 16, 32}. The weights in all
+layers are non-negative. The restrictions on the networks parameters, which are caused by the convexity condition, are discussed in
+Proposition A.9. For a compact notation, the core is referred to as e.g.  [8, 8] for a core containing two layers with eight nodes
+with  functions in each layer.
+
+Polyconvex ICNN model based on the deformation gradient (𝑊 F ). For the second model, the input (𝐹 , det 𝐹 ) ∈ R10 is chosen. Several
+simulations showed that, for the metamaterials under consideration, the deformation gradient alone is not enough to represent the
+material behavior, while there is no improvement when using all arguments of (𝐹 , Cof 𝐹 , det 𝐹 ). The group symmetrization is carried
+out with the cubic group 7 ⊂ SO(3), which contains 24 orthogonal transformations (Ebbing, 2010). The network architectures are
+chosen as described above for the invariant based model 𝑊 I , but with arbitrary weights in the first layer, and non-negative weights
+in all subsequent layers, c.f. Proposition A.9.
+
+Performance measures. While, from experimental investigations of materials, only stress values are available, the numerical
+evaluation of the unit cells yields both effective energy density and the stress tensor. For a given dataset 𝐷, the mean squared
+error (MSE) of the constitutive model 𝑊 □ , □ ∈ {SNE, C, I, F}, is defined as
+                             [                                                                ]
+                     1 ∑          1    (                    )2   1 ‖                       ‖2
+       MSE□ (𝑝) =                       𝑊 (𝐹 ) − 𝑊 □ (𝐹 ; 𝑝) +       ‖ 𝑆 (𝐹 ) − 𝑆 □ (𝐹 ; 𝑝)‖                                (24)
+                   # (𝐷) 𝐹 ∈𝐷 (J∕m3 )2                         9Pa2 ‖                      ‖
+
+where # (𝐷) denotes the number of datapoints in 𝐷. The parameters 𝑝 of the models are found as the minimizers of the corresponding
+MSE. However, since the minimization of the MSE is a non-convex optimization problem, a local minimum 𝑝 may strongly depend
+on the initial guess and the optimization algorithm. Thus, we introduce the mean deviation of two model instances (MD)   ̃ with
+parameters 𝑝𝑖 and 𝑝𝑗 on a set of deformation gradients 𝐷𝐹 as
+                                    [                                                                                ]
+             (      )          ∑               ( □(        )       (       ))2    1 ‖ □(         )       (       )‖2
+      ̃□ 𝑝 , 𝑝 = ( 1 )
+      MD
+                                         1
+                                                𝑊   𝐹 ; 𝑝    − 𝑊 □
+                                                                    𝐹 ; 𝑝      +      ‖ 𝑆 𝐹 ; 𝑝    − 𝑆 □
+                                                                                                          𝐹 ; 𝑝   ‖    .      (25)
+                                                                                 9Pa2 ‖
+               𝑖  𝑗                                      𝑖               𝑗                     𝑖                𝑗 ‖
+                       # 𝐷𝐹 𝐹 ∈𝐷𝐹     (J∕m3 )2
+                                                                                              ̃ of all possible combinations of
+Then, the overall mean deviation of a model (MD) with 𝑛 instances is obtained as the averaged MD
+model instances:
+                         ( )−1 𝑛−1 𝑛
+            (         )    𝑛     ∑ ∑          (      )
+      MD□ 𝑝1 , … , 𝑝𝑛 =                    ̃□ 𝑝 , 𝑝 .
+                                           MD                                                                              (26)
+                                                𝑖  𝑗
+                           2     𝑖=1 𝑗=𝑖+1
+
+                                                                                   9
+D.K. Klein et al.                                                                                    Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+
+
+                        SNE
+Fig. 3. Evaluation of 𝑊cub  for the BCC cell, calibrated only for the uniaxial deformation case. Points depict the simulation data, while lines depict the calibrated
+                 [   ]
+model; stress in hPa . The 𝑆11 component is not well-fitted.
+
+
+
+
+For the dataset used to calibrate the parameters, different sets of experiments may be applied on a material. As long as each dataset
+contains all the required information, different calibration datasets should yield the same model behavior. However, for models
+whose parameters have no physical interpretation (which is the case for ML based models), different calibration datasets may lead
+to a different model behavior. Thus, we introduce the mean deviation (MD) between a single model instance calibrated on the
+dataset 𝐷1 with parameters 𝑝0 and multiple model instances trained on another dataset 𝐷2 with parameters 𝑝1 , … , 𝑝𝑛 :
+             □(                       ) 1∑  𝑛
+                                                  (      )
+        MD          𝑝0 , 𝑝 1 , … , 𝑝 𝑛 =       ̃□ 𝑝 , 𝑝 .
+                                               MD                                                                                                              (27)
+                                                    0  𝑖
+                                         𝑛 𝑖=1
+
+Implementation. The model 𝑊 SNE has been implemented in MATLAB R2021a, the machine learning models were implemented in
+TensorFlow 2.3.0 with Python 3.7. Each machine learning model has been trained with the full batch of training data and the ADAM
+optimizer using default settings, every architecture was initialized three times. The models 𝑊 C and 𝑊 I were trained for 20,000
+epochs using the calibration dataset 𝐷𝐶 . The model based on the deformation gradient 𝑊 F was trained for 15,000 epochs with the
+calibration dataset 𝐷𝐶 , and retrained for 2000 epochs with the extended calibration dataset 𝐷    ̃𝐶 according to Eq. (22). From our
+experience, this strategy provides a good balance between accuracy, speed of convergence and computation time required. Since
+the material objectivity of the model 𝑊 F is only approximated, both MSE and MD of the model are evaluated with 1,024 random
+observers. For the additional observers, uniformly distributed rotation matrices are generated using the ‘‘Spatial Transformation’’
+package provided by SciPy (Virtanen et al., 2020). For the BCC cell, the models are also trained one time with the adapted calibration
+dataset 𝐷𝐶∗ which contains the shear and volumetric deformation cases (from 𝐷𝐶 ), as well as the biaxial and mixed test cases (from
+𝐷𝑇 ), following the training strategies given above.
+
+Reproducibility of the models. The potentials can be reproduced with the information of the network’s architecture and parameters,
+i.e., the number of layers and neurons, the connection of the neurons, choice of input and output, activation functions, as well
+as the weights and biases for each neuron. However, the training of the model, i.e., the process of parameter calibration of the
+weights and biases, is of utmost importance for its performance. As mentioned above, this calibration corresponds to solving a non-
+convex optimization problem, for which minima are usually local and may strongly depend on the initial guess and the optimization
+algorithm. Thus, for the same network architecture, typically several parameter sets are determined based on different random
+initializations, which renders the calibration process non-reproducible. To meet this difficulty, we provide not only the calibration
+data, but also a compiled version of our TensorFlow model instances as well as their sets of parameters in the public GitHub
+repository https://github.com/CPShub/sim-data. With the information about the networks architecture and the parameters used
+for the potential, it can be reproduced in any program, c.f. (A.1).
+
+4.3. Model evaluation for BCC cell
+
+    The performance of the four models calibrated with the training data for the BCC cell is now discussed. First of all, the evaluation
+of the analytical model 𝑊 SNE only in the uniaxial deformation case is shown in Fig. 3. As can be seen, even for this simple case the
+model fails to represent the material behavior. Thus, this model is not considered for further, more detailed performance evaluations.
+    Before the machine learning models can be compared, the required amount of observers for the data augmentation of the model
+𝑊 F must be examined. The model 𝑊 F is calibrated with the full calibration dataset 𝐷    ̃𝐶 , using 8, 16, 32 and 64 random observers,
+see Eq. (22), and evaluated after calibration with 1,024 random observers. The corresponding MSEs and relative calibration times
+are shown in Table 1, and the shear response for each calibration is illustrated in Fig. 4. While, for a calibration with 64 observers,
+the dataset is eight times as big as the dataset for eight observers, its calibration time is just under six times as long. Although
+data augmentation increases the calibration time, for increasing datasets, this approach profits from the fast evaluation of ANNs
+for large batch sizes. If the model response depends on the choice of observer, the evaluation yields an area containing the stress
+response for all different observers, whereas for sufficiently well approximated objectivity, minimum and maximum model response
+
+                                                                                 10
+D.K. Klein et al.                                                                               Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+
+
+Fig. 4. Variation of observers for 𝑊 F for the cubic BCC cell. Points depict the simulation data, while lines and shaded areas depict the calibrated model
+evaluated with 1,024 observers. Stress tensor 𝑄𝑇 𝑆(𝑄 𝐹 ) (4) for shear deformation is shown, with normal components in red colors, shear components in blue
+                                                        [    ]
+colors and less important components in gray; stress in hPa .
+
+
+
+
+Table 1
+MSEs of calibrated 𝑊 F models for the BCC cell with augmented data for learning objectivity. Evaluation with 1,024 random observers. Calibration times related
+to calibration time for 8 observers.
+ Observers for the calibration dataset                         MSE                                                                  Relative calibration time
+                                                               𝐷𝑇                                𝐷𝐶
+ 8                                                             1.25 ⋅ 104                        8.64 ⋅ 103                         1
+ 16                                                            3.97 ⋅ 103                        1.65 ⋅ 103                         1.98
+ 32                                                            3.42 ⋅ 103                        6.84 ⋅ 102                         2.95
+ 64                                                            7.61 ⋅ 102                        2.57 ⋅ 102                         5.70
+
+
+
+
+coincide, and the area practically reduces to a single line. For a calibration with eight observers, the individual stress components
+for the shear deformation are within a wide range, and the MSEs are very high. Therefore, the material objectivity is not fulfilled.
+Using more observers for the data augmentation, the approximation quality of the objectivity increases. For 64 observers in the
+calibration dataset, the shear responses for different observers are indistinguishable from each other, and the MSEs are sufficiently
+small. This shows that objectivity can be successfully learned using the data augmentation approach. In the following, the model
+𝑊 F is calibrated using 64 observers, and all evaluations for the model are carried out with 1,024 random observers.
+    In Table 2, the three best MSEs for the three machine learning models trained on 𝐷𝐶 and 𝐷         ̃𝐶 are depicted and sorted for
+decreasing error on the test dataset 𝐷𝑇 . The model 𝑊 F yields far better results than 𝑊 I for both calibration and test datasets,
+which may be caused by a smaller function space of the model 𝑊 I due to the human choice of invariants. While the MSEs of
+𝑊 F are slightly higher than the ones of 𝑊 C on 𝐷𝐶 , which is reasonable since the polyconvex model is more restricted in fitting
+the calibration data than the non-polyconvex one, it actually performs slightly better on the test data. This could be rooted in the
+additional mathematical structure that polyconvexity incorporates into the model, making it more generalizable.
+    As already encountered in Fernández et al. (2021b), different neural network architectures using a vastly differing amount of
+parameters may lead to models of equal quality, with different results for multiple initializations using the same architecture. Also,
+the stress error in Eq. (24) dominates the overall MSE for all evaluations. For the convex neural networks used in this work, the
+models need a sufficiently high amount of nodes and layers to counteract the loss of flexibility due to the restrictions on the
+parameters. For the model 𝑊 F ,  [16, 16, 16] is the smallest architecture yielding good results, while there were no significant
+benefits for architectures using more layers or nodes.
+
+                                                                             11
+D.K. Klein et al.                                                                             Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+Table 2
+Deviations of model instances and MSEs of calibrated ML models for the BCC cell. MD evaluates the deviation for the instances trained on 𝐷𝐶 , while MD
+compares the deviation of the instance trained on 𝐷𝐶∗ to the instances trained on 𝐷𝐶 .
+ Model                                        Param.            Calibr.          Deviations                                  MSE
+                                                                data             𝐷𝑇𝐹                    𝐷𝐶𝐹                  𝐷𝑇                    𝐷𝐶
+ 𝑊 C with             [16, 16, 16]        673                 𝐷𝐶                                                           1.02 ⋅ 103            1.59 ⋅ 102
+                                         ——"——                                                                               1.40 ⋅ 103            1.58 ⋅ 102
+                                         ——"——                                                                               1.41 ⋅ 103            1.63 ⋅ 102
+                      [16, 16, 16]        673                 𝐷𝐶∗                                                          2.40 ⋅ 102            4.18 ⋅ 103
+                                                                MD               2.05 ⋅ 103             5.91 ⋅ 100
+                                                                MD               1.47 ⋅ 103             4.21 ⋅ 103
+ 𝑊 I with             [32, 32, 32]          2,369             𝐷𝐶                                                           1.33 ⋅ 104            1.11 ⋅ 104
+                      [32, 32]              1,313             —"—                                                          1.41 ⋅ 104            1.10 ⋅ 104
+                      [16, 16]              401               —"—                                                          1.44 ⋅ 104            1.12 ⋅ 104
+                      [16, 16]              401               𝐷𝐶∗                                                          1.77 ⋅ 105            1.30 ⋅ 105
+                                                                MD               2.37 ⋅ 102             2.93 ⋅ 102
+                                                                MD               3.47 ⋅ 103             1.84 ⋅ 103
+ 𝑊 F with             [16, 16, 16]        737                 ̃𝐶
+                                                                𝐷                                                            7.47 ⋅ 102            2.45 ⋅ 102
+                                         ——"——                                                                               7.74 ⋅ 102            3.43 ⋅ 102
+                                         ——"——                                                                               8.05 ⋅ 102            2.62 ⋅ 102
+                      [16, 16, 16]        737                 ̃∗
+                                                                𝐷                                                            6.81 ⋅ 102            5.42 ⋅ 102
+                                                                 𝐶
+
+                                                                MD               1.60 ⋅ 102             1.11 ⋅ 102
+                                                                MD               4.36 ⋅ 102             2.66 ⋅ 102
+
+
+
+
+     Furthermore, in Table 2 the mean deviations for the three machine learning models are shown, evaluating the deviations of the
+different instances of each individual model. The deviations are evaluated for the datasets 𝐷𝐶𝐹 and 𝐷𝑇𝐹 , which contain all deformation
+gradients applied in the calibration dataset 𝐷𝐶 and test dataset 𝐷𝑇 , respectively. MD evaluates the deviation for the instances trained
+on 𝐷𝐶 , while MD compares the deviation of the single instance trained on the dataset 𝐷𝐶∗ to the instances trained on 𝐷𝐶 . For the
+model 𝑊 C the MD on 𝐷𝐶𝐹 is very low, which may be attributed to the high flexibility of the unrestricted network core, allowing
+the model to be very similar on 𝐷𝐶 for every initialization. However, for 𝐷𝑇𝐹 , the MD of the model 𝑊 C is worse than its MSE
+on 𝐷𝑇 . Furthermore, for both 𝐷𝑇𝐹 and 𝐷𝐶𝐹 , the model behavior depends on the dataset used for the calibration, which leads to a
+high MD. Actually, MD on 𝐷𝐶𝐹 is even three magnitudes higher than MD. For the model 𝑊 I , the MD on both datasets is about two
+magnitudes smaller than its MSEs on the datasets. This may be caused by the additional mathematical structure that polyconvexity
+and invariants incorporate into the model. While the deviation of multiple instances trained on the same dataset is very low, the
+training on the adapted dataset 𝐷𝐶∗ leads to a different model behavior, which results in a high MD. The reason for this is that the
+model is not flexible enough to capture the material behavior. The model 𝑊 F has a flexible input and, due to the polyconvexity
+condition, a pronounced mathematical structure. This leads to excellent results for both the MSE and the MD values, making it the
+only model of this comparison which has both excellent approximation qualities and a consistent behavior within multiple model
+instances. Furthermore, even for a calibration with the adapted dataset 𝐷   ̃ ∗ the model behavior stays consistent. The deviation MD
+                                                                              𝐶
+has the same magnitude as MD, and also the MSEs for the instances trained with different datasets have the same magnitude. For
+the following evaluations, the core  [16, 16] is used for 𝑊 I , while for 𝑊 C and 𝑊 F the core with the smallest MSE is chosen.
+     In Fig. 5, the uniaxial deformation case and mixed test case for 𝑊 C are shown to examine the ellipticity of the model. As already
+encountered in Fernández et al. (2021b), the model shows excellent approximation properties. However, in both examined cases
+in Fig. 5, the model loses its ellipticity even for small deformations, which causes material instability and would lead to major
+drawbacks in numerical applications such as the finite element method. Consequently, for the metamaterials under consideration,
+it is important to include the polyconvexity condition into the model formulation, as it implies ellipticity, and thus ensures material
+stability. Typically, for soft materials, one does not expect loss of material stability for a deformation gradient 𝐹 in a bounded set
+including the identity deformation 𝐹 = 1 (even if large elastic strains may occur). This is, e.g., the case for isotropic elastic energies
+defined in the logarithmic strain tensor (Neff et al., 2016, 2015; Schröder et al., 2018). The loss of ellipticity in these models occurs
+only for extremely large strains that cannot be observed in experiments.
+     In Fig. 6, the behavior of 𝑊 C and 𝑊 F is examined for volumetric tension and compression. Regarding the volumetric growth
+condition (7), the strain energy density should rapidly grow for 𝐽 = det 𝐹 → 0+ . The model 𝑊 F contains the term 𝑊vol from (17)
+and thus fulfills the growth condition. In the formulation of 𝑊 C , the growth condition is not considered, and consequently it is
+violated for the extrapolation 𝐽 → 0+ . For the metamaterials under consideration, lattice instabilities may lead to high volumetric
+compression, therefore the growth condition should be included in the model formulation. It must be emphasized that both the loss
+of ellipticity and the nonphysical behavior for 𝐽 → 0+ are no specific drawbacks of the model 𝑊 C as proposed by Fernández et al.
+(2021b). It is very likely that other ML-based constitutive models would show the same behavior when calibrated to the examined
+data, as long as ellipticity and the volumetric growth condition are not explicitly considered in the model formulation.
+     In Fig. 7, a subset of the calibration and test cases for the model 𝑊 I is shown to examine some model characteristics. The
+model yields acceptable results for deformation gradients with dominating main diagonal elements. For the uniaxial and equibiaxial
+calibration case, the component 𝑆33 shows a large deviation from the simulation data, which also transfers to the biaxial test case.
+
+                                                                          12
+D.K. Klein et al.                                                                                  Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+
+
+Fig. 5. Evaluation of 𝑊 C for the BCC cell, shaded areas denote the model’s loss of ellipticity. The ellipticity was checked with the Hessian of the potential,
+using 500 random unit vectors for each test vector, c.f. (10). Points depict the simulation data, while lines depict the calibrated model. Normal components of
+                                                                                                         [    ]
+the stress tensor in red colors, shear components in blue, less important components in gray; stress in hPa .
+
+
+
+
+                    Fig. 6. Evaluation of 𝑊 C and 𝑊 F for volumetric deformation of the cubic BCC cell; strain energy density in [kJ/m3 ].
+
+
+Table 3
+Deviation of model instances and MSEs of calibrated 𝑊 F model for the X cell.
+ Model                                          Param.             Calibr.            Deviations                                  MSE
+                                                                   data               𝐷𝑇𝐹                    𝐷𝐶𝐹                  𝐷𝑇                    𝐷𝐶
+ 𝑊 F with              [16, 16, 16]         737                  ̃𝐶
+                                                                   𝐷                                                              5.41 ⋅ 102            2.38 ⋅ 102
+                                           ——"——                                                                                  5.62 ⋅ 102            2.61 ⋅ 102
+                                           ——"——                                                                                  8.82 ⋅ 102            2.54 ⋅ 102
+                                                                   MD                 1.47 ⋅ 102             5.64 ⋅ 101
+
+
+
+
+For shear deformation, the model completely fails to represent the simulation data, consequently, it also fails to represent the mixed
+test case. While, basically, the set of invariants for the model could be extended, it is unlikely that the model behavior for the cubic
+metamaterials under considerations can be improved with this approach. While the model shows drawbacks especially for shear
+deformations, the additional invariants can only use main diagonal elements of 𝐶 in order to be polyconvex, which makes it hard to
+gain flexibility for shear deformations. However, for a wide range of materials with less challenging behavior, the invariant-based
+model may still be a good choice, which is demonstrated in Section 5 for transverse isotropy.
+    In Fig. 8, a subset of the calibration and test cases for the model 𝑊 F is shown to examine the model’s characteristics. The model
+shows excellent results for every deformation mode of the calibration dataset and the test dataset, with only small deviations of the
+𝑆12 component for the mixed test case. After recalibration of the model with the concatenation of calibration and test dataset for
+1000 epochs, the model can perfectly represent the simulation data for both calibration and test data, which is not shown in Fig. 8.
+The data augmentation approximates the material objectivity so well, that no dependence on the observer can be seen at all.
+
+4.4. Model evaluation for X cell
+
+   In the following, for the evaluation of the performance of the models calibrated with the training data for the X cell, only the
+results for the model 𝑊 F are shortly discussed; the results for the model 𝑊 I confirmed the observations made for the BCC cell
+without yielding further insights. The model 𝑊 F was initialized three times using three layers with 16 nodes in each layer, leading
+
+                                                                              13
+D.K. Klein et al.                                                                               Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+
+
+Fig. 7. Evaluation of 𝑊 I for the cubic BCC cell. Points depict the simulation data, while lines depict the calibrated model. Normal components of the stress
+                                                                                             [   ]
+tensor in red colors, shear components in blue, less important components in gray; stress in hPa .
+
+
+
+
+Fig. 8. Evaluation of 𝑊 F for the cubic BCC cell. Points depict the simulation data, lines depict the calibrated model. Normal components of the stress tensor
+                                                                                      [    ]
+in red colors, shear components in blue, less important components in gray; stress in hPa .
+
+
+
+
+                                                                             14
+D.K. Klein et al.                                                                                 Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+
+
+  Fig. 9. Evaluation of 𝑊 F for the cubic X cell. Points depict the simulation data, while lines and shaded areas depict the calibrated model; stress in [hPa].
+
+
+
+
+to the MDs and MSEs shown in Table 3. In Fig. 9, the uniaxial and equibiaxial deformation mode for the model with the best 𝐷𝑇 are
+shown. While the model shows excellent agreement with the simulation data for almost all calibration cases, in the uniaxial tension
+regime, the model shows a slight dependence on the choice of observer. The reason for this is that the uniaxial and equibiaxial
+deformations are similar, while their stress response differs by a factor of ten. Therefore it is challenging for the model to capture
+the material’s behavior for both uniaxial and equibiaxial deformations. This may be resolved by an adapted training strategy as
+proposed in Fernández et al. (2021a), for which the stress responses of the different deformation cases are scaled to a comparable
+magnitude for the training. We should also remark that approximate satisfaction of objectivity does not conflict with an existence
+theorem based on polyconvexity and growth or coercivity conditions.
+
+5. Application to transverse isotropy
+
+   After the detailed examinations for cubic lattice metamaterials in Section 4, the application of the polyconvex ML models to
+transverse isotropy is now briefly discussed. In doing so, we demonstrate the straightforward applicability of our models to other
+symmetry groups. Also, for the highly challenging behavior of cubic lattice metamaterials, the invariant-based model 𝑊 I showed
+poor approximation quality. With the following example we show that, for a wide range of materials, 𝑊 I can still be an appropriate
+choice.
+
+5.1. Data generation
+
+Analytical transversely isotropic potential. For the following investigations, we generate data with the polyconvex model proposed by
+Schröder et al. (2008), which is applicable to several symmetry groups, including transverse isotropy. In the following, the preferred
+axis of the transversely isotropic symmetry group (21) is chosen as the 𝑥1 -axis, which motivates the second order structural tensor
+                  (           )
+                        1 1
+       𝐺ti = diag 𝛽 2 , ,        .                                                                                                (28)
+                        𝛽 𝛽
+Using this structural tensor, the two transversely isotropic invariants
+              (     )                     (            )
+      𝐽4 = tr 𝐶 𝐺ti ,              𝐽5 = tr Cof (𝐶) 𝐺ti                                                                                                      (29)
+
+can be derived, which are convex in 𝐹 and Cof 𝐹 , respectively (Schröder et al., 2008). Together with the isotropic invariants 𝐼1−3 ,
+Schröder et al. (2008) proposed the potential
+                                              (√ )               ( 𝛼
+                                                         𝜂1              𝛼 )
+      𝑊tiSNE = 𝛼1 𝐼1 + 𝛼2 𝐼2 + 𝛿1 𝐼3 − 𝛿2 log   𝐼3 +   (      )𝛼 𝐽4 4 + 𝐽5 4 ,                                                 (30)
+                                                     𝛼4 tr 𝐺ti 4
+which is objective by construction, and polyconvex if all parameters are equal to or greater than zero. The parameter 𝛿2 depends
+on the other parameters and is chosen such that the model is stress-free in the reference configuration. Note that the parameter
+                                                                                                              (                      )
+𝛽 of the structural tensor (28) needs to be specified as well. Here, we use the parameter values 𝛽, 𝛼1 , 𝛼2 , 𝛿1 , 𝛿2 , 𝛼4 , 𝜂1 =
+(2, 8, 0, 10, 56, 2, 10), which were fitted in Schröder et al. (2008) to referential data of a not further specified real-world material.
+    Using the potential (30), transversely isotropic data can be generated. As was already the case for the numerical homogenization
+of cubic lattice metamaterials, the analytical potential (30) provides both energy and stress values. However, for the following
+investigations, we will only make use of the stress values, which will demonstrate that energy values, which are typically not
+available in experiments, are not necessarily required to calibrate the proposed polyconvex ML models. Given as an analytical
+function, the potential (30) can directly be evaluated for a given deformation gradient 𝐹 ∈ GL+ (3). This leaves the question open
+of how to choose 𝐹 for the generation of calibration and test datasets.
+
+                                                                               15
+D.K. Klein et al.                                                                    Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+Calibration dataset. The calibration dataset 𝐷𝐶 consists of uniaxial and equibiaxial tensile tests, as well as a shear deformation. For
+the special cases of uniaxial and equibiaxial tensile tests, the corresponding boundary-value problem can be directly formulated as
+systems of non-linear equations. For uniaxial tension in 𝑥1 -direction, deformation gradient and stress tensor are given by
+                (              )              (             )
+       𝐹 = diag 𝐹11 , 𝐹22 , 𝐹33 ,    𝑆 = diag 𝑆11 (𝐹 ), 0, 0 ,                                                                     (31)
+
+where 𝐹11 is prescribed, 𝐹22 = 𝐹33 are unknown and 𝑆11 (𝐹 ) = 𝐷𝐹11 𝑊tiSNE (𝐹 ). For equibiaxial tension in 𝑥1 , 𝑥2 -directions,
+                (               )              (                     )
+        𝐹 = diag 𝐹11 , 𝐹22 , 𝐹33 ,     𝑆 = diag 𝑆11 (𝐹 ), 𝑆22 (𝐹 ), 0                                                                          (32)
+
+holds, where 𝐹11 = 𝐹22 , 𝐹33 is unknown and 𝑆11 (𝐹 ) = 𝐷𝐹11 𝑊tiSNE (𝐹 ), 𝑆22 (𝐹 ) = 𝐷𝐹22 𝑊tiSNE (𝐹 ). These non-linear systems of
+equations are then solved with standard functions provided by MATLAB R2021a, which provides the overall deformation gradients
+for uniaxial and equibiaxial tensile tests. For this, 200 equidistant values 𝐹11 ∈ [0.5, 2] are prescribed. The shear deformation
+𝐹 = 1 + 𝛾(𝑒1 ⊗ 𝑒2 + 𝑒2 ⊗ 𝑒1 ) is evaluated for 250 equidistant values 𝛾 ∈ [0, 0.5]. Selected data points are visualized in Figs. 10
+and 11.
+
+Test dataset. The test dataset 𝐷𝑇 consists of a biaxial test and a combined tension-shear test. Note that the ‘‘biaxial test’’ and ‘‘mixed
+test’’ are different from the ones used in Section 4. For the biaxial test, the system of nonlinear equations
+                  (             )             (                     )
+        𝐹 = diag 𝐹11 , 𝐹22 , 𝐹33 ,    𝑆 = diag 𝑆11 (𝐹 ), 𝑆22 (𝐹 ), 0                                                                  (33)
+
+with prescribed 𝐹11 , 𝐹22 = 0.5 𝐹11 is solved for 𝐹33 for 100 equidistant values 𝐹11 ∈ [0.5, 2]. The mixed test case
+
+           ⎛1 + 0.2 𝜆      0.2 𝜆         0    ⎞
+        𝐹 =⎜    0        1 + 0.1 𝜆       0    ⎟                                                                                                (34)
+           ⎜                                  ⎟
+           ⎝    0            0       1 − 0.1 𝜆⎠
+is evaluated for 100 equidistant values 𝜆 ∈ [−1, 2.5].
+    After generation of the deformation gradients 𝐹 for all calibration and test cases, the first Piola–Kirchhoff stress 𝑆 = 𝐷𝐹 𝑊tiSNE (𝐹 )
+is evaluated, and the resulting datasets consist of tuples
+            {(      )     }
+       𝐷 = 𝐹1 , 𝑆 1 , … .                                                                                                            (35)
+
+Altogether, the calibration dataset 𝐷𝐶 consists of 650 tuples, while the test dataset 𝐷𝑇 consists of 200 tuples.
+
+5.2. Model preparation
+
+    For the invariant-based ML model 𝑊 I , the two transversely
+                                                           √         isotropic invariants from (29) together with the three isotropic
+                                                                                     (                       )
+invariants from (13) and the additional invariant 𝐼3∗ = −2 𝐼3 form the input  = 𝐼1 , 𝐼2 , 𝐼3 , 𝐼3∗ , 𝐽4 , 𝐽5 ∈ R6 of the neural network.
+For the deformation gradient based model 𝑊 F , the input (𝐹 , det 𝐹 ) ∈ R10 is chosen. For the network core of 𝑊 I , one hidden layer
+with eight nodes turned out as a sufficiently accurate choice, while for 𝑊 F three hidden layers with 32 nodes in each layer are
+chosen. As before, convexity is ensured by choice of the convex Softplus activation function in each node and restrictions on the
+network parameters, which are discussed in Section 4.2 and Proposition A.9, respectively. The transversely isotropic symmetry group
+ti has an infinite number of elements, see (21). In order to apply the group symmetrization approach from (20) on 𝑊 F , the group
+is approximated by six rotations around the 𝑥1 -direction, c.f. Eq. (21).
+    For the model calibration, the MSE
+                      1 ∑ 1 ‖                           ‖2
+       MSE□ (𝑝) =                  ‖𝑆 (𝐹 ) − 𝑆 □ (𝐹 ; 𝑝)‖                                                                            (36)
+                    # (𝐷)        2 ‖                    ‖
+                             9Pa
+                          𝐹 ∈𝐷
+
+with 𝑊 □ , □ ∈ {I, F} is applied, c.f. Section 4.2. Here, the MSE for the shear deformation is weighted twice, as its stress response is
+considerably lower than the stress response of the other calibration cases. For the data augmentation for objectivity of 𝑊 F , see (22),
+128 random rotation matrices are used, while for the group symmetrization for transverse isotropy of 𝑊 F , see (20), six equidistant
+rotations around the 𝑥1 -axis are applied. Since both objectivity and material symmetry are only approximated for 𝑊 F , the model
+is evaluated with 1024 random observers for the verification of objectivity (3) and with 60 equidistant rotations around the 𝑥1 -axis
+for the material symmetry (5). Both models are initialized three times and each trained for 5000 epochs.
+    Further technical details are discussed in Section 4.2. The MATLAB code used to generate calibration and test data, as well as
+compiled versions of both ML models and their sets of parameters are provided in the public GitHub repository https://github.com/
+CPShub/sim-data.
+
+5.3. Model evaluation
+
+    In Table 4, the MSEs of the different model initializations are shown. The ML models show excellent agreement with both the
+calibration and test dataset. In particular, even though 𝑊 I has only one layer with eight nodes, it can represent the data almost
+perfectly, which is most likely caused by the fact that the ML model 𝑊 I uses the same invariants as the analytical potential (30). A
+subset of the training dataset and both test cases are shown for 𝑊 I and 𝑊 F in Figs. 10 and 11, respectively. Again, the model 𝑊 I
+shows excellent agreement for the transversely isotropic data. For the shear calibration case and the test cases, 𝑊 F shows a slight
+
+                                                                         16
+D.K. Klein et al.                                                                                  Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+Table 4
+MSEs of calibrated ML models for the transversely isotropic data.
+ Model                                                                         Param.                             MSE
+                                                                                                                  𝐷𝑇                                   𝐷𝐶
+ 𝑊 I with                              [8]                                   65                                 1.52 ⋅ 10−1                          2.90 ⋅ 10−2
+                                                         ——"——                                                    7.84 ⋅ 10−1                          6.41 ⋅ 10−2
+                                                         ——"——                                                    8.47 ⋅ 10−1                          3.44 ⋅ 10−2
+ 𝑊 F with                              [32, 32, 32]                          737                                3.20 ⋅ 100                           2.80 ⋅ 10−1
+                                                         ——"——                                                    3.40 ⋅ 100                           3.44 ⋅ 10−1
+                                                         ——"——                                                    4.12 ⋅ 100                           2.95 ⋅ 10−1
+
+
+
+
+Fig. 10. Evaluation of 𝑊 I for transverse isotropy. Points depict data from the analytical model 𝑊tiSNE , while lines depict the evaluation of the calibrated model
+                                                                                                                                                  [    ]
+𝑊 I . Normal components of the stress tensor are shown in red colors, shear components in blue, less important components in gray; stress in hPa .
+
+
+
+
+dependence on the observer. Overall, both ML models are able to represent the analytical potential (30) very well, and here especially
+the invariant-based model 𝑊 I shows excellent results. As such analytical potentials are successfully applied in, e.g., modeling of soft
+biological tissues (Balzani et al., 2006), this implies that the polyconvex ML models are also applicable to a wide range of real-world
+materials.
+
+
+6. A critique of machine learning in nonlinear elasticity theory
+
+
+    At this point, we would like to briefly discuss some general issues raised by the use of machine learning techniques in nonlinear
+elasticity theory. First and foremost, we would like to point out that these methods are not meant to serve as a replacement for
+classical analytical models, but rather as an addition to the already existing extensive theoretical framework. More specifically, we
+want to address three interrelated shortcomings of the data-driven approach:
+
+     • the lack of an intuitive interpretation of the model and its parameters;
+     • the unstable (and, in practice, even non-deterministic) dependence of the parameter values on the experimental data;
+     • the uncertainty of whether the resulting model is applicable to problems outside the range of prior experiments.
+
+To a smaller extent, all three of these issues can be observed for a number of analytical models as well, especially some
+phenomenological models with a large number of parameters, which could be considered a precursor to the modern purely
+data-driven approaches.
+
+                                                                                17
+D.K. Klein et al.                                                                                  Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+
+
+Fig. 11. Evaluation of 𝑊 F for transverse isotropy. Points depict data from the analytical model 𝑊tiSNE , while lines depict the evaluation of the calibrated model
+                                                                                                                                       [    ]
+𝑊 F . Normal components of the stress tensor in red colors, shear components in blue, less important components in gray; stress in hPa .
+
+
+
+
+6.1. Analytical models
+
+    For comparison, we first consider the classical, isotropic Hencky strain energy
+                                                     √          𝜅        √
+       𝑊 H ∶ GL+ (3) → R ,     𝑊 H (𝐹 ) = 𝜇 ‖ dev log 𝐹 𝑇 𝐹 ‖2 + [tr(log 𝐹 𝑇 𝐹 )]2 ,                                              (37)
+                                                                2
+which depends solely on the two physical parameters 𝜇 (the shear modulus) and 𝜅 (the bulk modulus).
+    While it is well known that the elasticity model induced by the Hencky energy does not provide an accurate description of very
+large deformations (Anand, 1979; Ogden et al., 2004), it is indeed highly accurate for up to moderate strains of about 20% (Anand,
+1979). Moreover, the relation between the elastic behavior predicted by the Hencky model and the experimental data used to
+determine the parameters is clearly accessible to direct interpretation: The shear modulus and the bulk modulus are determined by
+the material’s response to shear stresses and hydrostatic pressure, respectively, and in turn influence the stress response to certain
+modes of deformation, namely to simple shear and purely volumetric strain. In particular, this direct correspondence between the
+parameter values and the model’s behavior can be used to examine the plausibility of a specific parameter set, even in the absence
+of additional test data.
+    Moreover, Hencky deduced his material model from a number of simple axiomatic assumptions (Hencky, 1928, 1929; Neff et al.,
+2016, 2020). The applicability of his model to deformations not included in prior experiments can therefore be based on whether
+or not (or rather: to what degree) his postulates hold under the new circumstances. It is thereby possible to reasonably assess the
+limitations of Hencky’s model.
+    This direct correspondence between the mechanical–geometrical interpretation of the model and its parameters can no longer be
+established for other hyperelastic material models, especially for so-called phenomenological (or ‘‘heuristic’’) models. For example,
+the Ogden energy, which can be expressed in terms of the singular values 𝜆1 , 𝜆2 , 𝜆3 of 𝐹 via
+                                                    ∑
+                                                    𝑀
+                                                      𝜇𝑖         𝛼     𝛼     𝛼
+        𝑊 OG ∶ GL+ (3) → R ,          𝑊 OG (𝐹 ) =              (𝜆1𝑖 + 𝜆2𝑖 + 𝜆3𝑖 − 3) ,                                                                       (38)
+                                                    𝑖=1
+                                                          𝛼𝑖
+
+with 2𝑀 parameters 𝜇𝑖 > 0, 𝛼𝑖 ∈ R, can provide a much better fit to empirical observations than the Hencky model for very large
+deformations (Ogden et al., 2004) if the number 2𝑀 of material parameters is sufficiently high. However, there is no longer any
+intuitive relation between these parameters and the predicted material behavior.
+    Furthermore, the (globally) optimal choice of parameters for fitting the energy to a given dataset is difficult to determine due
+to the strongly nonlinear dependence of the induced stress–strain relation on the parameter values (Ogden et al., 2004). Therefore,
+in practice, the result of the parameter optimization is not fully determined by the measured empirical data, but also affected by
+
+                                                                                  18
+D.K. Klein et al.                                                                   Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+the random influence of, for example, the chosen starting points of the optimization algorithm. In particular, two possible outcomes
+of such an optimization procedure might yield a similar (or even an identical) quality of fit for the Ogden model to the limited
+experimental data, whereas the material behavior predicted by those two distinct optimized models for other deformations might
+differ significantly. Therefore, a high degree of uncertainty must remain about the prediction quality exhibited by material models
+such as Ogden’s, particularly when applied to deformations which are not included in (or closely related to) the original experimental
+observations. This problem is closely related to the more general notion of overfitting, i.e. optimizing too specifically to a given
+dataset, which tends to occur for model functions with a high number of parameters.
+
+6.2. Data-driven models
+
+    Machine-learning based approaches share and even amplify these shortcomings of highly complex phenomenological models.
+Due to the general nature of data-driven methods, the number of parameters required for closely fitting such a model to a given
+specific dataset is necessarily rather high, even when compared to complex models such as the Ogden energy. In addition, for most
+machine learning methods used today (including neural networks), the resulting model cannot (easily) be stated explicitly in the
+form of a closed-form analytical expression. It is therefore extremely difficult, if not impossible, to develop an intuitive understanding
+of the relation between such a data-driven model and its parameters on the one hand and the predicted material behavior on the
+other.
+    Of course, these problems have been recognized in many other fields of research where machine learning techniques have
+been applied, and a number of approaches have been suggested to determine not only the influence of different parameters
+on the prediction, but also the direct relation between the training data and the resulting output in a humanly comprehensible
+fashion (Lundberg and Lee, 2017; Shrikumar et al., 2017; Štrumbelj and Kononenko, 2014). However, these techniques still lack
+the reliability and the direct intuition offered by more traditional models.
+    Similarly, the phenomenon of overfitting is a well known issue in the field of machine learning, and a number of precautions
+(such as the careful distinction between training and validation data) are taken in order to alleviate this problem. However, since
+any form of validation or testing is still based on available experimental data, any assumptions about the applicability of these
+models to circumstances outside the range of prior observations must remain unfounded even in the best of cases.
+    Thus, we consider it as extremely important to inform machine learning models with as much physical and mathematical
+structure as possible (as done here with the hyperelasticity, anisotropy, objectivity, and polyconvexity properties) and apply them
+only in cases where classical approaches cannot provide an acceptable accuracy (as is the case here due to the strong nonlinearity
+of the lattice microstructures).
+    Finally, and perhaps most importantly, even if the resulting trained algorithm does indeed provide an accurate model in all
+practically relevant situations, it does not offer any insight as to why its predictions are accurate. Again, this can be contrasted with
+the aforementioned Hencky elasticity model: Although not deduced ab initio, the model has indeed been developed originally by
+Heinrich Hencky from simple geometrical and mechanical considerations, and a careful study of his deductions can without doubt
+further the reader’s understanding of continuum mechanics in a way that cannot be matched by inspecting the ‘‘black box’’ that
+results from training a machine learning algorithm.
+    Of course, the above considerations are not restricted to applications of data-driven models to nonlinear elasticity theory, but
+equally apply to many other domains of the natural sciences where machine learning has recently been demonstrated to yield
+promising results. Machine-learning based approaches can (and will) most certainly be employed to improve the accuracy of
+predictions and thus the quality of models and simulations in the years to come, most likely resulting in considerable technological
+advancements. However, for the reasons outlined above, machine learning should not be considered as a full-fledged replacement
+of more traditional, analytical models, now or in the future, even if the outcomes seem to match or even surpass those resulting
+from more classical approaches. In the past, humanity has found a major motivation for developing a further understanding of
+nature in the dependence of (practically applicable) scientific techniques on the scientific method (Russell, 1931), and it would be
+most unfortunate if the success of machine learning in advancing the former would lead us to neglect the latter.
+
+7. Conclusion
+
+    In the present work, two machine learning based constitutive models are proposed, which fulfill the polyconvexity condition
+by using input convex neural networks. This implies ellipticity of the constitutive models, which ensures material stability. The
+hyperelastic models are formulated for finite deformations and anisotropic material behavior. Furthermore, the neural networks
+yield highly flexible constitutive models, which are adaptable to a wide range of materials.
+    The first model 𝑊 I is based on a set of polyconvex, anisotropic invariants proposed by Schröder et al. (2010), see Eqs. (13) and
+(15), which fulfill the material objectivity and material symmetry conditions by construction. The neural network core is able to
+create highly nonlinear functions from the invariants, while conventional models are restricted to comparatively simple polynomials.
+Depending on the anisotropy class, various sets of invariants can be used.
+    The second model 𝑊 F fully exploits the approximation capabilities of artificial neural networks. Formulated in the deformation
+gradient, its cofactor and determinant, the material objectivity condition is not fulfilled by construction, which would be a major
+drawback for conventional constitutive models. In the context of machine learning, however, the model is trained to approximate
+the objectivity condition, using data augmentation of the calibration dataset, cf. (22), which is possible due to the high flexibility
+of the models, and the high-performing optimization algorithms available in several machine learning libraries, e.g., TensorFlow.
+
+                                                                   19
+D.K. Klein et al.                                                                  Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+The present work not only uses the potential values, as done in Ling et al. (2016), but also the stress values. This is convenient as
+the stress is the quantity of interest for many applications of the constitutive model, and furthermore, the general approximation
+quality of the model can benefit from the additional information that the augmented stress values provide. For incorporating the
+material symmetry, the group symmetrization introduced in Fernández et al. (2021b) is used, see Eq. (20).
+    The model capabilities are examined with synthetic homogenization data of cubic metamaterials used in Fernández et al.
+(2021b), and compared to the polyconvex model proposed by Schröder et al. (2010). The simulation data offers a highly challenging
+benchmark case, with characteristics like lattice instabilities for several deformation modes. The analytical model from Schröder
+et al. (2010) is not able to capture the behavior of the material, even for the uniaxial deformation case. The model 𝑊 F shows
+excellent performance, not only for the calibration data, but also for several test scenarios which were not included in the training
+of the model. The evaluation of the model 𝑊 I gave acceptable results for deformation gradients with dominating main diagonal
+elements, but failed to represent the stress response for shear deformations. However, when fitted to data generated from the
+analytical, transversely isotropic model from Schröder et al. (2008), which represents a real-world material, the model 𝑊 I also
+delivered excellent results. This shows that both models are applicable to a wide class of anisotropic materials, while 𝑊 F is preferable
+for highly challenging metamaterials. Apparently, the polyconvexity conditions greatly improves the generalization capabilities of
+ANN-based constitutive models, such that they can be trained on fairly small training datasets. Here, deformation modes which
+are commonly applied in physical experiments were used. Nevertheless, due to their high flexibility, the models can benefit from a
+wider range of calibration data and yield even better results. The data augmentation approach for the calibration of the model 𝑊 F
+does not require additional simulation or experimental data, the extended dataset is created purely from mechanical considerations.
+    The models are formulated as general as possible, and can be adapted to a wide range of anisotropic, hyperelastic materials. It
+lies in the very nature of machine learning that constitutive models based on neural networks are, to some extent, more complex
+than their conventional counterparts. As to what extent, the present work suggests that there are two major ways: For a wide range
+of materials with a moderately challenging behavior, very small ML models can be used, c.f. the excellent performance of the small
+invariant based model in Section 5. The model complexity of this approach is close to the one of analytical potentials, without the
+need to manually construct a function for the specific material behavior at hand. However, for very complex material behavior, the
+full flexibility of neural networks can be utilized by using bigger networks, c.f. the deformation gradient based model in Section 4. In
+both cases, the application to finite element simulations will be important for future research. Considering the infinitely continuously
+differentiable neural network cores and the ellipticity of the proposed models, they offer a straightforward adaption for this, with
+favorable numerical behavior and trivial computation of stress and stiffness tensors, if automatic differentiation functionalities are
+considered. For future work, it would be valuable to investigate the formulation of polyconvex FFNNs with a volumetric–deviatoric
+decomposition of the deformation gradient for (nearly) incompressible materials. Furthermore, the incorporation of parametric
+dependencies, such as the aspect ratio of a microstructure, into polyconvex FFNNs should be investigated.
+
+
+CRediT authorship contribution statement
+
+
+   Dominik K. Klein: Conceptualization, Software, Writing – original draft, Writing – review & editing. Mauricio Fernández:
+Conceptualization, Software, Writing – review & editing, Supervision. Robert J. Martin: Conceptualization, Writing – review &
+editing. Patrizio Neff: Conceptualization, Writing – review & editing. Oliver Weeger: Conceptualization, Writing – review & editing,
+Supervision.
+
+
+Declaration of competing interest
+
+
+    The authors declare that they have no known competing financial interests or personal relationships that could have appeared
+to influence the work reported in this paper.
+
+
+Data availability
+
+
+   The authors provide access to the complete simulation data required to reproduce the results through the public GitHub repository
+https://github.com/CPShub/sim-data
+
+
+Acknowledgments
+
+
+    The work of Dominik Klein is supported by the Graduate School CE within the Centre for Computational Engineering at Technical
+University of Darmstadt, Germany. Patrizio Neff acknowledges support in the framework of the DFG-Priority Programme 2256
+‘‘Variational Methods for Predicting Complex Phenomena in Engineering Structures and Materials’’, Neff 902/10-1, Project-No.
+440935806.
+
+                                                                   20
+D.K. Klein et al.                                                                    Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+Appendix. Input convex feed-forward neural networks
+
+   FFNNs are a special class of artificial neural networks, which can be recursively defined as the composition of several vector-
+valued functions (Aggarwal, 2018; Kollmannsberger et al., 2021). The components of the vectors are referred to as nodes or neurons,
+the function in each neuron is referred to as activation function.
+
+Definition A.1 (Feed-Forward Neural Networks (FFNNs)). The FFNN with vector-valued input 𝑋, 𝐻 hidden layers and scalar-valued
+output function 𝑎 is given by
+                                           [0]
+                              𝑋 ∈ R𝑛
+                  ( [1]        )     [1]
+           𝐴1 = 𝐴1 𝑊 𝑋 + 𝑏[1] ∈ R𝑛 ,
+                ( [ℎ]          )     [ℎ]
+                                                                                                                                              (A.1)
+        𝐴ℎ = 𝐴ℎ 𝑊 𝐴ℎ−1 + 𝑏[ℎ] ∈ R𝑛 ,             ℎ = 2, … , 𝐻
+            ( [𝐻+1]            )
+        𝑎=𝑎 𝑊       𝐴𝐻 + 𝑏[𝐻+1] ∈ R.
+                      [ℎ]   [ℎ−1]                [ℎ]
+Weights 𝑊 [ℎ] ∈ R𝑛 ×𝑛       and bias 𝑏[ℎ] ∈ R𝑛 form the set of parameters, which is optimized when the model is calibrated. 𝑋 and
+𝑎 are referred to as input and output layer, respectively, while the layers 𝐴ℎ are referred to as hidden layers with component-wise
+applied activation functions according to
+                        (        )           (             )𝑇
+       (𝐴 (𝑊 𝑋))𝑖 = 𝐴𝑖 ⟨𝑤[𝑖] , 𝑋⟩ ,     𝑊 = 𝑤[1] , … , 𝑤[𝑛] .                                                                 (A.2)
+
+We apply the short notation for feed-forward neural networks
+
+        𝑎◦◦𝑋                                                                                                                                 (A.3)
+
+with the networks core  = 𝐴𝐻 ◦ … ◦𝐴1 .
+
+Definition A.2 (Input Convex Neural Networks (ICNNs)). The FFNN 𝑎 = 𝑎◦◦𝑋 is called an ICNN, when the scalar-valued output 𝑎
+is convex w.r.t. the vector-valued input 𝑋 (Amos et al., 2017).
+
+    Sufficiency conditions for the fulfillment of convexity in the case of function compositions are given in the following theorem.
+
+Theorem A.3.        The function 𝑎̄ = 𝑎◦𝐵◦𝑋 is convex in 𝑋 if the function 𝑎 is convex and non-decreasing in 𝐵, and 𝐵 is component-wise
+convex in 𝑋.
+
+Proof. We have to show the positive semi-definiteness of the function’s Hessian (Hartmann and Neff, 2003; Silhavy, 2014):
+       2
+             (    )𝑇   2                    2
+      𝐷𝑋 𝑎̄ = 𝐷𝑋 𝐵 ⋅ 𝐷𝐵  𝑎 ⋅ 𝐷𝑋 𝐵 + 𝐷𝐵 𝑎 ⋅ 𝐷𝑋 𝐵                                                                           (A.4)
+
+The derivatives 𝐷𝑋 𝐵 are mappings from the vector space 𝑋 into the vector space 𝐵. When 𝑎 is chosen as a convex function of 𝐵, the
+Hessian of 𝑎 w.r.t. 𝐵 is positive semi-definite and hence the first term in Eq. (A.4) is positive semi-definite, see also observation 7.1.8
+in Horn and Johnson (2013). The second term in Eq. (A.4) is positive semi-definite when 𝑎 is non-decreasing in every component
+of 𝐵, and 𝐵 is component-wise convex in 𝑋. □
+
+Corollary A.4. A FFNN is convex, when (i) the first hidden layer of the network’s core is component-wise convex w.r.t. the input, (ii) every
+following hidden layer is component-wise convex and non-decreasing w.r.t. the previous layer, and (iii) the scalar-valued output function is
+convex and non-decreasing w.r.t. the last hidden layer.
+
+Proof. This follows by recursively applying Theorem A.3 to the components of the hidden layers.               □
+
+Theorem A.5.        Convexity is preserved under affine transformations.
+
+    The proof is clear but we provide it for the convenience of the reader.
+                                                                                                        ( )
+                                                                                                         ̃ = 𝑎 (𝑋 𝐶 + 𝐷) with
+Proof. The Hessian of the convex function 𝑎 applied on an affine transformation of its argument, i.e., 𝑎 𝑋
+arbitrary, but constant 𝐶 and 𝐷, is positive semi-definite.
+               (     )
+       𝐷𝑋2
+           𝑎 = 𝐷𝑋 𝑋̃ 𝑇 ⋅ 𝐷2 𝑎 ⋅ 𝐷𝑋 𝑋
+                                   ̃ + 𝐷 ̃ 𝑎 ⋅ 𝐷2 𝑋
+                                                  ̃                                                                     (A.5)
+                           ̃        𝑋   𝑋       𝑋
+
+The positive semi-definiteness of the first summand follows equivalent to Eq. (A.4), while the second summand vanishes due to the
+             ̃ in 𝑋. □
+linearity of 𝑋
+
+Corollary A.6. Due to its linearity, the bias of convex FFNNs can be chosen arbitrarily in every layer. The input of a convex FFNN can
+be multiplied by any constant matrix.
+
+                                                                      21
+D.K. Klein et al.                                                                       Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+   With Corollaries A.4 and A.6, convex neural networks can be constructed. In the first step, this requires the choice of a convex
+and non-decreasing activation function. Furthermore, the activation function should be sufficiently smooth, as the calculation of
+gradients plays an important role in continuum mechanics. All of the former requirements can be fulfilled by the following functions.
+
+Theorem A.7 (Log-Sum-Exp Function). The Log-Sum-Exp function is defined as
+                                     ∑
+                                     𝑚
+        𝑓 ∶ R𝑚 → R,    𝑓 (𝑥) = log         𝑒𝑥𝑙 .                                                                                                 (A.6)
+                                     𝑙=1
+
+We use the adaption 𝑓0 (𝑥) = 𝑓 (0, 𝑥), since it is closely linked to the Softplus function, see Corollary A.8. Using the weight matrix 𝑊 ∈ R𝑚×𝑛
+as defined in Eq. (A.2) and the bias vector 𝑏 ∈ R𝑚 , we obtain the adapted Log-Sum-Exp function
+                                                              [                       ]
+                                                                   ∑𝑚
+                𝑛                                                        ⟨𝑤[𝑙] ,𝑋⟩+𝑏𝑙
+        ∶ R → R, (𝑋) = 𝑓0 (𝑊 𝑋 + 𝑏) = log 1 +                    𝑒                                                                   (A.7)
+                                                                𝑙=1
+
+for neural networks. The  function is convex for arbitrary weights and bias, and non-decreasing when all weights are non-negative. It
+is smooth for any choice of arguments or parameters, i.e.,  ∈ 𝐶 ∞ (R𝑛 ).
+
+Proof. We first show the convexity of the adapted softplus function 𝑓0 by proving the positive semi-definiteness of the Hessian
+𝐷𝑥2 𝑓0 (𝑥). For this, we simply observe that the inequality
+                                             [𝑚          ][             ] [𝑚           ]2
+                                            ⎛ ∑                ∑𝑚          ∑              ⎞
+                  2              1          ⎜       2 𝑥𝑙             𝑥𝑙             𝑥𝑙    ⎟
+        0 ≤ 𝑣 ⋅ 𝐷𝑥 𝑓0 ⋅ 𝑣 = (  ∑         )        𝑣   𝑒    1 +     𝑒     −     𝑣 𝑙 𝑒                                      (A.8)
+                                       𝑥𝑙 2 ⎜ 𝑙=1                                         ⎟
+                                                    𝑙
+                             1+ 𝑚𝑙=1 𝑒      ⎝                  𝑙=1         𝑙=1            ⎠
+holds for any 𝑣 ∈ R𝑚 since, due to the Cauchy–Schwarz inequality,
+       [𝑚           ]2 [ 𝑚                   ]2 [ 𝑚       ][ 𝑚      ] [𝑚       ][          ]
+        ∑               ∑                        ∑          ∑          ∑            ∑
+                                                                                    𝑚
+                 𝑥𝑙            𝑥𝑙 ∕2   𝑥𝑙 ∕2         2 𝑥𝑙        𝑥𝑙       2 𝑥𝑙          𝑥𝑙
+            𝑣𝑙 𝑒      =    𝑣𝑙 𝑒      ⋅𝑒        ≤    𝑣𝑙 𝑒       𝑒     ≤   𝑣𝑙 𝑒    1+   𝑒      .                                                   (A.9)
+           𝑙=1           𝑙=1                       𝑙=1        𝑙=1          𝑙=1             𝑙=1
+
+The  function is obtained through the linear transformation
+
+        (𝑋) = 𝑓0 (𝑥) ,      𝑥=𝑊 𝑋+𝑏                                                                                                         (A.10)
+
+of the convex function 𝑓0 . Linear transformations preserve convexity, therefore the  function is also convex. The first derivative
+of the  function
+                        ∑𝑚       [𝑙] ⟨𝑤[𝑙] ,𝑋⟩
+       [           ]       𝑙=1 𝑤𝑖 𝑒
+         𝐷𝑋 (𝑋) 𝑖 =       ∑                                                                                                  (A.11)
+                        1+ 𝑚   𝑙=1 𝑒
+                                     ⟨𝑤[𝑙] ,𝑋⟩
+
+
+is non-negative for 𝑤[𝑙]
+                     𝑖 ≥ 0 ∀ 𝑖, 𝑙. The smoothness of the functions follows from the smoothness of the exponential function, and the
+smoothness of the logarithm on the positive domain. □
+
+Corollary A.8 (Softplus Function). For 𝑚 = 1 in Eq. (A.7), the  function is reduced to the Softplus () function
+                                    [           ]
+       ∶ R𝑛 → R, (𝑋) = log 1 + 𝑒⟨𝑤,𝑋⟩+𝑏                                                                                                    (A.12)
+
+with weights 𝑤 ∈ R𝑛 and bias 𝑏 ∈ R. The  function is convex for arbitrary weights and bias, and non-decreasing when all weights are
+non-negative. It is smooth for any choice of arguments or parameters.
+
+Proposition A.9 (ICNNs using  and  Functions). ICNNs based on  functions are built from multiple layers, with several nodes
+using  activation functions in each layer. For the first hidden layer, the weights of the softplus functions can take arbitrary values, while
+the other layers must be non-decreasing functions and, therefore, use non-negative weights. The networks output is given as the non-negative
+weighted sum of the last  layer. The bias in every layer can be chosen arbitrarily.
+    ICNNs based on  functions can be composed of either a single  function, or of several  functions. In the first case, the 
+function can be understood as a composition of one layer with several nodes using exponential activation functions, which are summed up
+and logarithmized in the next layer. The function achieves its approximation properties by increasing the amount of nodes in the exponential
+layer. As the exponential layer is the first hidden layer, the weights can be chosen arbitrarily. Alternatively, the convex neural network can
+be constructed using several  functions. We obtain this approach similar to the one introduced for  functions, just by replacing the
+ functions by  functions. In both cases, the bias in every layer can be chosen arbitrarily.
+
+Remark A.10. Constitutive models are often formulated in sets of invariants. In doing so, several important properties are fulfilled
+already by the choice of the input quantity. When a set of invariants is used for a ML model, the networks core must not only be
+convex, but also non-decreasing in its input, which follows directly from Eq. (A.4). Since the invariants are created by nonlinear
+functions, e.g., 𝐼1 = tr(𝐹 𝑇 𝐹 ), the subsequent function processing the invariants must be convex and non-decreasing in order to be
+convex in (𝐹 , Cof 𝐹 , det 𝐹 ). For cores based on  or  functions, this can easily be achieved by using non-negative weights in
+the first layer.
+
+                                                                      22
+D.K. Klein et al.                                                                                   Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+Remark A.11. The  activation function is not included in the current TensorFlow version, and was manually implemented.
+While  based cores should benefit from the highly flexible activation function and yield excellent results, the convergence
+behavior during training was very slow, and no satisfying results could be obtained. However, this should be seen as a numerical
+drawback of the implementation and optimization approaches used in this work rather than a general drawback of the function
+itself. Thus, only  based cores were used for the numerical investigations shown in Section 4.
+
+References
+
+Aggarwal, C.C., 2018. Neural Networks and Deep Learning, first ed. Springer International Publishing.
+Amos, B., Xu, L., Kolter, J.Z., 2017. Input convex neural networks. In: Precup, D., Teh, Y.W. (Eds.), Proceedings of the 34th International Conference on Machine
+     Learning. In: Proceedings of Machine Learning Research, vol. 70, PMLR, pp. 146–155, arXiv:1609.07152.
+Anand, L., 1979. On H. Hencky’s approximate strain energy function for moderate deformations. J. Appl. Mech. 46, 78–82. http://dx.doi.org/10.1115/1.3424532.
+Ball, J.M., 1976. Convexity conditions and existence theorems in nonlinear elasticity. Arch. Ration. Mech. Anal. 63 (4), 337–403. http://dx.doi.org/10.1007/
+     BF00279992.
+Ball, J.M., 1977. Constitutive inequalities and existence theorems in nonlinear elasto-statics. In: Knops, R.J. (Ed.), Herriot Watt Symposion: Nonlinear Analysis
+     and Mechanics, Vol. 1. Pitman, London, pp. 187–241.
+Balzani, D., Neff, P., Schröder, J., Holzapfel, G.A., 2006. A polyconvex framework for soft biological tissues. Adjustment to experimental data. Int. J. Solids
+     Struct. 43 (20), 6052–6070. http://dx.doi.org/10.1016/j.ijsolstr.2005.07.048.
+Baydin, A., Pearlmutter, B., Radul, A., Siskind, J., 2018. Automatic differentiation in machine learning: A survey. J. Mach. Learn. Res. 18, 1–43, arXiv:1502.05767.
+Bertoldi, K., Vitelli, V., Christensen, J., van Hecke, M., 2017. Flexible mechanical metamaterials. Nat. Rev. Mater. 2 (11), 1–11. http://dx.doi.org/10.1038/
+     natrevmats.2017.66, Number: 11 Publisher: Nature Publishing Group.
+Bertram, A., 2021. Elasticity and Plasticity of Large Deformations, fourth ed. Springer International Publishing.
+Bonet, J., Gil, A.J., Ortigosa, R., 2015. A computational framework for polyconvex large strain elasticity. Comput. Methods Appl. Mech. Engrg. 283, 1061–1094.
+     http://dx.doi.org/10.1016/j.cma.2014.10.002.
+Cai, R., Holweck, F., Feng, Z.-Q., Peyraut, F., 2021. Integrity basis of polyconvex invariants for modeling hyperelastic orthotropic materials — Application to
+     the mechanical response of passive ventricular myocardium. Int. J. Non-Linear Mech. 133, 103713. http://dx.doi.org/10.1016/j.ijnonlinmec.2021.103713.
+Calafiore, G.C., Gaubert, S., Possieri, C., 2020a. A universal approximation result for difference of log-sum-exp neural networks. IEEE Trans. Neural Netw. Learn.
+     Syst. PP, 1–10. http://dx.doi.org/10.1109/TNNLS.2020.2975051.
+Calafiore, G.C., Gaubert, S., Possieri, C., 2020b. Log-sum-exp neural networks and posynomial models for convex and log-log-convex data. IEEE Trans. Neural
+     Netw. Learn. Syst. 31 (3), 827–838. http://dx.doi.org/10.1109/TNNLS.2019.2910417.
+Carrara, P., De Lorenzis, L., Stainier, L., Ortiz, M., 2020. Data-driven fracture mechanics. Comput. Methods Appl. Mech. Engrg. 372, 113390. http://dx.doi.org/
+     10.1016/j.cma.2020.113390.
+Chagnon, G., Rebouah, M., Favier, D., 2015. Hyperelastic energy densities for soft biological tissues: A review. J. Elasticity 120 (2), 129–160. http://dx.doi.org/
+     10.1007/s10659-014-9508-z.
+E, W., Han, J., Zhang, L., 2020. Integrating machine learning with physics-based modeling. Pre-Print under Review. arXiv:2006.02619.
+Ebbing, V., 2010. Design of Polyconvex Energy Functions for All Anisotropy Classes (Ph.D. thesis). Universität Duisburg-Essen.
+Ehret, A., Itskov, M., 2007. A polyconvex hyperelastic model for fiber-reinforced materials in application to soft tissues. J. Mater. Sci. 42, 8853–8863.
+     http://dx.doi.org/10.1007/s10853-007-1812-6.
+Fernández, M., Fritzen, F., Weeger, O., 2021a. Material modeling for parametric finite hyperelasticity based on machine learning with application in optimization
+     of metamaterials. http://dx.doi.org/10.13140/RG.2.2.21536.10242, Pre-Print under Review.
+Fernández, M., Jamshidian, M., Böhlke, T., Kersting, K., Weeger, O., 2021b. Anisotropic hyperelastic constitutive models for finite deformations combining material
+     theory and data-driven approaches with application to cubic lattice metamaterials. Comput. Mech. 67 (2), 653–677. http://dx.doi.org/10.1007/s00466-020-
+     01954-7.
+Flaschel, M., Kumar, S., De Lorenzis, L., 2021. Unsupervised discovery of interpretable hyperelastic constitutive laws. Comput. Methods Appl. Mech. Engrg. 381,
+     113852. http://dx.doi.org/10.1016/j.cma.2021.113852.
+Fritzen, F., Fernández, M., Larsson, F., 2019. On-the-fly adaptivity for nonlinear twoscale simulations using artificial neural networks and reduced order modeling.
+     Front. Mater. 6, 75. http://dx.doi.org/10.3389/fmats.2019.00075.
+Fritzen, F., Kunc, O., 2018. Two-stage data-driven homogenization for nonlinear solids using a reduced order model. Eur. J. Mech. A Solids 69, 201–220.
+     http://dx.doi.org/10.1016/j.euromechsol.2017.11.007.
+Ghaderi, A., Morovati, V., Dargazany, R., 2020. A physics-informed assembly of feed-forward neural network engines to predict inelasticity in cross-linked
+     polymers. Polymers 12, http://dx.doi.org/10.3390/polym12112628.
+Ghiba, I.-D., Martin, R.J., Neff, P., 2018. Rank-one convexity implies polyconvexity in isotropic planar incompressible elasticity. J. Math. Pures Appl. 116,
+     http://dx.doi.org/10.1016/j.matpur.2018.06.009.
+Glaesener, R.N., Träff, E.A., Telgen, B., Canonica, R.M., Kochmann, D.M., 2020. Continuum representation of nonlinear three-dimensional periodic truss networks
+     by on-the-fly homogenization. Int. J. Solids Struct. http://dx.doi.org/10.1016/j.ijsolstr.2020.08.013.
+González, D., Chinesta, F., Cueto, E., 2019. Learning corrections for hyperelastic models from data. Front. Mater. 6, 14. http://dx.doi.org/10.3389/fmats.2019.
+     00014.
+González, D., García, A., Chinesta, F., Cueto, E., 2020. A data-driven learning method for constitutive modeling: Application to vascular hyperelastic soft tissues.
+     Materials 13, 2319. http://dx.doi.org/10.3390/ma13102319.
+Hartmann, S., Neff, P., 2003. Polyconvexity of generalized polynomial-type hyperelastic strain energy funtions for near-incompressibility. Int. J. Solids Struct.
+     40, 2767–2791. http://dx.doi.org/10.1016/S0020-7683(03)00086-6.
+Haupt, P., 2002. Continuum Mechanics and Theory of Materials, second ed. Springer Berlin Heidelberg.
+Heider, Y., Wang, K., Sun, W., 2020. SO(3)-invariance of informed-graph-based deep neural network for anisotropic elastoplastic materials. Comput. Methods
+     Appl. Mech. Engrg. 363, http://dx.doi.org/10.1016/j.cma.2020.112875.
+Hencky, H., 1928. Über die Form des Elastizitätsgesetzes bei ideal elastischen Stoffen. Z. Tech. Phys. 9, 215–220.
+Hencky, H., 1929. Welche Umstände bedingen die Verfestigung bei der bildsamen Verformung von festen isotropen Körpern? Z. Phys. 55, 145–155.
+Holzapfel, G.A., 2000. Nonlinear Solid Mechanics: A Continuum Approach for Engineering, second ed. Wiley.
+Horn, R.A., Johnson, C.R., 2013. Matrix Analysis, second ed. Cambridge University Press, USA.
+Hornik, K., 1991. Approximation capabilities of multilayer feedforward networks. Neural Netw. 4 (2), 251–257. http://dx.doi.org/10.1016/0893-6080(91)90009-T.
+Itskov, M., 2001. A generalized orthotropic hyperelastic material model with application to incompressible shells. Internat. J. Numer. Methods Engrg. 50,
+     1777–1799. http://dx.doi.org/10.1002/nme.86.
+Itskov, M., Aksel, N., 2004. A class of orthotropic and transversely isotropic hyperelastic constitutive models based on a polyconvex strain energy function. Int.
+     J. Solids Struct. 41, 3833–3848. http://dx.doi.org/10.1016/j.ijsolstr.2004.02.027.
+
+
+                                                                                23
+D.K. Klein et al.                                                                                    Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+Jamshidian, M., Boddeti, N., Rosen, D.W., Weeger, O., 2020. Multiscale modelling of soft lattice metamaterials: Micromechanical nonlinear buckling analysis,
+    experimental verification, and macroscale constitutive behaviour. Int. J. Mech. Sci. 188, 105956. http://dx.doi.org/10.1016/j.ijmecsci.2020.105956.
+Jiang, Y., 2016. Highly-stretchable 3D-architected mechanical metamaterials. Sci. Rep. 6, 34147. http://dx.doi.org/10.1038/srep34147.
+Kambouchev, N., Fernandez, J., Radovitzky, R., 2007. A polyconvex model for materials with cubic symmetry. Modelling Simulation Mater. Sci. Eng. 15, 451.
+    http://dx.doi.org/10.1088/0965-0393/15/5/006.
+Karniadakis, G.E., Kevrekidis, I.G., Lu, L., Perdikaris, P., Wang, S., Yang, L., 2021. Physics-informed machine learning. Nat. Rev. Phys. http://dx.doi.org/10.1038/
+    s42254-021-00314-5.
+Khajehtourian, R., Kochmann, D., 2020. A continuum description of substrate-free dissipative reconfigurable metamaterials. J. Mech. Phys. Solids 147,
+    http://dx.doi.org/10.1016/j.jmps.2020.104217.
+Khajehtourian, R., Kochmann, D., 2021. Soft adaptive mechanical metamaterials. Front. Robot. AI 8, 673478. http://dx.doi.org/10.3389/frobt.2021.673478.
+Kirchdoerfer, T., Ortiz, M., 2016. Data-driven computational mechanics. Comput. Methods Appl. Mech. Engrg. 304, 81–101. http://dx.doi.org/10.1016/j.cma.
+    2016.02.001.
+Kollmannsberger, S., D’Angella, D., Jokeit, M., Herrmann, L., 2021. Deep Learning in Computational Mechanics. In: Studies in Computational Intelligence, vol.
+    977, Springer, http://dx.doi.org/10.1007/978-3-030-76587-3.
+Kružík, M., Roubíček, T., 2019. Mathematical Methods in Continuum Mechanics of Solids, first ed. Springer International Publishing.
+Kunc, O., Fritzen, F., 2019. Finite strain homogenization using a reduced basis and efficient sampling. Math. Comput. Appl. 24 (2), 56. http://dx.doi.org/10.
+    3390/mca24020056.
+Le, B.A., Yvonnet, J., He, Q.-C., 2015. Computational homogenization of nonlinear elastic materials using neural networks. Internat. J. Numer. Methods Engrg.
+    104 (12), 1061–1084. http://dx.doi.org/10.1002/nme.4953.
+Lee, J.-H., Singer, J.P., Thomas, E.L., 2012. Micro-/nanostructured mechanical metamaterials. Adv. Mater. (Deerfield Beach, Fla.) 24 (36), 4782—4810.
+    http://dx.doi.org/10.1002/adma.201201644.
+Ling, J., Jones, R., Templeton, J., 2016. Machine learning strategies for systems with invariance properties. J. Comput. Phys. 318, http://dx.doi.org/10.1016/j.
+    jcp.2016.05.003.
+Linka, K., Hillgärtner, M., Abdolazizi, K., Aydin, R., Itskov, M., Cyron, C., 2020. Constitutive artificial neural networks: A fast and general approach to predictive
+    data-driven constitutive modeling by deep learning. J. Comput. Phys. 110010. http://dx.doi.org/10.1016/j.jcp.2020.110010.
+Liu, J., Gu, T., Shan, S., Kang, S., Weaver, J., Bertoldi, K., 2016. Harnessing buckling to design architected materials that exhibit effective negative swelling.
+    Adv. Mater. 28, http://dx.doi.org/10.1002/adma.201600812.
+Liu, M., Liang, L., Sun, W., 2020. A generic physics-informed neural network-based constitutive model for soft biological tissues. Comput. Methods Appl. Mech.
+    Engrg. 372, 113402. http://dx.doi.org/10.1016/j.cma.2020.113402.
+Lundberg, S.M., Lee, S.-I., 2017. A unified approach to interpreting model predictions. In: Advances in Neural Information Processing Systems. pp. 4765–4774,
+    arXiv:1705.07874.
+Martin, R.J., Ghiba, I.-D., Neff, P., 2018. A non-ellipticity result, or the impossible taming of the logarithmic strain measure. Int. J. Non-Linear Mech. 102,
+    147–158. http://dx.doi.org/10.1016/j.ijnonlinmec.2018.02.011.
+Martin, R.J., Ghiba, I.-D., Neff, P., 2019. A polyconvex extension of the logarithmic Hencky strain energy. Anal. Appl. 17 (03), 349–361. http://dx.doi.org/10.
+    1142/S0219530518500173.
+Martin, R.J., Voss, J., Ghiba, I.-D., Neff, P., 2020a. Rank-one convexity vs. ellipticity for isotropic functions. Pre-Print under Review. arXiv:2008.11631.
+Martin, R.J., Voss, J., Ghiba, I.-D., Sander, O., Neff, P., 2020b. The quasiconvex envelope of conformally invariant planar energy functions in isotropic
+    hyperelasticity. J. Nonlinear Sci. 30, 2885–2923. http://dx.doi.org/10.1007/s00332-020-09639-4.
+Matous, K., Geers, M., Kouznetsova, V., Gillman, A., 2016. A review of predictive nonlinear theories for multiscale modeling of heterogeneous materials. J.
+    Comput. Phys. 330, http://dx.doi.org/10.1016/j.jcp.2016.10.070.
+Neff, P., Eidel, B., Martin, R.J., 2016. Geometry of logarithmic strain measures in solid mechanics. Arch. Ration. Mech. Anal. 222 (2), 507–572. http:
+    //dx.doi.org/10.1007/s00205-016-1007-x.
+Neff, P., Ghiba, I.-D., Lankeit, J., 2015. The exponentiated Hencky-logarithmic strain energy. Part I: Constitutive issues and rank-one convexity. J. Elasticity 121,
+    143–234. http://dx.doi.org/10.1007/s10659-015-9524-7.
+Neff, P., Graban, K., Schweickert, E., Martin, R.J., 2020. The axiomatic introduction of arbitrary strain tensors by Hans Richter – A commented translation of
+    ‘Strain tensor, strain deviator and stress tensor for finite deformations’. Math. Mech. Solids 25 (5), 1060–1080, arXiv:1909.05998.
+Nguyen, L.T.K., Keip, M.-A., 2018. A data-driven approach to nonlinear elasticity. Comput. Struct. 194, 97–115. http://dx.doi.org/10.1016/j.compstruc.2017.07.
+    031.
+Ogden, R.W., Saccomandi, G., Sgura, I., 2004. Fitting hyperelastic models to experimental data. Comput. Mech. 34 (6), 484–502. http://dx.doi.org/10.1007/
+    s00466-004-0593-y.
+Pfefferkorn, R., Betsch, P., 2019. Extension of the enhanced assumed strain method based on the structure of polyconvex strain-energy functions. Internat. J.
+    Numer. Methods Engrg. 121, http://dx.doi.org/10.1002/nme.6284.
+Russell, B., 1931. The Scientific Outlook. George Allen & Unwin.
+Schröder, J., 2010. Anisotropic polyconvex energies. In: Schröder, J., Neff, P. (Eds.), Poly-, Quasi- and Rank-One Convexity in Applied Mechanics. In: CISM
+    International Centre for Mechanical Sciences, Springer, Vienna, pp. 53–105. http://dx.doi.org/10.1007/978-3-7091-0174-2_3.
+Schröder, J., von Hoegen, M., Neff, P., 2018. The exponentiated Hencky energy: Anisotropic extension and case studies. Comput. Mech. 61, 657–685.
+    http://dx.doi.org/10.1007/s00466-017-1466-4.
+Schröder, J., Neff, P., 2003. Invariant formulation of hyperelastic transverse isotropy based on polyconvex free energy functions. Int. J. Solids Struct. 40, 401–445.
+    http://dx.doi.org/10.1016/S0020-7683(02)00458-4.
+Schröder, J., Neff, P., Balzani, D., 2005. A variational approach for materially stable anisotropic hyperelasticity. Int. J. Solids Struct. 42 (15), 4352–4371.
+    http://dx.doi.org/10.1016/j.ijsolstr.2004.11.021.
+Schröder, J., Neff, P., Ebbing, V., 2008. Anisotropic polyconvex energies on the basis of crystallographic motivated structural tensors. J. Mech. Phys. Solids 56,
+    3486–3506. http://dx.doi.org/10.1016/j.jmps.2008.08.008.
+Schröder, J., Neff, P., Ebbing, V., 2010. Polyconvex energies for trigonal, tetragonal and cubic symmetry groups. In: Hackl, K. (Ed.), IUTAM Symposium on
+    Variational Concepts with Applications to the Mechanics of Materials. Springer Netherlands, Dordrecht, pp. 221–232.
+Shrikumar, A., Greenside, P., Kundaje, A., 2017. Learning important features through propagating activation differences. In: Precup, D., Teh, Y.W. (Eds.),
+    Proceedings of the 34th International Conference on Machine Learning. In: Proceedings of Machine Learning Research, vol. 70, PMLR, pp. 3145–3153,
+    arXiv:1704.02685.
+Silhavy, M., 2014. The Mechanics and Thermodynamics of Continuous Media, first ed. In: Theoretical and Mathematical Physics, Springer Berlin Heidelberg.
+Štrumbelj, E., Kononenko, I., 2014. Explaining prediction models and individual predictions with feature contributions. Knowl. Inf. Syst. 41 (3), 647–665.
+    http://dx.doi.org/10.1007/s10115-013-0679-x.
+Surjadi, J.U., Gao, L., Du, H., Li, X., Xiong, X., Fang, N.X., Lu, Y., 2019. Mechanical metamaterials and their engineering applications. Advanced Engineering
+    Materials 21 (3), 1800864. http://dx.doi.org/10.1002/adem.201800864.
+Tac, V., Sree, V.D., Rausch, M.K., Tepole, A.B., 2021. Data-driven modeling of the mechanical behavior of anisotropic soft biological tissue. Pre-Print under
+    Review. arXiv:2107.05388.
+
+
+                                                                                 24
+D.K. Klein et al.                                                                                    Journal of the Mechanics and Physics of Solids 159 (2022) 104703
+
+
+Truesdell, C., Noll, W., 2004. The Non-Linear Field Theories of Mechanics, third ed. Springer Berlin Heidelberg.
+Virtanen, P., Gommers, R., Oliphant, T.E., Haberland, M., Reddy, T., Cournapeau, D., Burovski, E., Peterson, P., Weckesser, W., Bright, J., van der Walt, S.J.,
+    Brett, M., Wilson, J., Millman, K.J., Mayorov, N., Nelson, A.R.J., Jones, E., Kern, R., Larson, E., Carey, C.J., Polat, I., Feng, Y., Moore, E.W., VanderPlas, J.,
+    Laxalde, D., Perktold, J., Cimrman, R., Henriksen, I., Quintero, E.A., Harris, C.R., Archibald, A.M., Ribeiro, A.H., Pedregosa, F., van Mulbregt, P., SciPy 1.0
+    Contributors, 2020. SciPy 1.0: Fundamental algorithms for scientific computing in python. Nature Methods 17, 261–272. http://dx.doi.org/10.1038/s41592-
+    019-0686-2.
+Vlassis, N., Ma, R., Sun, W., 2020. Geometric deep learning for computational mechanics part I: Anisotropic hyperelasticity. Comput. Methods Appl. Mech. Engrg.
+    371, http://dx.doi.org/10.1016/j.cma.2020.113299.
+Wang, S., Yu, X., Perdikaris, P., 2020. When and why PINNs fail to train: A neural tangent kernel perspective. Pre-Print under Review. arXiv:2007.14527.
+Willard, J., Jia, X., Xu, S., Steinbach, M., Kumar, V., 2020. Integrating physics-based modeling with machine learning: A survey. Pre-Print under Review.
+    arXiv:2003.04919.
+Xiang, Y., Zhong, D., Rudykh, S., Zhou, H., Qu, S., Yang, W., 2020. A review of physically based and thermodynamically based constitutive models for soft
+    materials. J. Appl. Mech. 87 (11), http://dx.doi.org/10.1115/1.4047776.
+Xu, K., Huang, D., Darve, E., 2021. Learning constitutive relations using symmetric positive definite neural networks. J. Comput. Phys. 428, http://dx.doi.org/
+    10.1016/j.jcp.2020.110072.
+Yang, H., Guo, X., Tang, S., Liu, W.K., 2019. Derivation of heterogeneous material laws via data-driven principal component expansions. Comput. Mech. 64 (2),
+    365–379. http://dx.doi.org/10.1007/s00466-019-01728-w.
+Yvonnet, J., Gonzalez, D., He, Q.-C., 2009. Numerically explicit potentials for the homogenization of nonlinear elastic heterogeneous materials. Comput. Methods
+    Appl. Mech. Engrg. 198 (33), 2723–2737. http://dx.doi.org/10.1016/j.cma.2009.03.017.
+Yvonnet, J., He, Q.-C., 2007. The reduced model multiscale method (R3M) for the non-linear homogenization of hyperelastic media at finite strains. J. Comput.
+    Phys. 223 (1), 341–368. http://dx.doi.org/10.1016/j.jcp.2006.09.019.
+Zee, L., Sternberg, E.R., 1983. Ordinary and strong ellipticity in the equilibrium theory of incompressible hyperelastic solids. Arch. Ration. Mech. Anal. 83,
+    53–90. http://dx.doi.org/10.1007/BF00281087.
+Zheng, Q.-S., Spencer, A.J., 1993. Tensors which characterize anisotropies. Internat. J. Engrg. Sci. 31 (5), 679–693. http://dx.doi.org/10.1016/0020-7225(93)
+    90118-E.
+
+
+
+
+                                                                                 25
+

@@ -1,0 +1,1019 @@
+                                       Computer Methods in Applied Mechanics and Engineering 452 (2026) 118666
+
+
+
+                                                            Contents lists available at ScienceDirect
+
+
+                                           Comput. Methods Appl. Mech. Engrg.
+                                                    journal homepage: www.elsevier.com/locate/cma
+
+
+
+
+A staggered training framework for mechanics-informed neural
+networks in tractable multiscale homogenization with application
+to woven fabrics
+Faisal As’ad             ∗, Charbel Farhat
+
+Department of Aeronautics and Astronautics, Stanford University, Stanford, 94305, California, United States of America
+
+
+
+
+a r t i c l e           i n f o                           a b s t r a c t
+
+Keywords:                                                 We introduce a computationally tractable framework for multiscale homogenization of path-
+Homogenization                                            dependent heterogeneous materials that combines mechanics-informed artiﬁcial neural networks
+Neural networks                                           with a staggered training procedure. The proposed approach decomposes complex, multiscale
+Computational mechanics
+                                                          problems into a sequence of two-scale subproblems, eﬃciently bridging the scales through data-
+Multiscale
+Fabric
+                                                          driven, neural network-based surrogate models that are, by construction, consistent with funda-
+Acceleration                                              mental laws of continuum mechanics. The staggered training strategy ensures that the oﬄine
+                                                          computational cost scales linearly with the number of scales, rather than exponentially, thereby
+                                                          achieving substantial eﬃciency gains over conventional nested multiscale ﬁnite element meth-
+                                                          ods. As an illustrative application, the framework is demonstrated on woven fabrics, capturing
+                                                          viscoelastic and ﬁber-resolved material behaviors while maintaining computational eﬃciency.
+                                                          The results demonstrate that the proposed method achieves high-ﬁdelity predictions comparable
+                                                          to those of fully resolved models reconstructed from real-material imaging, establishing a general
+                                                          and ﬂexible methodology for modeling complex materials with many interacting scales.
+
+
+
+
+1. Introduction
+
+    Heterogeneous materials have become a cornerstone of modern engineering applications [1–3]. Yet, in contrast to their ho-
+mogeneous counterparts, they remain poorly understood. Such materials can exhibit highly nonlinear stress-strain relationships,
+path-dependence, and complex failure mechanisms that existing homogeneous theories or models fail to capture. As a result, fully
+exploiting their superior properties poses signiﬁcant scientiﬁc and engineering challenges.
+    A particularly important class of heterogeneous materials is woven fabrics, which play a central role in aerospace engineering as
+the canopy broadcloth of parachutes. For instance, woven fabrics have been used in the supersonic Disk-Gap-Band (DGB) parachutes
+that NASA has deployed to land rovers on Mars [4–6]. Despite numerous successful deployments, parachute failures have been
+reported where the broadcloth ruptured at loads well below its design capacity [7]. These incidents underscore the critical need for
+a deeper understanding of the mechanical behavior of woven fabrics.
+    Like many heterogeneous materials, woven fabrics possess inherent ﬁne-scale structures. As illustrated in Fig. 1, the broadcloth
+of the 16 meter diameter Mars 2020 parachute canopy consists of ﬁber bundles woven into yarns, with microscale features on
+the order of micrometers. These structures give rise to highly complex and nonlinear behavior, including compressive weakness,
+tensile stiﬀening, shear locking, biaxial tensile coupling, anisotropy, and path-dependence. Capturing these eﬀects in simulations
+
+  ∗ Corresponding author.
+
+    E-mail addresses: faisal3@stanford.edu (F. As’ad), cfarhat@stanford.edu (C. Farhat).
+
+https://doi.org/10.1016/j.cma.2025.118666
+Received 9 October 2025; Received in revised form 28 November 2025; Accepted 9 December 2025
+Available online 9 January 2026
+0045-7825/© 2025 Elsevier B.V. All rights are reserved, including those for text and data mining, AI training, and similar technologies.
+F. As’ad and C. Farhat                                                         Computer Methods in Applied Mechanics and Engineering 452 (2026) 118666
+
+
+
+
+ Fig. 1. Parachute broadcloth geometries at two scales: macroscale membrane (left) and ﬁne-scale plain weave of ﬁber bundles structure (right).
+
+
+
+requires accounting for ﬁne-scale structures. However, direct numerical resolution is computationally prohibitive: a fully resolved
+discretization of the Mars 2020 DGB canopy is estimated to require 2 × 1015 solid elements — far beyond practical computational or
+storage limits. Consequently, woven fabrics provide both a clear motivation for multiscale homogenization and an ideal candidate
+for its application.
+    Homogenization is widely employed in solid mechanics to capture the inﬂuence of ﬁne-scale structures on macroscopic behavior
+without explicitly resolving the small scales [8,9]. A prominent paradigm is the locally attached microstructure concept [10], which
+associates each macroscopic material point with a localized microscale model. This principle underlies the Finite Element Squared
+(FE2 ) framework [11,12], wherein the macroscale response is governed by concurrent microscale FE simulations performed on Rep-
+resentative Volume Elements (RVEs). Prior studies have applied FE2 to dry woven fabrics, but most were restricted to yarn-level
+resolution at the ﬁner scale and to elastic material behavior [13–16], thereby neglecting the intra-ﬁber interactions and viscoelastic
+eﬀects that strongly inﬂuence fabric response. Other works incorporated ﬁber-level resolution at the ﬁnest scale [17,18], typically
+leveraging beam element formulations, but were likewise limited to elastic responses.
+    Despite its versatility, FE2 remains computationally prohibitive for anything beyond small-scale problems. The high cost stems
+from the need to repeatedly solve Boundary Value Problems (BVPs) on the microscale RVE, with complexity worsening in multiscale
+settings where the number of required BVP solves increases exponentially with the number of scales.
+    To address this challenge, considerable eﬀort has been devoted to accelerating FE2 , particularly for two-scale problems. Prominent
+strategies include Projection-based Model Order Reduction (PMOR) [19,20], polynomial regression [14], reduced cubature [21],
+Artiﬁcial Neural Networks (ANNs) [22], Mechanics-Informed Artiﬁcial Neural Networks (MI-ANNs) [15,23], convolutional neural
+networks [24], and transformer architectures [25]. While these techniques enable rapid online evaluations, they predominantly still
+depend on expensive oﬄine data generation – a process that becomes prohibitive for large RVE discretizations or when multiple scales
+are involved. Recently, some attention has turned to accelerating FE2 speciﬁcally in the context of three or more scales [26,27].
+    This paper aims to develop a computationally eﬃcient framework for the multiscale homogenization of heterogeneous, path-
+dependent materials by combining MI-ANNs [15,23] with a staggered training procedure. Complex multiscale problems are decom-
+posed into successive two-scale subproblems, with the scales bridged through neural network surrogate models that, by construction,
+satisfy fundamental laws of continuum mechanics, including various stability criteria, the Clausius-Duhem principle, fading mem-
+ory, zero-stress conditions, objectivity, material non-inversion, and material symmetries. The staggered training strategy ensures that
+the oﬄine computational cost grows linearly with the number of scales, rather than exponentially, making the framework signiﬁ-
+cantly more eﬃcient than conventional nested multiscale FE methods. The proposed approach is developed and demonstrated in the
+context of woven fabrics, accurately capturing viscoelastic and ﬁber-resolved behaviors-such as rate-dependent hysteresis, biaxial
+tensile coupling, and warp-weft asymmetry-while retaining computational eﬃciency. The results show that the framework achieves
+high-ﬁdelity predictions comparable to fully resolved models derived from real-material imaging, establishing a versatile and general
+methodology for modeling complex, many-scale materials.
+    For clarity of exposition, the mesoscale/microscale terminology used throughout this work is deﬁned as follows: an RVE is referred
+to as mesoscale if it resolves the yarns as the smallest structural entity of a woven fabric, and as microscale if it resolves the individual
+ﬁbers comprising the yarns.
+    The remainder of this paper is organized as follows. Section 2 reviews the fundamentals of FE2 , yarn-resolved homogenization
+of woven fabrics, and surrogate-based acceleration. Section 3 introduces the two-scale and three-scale ﬁber-resolved models, along
+with the staggered training procedure. Section 4 presents the oﬄine training and online performance assessment on a fabric coupon
+test case as well as a large-scale parachute inﬂation problem. Finally, Section 5 provides concluding remarks.
+
+
+2. Background
+
+2.1. Computational homogenization of continua with locally attached microstructures
+
+    In solid mechanics, homogenization captures the inﬂuence of ﬁne-scale structures on macroscale behavior without explicitly
+resolving them in the macroscale discretization. A widely used class of homogenization schemes relies on the concept of the locally
+attached microstructure [10].
+
+                                                                       2
+F. As’ad and C. Farhat                                                           Computer Methods in Applied Mechanics and Engineering 452 (2026) 118666
+
+
+2.1.1. The locally attached microstructure
+   This concept assumes that each coarse-scale material point is associated with a localized portion of the ﬁne-scale structure. This
+ﬁne-scale structure deforms consistently with the local coarse-scale kinematics, and its response dictates the eﬀective constitutive
+behavior at that material point.
+   Formally, consider a material identiﬁed a priori to possess 𝑁𝑠 + 1 separate scales, where scale 0 denotes the macroscale and scale
+𝑁𝑠 the ﬁnest scale. At scale 𝑘, the body occupies a domain Ω𝑘 with boundary 𝜕Ω𝑘 , and is described in its reference conﬁguration by 𝑿𝑘
+and in its deformed conﬁguration by 𝒙𝑘 . The deformation gradient at 𝑿𝑘 is 𝑭𝑘 = 𝜕𝒙𝑘 ∕𝜕𝑿𝑘 . At the ﬁnest scale (𝑘 = 𝑁𝑠 ), the constitutive
+law is assumed homogeneous and explicitly known. At all other scales 𝑘 = 0, … , 𝑁𝑠 − 1, each material point 𝑿𝑘 is characterized by
+the response of an RVE at scale 𝑘 + 1, assumed here, without loss of generality, to be independent of 𝑿𝑘 .
+   To ensure consistency across scales, kinematic information is transferred from scale 𝑘 to scale 𝑘 + 1 to satisfy the localization-
+averaging condition1 [29]
+                 1
+        𝑭𝑘 =                𝑭    d𝑉                                                                                                                 (1)
+               |Ω𝑘+1 | ∫Ω𝑘+1 𝑘+1
+   It is convenient to place the RVE center at 𝑿𝑘+1 = 𝟎. The deformed position 𝒙𝑘+1 is decomposed into a mean ﬁeld 𝒙̄ 𝑘+1 dictated
+by the scale 𝑘 contribution and a ﬂuctuation ﬁeld 𝒘𝑘+1 arising due to the RVE, which takes the form
+        𝒙𝑘+1 = 𝒙̄ 𝑘+1 + 𝒘𝑘+1
+    Expanding 𝒙̄ 𝑘+1 about the attachment point 𝒙𝑘 and neglecting higher-order terms (ﬁrst-order homogenization) gives
+        𝒙𝑘+1 = 𝑭𝑘 𝑿𝑘+1 + 𝒘𝑘+1                                                                                                                       (2)
+    Equivalently, for the displacement ﬁeld,
+        𝒖𝑘+1 = (𝑭𝑘 − 𝑰)𝑿𝑘+1 + 𝒘𝑘+1
+    From (1), the deﬁnition of 𝑭𝑘+1 , and (2), it follows that the ﬂuctuation ﬁeld must satisfy
+              𝜕𝒘𝑘+1
+                    d𝑉 = 0
+        ∫Ω𝑘+1 𝜕𝑿𝑘+1
+which, by Green’s ﬁrst identity, is equivalent to
+
+                 𝒘𝑘+1 ⊗ 𝑵𝑘+1 d𝐴 = 0                                                                                                                 (3)
+        ∫𝜕Ω𝑘+1
+where 𝑵𝑘+1 is the outward unit normal vector to the boundary of the RVE at scale 𝑘 + 1, and the ⊗ operator denotes the dyadic (or
+outer) product.
+    Diﬀerent admissible choices of the ﬂuctuation ﬁeld 𝒘𝑘+1 lead to diﬀerent homogenization schemes. A particularly eﬀective choice
+is to impose Periodic Boundary Conditions (PBCs) on the RVE,
+            (      )       ( 𝜕Ω− )
+               𝜕Ω+
+        𝒘𝑘+1 𝑿𝑘+1    = 𝒘𝑘+1 𝑿𝑘+1                                                                                                (4)
+          𝜕Ω+       𝜕Ω− are boundary points on opposite faces of the RVE with opposing outward normals. PBCs are widely regarded
+where 𝑿𝑘+1    and 𝑿𝑘+1
+as the most appropriate choice, as they avoid the stiﬀness overestimation inherent to Dirichlet boundary conditions and the underes-
+timation associated with Neumann boundary conditions [30]. By adopting 𝒘𝑘+1 that satisﬁes (4), the boundary conditions on 𝜕Ω𝑘+1
+are fully deﬁned.
+    In general, the response of the scale 𝑘 + 1 RVE depends on a set of history variables 𝚵𝑘+1 , which may include internal variables
+or other quantities capturing path dependence, rate eﬀects, or hysteresis. The resulting BVP is therefore time-dependent, though
+typically quasi-static since inertia is negligible in homogenization by standard scaling arguments. With the displacement boundary
+conditions speciﬁed and the history variables initialized, the BVP is well-posed and can be solved.
+    Information from the ﬁner-scale solution is transmitted back to the scale 𝑘 material point in the form of a homogenized First
+Piola-Kirchhoﬀ (PK1) stress tensor 𝑷𝑘 , which must satisfy the homogenization averaging condition1
+                 1
+        𝑷𝑘 =                𝑷    d𝑉                                                                                                                 (5)
+               |Ω𝑘+1 | ∫Ω𝑘+1 𝑘+1
+    In the reference conﬁguration, the traction vector 𝑻𝑘+1 relates to the normal vector 𝑵𝑘+1 through 𝑷𝑘+1 as follows
+        𝑻𝑘+1 = 𝑷𝑘+1 𝑵𝑘+1
+with 𝑻𝑘+1 diﬀerentially related to the force acting on a reference area element d𝐴 as
+        d𝒇𝑘+1 = 𝑻𝑘+1 d𝐴
+
+
+ 1
+   For simplicity, the averaging conditions (1) and (5) are stated here under the assumption of continuous displacements and tractions in the RVE.
+This assumption does not hold for an RVE with multiple disjoint interacting bodies, where displacement and traction jumps at the discontinuities
+must be accounted for via additional surface integral terms. Nonetheless, this simpliﬁcation is inconsequential, as the subsequent results (2), (3),
+and (6) remain valid even in the presence of discontinuities [28].
+
+                                                                         3
+F. As’ad and C. Farhat                                                     Computer Methods in Applied Mechanics and Engineering 452 (2026) 118666
+
+
+   Applying Green’s ﬁrst identity, the volumetric integral in (5) can be rewritten as a surface integral, yielding the homogenization
+transmission rule
+               1
+      𝑷𝑘 =                𝒇    ⊗ 𝑵𝑘+1 d𝐴                                                                                          (6)
+            |Ω𝑘+1 | ∫𝜕Ω𝑘+1 𝑘+1
+which deﬁnes the constitutive response at the scale 𝑘 material point 𝑿𝑘 .
+    In the localization rule (2), rigid body translations are eliminated by ﬁxing the RVE’s geometric center at the origin. However,
+rigid body rotations – which should not aﬀect the response by material frame indiﬀerence – are unnecessarily transmitted. Following
+[14], only the deformational component of 𝑭𝑘 is transmitted in this work. That is, using the polar decomposition 𝑭𝑘 = 𝑹𝑘 𝑼𝑘 , the
+rotational component 𝑹𝑘 is ﬁltered out and only the right stretch tensor 𝑼𝑘 is applied to the RVE. The localization rule then becomes
+        𝒙𝑘+1 = 𝑼𝑘 𝑿𝑘+1 + 𝒘𝑘+1                                                                                                                 (7)
+    Filtering 𝑹𝑘 can be viewed as a rotation by 𝑹𝑘𝑇 to remove the rigid rotation. Consequently, the volumetric and surface integrals
+(5) and (6) yield the asymmetric Biot stress tensor 𝑩𝑘 = 𝑹𝑘𝑇 𝑷𝑘 , with
+                  1
+        𝑩𝑘 =                  𝒇    ⊗ 𝑵𝑘+1 d𝐴                                                                                                  (8)
+                |Ω𝑘+1 | ∫𝜕Ω𝑘+1 𝑘+1
+This stress tensor is energy-conjugate to the right stretch tensor.
+   The modiﬁed localization and homogenization rules (7) and (8) thus serve as counterparts to (2) and (6), but with rigid body
+rotations removed. Since the stretch tensor 𝑼𝑘 is related to the Green-Lagrange strain 𝑬𝑘 = (𝑼𝑘2 − 𝑰)∕2, and the Second Piola-Kirchhoﬀ
+(PK2) stress 𝑺𝑘 can be recovered from 𝑩𝑘 via the Lyapunov equation
+        𝑼𝑘 𝑺𝑘 + 𝑺𝑘 𝑼𝑘 = 𝑩𝑘𝑇 + 𝑩𝑘                                                                                                              (9)
+it follows that solving the scale 𝑘 + 1 BVP, together with these localization and homogenization rules, provides a constitutive mapping
+between the strain and stress at scale 𝑘, given the corresponding history variables. Since the deformation history at scale 𝑘 + 1 (and
+thus 𝚵𝑘+1 ) is determined by the deformation history at scale 𝑘, this mapping can be equivalently expressed in terms of scale 𝑘 history
+variables 𝚵𝑘 , which implicitly encode 𝚵𝑘+1 . The resulting constitutive law is therefore
+                 (       )
+        𝑺𝑘 =  𝑘 𝑬𝑘 , 𝚵𝑘
+where the function  𝑘 is deﬁned by the scale 𝑘 + 1 RVE.
+
+2.1.2. The FE2 method
+    The FE2 method [12] is a computational homogenization framework founded on the locally attached microstructure concept. At
+the coarse scale, the material is discretized using an FE model, and each integration point is endowed with a locally attached ﬁne-scale
+RVE, which is itself modeled using ﬁnite elements. This results in a multi-level concurrent FE formulation involving nested solves,
+driven by the localization and homogenization rules outlined above.
+    The solution procedure begins at scale 𝑘 = 0, where boundary conditions are speciﬁed by the physical problem. At each solution
+step (time step or iteration, e.g., in a Newton-Raphson method), the local deformation at each integration point is transmitted to
+the attached RVE at scale 𝑘 + 1 to deﬁne its boundary conditions. This process is repeated recursively until the ﬁnest scale 𝑘 = 𝑁𝑠 ,
+where the constitutive law is explicitly known and the boundary value problem can be solved. Information is then passed upward:
+homogenized stresses from the RVE at scale 𝑘 are transmitted to the corresponding integration point at scale 𝑘 − 1, enabling the
+coarse-scale problem to advance. This top-down and bottom-up exchange is repeated at each solution step, with partial intermediate
+passes when iterative or multirate time-integration strategies are required.
+    Here, we adopt an implementation of FE2 based on the method of reference nodes [31], and extend it to ensure compatibility
+between three-dimensional (3D) RVEs at scale 𝑘 + 1 and 2D or 1D coarse-scale attachment elements at scale 𝑘. The domain boundary
+of the scale 𝑘 + 1 RVE is decomposed as
+                  ⋃ ( +□                )
+       𝜕Ω𝑘+1 =         𝜕Ω𝑘+1 ∪ 𝜕Ω−□ 𝑘+1
+                   □∈𝑆𝑘
+
+where 𝜕Ω±□
+        𝑘+1
+            denotes faces with normals ±□, and 𝑆𝑘 = {𝑥, 𝑦, 𝑧}, {𝑥, 𝑦}, or {𝑥} depending on whether the scale 𝑘 integration point
+lies within a 3D, 2D, or 1D element, respectively. Reference (or dummy) nodes are placed at the geometric centers of these opposing
+faces. These nodes do not belong to the actual RVE stuctural discretization but serve as carriers of localized deformation and reaction
+forces, while facilitating the application of PBCs. By constraining only these reference nodes, rather than subsets of physical boundary
+nodes, over-stiﬀening of the RVE is avoided.
+    The localization of the right stretch tensor 𝑼𝑘 to the RVE is performed through these reference nodes as
+              |    (       )|
+       𝒖̂ ±□  | = 𝑼𝑘 − 𝑰 | 𝑿    ̂ ±□ ||                                                                                             (10)
+          𝑘+1 |𝑆            |𝑆𝑘 𝑘+1 |𝑆𝑘
+                 𝑘
+
+where 𝒖̂ ±□
+         𝑘+1
+             denotes the displacement of the reference node on the 𝜕Ω±□
+                                                                     𝑘+1
+                                                                         face, and †|𝑆𝑘 indicates restriction to the coordinate compo-
+nents in 𝑆𝑘 . Since these are the only displacement-controlled nodes within the RVE, they alone exhibit nonzero reaction forces. The
+homogenized Biot stress tensor is then obtained directly from these quantities as
+                 1     ∑ ( +□ +□𝑇                    )
+       𝑩𝑘 =                 ̂ 𝒇̂
+                            𝑿          +𝑿 ̂ −□ 𝒇̂−□𝑇
+              |Ω𝑘+1 | □∈𝑆     𝑘+1 𝑘+1      𝑘+1   𝑘+1
+                          𝑘
+
+
+                                                                   4
+F. As’ad and C. Farhat                                                           Computer Methods in Applied Mechanics and Engineering 452 (2026) 118666
+
+
+
+
+                 Fig. 2. Schematic of the FE2 implementation for the two-scale yarn-resolved woven fabric model proposed in [14].
+
+
+
+from which the second PK2 stress tensor is obtained by solving the Lyapunov equation in (9). This construction ensures consistency
+with the dimensionality of the coarse-scale element. For example, when the RVE is attached to a 2D membrane element, out-of-plane
+displacements of reference nodes are unconstrained, yielding zero out-of-plane reactions forces and thus a plane-stress condition at
+the homogenized level. Similarly, when attached to a 1D truss element, only the axial stress component survives.
+   PBCs are enforced by Linear Multi-Point Constraints (LMPCs) tying opposing faces, which can be written as
+          +                    −                                  ±
+        𝒖𝑖𝑘+1 − 𝒖̂ +□
+                   𝑘+1
+                       = 𝒖𝑖𝑘+1 − 𝒖̂ −□
+                                    𝑘+1
+                                        ,    for □ ∈ 𝑆𝑘 , 𝑖± s.t. 𝑿𝑘+1
+                                                                   𝑖
+                                                                       ∈ 𝜕Ω±□
+                                                                           𝑘+1
+
+    Together with (10), these constraints ensure a periodic ﬂuctuation ﬁeld that satisﬁes (3). Global translational rigid-body modes
+of the RVE are suppressed through additional LMPCs of the form
+           ∑
+                   𝒖𝑖𝑘+1 = 𝟎
+            𝑖 ∈𝜕Ω
+        {𝑖|𝑿𝑘+1  𝑘+1 }
+
+
+    Overall, the computational cost of FE2 is dominated by the number of ﬁne-scale boundary value problems to be solved,
+                    (𝑁 −1                )
+                     ∏𝑠
+        𝑁BVP =                𝑁𝑘𝑔 𝑁𝑘𝑡                                                                                                            (11)
+                         𝑘=0
+
+where 𝑁𝑘𝑔 is the number of integration points in the scale 𝑘 RVE and 𝑁𝑘𝑡 the number of solution steps required at that scale.
+   While FE2 provides a rigorous framework, its prohibitive cost has motivated a broad array of acceleration strategies. The method-
+ologies introduced in this paper will be illustrated through FE2 , but are equally compatible with other concurrent homogenization
+schemes.
+
+
+2.2. Two-scale yarn-resolved model for woven fabric
+
+    Two-scale computational homogenization of plain woven fabrics has been studied previously [13–16,18]. Of particular relevance
+to this work is the two-scale model described in [14,15], in which a yarn-resolved RVE of type F-111 nylon fabric was attached to
+macroscale membrane elements, as illustrated in Fig. 2. The minimal repeatable unit cell comprised four interwoven yarns, each
+discretized with solid elements and modeled as homogeneous, isotropic, elastic nylon. Yarn-yarn interactions were represented via
+frictionless contact, and PBCs were applied, though not via the reference-node method described in Section 2.1.2. The full FE model
+of the RVE contained 1 024 elements.
+    To ensure compatibility between the homogenized stress tensor and the plane-stress assumption of the macroscale membrane, a
+Newton-Raphson-like iterative scheme was used, following [32], to enforce vanishing out-of-plane stresses. This procedure delivered
+an eﬀective mapping between in-plane strains and in-plane stresses.
+    The primary motivation for this modeling eﬀort was to enable the homogenization of canopy fabric in simulations of the inﬂation
+of a 16 m diameter supersonic parachute. A fully resolved simulation of such a parachute is estimated to require approximately 2 × 1015
+elements, rendering it utterly intractable. By contrast, the homogenized model reduced the problem to roughly 270 000 macroscale
+membrane elements.
+    Although this represents a substantial reduction in computational cost, the problem remained far from tractable. Solving approxi-
+mately 270 000 RVE problems at every macroscale time step would require nearly 500 years of wall-clock time on 96 computing cores
+for just one second of simulation time. This highlights the critical need to accelerate the homogenization process.
+
+                                                                            5
+F. As’ad and C. Farhat                                                             Computer Methods in Applied Mechanics and Engineering 452 (2026) 118666
+
+
+2.3. Accelerated homogenization using mechanics-informed artiﬁcial neural networks
+
+    To overcome the computational intractability highlighted in Section 2.2, it is essential to eliminate the need for a prohibitively
+large number of online BVP solves, whose cost scales with both the size of the macroscale FE model and the number of solution
+steps. The remedy is to adopt an oﬄine/online procedure: surrogate models are trained oﬄine at a ﬁxed cost and then evaluated
+rapidly online during the macroscale simulation, thereby replacing the expensive FE2 process with a more computationally eﬃcient
+framework.
+    Surrogate models in this context can be broadly classiﬁed into two categories. The ﬁrst comprises internal representations,
+which approximate the full numerical simulation (and hence the underlying physical governing equations) by projecting the high-
+dimensional state vector into a reduced latent space. PMOR exempliﬁes this approach: it constructs reduced bases from snapshots
+of the high-dimensional solution and has been successfully applied to accelerate FE2 homogenization [19,33,34]. Although physics-
+based, these methods can remain unnecessarily costly for problems where only speciﬁc quantities of interest (QoIs) are required, and
+they often require intrusive modiﬁcations of the governing equations.
+    The second category consists of external representations, which directly approximate the mapping between input parameters and
+QoIs without reconstructing the full solution. In homogenization, this amounts to approximating the functional mapping between
+the strain history and the stress response at scale 𝑘, eﬀectively serving as a constitutive law. For example, [14] employed ANNs to
+map strain to stress in the nonlinear elastic setting. This approach is highly eﬃcient, but its neglect of governing physics can lead to
+violations of essential mechanical principles.
+    The frontier of surrogate modeling therefore lies in physics-informed external representations: QoI-driven surrogates that embed
+mechanical constraints [35–38]. MI-ANNs, introduced by the authors in the elastic [15] and viscoelastic [23] contexts, illustrate this
+paradigm. MI-ANNs are form-agnostic, capable of representing highly nonlinear constitutive mappings, and constrained by construc-
+tion to satisfy essential physical principles, including stability, material frame indiﬀerence, energy consistency, the second law of
+thermodynamics, rigid-body invariance, and symmetry requirements where relevant.
+    The training of MI-ANNs is based on data generated by expensive FE2 simulations, conducted oﬄine using simpliﬁed “coupon
+tests.” In these tests, the macroscale consists of a single element with a single integration point, constrained so that all relevant
+strain components can be realized. Repeated homogenization over prescribed displacement histories produces pairs of strain-stress
+trajectories, {𝑬(𝑡𝑚 ), 𝑺(𝑡𝑚 )}𝑚 , which form the training data. Once trained, the MI-ANN surrogate replaces the ﬁne-scale RVE solves
+during macroscale simulations, eﬀectively reducing the number of expensive BVP solves to a ﬁxed oﬄine cost independent of the
+number of time steps or integration points.
+    Given the viscoelastic nature of woven fabrics, an internal-variable-based MI-ANN framework is employed. Details of this frame-
+work can be found in [23]; its principal features are brieﬂy summarized here. In the viscoelastic MI-ANN framework, the stress 𝑺(𝑬, 𝜶)
+depends on both the strain 𝑬 and an internal strain-like variable 𝜶, which evolves according to a diﬀerential equation 𝜶(𝜷,
+                                                                                                                          ̇   𝑬) driven
+by an internal stress 𝜷(𝑬, 𝜶). After enforcing key mechanics-based constraints on these functional relationships – including various
+stability criteria, the Clausius-Duhem principle, fading memory, zero-stress conditions, objectivity, material non-inversion, and the
+symmetries of the material symmetry group  – a three-potential model is obtained
+
+                                 𝜕𝑊          𝜕𝑉
+          𝑺(𝑬, 𝜶)            =        (𝑬) +     (𝑬, 𝜶)
+                                 𝜕𝑬          𝜕𝑬
+                                 𝜕𝐺
+          𝜶(𝜷,
+          ̇    𝑬)            =      (𝜷, 𝑬)
+                                 𝜕𝜷
+                                   𝜕𝑉
+          𝜷(𝑬, 𝜶)            =   −     (𝑬, 𝜶)
+                                   𝜕𝜶
+     where
+
+ •   𝑊 is convex, 𝜕𝑊 ∕𝜕𝑬(𝟎) = 𝟎,              lim        𝑊 (𝑬) = ∞, and 𝑊 (𝑹𝑬𝑹𝑇 ) = 𝑊 (𝑬) for all 𝑹 ∈ .
+                                          det(2𝑬+𝑰)→0+
+ •   𝑉 = 𝑉̃ (ℂ1 ∶ 𝑬 + ℂ2 ∶ 𝜶 ), with 𝑉̃ convex, 𝜕 𝑉̃ ∕𝜕𝜹(𝟎) = 𝟎, 𝑉 (𝑹𝑬𝑹𝑇 , 𝑹𝜶𝑹𝑇 ) = 𝑉 (𝑬, 𝜶) for all 𝑹 ∈ , and ℂ1 , ℂ2 are fourth-order
+             ⏟⏞⏞⏞⏞⏞⏞⏞⏞⏞⏟⏞⏞⏞⏞⏞⏞⏞⏞⏞⏟
+                         𝜹
+   tensors.
+ • 𝐺 is convex in 𝜷, 𝜕𝐺∕𝜕𝜷(𝟎, 𝑬) = 𝟎, and 𝐺(𝑹𝜷𝑹 𝑇 , 𝑹𝑬𝑹 𝑇 ) = 𝐺(𝜷, 𝑬) for all 𝑹 ∈ .
+
+
+   The three potentials 𝑊 , 𝑉 , and 𝐺 are learned using Input Convex Neural Networks [39], leveraging a surrogate internal-variable
+representation for accelerated and parallelizable training. Furthermore, the symmetry conditions on the potentials are enforced
+via a group symmetrization method [40]. Importantly, the training process in this time-dependent setting incorporates temporally
+stochastic strain paths, generated via random walks in strain space, to capture path-dependence and promote robust generalization.
+
+3. Fiber-resolved computational homogenization of fabric
+
+    The two-scale yarn-resolved homogenized model introduced in [14], described in Section 2.2 and illustrated in Fig. 2, success-
+fully captures certain key characteristics of fabric behavior, such as compressive and shear weakness. However, it also suﬀers from
+signiﬁcant limitations that diminish its accuracy in representing the true mechanical behavior of woven fabrics.
+
+                                                                            6
+F. As’ad and C. Farhat                                                      Computer Methods in Applied Mechanics and Engineering 452 (2026) 118666
+
+
+
+
+Fig. 3. X-ray microtomographic imaging of the Mars 2020 parachute broadcloth material (left) and the corresponding post-processed geometry
+after ﬁber segmentation (right). Image reproduced from [46].
+
+
+
+ • Viscoelastic behavior: Woven nylon fabrics exhibit viscoelasticity arising from polymeric dissipation within the ﬁbers and intra-ﬁber
+   friction [41]. The model outlined in Section 2.2 is formulated within an elastic framework and therefore cannot capture hysteresis
+   or other path-dependent eﬀects.
+ • Yarn heterogeneity and anisotropy: Yarns are heterogeneous, anisotropic bundles of ﬁbers with well-deﬁned directionality. The
+
+   two-scale yarn-resolved model outlined in Section 2.2 assumes an isotropic, homogeneous constitutive law at the yarn level,
+   and therefore cannot capture the inherently heterogeneous and anisotropic response of the yarns. Compared to a homogeneous
+   yarn, a ﬁber bundle has lower bending stiﬀness [42] and oﬀers negligible resistance to transverse tensile strains, as the ﬁbers are
+   unbonded. Additionally, because ﬁbers are not tightly packed in the undeformed state, the bundle exhibits minimal transverse
+   compressive resistance until the ﬁbers become closely packed.
+ • Warp-weft asymmetry: Woven fabrics typically display distinct tensile stiﬀnesses along warp and weft directions [43]. The model
+
+   described in Section 2.2 uses an RVE with four identical yarns based on nominal measurements, resulting in complete symmetry
+   and failing to capture these diﬀerences. In reality, yarn cross-sectional shapes and crimp vary according to ﬁber arrangement,
+   which is determined by the manufacturing process.
+ • Biaxial tensile coupling: Plain-woven fabrics often exhibit strong biaxial tensile coupling: an increase in strain along one direction
+
+   signiﬁcantly raises the tensile stiﬀness in the perpendicular direction [44]. This is primarily due to the phenomena of de-crimping
+   and crimp interchange between perpendicular ﬁbers [45]. The two-scale yarn-resolved model described in Section 2.2, however,
+   does not capture this eﬀect, as the axial stresses respond only to their corresponding axial strains.
+
+     These limitations motivate the development of a higher-ﬁdelity, ﬁber-resolved model for woven fabric homogenization.
+
+
+3.1. Two-scale ﬁber-resolved model
+
+    To overcome the limitations of yarn-level homogenization, we enhance model ﬁdelity by introducing ﬁber-level resolution within a
+viscoelastic framework. Speciﬁcally, we employ a ﬁber-resolved geometry of the broadcloth material used in the Mars 2020 parachute,
+provided by the authors of [46]. The fabric, custom-developed for the Mars 2020 parachute project by Heathcoat Fabrics [47], consists
+of plain-woven yarns, each composed of bundles of nylon 6,6 ﬁbers with a nominal diameter of 20.4 μm. The provided geometry
+represents a 0.57 mm × 0.55 mm × 0.21 mm region of interest – suﬃcient to capture a single repeating unit of the weave – and was
+reconstructed from X-ray microtomographic imaging using a ﬁber segmentation algorithm [48]. The microtomography data and
+the corresponding reconstructed geometry are shown in Fig. 3. The resulting ﬁber-resolved model comprises 80 ﬁbers in total: 40
+nominally aligned with the warp direction and 40 with the weft. This ﬁner-scale representation enables the explicit capture of the
+heterogeneous architecture and intra-ﬁber mechanisms that govern the nonlinear, path-dependent response of woven fabrics.
+    Nonetheless, due to the ﬁnite resolution of the microtomography, the ﬁber segmentation procedure signiﬁcantly underestimates
+the nominal cross-section of each ﬁber relative to the known diameter of 20.4 μm. In addition, the inherent randomness of the ﬁber
+paths renders the geometry non-periodic, preventing the straightforward application of PBCs. To address these issues, we propose
+a constrained optimization approach that seeks the minimal smooth distortion of the geometry such that it becomes periodic, each
+ﬁber attains the correct radius, and no ﬁbers interpenetrate. The formulation and solution procedure for this optimization problem
+are detailed in Appendix A. A comparison of the altered and original geometries is shown in Fig. 4.
+    A solid-element FE discretization of the ﬁber-resolved geometry is constructed, with each element assigned a Mooney-Rivlin
+constitutive law augmented by a three-term Prony series, calibrated from relaxation tests of nylon 6,6 ﬁbers reported in [49]. Fiber-
+to-ﬁber interactions are modeled via Coulomb frictional contact, with a constant friction coeﬃcient of 0.37 corresponding to nylon-
+on-nylon values [50]. It is worth noting that this frictional contact does not introduce any residual stresses into the RVE, as the ﬁbers
+are suﬃciently spaced to avoid contact in the reference conﬁguration. PBCs are imposed on the nodes at the RVE boundaries.
+
+                                                                    7
+F. As’ad and C. Farhat                                                          Computer Methods in Applied Mechanics and Engineering 452 (2026) 118666
+
+
+
+
+Fig. 4. Comparison between the original imaged fabric geometry (white) and the minimally distorted periodic geometry with corrected ﬁber
+diameters (red). (For interpretation of the references to colour in this ﬁgure legend, the reader is referred to the web version of this article.)
+
+
+
+
+     Fig. 5. FE2 implementation of a two-scale ﬁber-resolved model of woven fabric, featuring a microscale RVE derived from imaging data.
+
+
+    The resulting FE model of the RVE comprises 1 842 880 brick elements, 22 800 LMPCs, 749 552 contact surface elements, and
+6 588 066 degrees of freedom (DoFs). This discretized RVE is then used as the microscale component attached to a macroscale
+membrane element within the two-scale ﬁber-resolved homogenization framework, as illustrated in Fig. 5.
+    As evident, achieving ﬁber-level resolution in this microscale RVE comes at the cost of a substantial increase in both the number
+of elements and the DoF count in the FE mesh. Consequently, the computational time required to solve a BVP, particularly when
+accounting for contact detection and resolution, rises dramatically. Even with surrogate-based acceleration, homogenization remains
+computationally prohibitive due to the immense cost of generating the required training data. For example, producing a suﬃcient
+dataset using the two-scale ﬁber-resolved model to train a surrogate is estimated to require approximately 130 days on 96 computing
+cores.
+
+3.2. Three-scale ﬁber-resolved model
+
+    The prohibitive training cost of the two-scale ﬁber-resolved model arises from its RVE being itself a multiscale structure, containing
+both the yarn and ﬁber scales. This dual-scale nature necessitates an extremely ﬁne discretization, resulting in a large number of
+elements and DoFs. This outcome is not unexpected, since woven fabric is inherently a three-scale material system – comprising the
+membrane, yarn, and ﬁber scales-as illustrated in Fig. 6.
+    To achieve a homogenized model with ﬁber-level ﬁdelity at the ﬁnest scale while alleviating the computational burden of the
+two-scale ﬁber-resolved model, we therefore propose a three-scale homogenization framework. The goal of this approach is to fully
+separate the scales: membrane resolution at the macroscale, yarn resolution at the mesoscale, and ﬁber resolution at the microscale.
+In this way, each RVE is restricted to a single distinct scale.
+    The mesoscale RVE consists of four plain-woven yarns, each representing a ﬁber bundle, similar to that of the two-scale yarn-
+resolved model described in Section 2.2. Unlike that model’s RVE, however, the geometry of each yarn is informed by Mars 2020
+material imaging: the cross-sections of each yarn are computed as the best-ﬁt superellipses [51] of the corresponding ﬁber-bundle
+cross-sections. As a result, the yarns are generally distinct from one another and vary in cross section along their respective paths.
+On average, their height and width are 60 μm and 200 μm, respectively.
+    Each yarn is discretized with solid elements whose constitutive behavior is derived from BVP solutions on the microscale RVE.
+Since the microscale RVE response is anisotropic, material frames aligned with the yarn paths are assigned to the solid elements.
+Yarn-to-yarn interactions are modeled through frictional contact, and PBCs are applied to the boundary nodes. The plane-stress
+requirement on the homogenized stress tensor is satisﬁed automatically using the reference node method described in Section 2.1.2.
+The resulting mesoscale RVE contains 2 832 solid elements, 423 LMPCs, 3 024 contact surface elements, and 12 822 DoFs.
+    The microscale RVE consists of a single central ﬁber segment modeled as a complete cylinder, surrounded by four neighboring
+ﬁber segments, each represented as a quarter cylinder. All ﬁbers have a diameter of 20.4 μm. The ﬁber spacing is chosen such that
+                                                                        8
+F. As’ad and C. Farhat                                                        Computer Methods in Applied Mechanics and Engineering 452 (2026) 118666
+
+
+
+
+Fig. 6. Multiscale nature of the parachute broadcloth, consisting of the membrane-level macroscale, the yarn-level mesoscale and the ﬁber-level
+microscale.
+
+
+
+
+                           Fig. 7. Nested FE2 implementation of a three-scale ﬁber-resolved model of woven fabric.
+
+
+the void fraction of this RVE matches that of the ﬁber-resolved microscale RVE in the two-scale model described in Section 3.1,
+relative to the yarn-resolved mesoscale RVE described above. This construction is admittedly an idealization: real ﬁber bundles are
+not arranged in a uniform grid and exhibit variations in ﬁber radii. Moreover, using only a minimal length of each ﬁber in the RVE
+prevents capturing certain physical phenomena, such as the buckling of an individual ﬁber independently of its surrounding ﬁbers
+or the entanglement of adjacent ﬁbers. Nonetheless, the model is expected to be suﬃciently representative to capture the essential
+behavior of the bundles.
+    Each ﬁber is discretized with solid elements and assigned the same Mooney-Rivlin constitutive law with a three-term Prony series
+used in the microscale RVE of the two-scale ﬁber-resolved model. Fiber-to-ﬁber interactions are modeled via frictional contact, and
+PBCs are applied to boundary nodes, with care taken to avoid redundancy at edges and corners where nodes belong to multiple faces
+[52]. In total, the microscale RVE contains 384 solid elements, 1 497 LMPCs, 104 contact surface elements, and 2 790 DoFs.
+    By combining the discretized mesoscale and microscale RVEs, the resulting three-scale computational homogenization model
+is illustrated in Fig. 7. Although the explicit separation of scales yields RVEs with relatively few elements at both the meso- and
+microscales, it does not provide a computational speedup over the two-scale ﬁber-resolved model. In fact, when implemented using the
+conventional approach, the three-scale model is even more expensive to evaluate per macroscale solution step, despite the substantial
+reduction in DoFs in each RVE. This is primarily due to the exponential growth in the number of BVP solves required by FE2 as
+the number of scales increases, as expressed in (11). Speciﬁcally, a single evaluation of the three-scale model at one macroscale
+integration point requires 22 656 microscale BVP solves for each mesoscale solution increment.
+
+3.3. Computationally tractable staggered training procedure
+
+    The preceding discussion highlights that, despite the reduction in RVE DoFs, the conventional three-scale model remains compu-
+tationally prohibitive due to the exponential growth in the number of BVP solves. Clearly, any practical multiscale homogenization
+scheme must circumvent this bottleneck, especially as the number of scales increases. To address this challenge, we propose a staggered
+training approach that dramatically accelerates homogenization of problems with many scales by eliminating the nested structure of
+FE2 BVP solves. In essence, it decomposes an (𝑁𝑠 + 1)-scale homogenization problem into 𝑁𝑠 successive two-scale problems, bridged
+by economical surrogate models. When only two scales are present, the method reduces to the surrogate-based homogenization
+strategy described in Section 2.3.
+    Concretely, consider an (𝑁𝑠 + 1)-scale system with scales 𝑘 = 0, … , 𝑁𝑠 . The staggered procedure begins at 𝑘 = 𝑁𝑠 − 1, where a
+two-scale problem is solved between a single-element coupon at level 𝑘 and an RVE at level 𝑘 + 1 under a variety of time-varying
+                                                                      9
+F. As’ad and C. Farhat                                                           Computer Methods in Applied Mechanics and Engineering 452 (2026) 118666
+
+
+
+
+                         Fig. 8. Staggered training procedure applied to a three-scale ﬁber-resolved model of woven fabric.
+
+
+
+boundary conditions. This generates time-labeled strain-stress data, from which a surrogate   ̃ 𝑘 is trained to map the strain history
+at level 𝑘 to the corresponding stress. The surrogate then serves as the constitutive law for the material at level 𝑘 in the two-scale
+problem coupling a coupon at level 𝑘 − 1 with the RVE at level 𝑘. This process is repeated recursively until the macroscale (𝑘 = 0)
+is reached, ultimately producing a mapping between macroscale strain history and stress that accounts for all ﬁner-scale eﬀects. A
+similar approach was recently proposed in [26] for path-independent material responses and monotonic loading paths, employing
+standard deep feedforward neural networks as surrogate models.
+    The key advantage is that the number of BVP solves now grows linearly with the number of scales, rather than exponentially.
+Moreover, the dominant cost stems from generating training data and ﬁtting surrogate models, which is independent of the number
+of elements or steps in the ﬁnal macroscale simulation. Instead, the cost is tied to the complexity of the constitutive relation being
+learned: more intricate behaviors require more data. Since MI-ANNs have proven robust to sparse training data, the amount of data
+needed is expected to remain modest, making this approach genuinely eﬃcient.
+    The only approximation relative to classical concurrent FE2 arises from replacing direct localization and homogenization of each
+ﬁne-scale RVE with its surrogate. If a surrogate reproduces the exact constitutive response of its RVE, the macroscale predictions are
+identical to those of FE2 , but at a fraction of the computational cost. Conversely, any surrogate error at level 𝑘 propagates upward
+through all coarser levels 𝑘′ < 𝑘, potentially accumulating at the macroscale. Furthermore, each surrogate model must satisfy stability
+conditions, grounded in fundamental principles of continuum mechanics, to be reliably used as a constitutive law in the coarser-scale
+simulation. Consequently, the success of this framework critically depends on the expressivity, generalization capacity, and physical
+admissibility of the surrogate models at each scale – all of which are ensured by MI-ANNs.
+    The staggered training procedure, as applied to the three-scale woven fabric model, is illustrated in Fig. 8. At the meso-micro
+stage, the microscale ﬁber-bundle RVE is coupled to a single tetrahedral coupon with one integration point, where six independent
+displacements control the six unique components of the strain tensor. By varying these displacements over time and solving the
+corresponding BVPs on the microscale RVE, homogenized mesoscale data is generated. A mesoscale surrogate model, implemented
+as a MI-ANN, is then trained on this data.
+    Next, the trained mesoscale surrogate is used in the macro-meso homogenization problem as the constitutive law for the solid
+elements in the meso-scale yarn-level RVE. This RVE is coupled to a coupon with a single membrane element and one integration
+point, where three independent displacements prescribe the in-plane strain components. As in the meso-micro stage, time-varying
+displacements are applied to generate homogenized macroscale data, from which a macroscale MI-ANN surrogate model is trained.
+This surrogate provides a constitutive law at the macroscale that consistently incorporates the contributions of both the meso- and
+microscales.
+
+
+
+4. Applications and veriﬁcation of the multiscale models
+
+   The purpose of this section is twofold: (i) to evaluate the additional ﬁdelity gained by ﬁber-resolved homogenization of woven
+fabric compared to yarn-resolved homogenization, and (ii) to assess whether ﬁber-resolved homogenization can be performed in a
+computationally eﬃcient manner using the three-scale staggered training approach, with minimal loss of accuracy. Speciﬁcally, three
+homogenization models are compared:
+
+ •   2S-FR: two-scale ﬁber-resolved model derived without surrogate modeling, described in Section 3.1. This is the most computation-
+     ally expensive model, but also the highest-ﬁdelity, as it directly resolves the fabric unit cell down to individual ﬁbers, is derived
+     from real-material imaging, and avoids surrogate modeling error. It is therefore taken as the reference model for accuracy in lieu
+     of experimental data.
+
+                                                                        10
+F. As’ad and C. Farhat                                                              Computer Methods in Applied Mechanics and Engineering 452 (2026) 118666
+
+
+                           Table 1
+                           Feasible strain ranges for generating coupon data in microscale and mesoscale RVEs.
+                             RVE          𝐸11             𝐸22              𝐸33             𝐸23        𝐸13        𝐸12
+
+                             Microscale   [−0.05, 0.15]   [−0.15, 0.05]    [−0.15, 0.05]   [0, 0.1]   [0, 0.1]   [0, 0.1]
+                             Mesoscale    [−0.05, 0.1]    [−0.05, 0.1]     –               –          –          [−0.1, 0.1]
+
+
+
+ • 3S-FR-NN2 : three-scale ﬁber-resolved model accelerated via the staggered training approach with MI-ANN surrogates, described
+   in Section 3.2. This model aims to replicate the ﬁdelity of 2S-FR while substantially reducing online execution time, with minimal
+   oﬄine training cost.
+ • 2S-YR: two-scale yarn-resolved model without surrogate modeling, similar but not identical to the one described in Section 2.2.
+
+   At the mesoscale, this model employs the yarn-level mesoscale RVE from the three-scale model described in Section 3.2, assigning
+   to the yarns the nylon 6,6 Mooney-Rivlin-Prony series constitutive law. It neglects ﬁber-level resolution and treats yarns as the
+   ﬁnest scale, thus providing a baseline for the accuracy achievable without ﬁber-level modeling.
+
+    The comparison is ﬁrst carried out on a coupon problem under displacement-driven loading-unloading, and subsequently on the
+inﬂation of a full-scale DGB parachute.
+    All FE simulations are conducted using the academic FE software AERO-S [53]. The analyses are nonlinear, with geometric non-
+linearities captured through a Lagrangian formulation. Contact detection and resolution are performed with the ACME package [54],
+and contact constraints are enforced using Lagrange multipliers. All LMPCs are enforced with a penalty method. For RVEs, quasi-static
+solutions of time-dependent BVPs are obtained using dynamic relaxation with explicit central-diﬀerence time integration, rather than
+the implicit static approach commonly employed in FE2 .
+    Neural networks are trained using the machine learning package PyTorch.
+
+4.1. Training the three-scale ﬁber-resolved model’s MI-ANNs
+
+    Staggered training of the three-scale model introduced in Section 3.2 requires two surrogate models: a mesoscale MI-ANN   ̃ 1,
+trained on a meso-micro coupon problem, and a macroscale MI-ANN     ̃ 0 , trained on a macro-meso coupon problem. The training of
+each MI-ANN surrogate follows the procedure described in [23], which integrates naturally into the staggered approach employed
+here to capture the dependence of the macroscale MI-ANN on the mesoscale MI-ANN. The training procedures are summarized below.
+
+4.1.1. Mesoscale MI-ANN
+    The mesoscale MI-ANN is trained via homogenization of a tetrahedral coupon coupled with the ﬁber-level microscale RVE. A
+total of 55 randomly generated strain paths, each spanning 5 seconds, are applied, and the corresponding homogenized stresses are
+collected. The feasible domains used to generate these strain paths – i.e., the physically and numerically meaningful ranges of strain
+for RVE training – are reported in Table 1. Since the microscale RVE exhibits symmetries along all three canonical planes, it is not
+necessary to generate training data for negative shear values; the shear constitutive response is anti-symmetric with respect to the
+shear strain, and this material symmetry is explicitly enforced in the MI-ANN. Of the 55 paths, 50 are used for training the model
+and 5 for testing. The mesoscale MI-ANN’s ﬁt to a representative training path is shown in Fig. 9a, while its prediction on an unseen
+strain path is shown in Fig. 9b.
+
+4.1.2. Macroscale MI-ANN
+   The trained mesoscale MI-ANN is then used to facilitate training of the macroscale MI-ANN. Homogenization of a membrane
+coupon coupled with the yarn-level mesoscale RVE is performed for 30 randomly generated planar strain paths, each spanning 5
+seconds. The feasible domains – deﬁned as above – used to generate these strain paths are reported in Table 1. Of the 30 paths, 25
+are used for training and 5 for testing. The macroscale MI-ANN is validated by comparing its ﬁt to a training path (shown in Fig. 10a)
+and its prediction on an unseen path (shown in Fig. 10b).
+
+4.2. Coupon test problem
+
+    A test problem involving displacement-driven loading and unloading of a macroscale coupon is considered. This problem is selected
+because it isolates the eﬀects of homogenization, allowing a direct assessment of how the homogenized stress responds to prescribed
+strains, and is straightforward for readers to reproduce.
+    The macroscale coupon is a 10 cm × 10 cm square, as shown in Fig. 11, discretized with two triangular membrane elements, each
+with a single integration point at its barycenter. The nodes are constrained to enforce a zero-shear state and to provide complete
+control over the axial strains. The displacements 𝑢1 and 𝑢2 , corresponding to the weft and warp directions, respectively, are prescribed
+to vary sinusoidally over one half-period as
+
+                 (       ( (    ) )) ( )
+                             2𝜋𝑡 2      𝜋𝑡
+        𝑢𝑖 = 𝑢̄ 𝑖 1 − exp −         sin    ,       𝑖 = 1, 2
+                              𝑇         𝑇
+
+                                                                          11
+F. As’ad and C. Farhat                                                        Computer Methods in Applied Mechanics and Engineering 452 (2026) 118666
+
+
+
+
+                         Fig. 9. Predictions by mesoscale MI-ANN: (a) along a training path; (b) along an unseen path.
+
+
+
+
+where the exponential term ensures a smooth ramp-up of the displacement velocity. Diﬀerent values of the ratio 𝑢̄ 2 ∕𝑢̄ 1 correspond
+to diﬀerent displacement loading cases: a ratio of 0 corresponds to uniaxial loading, while a ratio of 1 corresponds to equi-biaxial
+displacement loading. For this study, 𝑢̄ 1 = 0.5 cm is chosen, resulting in a maximum strain of approximately 5 %, and 𝑢̄ 2 is varied to
+achieve 𝑢̄ 2 ∕𝑢̄ 1 ∈ {0, 0.5, 1}. The half-period of the sinusoidal loading is set to 𝑇 = 5 s.
+
+                                                                      12
+F. As’ad and C. Farhat                                                         Computer Methods in Applied Mechanics and Engineering 452 (2026) 118666
+
+
+
+
+                         Fig. 10. Predictions by macroscale MI-ANN: (a) along a training path; (b) along an unseen path.
+
+
+
+
+                           Fig. 11. Square coupon and associated boundary conditions for the loading-unloading test.
+
+
+4.2.1. Behavior of the reference model
+    Fig. 12a shows the macroscale normal resultants (i.e., the forces per unit length obtained by integrating the homogenized stress
+through the coupon thickness) versus normal strains for 𝑢̄ 2 ∕𝑢̄ 1 = 1, whereas Fig. 12b presents the macroscale weft resultant versus
+the macroscale weft strain for diﬀerent values of 𝑢̄ 2 ∕𝑢̄ 1 . Several behaviors typical of woven fabrics are observed. The resultant-strain
+curves exhibit pronounced hysteresis, arising from both frictional contact and the viscoelasticity of the nylon 6,6 ﬁbers. The model is
+stiﬀer in the warp direction than in the weft direction, reﬂecting the distribution of crimp in the reference conﬁguration. The curves
+also display weakness in compression and stiﬀening in tension, due to ﬁber buckling and de-crimping, respectively. Furthermore,
+strong biaxial coupling is evident: as 𝑢̄ 2 ∕𝑢̄ 1 increases, the stiﬀness in the weft direction increases, resulting from crimp interchange
+between ﬁbers. Overall, these results demonstrate that the 2S-FR model captures the key behaviors discussed in Section 3.1 and
+provides a reliable reference for assessing accuracy.
+
+4.2.2. Model comparison: accuracy and timing
+    Fig. 13 compares the 2S-FR, 3S-FR-NN2 , and 2S-YR models for various values of 𝑢̄ 2 ∕𝑢̄ 1 , taking the 2S-FR model as the reference in
+lieu of experimental data. As shown, the 2S-YR model exhibits poor agreement with the reference solution, whereas the 3S-FR-NN2
+model performs substantially better, closely matching the reference response across all loading cases. It is worth noting however that
+the 3S-FR-NN2 model slightly overpredicts the compressive stress toward the end of the unloading phase. This discrepancy can be
+attributed to approximation errors in the macroscale MI-ANN, as it is not observed in the intermediate macro-meso model used to train
+the macroscale network-that is, the model employing the mesoscale MI-ANN as its constitutive law. This error could be mitigated
+
+                                                                       13
+F. As’ad and C. Farhat                                                              Computer Methods in Applied Mechanics and Engineering 452 (2026) 118666
+
+
+
+
+Fig. 12. Resultant-strain responses of the 2S-FR model: (a) normal resultants 𝑁11 and 𝑁22 versus their corresponding strains for 𝑢̄ 2 ∕𝑢̄ 1 = 1; (b) weft
+resultant 𝑁11 versus weft strain for various values of 𝑢̄ 2 ∕𝑢̄ 1 .
+
+
+
+
+Fig. 13. Comparison of resultant-strain responses predicted by the 2S-FR, 2S-YR, and 3S-FR-NN2 models under diﬀerent biaxial loading ratios: (a)
+𝑢̄ 2 ∕𝑢̄ 1 = 1; (b) 𝑢̄ 2 ∕𝑢̄ 1 = 0.5; and (c) 𝑢̄ 2 ∕𝑢̄ 1 = 0.
+
+
+
+                                                                           14
+F. As’ad and C. Farhat                                                          Computer Methods in Applied Mechanics and Engineering 452 (2026) 118666
+
+
+                               Table 2
+                               Computational costs of the 2S-FR and 3S-FR-NN2 models for the loading-
+                               unloading coupon test.
+                                                      Oﬄine                 Online          Wall-clock speedup
+
+                                  Model        CPUs     Time (hrs)   CPUs     Time (hrs)    Total       Online
+
+                                  2S-FR        –        –            96       2.2 × 102     –           –
+                                  3S-FR-NN2    96       2.6          1        1.4 × 10−4    8.2 × 101   1.5 × 106
+
+
+
+
+                                      Fig. 14. Snapshot of the DGB parachute during inﬂation at 𝑡 = 2 s.
+
+
+by incorporating more representative training data in this regime. Overall, these results suggest that ﬁber-level resolution at the
+ﬁnest scale, as delivered by the 3S-FR-NN2 model, is essential to accurately capture the behavior of the real fabric microstructure
+represented by the 2S-FR homogenization.
+    Table 2 reports the oﬄine and online computational costs and speedup factors for the 2S-FR and 3S-FR-NN2 models. Even for
+this minimal coupon problem, the oﬄine cost of generating the 3S-FR-NN2 model – including all coupon data collection and MI-ANN
+training – is oﬀset by a substantial reduction in online computational time, with minimal loss of accuracy. The total wall-clock speedup
+of the 3S-FR-NN2 model relative to the 2S-FR model is 82, demonstrating that the staggered training procedure delivers signiﬁcant
+eﬃciency even for a single evaluation without requiring amortization. Moreover, the large gap between the total and online speedups
+indicates that the 3S-FR-NN2 approach would provide even greater acceleration for larger-scale problems.
+
+4.3. Parachute inﬂation problem
+
+    Next, we simulate the inﬂation of a DGB parachute to demonstrate the feasibility and computational eﬃciency of the 3S-FR-NN2
+model on a large-scale problem. The FE model is based on the ASPIRE SR03 ﬂight-test parachute [5], used as a qualiﬁcation for the
+Mars 2020 aerodynamic decelerator. It comprises 267 878 triangular membrane elements – each assigned the 3S-FR-NN2 constitutive
+law – representing the canopy, 80 000 nonlinear bar elements for the suspension lines, and 4 968 rigid solid elements representing
+the forebody. All relevant material properties and dimensions are reported in [55].
+    Inﬂation is driven by a pressure force applied to the interior of the canopy, linearly ramped from 0 to 1 800 Pa on the disk and
+1 200 Pa on the band over the ﬁrst 1 s, then held constant for 4 s. The canopy undergoes self-contact, modeled as frictionless. The FE
+system starts in a tightly folded, accordion-like conﬁguration [55], and is integrated forward in time using explicit central diﬀerences
+with a time step of 5 × 10−6 s until 𝑡 = 5 s. Fig. 14 shows a snapshot of the parachute at 𝑡 = 2 s during the simulation.
+    The canopy area projected onto a plane perpendicular to the forebody axis is used as a representative QoI of the inﬂation behavior
+and is plotted against time in Fig. 15. As expected, the viscoelasticity of the 3S-FR-NN2 model – being the sole structural dissipative
+mechanism in the FE model – dampens the large initial oscillations, allowing the projected area to gradually approach a steady-state
+value.
+    Table 3 reports the computational cost of the parachute inﬂation simulation using the 3S-FR-NN2 model, alongside the estimated
+cost for the 2S-FR model. The results reveal an impressive speedup of 3.2 × 106 , reducing the estimated wall-clock time from 35 365
+years to only 95 hours. This demonstrates that the 3S-FR-NN2 model is not only feasible, but also enables eﬃcient, homogenized
+simulations of parachute inﬂation with full viscoelastic and ﬁber-level ﬁdelity – computations that would be entirely intractable
+using the 2S-FR model.
+
+
+
+
+                                                                      15
+F. As’ad and C. Farhat                                                         Computer Methods in Applied Mechanics and Engineering 452 (2026) 118666
+
+
+
+
+                            Fig. 15. Projected canopy area over time during the parachute inﬂation simulation.
+
+                              Table 3
+                              Comparison of computational costs for the 2S-FR (∗ estimated) and 3S-FR-NN2
+                              models during disk-gap-band parachute inﬂation.
+                                                     Oﬄine                 Online            Wall-clock speedup
+
+                                Model         CPUs     Time (hrs)   CPUs     Time (hrs)      Total       Online
+                                                                                         ∗
+                                2S-FR         –        –            96       3.1 × 108       –           –
+                                3S-FR-NN2     96       2.6          1        9.5 × 101       3.2 × 106   3.3 × 106
+
+
+
+
+5. Conclusions
+
+     In summary, this paper presented a three-scale homogenization model for woven nylon fabric, achieving ﬁber-level resolution at
+the ﬁnest scale, combined with a staggered training procedure that is broadly applicable to multiscale problems. By decomposing a
+many-scale problem into successive two-scale subproblems and leveraging surrogates, the staggered approach reduces oﬄine costs
+from exponential to linear scaling with the number of scales, making it computationally tractable. The three-scale ﬁber-resolved model
+matches the accuracy of the costly two-scale ﬁber-resolved homogenization based on real-material RVEs obtained from imaging, while
+signiﬁcantly outperforming the two-scale yarn-resolved model, highlighting the importance of ﬁber-level resolution in woven fabric
+homogenization. The framework is further demonstrated on a large-scale disk-gap-band parachute inﬂation simulation, showing that
+it is both feasible and eﬃcient for highly resolved ﬁnite element multiscale models. Overall, the method provides a general, accurate,
+and computationally eﬃcient approach for multiscale analysis, and the staggered training procedure is a key enabler of tractable
+computation across a wide range of many-scale problems.
+
+
+CRediT authorship contribution statement
+
+   Faisal As’ad: Writing – original draft, Visualization, Software, Methodology, Formal analysis, Conceptualization, Investigation,
+Writing – review & editing; Charbel Farhat: Writing – review & editing, Supervision, Resources, Funding acquisition.
+
+
+Data availability
+
+    Data will be made available on request.
+
+
+Declaration of competing interest
+
+   The authors declare that they have no known competing ﬁnancial interests or personal relationships that could have appeared to
+inﬂuence the work reported in this paper.
+
+
+Acknowledgements
+
+   The authors gratefully acknowledge partial support from the Oﬃce of Naval Research under Grant N00014-23-1-2877, and from
+the Air Force Oﬃce of Scientiﬁc Research under Grant FA9550-20-1-0358.
+
+                                                                     16
+F. As’ad and C. Farhat                                                                       Computer Methods in Applied Mechanics and Engineering 452 (2026) 118666
+
+
+Appendix A. Generation of periodic and high-ﬁdelity RVEs from imaged geometries
+
+    In general, a geometry obtained from imaging of a fabric material is not immediately suitable as a Representative Volume Element
+(RVE) for two main reasons: (i) the ﬁnite resolution of imaging often leads ﬁber segmentation procedures to underestimate the
+nominal cross-section of each ﬁber relative to its actual diameter [48]; (ii) the inherent randomness of ﬁber paths implies that a given
+fabric segment is unlikely to be exactly periodic, preventing straightforward application of Periodic Boundary Conditions (PBCs).
+Therefore, we seek a minimal distortion of the imaged geometry such that the resulting RVE has correct ﬁber diameters, exhibits
+planar periodicity, maintains smooth geometry, and avoids interpenetrating ﬁbers.
+    Let 𝑁𝑓 denote the number of ﬁbers in the RVE, and let ﬁber 𝑖 be parametrized by its centerline 𝑿𝑖0 (𝑠) along its abscissa 𝑠 in the
+original conﬁguration. Each ﬁber centerline is discretized into 𝑛 evenly spaced control points 𝑿𝑖0 (𝑠𝑗 ), 𝑗 = 1, … , 𝑛, and 𝑚 evenly spaced
+pin-balls 𝑿𝑖0 (𝑝𝑘 ), 𝑘 = 1, … , 𝑚. Let 𝑟𝑖 denote the target radius of ﬁber 𝑖.
+    Since only the geometry as a whole needs to be periodic, rather than each individual ﬁber, an optimal matching between ﬁber
+starts and ends on opposite faces of the RVE must be determined. This is achieved by ﬁnding a bijective mapping Λ of the ﬁbers onto
+themselves, minimizing the total cost
+              𝑁
+              ∑𝑓
+        𝐿=          𝐶(𝑖, Λ(𝑖))
+              𝑖=1
+
+   To deﬁne the cost function 𝐶, introduce the function 𝑩(𝑖, 𝐼), which returns 𝑵 if the start of ﬁber 𝑖, 𝑿𝑖0 (𝑠1 ), lies on a face with
+normal +𝑵, and the end of ﬁber 𝐼, 𝑿𝐼0 (𝑠𝑛 ), lies on the opposite face with normal −𝑵; otherwise, it returns 𝟎. Then, the cost function
+is
+                { 0
+                 ‖𝑿𝑖 (𝑠𝑛 ) − 𝑿𝐼0 (𝑠1 )‖⟂𝑩(𝑖,𝐼) , 𝑩(𝑖, 𝐼) ≠ 𝟎,
+      𝐶(𝑖, 𝐼) =
+                 ∞,                              otherwise
+where ‖ ⋅ ‖⟂† denotes the Euclidean norm after projection onto a plane perpendicular to †. Intuitively, this cost penalizes ﬁber matches
+that deviate from periodicity and forbids matches that are not on opposing faces. The minimization of 𝐿 is an assignment problem,
+which can be solved exactly, e.g., via the Hungarian algorithm [56].
+   Once Λ is determined, the following continuous optimization problem is solved to minimally distort the ﬁber geometry
+
+                         ∑⎛                                ‖ d2 (𝑿𝑖 − 𝑿 0 ) ‖2 ⎞
+        minimize             ⎜‖𝑿𝑖 (𝑠𝑗 ) − 𝑿 0 (𝑠𝑗 )‖2 + 𝜆2 ‖
+                                                           ‖
+                                                                       𝑖 | ‖ ⎟
+                                                                           | ‖
+          {𝑿𝑖 (𝑠𝑗 )}         ⎜             𝑖        2      ‖      d𝑠2      |𝑠𝑗 ‖ ⎟
+                         𝑖,𝑗 ⎝                             ‖                   ‖2 ⎠
+                  s.t.   𝑿𝑖 (𝑠𝑛 ) = 𝑿Λ(𝑖) (𝑠1 ),   ∀𝑖,
+                         d𝑿𝑖      d𝑿Λ(𝑖)
+                              =          , ∀𝑖,
+                          d𝑠        d𝑠
+                         ‖𝑿𝑖 (𝑝𝑘 ) − 𝑿𝐼 (𝑝𝐾 )‖22 ≥ (𝑟𝑖 + 𝑟𝐼 )2 ,   ∀𝑖 ≠ 𝐼, ∀𝑘, ∀𝐾,
+where 𝜆2 is a user-deﬁned smoothing parameter. The ﬁrst term of the objective penalizes large distortions from the original geometry,
+while the second promotes smoothness. The ﬁrst two sets of constraints enforce periodicity in both positions and tangents at the RVE
+faces, ensuring a diﬀerentiable ﬁber path. The last constraint prevents interpenetration of ﬁbers via the pin-ball approximation.
+    This optimization can be solved using gradient-based or gradient-free methods, with ﬁnite-diﬀerence discretization of derivatives.
+Here, a damped gradient descent with adaptive penalty parameters is employed. The solution provides the ﬁber centerline coordinates
+𝑿𝑖 (𝑠𝑗 ), which can be interpolated with splines to yield continuous centerlines 𝑿𝑖 (𝑠). Combined with the ﬁber radii 𝑟𝑖 , this fully deﬁnes
+the optimized, periodic, and high-ﬁdelity RVE geometry.
+    Whilst the above optimization procedure is presented in the context of a fabric RVE consisting of ﬁbers, the methodology is equally
+applicable to enforcing periodicity and/or other geometric constraints to a general multi-body RVE.
+
+References
+
+ [1] Y. Ma, M. Yang, F. Yuan, X. Wu, A review on heterogeneous nanostructures: a strategy for superior mechanical properties in metals, Metals (Basel) 9 (5) (2019)
+     598.
+ [2] X. Wu, Y. Zhu, Heterogeneous materials: a new class of materials with unprecedented mechanical properties, in: Heterostructured Materials, Jenny Stanford
+     Publishing, 2021, pp. 3–16.
+ [3] X. Dong, B. Gao, L. Xiao, J. Hu, M. Xu, Z. Li, J. Meng, X. Han, H. Zhou, Y. Zhu, Heterostructured metallic structural materials: research methods, properties, and
+     future perspectives, Adv. Funct. Mater. 34 (51) (2024) 2410521.
+ [4] A. Sengupta, A. Steltzner, A. Witkowski, J. Rowan, An overview of the Mars science laboratory parachute decelerator system, in: 2007 IEEE Aerospace Conference,
+     IEEE, 2007, pp. 1–8.
+ [5] C. O’Farrell, B.S. Sonneveldt, C. Karhgaard, J.A. Tynis, I.G. Clark, Overview of the ASPIRE project’s supersonic ﬂight tests of a strengthened DGB parachute, in:
+     2019IEEE Aerospace Conference, IEEE, 2019, pp. 1–18.
+ [6] A. Nelessen, C. Sackier, I. Clark, P. Brugarolas, G. Villar, A. Chen, A. Stehura, R. Otero, E. Stilley, D. Way, et al., Mars 2020 entry, descent, and landing system
+     overview, in: 2019IEEE Aerospace Conference, IEEE, 2019, pp. 1–20.
+ [7] C. O’Farrell, E.J. Brandeau, C. Tanner, J.C. Gallon, S. Muppidi, I.G. Clark, Reconstructed parachute system performance during the second LDSD supersonic
+     ﬂight dynamics test, in: AIAA Atmospheric Flight Mechanics Conference, 2016, p. 3242.
+ [8] N. Charalambakis, Homogenization techniques and micromechanics. A survey and perspectives, Appl. Mech. Rev. 63 (3) (2010).
+ [9] J. Yvonnet, Computational homogenization of heterogeneous materials with ﬁnite elements, 258, Springer, 2019.
+[10] V. Kouznetsova, W. Brekelmans, F. Baaijens, An approach to micro-macro modeling of heterogeneous materials, Comput. Mech. 27 (1) (2001) 37–48.
+
+                                                                                   17
+F. As’ad and C. Farhat                                                                      Computer Methods in Applied Mechanics and Engineering 452 (2026) 118666
+
+
+[11] R.J.M. Smit, W.A.M. Brekelmans, H.E.H. Meijer, Prediction of the mechanical behavior of nonlinear heterogeneous systems by multi-level ﬁnite element modeling,
+     Comput. Methods Appl. Mech. Eng. 155 (1–2) (1998) 181–192.
+[12] F. Feyel, A multilevel ﬁnite element method (FE2) to describe the response of highly non-linear structures using generalized continua, Comput. Methods Appl.
+     Mech. Eng. 192 (28–30) (2003) 3233–3244.
+[13] S. Fillep, J. Mergheim, P. Steinmann, Computational modelling and homogenization of technical textiles, Eng. Struct. 50 (2013) 68–73.
+[14] P. Avery, D.Z. Huang, W. He, J. Ehlers, A. Derkevorkian, C. Farhat, A computationally tractable framework for nonlinear dynamic multiscale modeling of
+     membrane woven fabrics, Int. J. Numer. Methods Eng. 122 (10) (2021) 2598–2625.
+[15] F. As’ad, P. Avery, C. Farhat, A mechanics-informed artiﬁcial neural network approach in data-driven constitutive modeling, Int. J. Numer. Methods Eng. 123
+     (12) (2022) 2738–2759.
+[16] C.J.F. Júnior, V. Nandurdikar, A.G. Neto, A.B. Harish, Concurrent multiscale modelling of woven fabrics: using beam ﬁnite elements with contact at mesoscale,
+     Finite Elem. Anal. Des. 242 (2024) 104274.
+[17] S. Fillep, J. Mergheim, P. Steinmann, Computational homogenization of rope-like technical textiles, Comput. Mech. 55 (3) (2015) 577–590.
+[18] A. Queiruga, T. Zohdi, Microscale modeling of eﬀective mechanical and electrical properties of textiles, Int. J. Numer. Methods Eng. 108 (13) (2016) 1603–1625.
+[19] M.J. Zahr, P. Avery, C. Farhat, A multilevel projection-based model order reduction framework for nonlinear dynamic multiscale problems in structural and
+     solid mechanics, Int. J. Numer. Methods Eng. 112 (8) (2017) 855–881.
+[20] F. Fritzen, M. Hodapp, The ﬁnite element square reduced (FE2R) method with GPU acceleration: towards three-dimensional two-scale simulations, Int. J. Numer.
+     Methods Eng. 107 (10) (2016) 853–881.
+[21] M. Raschi, O. Lloberas-Valls, A. Huespe, J. Oliver, High performance reduction technique for multiscale ﬁnite element modeling (HPR-FE2): towards industrial
+     multiscale FE software, Comput. Methods Appl. Mech. Eng. 375 (2021) 113580.
+[22] B.A. Le, J. Yvonnet, Q.-C. He, Computational homogenization of nonlinear elastic materials using neural networks, Int. J. Numer. Methods Eng. 104 (12) (2015)
+     1061–1084.
+[23] F. As’ad, C. Farhat, A mechanics-informed deep learning framework for data-driven nonlinear viscoelasticity, Comput. Methods Appl. Mech. Eng. 417 (2023)
+     116463.
+[24] F. Aldakheel, E.S. Elsayed, T.I. Zohdi, P. Wriggers, Eﬃcient multiscale modeling of heterogeneous materials using deep neural networks, Comput. Mech. 72 (1)
+     (2023) 155–171.
+[25] S. Kim, H. Shin, Accelerating the data-driven multiscale ﬁnite element analysis for elastoplastic materials by using proper orthogonal decomposition and trans-
+     former architecture, Comput. Methods Appl. Mech. Eng. 437 (2025) 117827.
+[26] S. Pyrialakos, I. Kalogeris, V. Papadopoulos, Multiscale analysis of nonlinear systems using a hierarchy of deep neural networks, Int. J. Solids Struct. 271 (2023)
+     112261.
+[27] C. He, J. Ge, Y. Lian, L. Geng, Y. Chen, D. Fang, A concurrent three-scale scheme FE-SCA2 for the nonlinear mechanical behavior of braided composites, Comput.
+     Methods Appl. Mech. Eng. 393 (2022) 114827.
+[28] A. Javili, P. Steinmann, J. Mosler, Micro-to-macro transition accounting for general imperfect interfaces, Comput. Methods Appl. Mech. Eng. 317 (2017) 274–317.
+[29] R. Hill, Elastic properties of reinforced solids: some theoretical principles, J. Mech. Phys. Solids 11 (5) (1963) 357–372.
+[30] A. Denisiewicz, M. Kuczma, K. Kula, T. Socha, Inﬂuence of boundary conditions on numerical homogenization of high performance concrete, Mater. (Basel) 14
+     (4) (2021) 1009.
+[31] D. Garoz, F.A. Gilabert, R. Sevenois, S. Spronk, W. Van Paepegem, Consistent application of periodic boundary conditions in implicit and explicit ﬁnite element
+     simulations of damage in composites, Compos. Part B: Eng. 168 (2019) 254–266.
+[32] S. Klinkel, S. Govindjee, Using ﬁnite strain 3D-material models in beam and shell elements, Eng. Comput. (Swansea) 19 (3) (2002) 254–271.
+[33] W. He, P. Avery, C. Farhat, In situ adaptive reduction of nonlinear multiscale structural dynamics models, Int. J. Numer. Methods Eng. 121 (22) (2020) 4971–4988.
+[34] Y. So, J. Lee, A two-step sequential hyper-reduction method for eﬃcient concurrent nonlinear FE2 analyses, Mathematics 13 (11) (2025) 1790.
+[35] F. Masi, I. Stefanou, P. Vannucci, V. Maﬃ-Berthier, Thermodynamics-based artiﬁcial neural networks for constitutive modeling, J. Mech. Phys. Solids 147 (2021)
+     104277.
+[36] D.K. Klein, M. Fernández, R.J. Martin, P. Neﬀ, O. Weeger, Polyconvex anisotropic hyperelasticity with neural networks, J. Mech. Phys. Solids 159 (2022) 104703.
+[37] M. Flaschel, P. Steinmann, L. De Lorenzis, E. Kuhl, Convex neural networks learn generalized standard material models, J. Mech. Phys. Solids 200 (2025) 106103.
+[38] F. Aldakheel, E.S. Elsayed, Y. Heider, O. Weeger, Physics-based machine learning for computational fracture mechanics, Machine Learn. Comput. Sci. Eng. 1 (1)
+     (2025) 18.
+[39] B. Amos, L. Xu, J.Z. Kolter, Input convex neural networks, in: International Conference on Machine Learning, PMLR, 2017, pp. 146–155.
+[40] M. Fernández, M. Jamshidian, T. Böhlke, K. Kersting, O. Weeger, Anisotropic hyperelastic constitutive models for ﬁnite deformations combining material theory
+     and data-driven approaches with application to cubic lattice metamaterials, Comput. Mech. 67 (2) (2021) 653–677.
+[41] Z. Li, H. Zhou, Y. Wang, H. Zhou, X. Peng, Modelling energy dissipation and hysteresis of woven fabrics with large deformation under single loading-unloading
+     cycle, Compos. Struct. 279 (2022) 114781.
+[42] C.A. Lawrence, Fundamentals of spun yarn technology, Crc Press, 2003.
+[43] D. Cooper, The stiﬀness of woven textiles, J. Textile Instit. Trans. 51 (8) (1960) T317–T335.
+[44] H.O. Werner, F. Schäfer, F. Henning, L. Kärger, Material modelling of fabric deformation in forming simulation of ﬁber-metal laminates – a review on modelling
+     fabric coupling mechanisms (2021).
+[45] B. Bridgens, P. Gosling, G.-T. Jou, X.-Y. Hsu, Inter-laboratory comparison of biaxial tests for architectural textiles, J. Text. Inst. 103 (7) (2012) 706–718.
+[46] P.J. Creveling, J. Fisher, C. Dahlkamp, M.W. Czabaj, Modeling as-manufactured ﬁber-reinforced microstructures based on X-ray microcomputed tomography,
+     Compos. Sci. Technol. 214 (2021) 109004.
+[47] K.J. Siegel, C. O’Farrell, C.W. Lowry, Parachute broadcloth development for use on Mars sample retrieval lander, in: 26th AIAA Aerodynamic Decelerator Systems
+     Technology Conference, 2022, p. 2740.
+[48] P.J. Creveling, W.W. Whitacre, M.W. Czabaj, A ﬁber-segmentation algorithm for composites imaged using X-ray microtomography: development and validation,
+     Compos. Part A: Appl. Sci. Manuf. 126 (2019) 105606.
+[49] R.H. Blanc, A. Ravasoo, On the nonlinear viscoelastic behaviour of nylon ﬁber, Mech. Mater. 22 (4) (1996) 301–310.
+[50] R.C. Bowers, W.C. Clinton, W.A. Zisman, Friction and lubrication of nylon, Indust. Eng. Chem. 46 (11) (1954) 2416–2419.
+[51] X. Zhang, P.L. Rosin, Superellipse ﬁtting to partial data, Pattern Recognit. 36 (3) (2003) 743–752.
+[52] W. Tian, L. Qi, X. Chao, J. Liang, M. Fu, Periodic boundary condition and its numerical implementation algorithm for the evaluation of eﬀective mechanical
+     properties of the composites with complicated micro-structures, Compos. Part B: Eng. 162 (2019) 1–10.
+[53] Farhat Research Group, AERO-S, (Bitbucket. Bitbucket repository. https://bitbucket.org/frg/aero-s).
+[54] K. Brown, M. Glass, R. Summers, M. Heinstein, A. Gullerud, et al., Algorithms for contact in a mulitphysics environment, Technical Report, Sandia National
+     Laboratories, 2001.
+[55] F. As’ad, P. Avery, C. Farhat, J. Rabinovitch, M. Lobbia, N. Ataei, Sensitivity analysis and validation of a computational framework for supersonic parachute
+     inﬂation dynamics, AIAA J. 63 (5) (2025) 1743–1763.
+[56] H.W. Kuhn, The Hungarian method for the assignment problem, Naval Res. Logist. Quarter. 2 (1-2) (1955) 83–97.
+
+
+
+
+                                                                                  18
+

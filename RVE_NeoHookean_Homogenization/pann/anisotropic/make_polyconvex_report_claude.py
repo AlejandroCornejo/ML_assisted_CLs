@@ -19,6 +19,7 @@ REGRESSION_METRICS = RESULTS / "regression_claude_metrics.json"
 REGRESSION_TRAINING_SUMMARY = RESULTS / "PANN_anisotropic_regression_claude_training_summary.json"
 C1_CYCLIC_METRICS = RESULTS / "c1_cyclic_claude_metrics.json"
 HPROM_ANN_DIRECT_METRICS = HERE.parent / "data" / "hprom_ann_direct_stage10_metrics.json"
+LINEAR_HPROM_METRICS = HERE.parent / "data" / "linear_hprom_stage10_metrics.json"
 MACROS = RESULTS / "polyconvex_numbers_claude.tex"
 FOM_TANGENT = HERE.parent.parent / "studies" / "fom_tangent_stability_test" / "results" / "h_1.000e-02" / "fom_energy_hessian_summary.json"
 
@@ -177,6 +178,16 @@ def main() -> None:
             "DHpromOldSxyError": percentage(cross_check["old_reference_stress_component_relative_l2"][2]),
             "DHpromNewOverOldRatio": f"{cross_check['new_over_old_ratio']:.2f}",
             "HpromControlFomStressError": f"{hprom_direct['control_full_fom_single_run_vs_stage10_stress_relative_l2']:.2e}",
+        })
+
+    if LINEAR_HPROM_METRICS.exists():
+        linear_hprom = json.loads(LINEAR_HPROM_METRICS.read_text(encoding="utf-8"))["modes"]["linear_hprom"]
+        names.update({
+            "LinearHpromStressError": percentage(linear_hprom["stress_relative_l2"]),
+            "LinearHpromSxxError": percentage(linear_hprom["stress_component_relative_l2"][0]),
+            "LinearHpromSyyError": percentage(linear_hprom["stress_component_relative_l2"][1]),
+            "LinearHpromSxyError": percentage(linear_hprom["stress_component_relative_l2"][2]),
+            "LinearHpromVonMisesError": percentage(linear_hprom["von_mises_relative_l2"]),
         })
 
     MACROS.write_text("\n".join(f"\\newcommand{{\\{key}}}{{{value}}}" for key, value in names.items()) + "\n", encoding="utf-8")

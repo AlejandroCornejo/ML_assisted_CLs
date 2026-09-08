@@ -31,7 +31,7 @@ from _material_law_guard_claude import true_neo_hookean_active  # noqa: E402
 _N_CALLS = 0
 
 
-def fom_nested_pk2_2d_vectorized(E_flat, young=None, poisson=None, h=1.0e-4, verbose=True):
+def fom_nested_pk2_2d_vectorized(E_flat, young=None, poisson=None, h=1.0e-4, verbose=True, out_dir=None):
     """(E_flat (N,3), young, poisson) -> (S (N,3), CC (N,3,3)), the exact
     contract Cook's VectorizedAssembler expects from
     fom._neo_hookean_pk2_2d_vectorized. young/poisson accepted but unused
@@ -57,15 +57,15 @@ def fom_nested_pk2_2d_vectorized(E_flat, young=None, poisson=None, h=1.0e-4, ver
     for i in range(n):
         e0 = E_flat[i]
         with true_neo_hookean_active():
-            _eps0, sig0 = solve_at_strain(e0)
+            _eps0, sig0 = solve_at_strain(e0, out_dir=out_dir)
             S[i] = sig0
             for k in range(3):
                 ep = e0.copy()
                 ep[k] += h
                 em = e0.copy()
                 em[k] -= h
-                _epsp, sigp = solve_at_strain(ep)
-                _epsm, sigm = solve_at_strain(em)
+                _epsp, sigp = solve_at_strain(ep, out_dir=out_dir)
+                _epsm, sigm = solve_at_strain(em, out_dir=out_dir)
                 CC[i, :, k] = (sigp - sigm) / (2.0 * h)
         if verbose and (i + 1) % 16 == 0:
             dt = time.perf_counter() - t0

@@ -1,0 +1,905 @@
+       Optimizing Cubature for Efficient Integration of Subspace Deformations
+                                                        Steven S. An                                 Theodore Kim                                 Doug L. James
+                                                                                                    Cornell University
+
+
+
+Abstract                                                                                                                     rials (St. Venant-Kirchhoff) in practice [Barbič and James 2005],
+                                                                                                                             or are inaccurate.
+We propose an efficient scheme for evaluating nonlinear subspace
+                                                                                                                                In this paper, we present a general-purpose force evaluation
+forces (and Jacobians) associated with subspace deformations. The
+                                                                                                                             method that applies to more general materials, subspace kinemat-
+core problem we address is efficient integration of the subspace
+                                                                                                                             ics, and geometry, while delivering fast N-independent force eval-
+force density over the 3D spatial domain. Similar to Gaussian
+                                                                                                                             uations at O(r2 ) cost (without exploiting sparsity). We achieve this
+quadrature schemes that efficiently integrate functions that lie in
+                                                                                                                             scalability by performing a cubature optimization preprocess that
+particular polynomial subspaces, we propose cubature schemes
+                                                                                                                             enables fast runtime evaluation. Additionally, we provide evidence
+(multi-dimensional quadrature) optimized for efficient integration
+                                                                                                                             that our cubature schemes are computationally accurate and effi-
+of force densities associated with particular subspace deformations,
+                                                                                                                             cient, are resistant to over-fitting, and provide clear improvements
+particular materials, and particular geometric domains. We sup-
+                                                                                                                             over traditional Monte Carlo integration [Baraff and Witkin 1992].
+port generic subspace deformation kinematics, and nonlinear hy-
+perelastic materials. For an r-dimensional deformation subspace                                                              Subspace Internal Forces: Our method can be applied to gen-
+with O(r) cubature points, our method is able to evaluate sub-                                                               eral subspace deformation models, but for concreteness of exposi-
+space forces at O(r2 ) cost. We also describe composite cubature                                                             tion we will focus on the case of dimensional model reduction for
+rules for runtime error estimation. Results are provided for var-                                                            detailed finite element meshes [Krysl et al. 2001; Barbič and James
+ious subspace deformation models, several hyperelastic materials                                                             2005]. In a full FEM simulation with N degrees of freedom, the dis-
+(St.Venant-Kirchhoff, Mooney-Rivlin, Arruda-Boyce), and multi-                                                               placement vector would be of length N. However, in dimensional
+modal (graphics, haptics, sound) applications. We show dramati-                                                              model reduction, the equations of motion have been projected into a
+cally better efficiency than traditional Monte Carlo integration.                                                            linear, r-dimensional subspace of deformations. The reduced-order
+CR Categories:     I.6.8 [Simulation and Modeling]: Types of                                                                 equations of motion describing a mesh deforming in subspace co-
+Simulation—Animation, I.3.5 [Computer Graphics]: Computa-                                                                    ordinates can be written as
+tional Geometry and Object Modeling—Physically based model-
+ing G.1.4 [Mathematics of Computing]: Numerical Analysis—                                                                                                  M q̈ + f(q) = fext ,                            (1)
+Quadrature and Numerical Differentiation
+                                                                                                                             where, M ∈ Rr×r is the (often constant) mass matrix, q ∈ Rr is the
+Keywords: Dimensional model reduction; reduced-order model-                                                                  generalized displacement vector of reduced coordinates, f(q) ∈ Rr
+ing; subspace integration; quadrature; subspace dynamics; dynamic                                                            is the subspace internal restoring force, fext ∈ Rr are external forces,
+deformations; nonlinear solid mechanics; real-time simulation                                                                and the overdot denotes differentiation.
+                                                                                                                                Unfortunately, the subspace internal force term f(q) in (1) is re-
+1        Introduction                                                                                                        sponsible for the poor O(rN) and O(r4 ) scalings of previous meth-
+Recently, dimensional model reduction has gained attention due to                                                            ods [Krysl et al. 2001; Barbič and James 2005], so its efficient eval-
+the difficulty of simulating detailed physical models at high rates for                                                      uation is the focus of this paper. The subspace force can be formu-
+multimodal (graphics, haptics, sound) applications. Such reduced-                                                            lated in terms of a potential energy function, E(q) : Rr → R, given
+order methods construct a small, r-dimensional subspace that cap-                                                            by the domain integral,
+tures the salient features of a much larger, N-dimensional model.                                                                                               Z
+If r  N, simulating these reduced-order models entirely in the r-                                                                                    E(q) =         Ψ(X; q) dΩX ,                         (2)
+dimensional subspace holds the promise of superior runtime perfor-                                                                                               Ω
+mance provided costs independent of N are achieved.
+                                                                                                                             where Ψ(X; q) is the nonnegative strain energy density at material
+   Unfortunately, efficient evaluation of internal forces for subspace                                                       point X of the undeformed material domain Ω [Bonet and Wood
+deformation models has proven difficult for arbitrary geometry and                                                           2008]. The subspace internal force is then the gradient of this en-
+nonlinear materials. In particular, the inability of many models to                                                          ergy, and is given by the vector integral
+support more complex materials, such as biological materials for
+surgical simulation, is unfortunate. Current force evaluation meth-                                                                                        Z                         Z
+ods either have costs dependent on N [Krysl et al. 2001] or that                                                              f(q) = −∇q E(q) = −              ∇q Ψ(X; q) dΩX =           g(X; q) dΩX , (3)
+                                                                                                                                                           Ω                          Ω
+scale poorly (O(r4 )) or are essentially restricted to particular mate-
+                                                                                                                             where we denote the “reduced-force density” integrand by
+
+ACM Reference Format                                                                                                                             g = g(X; q) = −∇q Ψ(X; q) ∈ Rr .                          (4)
+An, S., Kim, T., James, D. 2008. Optimizing Cubature for Efficient Integration of Subspace Deformations.
+ACM Trans. Graph. 27, 5, Article 165 (December 2008), 10 pages. DOI = 10.1145/1409060.1409118
+http://doi.acm.org/10.1145/1409060.1409118.                                                                                    Our approach is to approximate f(q) using an n-point cubature
+Copyright Notice                                                                                                             (multi-dimensional quadrature) scheme,
+Permission to make digital or hard copies of part or all of this work for personal or classroom use is granted
+without fee provided that copies are not made or distributed for profit or direct commercial advantage
+and that copies show this notice on the first page or initial screen of a display along with the full citation.
+                                                                                                                                                     Z                        n
+Copyrights for components of this work owned by others than ACM must be honored. Abstracting with                                           f(q) =         g(X; q) dΩX ≈ ∑ wi g(Xi ; q).                   (5)
+credit is permitted. To copy otherwise, to republish, to post on servers, to redistribute to lists, or to use any                                      Ω
+component of this work in other works requires prior specific permission and/or a fee. Permissions may be                                                                    i=1
+requested from Publications Dept., ACM, Inc., 2 Penn Plaza, Suite 701, New York, NY 10121-0701, fax +1
+(212) 869-0481, or permissions@acm.org.
+© 2008 ACM 0730-0301/2008/05-ART165 $5.00 DOI 10.1145/1409060.1409118
+                                                                                                                             We precompute estimates of the n positive cubature weights (wi ),
+http://doi.acm.org/10.1145/1409060.1409118                                                                                   and n cubature points (Xi ) by minimizing f(q) integration error over
+                                                                                                                    ACM Transactions on Graphics, Vol. 27, No. 5, Article 165, Publication date: December 2008.
+165:2        •      S. An et al.
+
+                                                                                       PRECOMPUTATION                RUNTIME
+
+                                     q(1)       (1)
+                                               g (X
+                                                 ( )                                    f (1)
+                                                                                  Ω
+
+
+
+                                     q(2)      g(2)(X
+                                                   ( )                                  f (2)
+                                                                                                     Cubature
+                                                                                                    Optimization
+
+
+
+
+                                   ...
+
+
+                                              ...
+
+
+
+
+                                                                                      ...
+                                     q(T)      g(T)(X
+                                                   ( )                                  f (T)
+
+         Subspace                  Training                 Training                  Training                             Optimized Cubature        Fast Subspace
+     Deformation Model              Poses                Force Densities               Forces                                                     Force Approximation
+
+Figure 1: Overview of Cubature Optimization: Given a subspace deformation model with N elements, we generate (sample or simulate) a
+set of training poses for input to the cubature optimization preprocess. The optimization procedure estimates nN cubature elements/points,
+and associated nonnegative weights, wi , such that the the cubature approximation of f(q) well-approximates the training force/pose data.
+At runtime, the cubature scheme uses the force response of only the n cubature elements to provide a fast approximation to internal forces,
+therein accelerating integration of subspace deformation dynamics.
+
+
+
+
+            O PTIMIZED C UBATURE                               R EST P OSE                          N ONLINEAR V IBRATIONS
+Figure 2: Optimizing cubature for nonlinear modal sound: (Left) A 900-element cubature scheme optimized for integrating the nonlinear
+200-mode subspace vibrations of (Middle) a complex Menger-inspired thin shell (one cube thick) modeled with 393216 tetrahedra, and a
+St.Venant-Kirchhoff material model of aluminum. (Right) Nonlinear shell vibrations (amplified 4× for display). Optimized cubature permits
+explicit Newmark subspace integration of audio-rate (44.1 kHz) nonlinear sound simulations, with significant and audible nonlinear mode
+coupling effects, at greatly reduced costs: for a 5.0 second sound clip, nonlinear sound synthesis using optimized cubature and subspace
+integration (∆t = 1ms/88.2) required 3.5 single-core hours for subspace vibration (and radiation calculations), whereas sounds integrated
+using a parallelized implementation of subspace-projected unreduced forces [Krysl et al. 2001] required 4 days on 16 cores. The resulting
+sounds are virtually indistinguishable.
+
+
+a training set of (q, f(q)) pairs. Our proposed preprocess is a greedy                          formable shapes [Terzopoulos et al. 1987; Terzopoulos and Witkin
+algorithm that incrementally selects cubature sample points, and es-                            1988; Witkin and Welch 1990]. Monte Carlo methods were widely
+timates their nonnegative cubature weights. In our discrete imple-                              used to evaluate subspace force integrals (3); for example, Baraff
+mentation, each cubature point Xi corresponds to a linear tetrahedral                           and Witkin [1992] mention that the gradient of the potential energy
+element, since the force density Ψ is constant over each element.                               integral could be easily computed for relatively simple examples
+Runtime evaluation of subspace forces consists of evaluating only                               (such as a quadratically deforming block) using Monte Carlo inte-
+n deformed tetrahedra, and accummulating their f(q) contribution.                               gration: “For second-order polynomial deformations, a small num-
+An overview of our preprocess and runtime pipeline is shown in                                  ber of sample points (on the order of fifty) yields adequate results.”
+Figure 1.                                                                                       Unfortunately, we observe (Figure 8) that Monte Carlo is inefficient
+    Although no formal theory exists for cubature over nontrivial 3D                            for more complex geometry, deformations, and materials.
+domains, our empirical evidence indicates that cubature schemes                                    Our approach is inspired by Gaussian quadrature and related
+can be optimized for efficient subspace force evaluation for (1) par-                           schemes from classical 1-D numerical integration [Hildebrand
+ticular geometric domains, (2) particular materials, (3) particular                             1956; Press et al. 1992], e.g., an n-point Gaussian quadrature
+deformation subspace kinematics and/or motion examples, and (4)                                 scheme for a proper integral is
+greatly accelerated subspace force evaluation. See figure 2 for a                                                   Z 1                 n
+preview of our results.                                                                                                   g(X)dX = ∑ wi g(Xi ),                         (6)
+                                                                                                                     −1               i=1
+2     Other Related Work                                                                        where wi are n (positive) weights, and Xi are n abscissae chosen as
+For more than two decades, following the pioneering work of Ter-                                roots of a suitable orthogonal polynomial. Surprisingly, with only n
+zopoulos, Barr, Witkin, and others, the mathematical foundations                                quadrature samples, Gaussian quadrature can evaluate integrals of
+of Lagrangian dynamics have been employed in computer graph-                                    polynomials of degree 2n − 1 exactly, so that each function sample
+ics to build dynamic physically based models of parametrized de-                                effectively kills off a polynomial subspace of dimension two. If the
+ACM Transactions on Graphics, Vol. 27, No. 5, Article 165, Publication date: December 2008.
+                                               Optimizing Cubature for Efficient Integration of Subspace Deformations                             •      165:3
+
+function is very well approximated by a degree 2n − 1 polynomial,              modes have been warped to approximate large deformation kine-
+then the integral is also very well approximated. While Gaussian               matics [Choi and Ko 2005].
+quadrature and related quadrature schemes (Gauss-Radau, Gauss-                     Closely related to our approach, Key-Point Subspace Accelera-
+Lobatto, Radau, etc.) are widely used, variants for integrating                tion (KPSA) and caching have been proposed to accelerate posing
+higher-dimensional functions are restricted to tensor product do-              of deformable characters [Meyer and Anderson 2007]. The selec-
+mains and other simple parameterizations [Hildebrand 1956; Press               tion and use of key points is analogous to our selection of cuba-
+et al. 1992]. In finite element analysis, integrals such as (3) are            ture points (or key elements). Unfortunately, KPSA does not solve
+computed using related quadrature schemes but only for simple el-              the problem of estimating subspace forces and Jacobians associated
+ement shapes and low-order basis functions [Bathe 1996]. Exot-                 with subspace deformations (although it was never intended to). For
+ically shaped elements have essentially avoided evaluation of (3)              example, KPSA applied to subspace forces results in nonconser-
+by using corotated linear models [Kaufmann et al. 2008]. Sadly,                vative force models with nonsymmetric Jacobians due to KPSA’s
+no generalizations of Gaussian quadrature exist to nontrivial multi-           use of least-squares estimation. Instead, it is more natural here to
+dimensional domains (where it is called cubature), or to nonpoly-              formulate reduced forces in terms of subspace derivatives of strain
+nomial function spaces relevant to subspace deformation forces.                energy using the solid foundations of numerical integration.
+   Dimensional model reduction techniques use Galerkin projec-                     Articulated subspace deformation models are commonplace in
+tion onto a relatively low-dimensional linear subspace (spanned by             character animation, and can be used with cubature optimiza-
+the columns of the dense basis matrix, U) to obtain a smaller re-              tion. Pose space deformation interpolates shape correction coef-
+duced set of equations of motion, the unreduced internal forces,               ficients as a function of pose [Lewis et al. 2000]. For physics-
+F = F(Uq) ∈ RN (evaluated in shape Uq) are projected to yield re-              based models [Kry et al. 2002], cubature could assist with estimat-
+duced forces, f = UT F(Uq) ∈ Rr , equivalent to (3). Linear eigen-             ing pose-specific subspace corrections potentially avoiding high-
+mode coordinates are often used for subspace dynamics to resolve               dimensional interpolation and training difficulties.
+weak material nonlinearities in small-strain configurations [Bathe                 An alternative to runtime integration of g over Ω is to precom-
+1996] or mode-mode coupling [Vakakis 2001]. For more nonlinear                 pute a fast model of f(q) using various system modeling tech-
+problems, Krysl et al. [2001] formalized subspace integration for fi-          niques, such as data-driven interpolation using radial basis func-
+nite element models by employing a posteriori dimensional model                tions [Nelles 2000] or neural networks [Grzeszczuk et al. 1998].
+reduction with “empirical eigenvectors” (or proper orthogonal de-              Other approaches tabulate forces indirectly using compressed mo-
+composition (POD); principle component analysis) subspaces. The                tion libraries for runtime playback, but simulation is done in
+principle benefits are fewer ODEs to integrate, and smaller linear             an unreduced setting [James and Fatahalian 2003]. In such ap-
+systems to solve (during implicit Newmark integration and New-                 proaches, challenges include guaranteeing adequate data and model
+ton iterations). Unfortunately the speedup is fundamentally limited            training, supporting high subspace dimensionality, avoiding over-
+by reduced force (and Jacobian) evaluation since they are based                fitting, and ensuring energy conservation, passivity, and stability.
+on “brute force” evaluation of O(N) unreduced nodal force val-                 To a large extent, cubature avoids problems associated with approx-
+ues (F) in order to evaluate f via subspace projections (UT F)–an              imating f(q) (or dynamics) by estimating and storing just 2n cuba-
+O(rN) cost. Related issues arise when computing forces and gra-                ture values (n sample indices, and n nonnegative weights), thereby
+dients for general-purpose multi-scale basis formulations, e.g., the           exploiting the redundant spatial structure of subspace deformation,
+basis-refinement formulation of CHARMS [Grinspun et al. 2002]                  and the energy integrand’s functional structure.
+(see also [Capell et al. 2002]) formalizes the (multi-resolution)              3     Subspace Deformation Model
+scatter/gather integration steps of Galerkin subspace projection,
+but again invokes fine-scale evaluation of reduced force (and Ja-              Subspace Kinematics: Given the time-dependent parameters of
+cobian) components for accurate evaluation of nonlinear force re-              an r-dimensional subspace deformation, q = q(t) ∈ Rr , the sub-
+sponse. Other schemes rely on coarsened discrete approximations                space deformation is specified pointwise by the deformation opera-
+for speed [Debunne et al. 2001], albeit at the cost of geometric               tor, ϕ = ϕ(X; q),
+and/or material resolution.                                                                            x = ϕ(X; q) ∈ R3 ,                     (7)
+   Recently Barbič and James [2005] observed that for the special             where x ∈ R3 is the deformed image of the undeformed material
+case of St.Venant-Kirchhoff materials (large deformations, but lin-            point, X ∈ R3 . Computationally, we assume that the cost of evalu-
+ear stress-strain response), the reduced internal force (3) was in fact        ating a deformed point using (7) is O(r) flops. The partial deriva-
+a vector of cubic polynomials in the reduced coordinates, q ∈ Rr .             tives of ϕ are important kinematic quantities: (1) the deformation
+Subspace integrators can thus be generated for large-deformation               gradient,
+reduced StVK models using arbitrary linear subspace bases, such                                                     ∂x
+as from PCA of training data, or linear and derivative modes us-                                   F = F(X, q) =       ∈ R3×3                  (8)
+                                                                                                                   ∂X
+ing mass-PCA [Barbič and James 2005]. While extremely fast
+for small r, and suitable for real-time haptics [Barbič and James             and (2) the displacement sensitivity matrix,
+2007], the cost complexity of the reduced force evaluation scales                                                         ∂x
+as O(r4 ) so that only models smaller than, e.g., r = 30, offer sig-                                  U = U(X, q) =          ∈ R3×r .                        (9)
+nificant speedups [Barbič 2007]. More general reduced kinematics                                                         ∂q
+would also be useful, but the model is limited to the linear basis             Materials are defined via the strain energy density, Ψ(X; q),
+superposition typical of POD methods. In contrast, our proposed                which are used to evaluate the deformation potential energy and
+approximation allows higher rank models due to its O(r2 ) force                subspace force integrals (2-3). Materials used in this paper are
+calculations for O(r) cubature points.                                         given in Appendix A.
+   For linear quasistatics, condensation and other precomputa-
+tions can enable output-sensitive (subspace) evaluation of contact             Discrete Setting: To support reduced-order model construction,
+force/displacement responses [Cotin et al. 1999; James and Pai                 we will employ an underlying discrete model. Without loss of gen-
+1999]. For linear elastodynamics, linear modal analysis allows ef-             erality, our implementation uses tetrahedral finite element models
+ficient subspace force and dynamics models to be precomputed and               with linear shape functions. We will refer to nodal positions as a
+diagonalized, thereby enabling O(r) mode integration using IIR fil-            vector of position quantities: given Nv nodal vertices, let the unde-
+ters [Pentland and Williams 1989; James and Pai 2002]. Linear                  formed material positions be X = (X1 , X2 , . . . , XNv )T ∈ R3Nv , and
+                                                                      ACM Transactions on Graphics, Vol. 27, No. 5, Article 165, Publication date: December 2008.
+165:4        •      S. An et al.
+                                                                                                                                                   4.5
+the deformed positions be x = (x1 , x2 , . . . , xNv )T ∈ R3Nv , such that                                                                               FORCE ONLY
+xi = ϕ(Xi ; q). An important displacement-like matrix quantity is                                                                                   4    FORCE AND STIFFNESS
+
+the gradient of the position with respect to q,                                         Figure 3: Complexity of
+                                                                                                                                                   3.5
+                                                                                        force and stiffness evalua-
+
+
+
+
+                                                                                                                              MILLISECS PER EVAL
+                        ∂x                                                              tion: Assuming n = O(r) cu-                                 3
+
+                           ≡ U = U(q) ∈ R3Nv ×r .                           (10)        bature samples, internal force                             2.5
+                        ∂q                                                              evaluation costs O(r2 ) flops,
+                                                                                                                                                    2
+For the important case of linear shape models, U is a constant ma-                      whereas dense stiffness matrix
+trix of displacement modes, which has the important consequence                         evaluation is O(r3 ) (although                             1.5
+
+
+of making the mass matrix M constant.                                                   a fast matrix-vector multiply                               1
+                                                                                        exists (§6.2)). These timings
+                                                                                                                                                   0.5
+4     Discrete Cubature                                                                 were done using n = r cuba-
+                                                                                                                                                    0
+                                                                                        ture schemes.                                                0   20      40      60    80   100
+We use optimization to estimate an n-point cubature scheme (5) that                                                                                               RANK (r)
+
+approximates the reduced force f(q) integral in (3). It follows that
+our approximation of the gradient of the reduced force vector, or
+the stiffness matrix, is                                                                  {(f(t) , q(t) )}t=1...T where we compute f(t) = f(q(t) ) for the shape
+                                     n                                                    q(t) using standard methods, e.g., subspace projection of unreduced
+                                           ∂ g(Xi ; q)                                    forces [Krysl et al. 2001]. We now describe the procedures for es-
+                         K(q) ≈ ∑ wi                   .                    (11)
+                                   i=1        ∂ qT                                        timating weights (§5.1), greedy cubature optimization (§5.2), train-
+                                                                                          ing data generation (§5.3), and cubature validation (§5.5).
+Observe that by choosing nonnegative weights, wi ≥0, we are guar-
+anteed that K inherits the same semi-definiteness properties of the                       5.1    Estimating Nonnegative Cubature Weights
+integrand.
+                                                                                          Given a set S of n cubature points, we estimate cubature weights
+                                                                                                                                                   (t)
+Element-based Cubature Schemes: Cubature optimization                                     w ∈ Rn+ (that multiply the integrand samples, gi = g(XSi ; q(t) )),
+would suggest considering continuous positions, X ∈ Ω, and thus                           by minimizing the error in predicting (3) over the training data’s
+a continuous-valued, constrained optimization problem. However,                           T reduced force values, f(t) , t = 1 . . . T. To avoid over-fitting and
+in reduced-order modeling we may only have access to discrete rep-                        preserve the spectral properties of stiffness matrices, we estimate
+resentations of the integrand. Therefore, we consider discrete op-                        nonnegative weights using nonnegative least squares (NNLS) by
+timization schemes, wherein the candidate cubature “points” (and                          solving:
+hence g) are chosen from a finite set.                                                     (1)               (1)             (1) 
+                                                                                              g1             gi
+                                                                                                                     . . . kfg(1)
+                                                                                                                                              (1) 
+   In our implementation, we use linear tetrahedral finite elements                            (1) k . . . kf(1)              n                 f
+                                                                                             kf                    k              k              (1)
+                                                                                                                                              kf k 
+                                                                                                                                       
+with constant deformation gradients. The tetrahedrons are features                                                                  w1
+                                                                                           .                  .               .                  .. 
+                                                                                           ..                 ..              ..   ..  
+                                                                                                                                    
+which can be seen as generalized cubature “points.” The reduced-                                                                     .         . 
+force integrand g(Xi ; q) of any point Xi ∈ Ω is equal to the response
+                                                                                          
+                                                                                           g(t)             gi
+                                                                                                               (t)             (t)  
+                                                                                                                             gn   w  =  f
+                                                                                                                                             (t)      
+                                                                                                                                                          ⇔ Aw = b,
+                                                                                                                                                        
+of the containing element.
+                                                                                           1
+                                                                                           kf(t) k  . . .  kf(t) k
+                                                                                                                     . . . kf(t) k   
+                                                                                                                                         i       (t)
+                                                                                                                                               kf k 
+                                                                                                                                     .        .
+                                                                                                                                                        
+                                                                                           ..                  ..              ..   ..  
+                                                                                          
+                                                                                                                                              .. 
+                                                                                                                                                        
+Complexity of Cubature Evaluation: The cost of evaluating                                  .                    .               .  wn               
+                                                                                                                                                f(T )
+                                                                                           (T )              (T )
+internal forces (5) using an n-point cubature scheme is O(rn), since                          g1             gi             gn
+                                                                                                                              (T )
+
+each cubature point’s contribution can be accumulated in O(r) oper-                         kf(T ) k
+                                                                                                     . . . kf(T ) k . . . kf(T ) k             kf(T ) k
+
+ations (assuming dense matrices and global deformation support).                                                                                               (12)
+For example, a tetrahedron used in a cubature scheme can be de-                           subject to nonnegativity constraints, w ≥ 0. Here A is a dense rT -
+formed in O(r) operations using (7), the resulting 12-vector of ver-                      by-n matrix, and b is an rT -vector. Each r-vector in row t of A and
+tex forces can be computed at O(1) cost, and these forces can be                          b is scaled by kf(t) k−1 in order to minimize relative error instead
+projected into subspace force contributions using a 12-by-r matrix-                       of absolute error. Larger absolute errors will be tolerated for larger
+vector multiply at O(r) cost. Evaluating the stiffness matrix approx-                     training forces, so a small number of very large samples will not
+imation (11) involves O(r2 n) cost (assuming dense matrices). For                         distort the fitting process.
+example, a 12-by-12 tetrahedral stiffness matrix, Ke , can be com-                            Such problems can be solved efficiently using available NNLS
+puted using (7) at O(r) cost, however computing its contribution                          implementations [Lawson and Hanson 1974]. In practice, we can
+to the r-by-r subspace stiffness matrix K(q) involves a subspace                          estimate nonnegative cubature weights with one NNLS call in less
+projection of the form, UTe Ke Ue , which incurs an O(r2 ) cost.                          than a minute for a relatively complex model with T = 1000 poses,
+   Assuming n ∝ r (as we observe in practice (§7)), we therefore                          r = 100 dimensions, and n = 200 samples. However, for challeng-
+obtain O(r2 ) cost for force evaluation and O(r3 ) cost for stiffness                     ing examples, such as the “Menger shell” (Figure 2), NNLS calls
+evaluation. However, we show in §6.2 that a fast O(r2 ) stiffness                         can be expensive: 36 minutes for T = 1000, r = 200, and n = 800.
+matrix-vector product is possible if the stiffness matrix need not                        Given that solve times scale roughly as O(rT n2 ), we will address
+be formed explicitly. Finally, while complexity analysis can show                         the superlinear scaling of NNLS with n and r later in §5.4.
+costs independent of N, an important result is that subspace com-                             Example sorted nonnegative weights (for “Menger shell”) are:
+putations are still fast in practice (see Figure 3).                                                           1
+                                                                                                     WEIGHT
+
+
+
+
+5     Optimizing Cubature                                                                                     0.5
+We model the cubature optimization problem as a discrete sub-
+                                                                                                               0
+set selection problem, where we attempt to select cubature                                                          0   200     400                      600       800
+points/elements that, when weights are optimized using nonneg-                                                                   INDEX
+ative least squares (NNLS), will tend to minimize fitting error
+of (3). The optimization estimates cubature quality via the er-                           Error estimator, ε: In subsequent optimizations, we choose
+ror of the subspace force estimate using T training data samples,                         to minimize RMS relative L2-norm error over all samples, as de-
+ACM Transactions on Graphics, Vol. 27, No. 5, Article 165, Publication date: December 2008.
+                                                  Optimizing Cubature for Efficient Integration of Subspace Deformations                                          •      165:5
+                                                                                                                                             0.8
+scribed by the following error metric:                                                                                                                                  |C| = 100
+                                                                                                                                                                        |C| = 1000
+                        v                                                        Figure 4: Comparison of dif-                                0.7
+                                                                                                                                                                        |C| = 10000
+                        u T                                                      ferent values of |C|: Be-
+                        u1       kf̃(t) − f(t) k2                                                                                            0.6
+                    ε =t ∑                        .                   (13)       low 10% error, the quality of
+
+
+
+
+                                                                                                                          VALIDATION ERROR
+                            T t=1 kf(t) k2                                       the cubature does not degrade                               0.5
+
+                                                                                 significantly when consider-                                0.4
+All following training and validation convergence plots were done                ing less candidates per itera-
+using this metric. Given the scaling by kf(t) k−1 , this is equivalent to        tion. Thus, the greedy cuba-                                0.3
+
+the relative residual error krk/kbk optimized by the NNLS problem                ture optimization algorithm is                              0.2
+and the greedy algorithm that follows.                                           practical for high-resolution
+                                                                                 meshes. The bridge model of                                 0.1
+
+5.2    Greedy Estimation of Cubature Points                                      29,800 elements was used for                                 0
+                                                                                                                                               0    50      100       150         200
+We propose a simple, iterative, greedy, subset-selection algorithm1 .            this plot.                                                        # CUBATURE SAMPLES (Ns)
+
+At every iteration, we add a key element e such that ge is the most
+positively parallel to the current NNLS residual. This will reduce
+the size of the residual the most. Then, we update the residual and                      for large meshes. To work around this, manual input can be
+iterate again. The algorithm is as follows:                                              recorded and then simulated off-line [Barbič and James 2005].
+            G REEDY C UBATURE(A, b, T OL)                                             • For a linear modal analysis basis used for small-strain sub-
+             1 S ← 0/                                                                   space integration [Bathe 1996], training data can be generated
+             2 r←b                                                                      automatically by randomly sampling a Gaussian distribution
+             3 while krk/kbk > T OL                                                     for each mode (component of q), with standard deviations
+             4      C ← S ELECT C ANDIDATE P OINTS(S)                                   proportional to the inverse of the mode’s frequency.
+                                         gT r
+             5    e ← arg maxe∈C kg kkrk
+                                     e
+                                   e
+                                                                                   Once the q(t) values are known for the poses, we can lazily compute
+             6    S ← S ∪ {e}                                                      the columns of A for training, as needed.
+             7    w ← NNLS(AS , b)
+             8    r ← b − AS w                                                     5.4     Optimization Complexity Analysis
+             9 return (S, w)                                                       Scaling with N: The algorithm cost and memory requirements
+Here S is the set of key elements, r is the current NNLS residual,                 are linear in the size of discrete model, which is mandatory for
+w is the vector of cubature weights, and AS is the A matrix with                   reduced-order modeling. This N-dependence arises from the com-
+columns corresponding to elements in S.                                            putation of T training force values, f(t) . The “Menger shell” model
+                                                                                   illustrates that our method can support large tetrahedral models.
+Lazy Evaluation: The sub-function S ELECT C ANDIDATE -
+P OINTS must choose the remaining elements/points most likely                      Scaling with r: For higher rank models, one may need hundreds
+to reduce the residual error. The most thorough implementation                     of cubature points to achieve low error. For such problems, the op-
+is to return all remaining elements not already in S. However, for                 timization process can become impractical. Informally, NNLS ex-
+high-resolution meshes, storing or calculating the ge vectors for                  hibits O(rT n2 ) complexity, so that high r and n values can be slow.
+all elements is impractical. Instead, we pick a random subset of                   To limit this bottleneck, we use subset training, wherein NNLS re-
+the remaining elements and calculate the ge vectors needed for                     gression is done on a small subset of Ts training samples. Before the
+the arg max step. The full A matrix is never actually computed or                  NNLS call, we randomly choose this subset, perform NNLS only
+stored, so the algorithm has modest memory requirements, even                      on the subset to update the residual, and then on the next iteration
+for meshes with hundreds of thousands of elements. These column                    we greedily select the point most fit with respect to the residual.
+computations are also trivial to parallelize.                                      Although the residual is inaccurate, each iteration is much faster.
+    One adjustable parameter of the algorithm is the number of ran-                However, one can occasionally do NNLS on the full training set
+dom candidates, |C|, to consider at each iteration. We found that                  to check the actual error and output a final cubature rule. In our
+for our examples, increasing the value of |C| beyond 1000 elements                 experiments, we used Ts = 10 and do a full regression every O(r)
+does not significantly improve the quality of the cubature after 10%               iterations to obtain cubature schemes that appear to achieve train-
+error is reached. Figure 4 demonstrates that considering only 100                  ing errors within 5% of comprehensively trained (Ts =T ) rules. For
+candidates per iteration is about the same as considering 10000,                   high-rank models, such as r = 200 for the detailed Menger shell,
+suggesting that optimal selection at any greedy step is not critical.              optimization times became hours instead of days.
+5.3    Training Data Generation                                                    Complexity Summary: The optimization bottleneck is repeated
+Various methods may be used to collect cubature training samples:                  calls to the NNLS routine. Characterizing the cost of NNLS as
+                                                                                   O(rT n2 ), then since every iteration calls NNLS with one more cu-
+   • A simple approach is to use pre-simulated motion for reanal-                  bature sample the total complexity is O(rT n3 ). If only a subset of
+     ysis [Krysl et al. 2001] of non-interactive simulation condi-                 the training set is used each iteration the cost is O(rTs n3 ).
+     tions, possibly with forcing variations, e.g., in gravity, wind,
+     or inflation conditions of a balloon. The q values produced                   5.5     Cubature Validation
+     during the simulation can then be recorded to disk and sam-                   In some ways, the requirement of training data is a weakness of
+     pled for training and validation.                                             cubature optimization. However, a strength of cubature optimiza-
+   • Manual interaction (or user sketches) with a reduced simula-                  tion, perhaps due to the fact that the method only learns cubature
+     tion using fully projected forces can be used, but can be slow                points and nonnegative weights, is that it resists over-fitting. To
+                                                                                   assess the quality of a given cubature rule, we evaluate it on a vali-
+   1 Our greedy algorithm is analogous to one proposed for multipole source        dation set, {(f(v) , q(v) )}v=1...V , obtained in ways similar to training
+placement [James et al. 2006], although here the data is real-valued, and          set generation (§5.3). To estimate validation error, we use the train-
+NNLS solves are used at each iteration.                                            ing error metric (13) on the validation set. Our experiments show
+                                                                          ACM Transactions on Graphics, Vol. 27, No. 5, Article 165, Publication date: December 2008.
+ 165:6                     •          S. An et al.
+
+ that cubature optimization is surprisingly resistant to over fitting:                                                                 7    Results
+ for all examples, the training and validation convergence plots are                                                                   We now provide numerical results and analysis; please see our ac-
+ nearly identical. The two representative plots are shown for the rope                                                                 companying video for animation results. Model statistics and al-
+ bridge example in Figure 5.                                                                                                           gorithm timings are provided in Table 1. We note that graphical
+                                                                                                                                       renderings were done using unoptimized implementations of ambi-
+                               Training (T = 1000)                                             Validation (V = 1000)
+              0.8                                                                  0.8                                                 ent occlusion [Hoberock and Jia 2008], and offline renderings.
+                                                Greedy (|C|=100)                                                 Greedy (|C|=100)
+              0.7                                                                  0.7
+                                                                                                                                       Comparison to Gaussian quadrature: Although we do not tar-
+              0.6                                                                  0.6                                                 get 1-dimensional or tensor-product integration applications, out
+RMS L2 REL ERROR
+
+
+
+
+                                                                     RMS L2 REL ERROR
+              0.5                                                                  0.5
+                                                                                                                                       of curiosity, we compared our Greedy-NNLS cubatures to Gaus-
+                                                                                                                                       sian quadrature on the [−1, 1] interval. To do so, we randomly
+              0.4                                                                  0.4
+                                                                                                                                       generated suitably normalized degree-n polynomials using Cheby-
+              0.3                                                                  0.3                                                 shev basis functions, then trained our cubature using N = 1000
+              0.2                                                                  0.2
+                                                                                                                                       uniformly distributed candidate abscissae. We observe that while
+                                                                                                                                       an n-point Gaussian quadrature rule can exactly integrate a degree
+              0.1                                                                  0.1
+                                                                                                                                       2n − 1 polynomial, on average our n-point Greedy-NNLS scheme
+                   0
+                    0     50       100      150                200
+                                                                                        0
+                                                                                         0   50       100      150              200
+                                                                                                                                       can integrate only an n-degree polynomial for 0.5% training error.
+                           # CUBATURE SAMPLES (n)                                             # CUBATURE SAMPLES (n)
+                                                                                                                                       Results are shown in Figure 6.
+ Figure 5: Training and validation convergence plots for the rope                                                                                                                               30
+ bridge example (r = 100) illustrate characteristic resistance of cu-                                                                                                                                     Greedy−NNLS (0.5% Error)
+                                                                                                                                                                                                          Gaussian Quadrature
+ bature optimization to over-fitting. Five cubatures were optimized                                                                                                                             25
+ for each n value.
+
+
+
+
+                                                                                                                                                                         # POLYNOMIAL SAMPLES
+                                                                                                                                      Figure 6: Comparison to                                   20
+                                                                                                                                      Gaussian quadrature: In
+ 6                      Implementation Details                                                                                        the 1-D case, our greedily-                               15
+                                                                                                                                      optimized quadrature rules re-
+ 6.1                    Fast Integrand Evaluation                                                                                     quire about twice as many                                 10
+ For a constant displacement sensitivity matrix U, equation (5) can                                                                   samples as the corresponding
+ be accelerated using level-2 BLAS matrix-vector multiplies. Re-                                                                      Gaussian quadrature rules to                              5
+ shaping the deformation gradient for element e as a 9-vector, it                                                                     achieve 0.5% error.
+ can be calculated as Fe = Ee q + I, where Ee ∈ R9×r can be de-                                                                                                                                 0
+                                                                                                                                                                                                 0        5         10    15     20     25   30
+ rived and pre-computed using U (c.f. [Barbič 2007]). Furthermore,                                                                                                                                                POLYNOMIAL DEGREE
+
+ all deformation gradients for cubature elements can be calculated
+ in one matrix-vector multiply by stacking all Ee matrices into a                                                                      Scaling with rank for given error tolerances: Analogous to
+ single matrix E ∈ R9n×r . All energy density gradients with re-                                                                       the 1-dimensional comparison, we also investigated how n scales
+ spect to the deformation gradient, g̃i , can then be evaluated for                                                                    with the rank of the reduced model. For a given reduced model
+ each sample element (invoking the constitutive model) in an O(n)                                                                      of rank r, how many cubature samples n are necessary to achieve
+ loop. Finally, the subspace projection and summation can be eval-                                                                     a given error tolerance? Figure 7 shows that the greedy algorithm
+ uated as another matrix-vector multiply, f = HT [g̃1 . . . g̃n ], where                                                               can produce cubature rules that satisfy the error tolerance with n =
+ the matrix H ∈ R9n×r can be pre-computed using U and the cu-                                                                          O(r) sample elements. The constant factor varies depending on the
+ bature weights wi . Similar optimizations exist for Jacobian matrix                                                                   error tolerance and the geometry of the mesh. As expected, more
+ evaluation. In our implementation, this level-2 BLAS optimization                                                                     cubature samples are needed to meet lower error tolerances.
+ provided nearly a two-fold speedup in force evaluation.
+                                                                                                                                                                                                400
+ 6.2                    O(r2 ) Dense Stiffness Matrix-Vector Products                                                                                                                                         Menger: 5% Error
+                                                                                                                                                                                                              Menger: 10% Error
+                                                                                                                                                                                                350
+                                                                                                                                                                                                              Bridge: 5% Error
+ Fast matrix-vector product evaluation with the stiffness matrix, K ∈                                                                                                                                         Bridge: 10% Error
+ Rr×r , is often required for stiffness proportional Rayleigh damping,                                                                                                                          300           y=x
+                                                                                                                                                                       # CUBATURE SAMPLES (n)
+
+
+
+
+                                                                                                                                      Figure 7: Scaling with rank
+ or implicit integrators. Unfortunately, for dense U, the stiffness                                                                   for given error tolerances:                               250
+ matrix is dense, and therefore evaluating each cubature sample’s                                                                     In practice, n = O(r) cuba-                               200
+ contribution to all entries of K involves O(r2 ) work, so that the total                                                             ture samples are sufficient to
+ cost of forming the stiffness matrix is O(r2 n). Fortunately, many                                                                   achieve a given error toler-                              150
+
+ iterative Krylov-Newton solvers only require evaluation of matrix-                                                                   ance, but the constant factor                             100
+ vector products. Consequently we can exploit the fact that each                                                                      depends on the example and
+ cubature sample only contributes a low constant-rank update to K,                                                                                                                               50
+                                                                                                                                      the desired error tolerance.
+ so that matrix-vector products, Kv, can be constructed in O(rn) (or                                                                                                                                 0
+                                                                                                                                                                                                      0       20        40       60    80    100
+ O(r2 ) for n = O(r)). The Kv matrix-vector product can be written                                                                                                                                                        RANK (r)
+
+
+
+                                                     ∂ g(e; q)                                                                         Cubature error analysis and comparisons: Figure 8 provides
+                           Kv = ∑ we                           v = ∑ we UTe Ke Ue v                                         (14)
+                                                       ∂ qT                                                                            error convergence plots as a function of the number of cubature
+                                       e∈S                         e∈S
+                                                                                                                                       samples/elements used. The results indicate that our Greedy-NNLS
+                                                                                                                                       cubature schemes tend to perform well in practice, especially for
+ where Ue ∈ R12×r is the displacement matrix for tetrahedral ele-
+                                                                                                                                       low error (ε) and high rank (r) situations, and is dramatically more
+ ment e, and Ke ∈ R12×12 is the element’s stiffness matrix. The
+                                                                                                                                       efficient than Monte Carlo integration.
+ product Ke Ue takes O(r) flops to compute, and can be precomputed
+ and cached. For the Kv product, we first compute t=(Ke Ue )v, and                                                                     Error Estimation: Classical quadrature schemes often provide
+ then UTe t, both of which take O(r) flops per cubature sample.                                                                        error estimators that can be used with little additional computation
+ ACM Transactions on Graphics, Vol. 27, No. 5, Article 165, Publication date: December 2008.
+                                                                                               Optimizing Cubature for Efficient Integration of Subspace Deformations                                                                                                                             •    165:7
+                             Model      Material                                             Ntet   Basis                   Rank (r)      n        f Eval                        K Eval          Solve                          Timesteps/sec                         Optimization         Error
+                             Bridge∗    St. Venant-Kirchhoff                              29,800    LMA                         100     100       0.48 ms                         3.0 ms        0.29 ms                         265 (implicit)                          47 secs             8%
+                             Balloon∗   Mooney-Rivlin                                    118,208    PCA                          30      90       0.15 ms                        0.88 ms        0.03 ms                         943 (implicit)                          34 secs            1.5%
+                             Menger∗    St. Venant-Kirchhoff                             393,216    LMA                         200     900        9.7 ms                         75 ms         2.2 ms                          101 (explicit)                         1.8 hours           6.4%
+                             Haptic†    St. Venant-Kirchhoff                              21,376    LMA                          10      32       0.02 ms                        0.19 ms       0.008 ms                        4230 (implicit)                          10 secs             3%
+                             Haptic†    Mooney-Rivlin                                     21,376    LMA                          10      12       0.01 ms                        0.07 ms       0.008 ms                        8750 (implicit)                           5 secs             3%
+ Table 1: Model statistics including number of tetrahedra (Ntet ); rank (r) of linear deformation basis U; number of cubature points/elements
+ (n); time to evaluate both f(q) and K(q); time to solve an r-by-r dense symmetric positive-definite linear system using LAPACK for implicit
+ Newmark subspace integration; time-stepping rate of Newmark subspace integration used in demos, for either explicit or semi-implicit (one
+ Newton-Raphson iteration) schemes; time for the cubature optimization preprocess (using 4-16 Xeon cores); relative training error ε of the
+ resulting cubature scheme. With the exception of cubature optimization, the ∗ timing experiments were done on a 2.4GHz Intel Core2, and the
+ † experiments on a 3.0GHz Intel Xeon. The Intel Math Kernel Library was used for BLAS operations (dual-core enabled). Cubature training
+ was done using the Greedy algorithm with |C| = 100 (except for the balloon and haptic examples which used |C| = 1000) and subset training
+ (Ts = 10, full NNLS solves every r/2 iterations; except haptic examples use comprehensive training, Ts = T ).
+
+                                    Bridge (LMA, r=100, StVK)                                                                    Menger Shell (LMA, r=200, StVK)                                                                     H−Balloon (PCA, r=30, Mooney-Rivlin)
+                        2                                                                                              2                                                                                                       2
+                                                            MC                                                                                                                MC                                                                                                    MC
+                   1.8                                      MC−NNLS                                               1.8                                                         MC−NNLS                                     1.8                                                       MC−NNLS
+                                                            Greedy (|C|=100)                                                                                                  Greedy (|C|=100)                                                                                      Greedy (|C|=1000)
+                   1.6                                                                                            1.6                                                                                                     1.6
+
+                   1.4                                                                                            1.4                                                                                                     1.4
+     RMS L2 REL ERROR
+
+
+
+
+                                                                                                    RMS L2 REL ERROR
+
+
+
+
+                                                                                                                                                                                                            RMS L2 REL ERROR
+                   1.2                                                                                            1.2                                                                                                     1.2
+
+                        1                                                                                              1                                                                                                       1
+
+                   0.8                                                                                            0.8                                                                                                     0.8
+
+                   0.6                                                                                            0.6                                                                                                     0.6
+
+                   0.4                                                                                            0.4                                                                                                     0.4
+
+                   0.2                                                                                            0.2                                                                                                     0.2
+
+                        0                                                                                              0                                                                                                       0
+                         0         50       100       150                                    200                        0          100       200      300                                     400                               0              50       100      150                                   200
+                                   # CUBATURE SAMPLES (n)                                                                           # CUBATURE SAMPLES (n)                                                                                     # CUBATURE SAMPLES (n)
+
+ Figure 8: Cubature Convergence Analysis: Plots of reduced-force training error, ε, as a function of the number of key elements, n. Results
+ are shown for the uniformly weighted Monte Carlo scheme (MC), MC-sampled positions but NNLS-estimated weights (MC-NNLS), and our
+ greedy approach (Greedy). We used T =1000 training samples for the bridge and Menger shell, and T =50 (from the full inflation simulation)
+ for the balloon. For these plots, we do a full NNLS regression per-iteration, so Ts = T (no subset training), in order to get accurate error
+ measurements, however, subset training (§5.4) accelerates optimization, e.g., of our n = 900 Menger cubature scheme (ε = 6.4%).
+
+ during evaluation. For example, a Gauss-Kronrod pair consists of                                                                                     mized reduced St.Venant-Kirchhoff (StVK) model where reduced
+ an n-point Gaussian rule and a (2n + 1)-point Kronrod rule that                                                                                      forces are exactly represented by an r-vector of polynomials cubic
+ reuses all of the points from the Gaussian rule [Heath 2002]. The                                                                                    in the components of q [Barbič and James 2005]. Unlike our O(r2 )
+ Kronrod rule is used as the integral approximation, while the dif-                                                                                   approximation, exact evaluation of StVK reduced forces requires
+ ference between the two rule values is an error estimate.                                                                                            O(r4 ) operations, and can be prohibitive for larger r values. For a
+     Analogously, given 2n cubature elements, we run NNLS on the                                                                                      fair timing comparison, we use the optimized level-3 BLAS imple-
+ first n elements to compute the nonnegative weights of a coarser                                                                                     mentation of the authors of [Barbič and James 2005], and the level-
+ cubature rule C. The relative error estimate is calculated as kfC −                                                                                  2 BLAS implementation of our reduced-force evaluation (§6.2).
+ fk/kfk where fC is the force estimated by the coarser rule C. Like
+ a Gauss-Kronrod pair, this requires no additional evaluations of the
+                                                                                                                                                                                         REDUCED−FORCE EVAL                                                           REDUCED−FORCE AND STIFFNESS EVAL
+ integrand. Figure 9 illustrates estimator performance.                                                                                                                  30                                                                                      70
+                                                                                                                                                                                   StVK cubic polynomials                                                                StVK cubic polynomials
+                                                                                                                                                                                   Cubature (n=r)                                                                        Cubature (n=r)
+                                                                                                                                                                                                                                                                 60
+                                                                                                                                                                         25
+                                                                                   0.5
+Figure 9: Error Estimator                                                                                                         n = 50                                                                                                                         50
+                                                                                                                                                    MILLISECS PER EVAL
+
+
+
+
+                                                                                                                                                                                                                                            MILLISECS PER EVAL
+
+
+
+
+                                                                                  0.45                                            n = 100                                20
+results for two cubature pairs:
+                                                                                   0.4                                                                                                                                                                           40
+                                                       ESTIMATED RELATIVE ERROR
+
+
+
+
+n = 50 (& 25) and n = 100 (&                                                                                                                                             15
+                                                                                  0.35
+50) samples (rope-bridge ex-                                                                                                                                                                                                                                     30
+
+ample with r = 100). Each                                                          0.3                                                                                   10
+                                                                                                                                                                                                                                                                 20
+point in the plot represents                                                      0.25
+
+the validation error of a ran-                                                                                                                                           5
+                                                                                   0.2                                                                                                                                                                           10
+
+dom deformable pose. Here                                                         0.15
+                                                                                                                                                                         0                                                                                       0
+the n = 100 error estimate ap-                                                                                                                                            0         20       40       60                       80     100                         0      20        40       60        80     100
+                                                                                   0.1                                                                                                        RANK (r)                                                                              RANK (r)
+pears conservative, since its
+estimate is higher than the                                                       0.05                                                                Figure 10: Comparison to StVK reduced-force evaluation costs:
+actual error, i.e., points are                                                      0                                                                 We compared a St.Venant-Kirchhoff (StVK) polynomial model, ver-
+                                                                                     0      0.1     0.2     0.3   0.4                       0.5
+above the “y = x line.”                                                                       ACTUAL RELATIVE ERROR                                   sus a cubature-based approximation using n = r elements. Our
+                                                                                                                                                      O(r2 ) reduced-force evaluation becomes faster around r = 23,
+ Comparison to reduced St.Venant-Kirchhoff: In Figure 10                                                                                              and scales substantially better that the O(r4 ) StVK polynomial
+ we compare a cubature-based reduced-force evaluation to an opti-                                                                                     model. When evaluating both reduced forces and stiffness matri-
+                                                                                                                                                      ces (O(r3 )), the cubature scheme becomes faster around r = 35.
+                                                                                                                                            ACM Transactions on Graphics, Vol. 27, No. 5, Article 165, Publication date: December 2008.
+165:8                        •        S. An et al.
+
+Rope bridge: To illustrate that cubature can be optimized for                                                                 generate an r = 10 shape basis. The Mooney-Rivlin material gives
+structures with complicated topologies, we considered a jungle-                                                               clearly different behavior than the StVK model (see Figure 14).
+like rope bridge (see Figure 11). This polygon soup model was
+discretized into 29,800 tetrahedra using a voxel embedding ap-
+proach [Barbič and James 2005], and then approximated using an
+StVK model with tuned parameters. Because their dynamics looked
+reasonable, we used a linear modal basis shape model, and relied
+on the StVK nonlinearity to avoid large-deformation distortion.
+
+Reanalysis: Another method of generating a basis is to perform
+proper orthogonal decomposition (POD), or principle component                                                                                                       Mooney-Rivlin      St.Venant-Kirchhoff
+analysis (PCA), on full simulation data [Krysl et al. 2001]. For
+                                                                                                                              Figure 14: Haptic force-feedback rendering examples: The im-
+our example, we simulate a balloon being inflated by constant air
+                                                                                                                              plicit Newmark subspace integrators could deliver 5000 Hz rates.
+pressure forces (see Figure 12). Our reduced model can then re-
+create the dynamics of inflation at interactive rates, allowing the
+user to control the amount of air pressure2 interactively.                                                                    Hyperelastic material test: To investigate the ability of opti-
+                                                                                                                              mized cubatures to approximate nonlinear material response, we
+                                                                                                                              performed virtual compression tests on cubes (see Figure 15) made
+                                                                                                                              using three hyperelastic constitutive models: St. Venant-Kirchhoff,
+                                                                                                                              Mooney-Rivlin and Arruda-Boyce (see Appendix A). In each case
+                                                                                                                              we precompute a compression test to estimate a PCA basis and re-
+                                                                                                                              duced model for optimization and simulation3 . Results of the com-
+                                                                                                                              pression tests are in Figure 13, and illustrate that optimized cuba-
+                                                                                                                              ture can accurately reproduce nonlinear force responses when given
+                                                                                                                              a suitable subspace deformation model. For the StVK sample, our
+                                                                                                                              parameters were λ = 1000 and µ = 5000. For the Arruda-Boyce,
+                                                                                                                              we used µ = 5000, N = 5, and K = 1 × 105 . For the Mooney-Rivlin
+Figure 12: Reanalysis of balloon inflation                                                                                    sample, we used µ10 = 1 × 105 , µ01 = 10, and K = 1 × 105 .
+using cubature optimized from PCA-based
+simulation data. The dynamic Mooney-Rivlin
+rubber balloon can be inflated interactively.
+
+
+                                      StVK                                           x 10 ARRUDA−BOYCE & MOONEY−RIVLIN
+                                                                                         4
+
+                    2500                                                        14
+                           FULL SIM                                                       A−B FULL SIM
+                           CUBATURE                                                       A−B CUBATURE
+                                                                                12
+                                                                                          M−R FULL SIM
+                    2000                                                                  M−R CUBATURE
+                                                                                10
+                                                            COMPRESSION FORCE
+COMPRESSION FORCE
+
+
+
+
+                                                                                 8
+                    1500                                                                                                         Figure 15: Compressing the Arruda-Boyce material cube
+                                                                                 6
+
+                    1000                                                                                                      Nonlinear modal sound synthesis: Linear modal analysis is
+                                                                                 4
+
+
+                                                                                 2
+                                                                                                                              widely used for vibration modeling of effectively rigid objects since
+                    500                                                                                                       the runtime space and time complexity of integrating r modes with
+                                                                                 0
+                                                                                                                              an IIR filter is only O(r) flops [James and Pai 2002], after which the
+                      0
+                       0     10      20         30     40
+                                                                                −2
+                                                                                  0          20      40         60       80
+                                                                                                                              modal coefficients q can be used to evaluate sound radiation [James
+                           COMPRESSION (% OF HEIGHT)                                       COMPRESSION (% OF HEIGHT)          et al. 2006]. However, for objects such as thin shells, even small
+Figure 13: Virtual compression test: The force response repro-                                                                deformations can induce nonlinear dynamics, and effectively “cou-
+duced by optimized cubature closely matches the full simulation for                                                           pling” linear modes. To avoid the N-dependent costs of a fully
+all compression amounts tested. The Arruda-Boyce and Mooney-                                                                  nonlinear vibration analysis, such as in [O’Brien et al. 2001], we
+Rivlin materials could not be compressed beyond 85% due to el-                                                                apply cubature optimization to nonlinear StVK forces based on
+ement inversion, whereas the St.Venant-Kirchhoff (StVK) material                                                              sampling the space of linear-mode shapes. Optimized cubature
+softened significantly at about 35% compression, ultimately lead-                                                             provides an efficient O(r2 ) evaluation of subspace forces, suitable
+ing to inversion and stiffness matrix indefiniteness.                                                                         for long-time explicit Newmark subspace integration [Krysl et al.
+                                                                                                                                  3 We compress a cube of the material by constraining the nodes of the
+Haptic force-feedback rendering can exploit reduced-order                                                                     top-face and lowering them by a small amount in a quasi-static simulation.
+models for simulation speed, and output-sensitive collision process-                                                          When the material response reaches equilibrium, we record the total upward
+ing [Barbič and James 2007]. Optimized cubature enables complex                                                              forces on the top-face nodes and record the displacement state. We then
+nonlinear material models for real-time haptic rendering applica-                                                             perform PCA on these recorded states to produce a linear basis, use these
+tions. As a proof of concept, we simulated a hollow rubber-like                                                               states to train a cubature rule, and observe the upward forces reproduced
+structure using both StVK and Mooney-Rivlin material models;                                                                  by the cubature rule. Because the top-face nodes are constrained in the
+without loss of generality, linear modal analysis (LMA) was used to                                                           original simulation, we need to artificially include them in the PCA basis
+                                                                                                                              for training cubature and reduced simulation. If U0 is the basis produced by
+   2 Pressure forces were modeled as a linear function of the form, Pq + f ,                                                  PCA of the simulation data, then the basis we use for the reduced simulation
+                                                                            0
+where the constant matrix, P ∈ Rr×r , and offset f0 model the subspace force                                                  is U = [U0 , utop ], where utop is a normalized 3N basis vector with positive
+resulting from a unit pressure applied to an internal tetrahedron’s face whose                                                vertical displacement for the top-face nodes. This allows us to measure the
+deformed normal is approximated by transforming the material-frame nor-                                                       total upward force on the top-face nodes reproduced by the cubature force
+mal by the deformation gradient (a quantity linear in q).                                                                     model by unprojecting the reduced force using U.
+ACM Transactions on Graphics, Vol. 27, No. 5, Article 165, Publication date: December 2008.
+                                                Optimizing Cubature for Efficient Integration of Subspace Deformations                             •      165:9
+
+
+
+
+             O PTIMIZED C UBATURE                      R EST P OSE                U NREDUCED                     R EDUCED
+Figure 11: Optimizing cubature for an embedded rope bridge: (Far-Left) Rasterized polygon-soup bridge with cubature tetrahedra/points
+highlighted. (Mid-Left) The undeformed bridge is subjected to a sideways impulse at its midpoint, and simulated using the (Mid-Right)
+unreduced implicit Newmark integrator, and the (Far-Right) implicit Newmark subspace integrator. Optimized cubature achieved 200
+timesteps/second (implicit Newmark subspace) whereas unreduced implicit Newmark (with PARDISO solver) achieved 0.25 timesteps/sec.
+
+2001]. Subspace integration provides easy access to modal coor-                 metric deformable objects, e.g., shells, MEMS, etc. Efficient error
+dinates q(t) used in sound radiation models (here we use the far-               estimators allows the possibility of adaptive simulation. For general
+field, low-frequency, monopole radiation model (see (15) in [James              kinematics, the mass matrix can be time dependent and potentially
+et al. 2006])). Results are shown in Figure 2, and the accompanying             expensive to evaluate. OptimizedRcubature might also be used for
+video. We compared our cubature approximation to a brute-force                  fast estimates of the mass matrix, Ω U(x)T U(x)ρ(x)dΩ.
+subspace simulation [Krysl et al. 2001] and obtained nearly iden-                  Finally, we have proposed a greedy algorithm for cubature op-
+tical sounds. However, computing f(q) by evaluating O(N) unre-                  timization, however, a stronger theoretical footing is desirable for
+duced forces, followed by subspace projection (multiplication by                automatic cubature generation. For example, it is tempting to think
+UT ), at each explicit timestep was approximately 110× more ex-                 of cubature as some sort of critical points of some class of func-
+pensive; 16-core parallelization was used to compute the compari-               tions, similar to the definition of Gaussian quadratures as the zeros
+son.                                                                            of Legendre polynomials and other functions. It appears that simi-
+                                                                                lar accuracy may be possible using half as many cubature points if
+8    Conclusion and Discussion                                                  Gaussian-quality cubatures could somehow be learned, thus leading
+In summary, optimized cubature is a simple and mathematically                   to a two-fold speedup in reduced force evaluation.
+sound way to build reduced-order force models for subspace inte-
+gration. It is not restricted to any particular shape model, and it sup-        Acknowledgments: The authors wish to acknowledge funding
+ports various hyperelastic material models. Cubature can be trained             and support from the National Science Foundation (CAREER-
+for geometrically complex examples, and fast subspace integration               0430528, EMT-CompBio-0621999), National Institutes of Health
+performance can enable interactive graphics, large multibody simu-              (NIBIB/NIH R01EB006615), the Alfred P. Sloan Foundation, Intel,
+lations, or simulations requiring high temporal rates such as haptics           Pixar, The Boeing Company, Autodesk, and NVIDIA. Any opin-
+and sound synthesis. Although cubature schemes depend on train-                 ions, findings, and conclusions or recommendations expressed in
+ing data, they also are surprisingly robust to over-fitting.                    this material are those of the authors and do not necessarily reflect
+                                                                                the views of the National Science Foundation.
+Discussion and Limitations: We have provided some examples
+to provide evidence in support of cubature optimization, however                A      Material Strain Energy Densities, Ψ
+there are many other ways to realize its benefits, and also other               This appendix reports strain energy densities, Ψ, used in this pa-
+limitations to overcome.                                                        per [Bonet and Wood 2008]. The St. Venant-Kirchhoff model is
+   Exploiting sparsity is important for fast evaluation and training                                       1
+of high-rank r models, whereas our current analysis is limited to                                Ψ(E) = λtr(E)2 + µE : E,                     (15)
+                                                                                                           2
+models with dense U bases. Generating sparse bases and cubature                 where λ and µ are the Lamé constants, and µ corresponds to the
+schemes can lead to linear-time O(r) schemes for reduced force and              shear modulus. The Arruda-Boyce model uses
+sparse stiffness matrix evaluation. The existence of an O(r) algo-                                                   5
+                                                                                                                     Ci
+rithm for reduced force evaluation using dense rank-r displacement                                     Ψ(E) = µ ∑         (I i − 3i ),
+                                                                                                                      i−1 C
+                                                                                                                                                     (16)
+bases remains an open problem.                                                                                  i=1 N
+   Although cubature schemes support general subspace deforma-                  where IC is the first deviatoric strain invariant, µ is the initial shear
+tions, we have mostly considered linear (constant U) shape mod-                 modulus, and N is the number of rigid links for the model [Liu et al.
+els here, however many other successful models exist, e.g., modal               2004]. The Mooney-Rivlin constitutive model uses
+derivatives [Barbič and James 2005]. We have also constructed cu-                                                    1
+bature schemes for articulated and skinned mesh models [James and                             Ψ(E) = µ10 (IC − 3) + µ01 (IC2 − IIC − 6),             (17)
+                                                                                                                      2
+Twigg 2005], however such models require more efficient implicit                where IIC is the second deviatoric strain invariant, and µ10 and µ01
+Newmark subspace integrators with efficient sparse matrix solves                are material constants. The last two models do not enforce incom-
+and/or preconditioning for similar performance. Physically based                pressibility, so we add a penalty term K log(J 2 ) to approximately
+character animation, especially detailed skin deformation and facial            conserve volume, where K is the bulk modulus, and J = det(F).
+animation, are areas likely to benefit from fast cubature schemes.
+Some shape models may be more susceptible than others to ele-                   References
+ment inversion, and non-element-based approaches for evaluating                 BARAFF , D., AND W ITKIN , A. 1992. Dynamic simulation of non-
+g may help. For example, we implemented subspace deformations                     penetrating flexible bodies. In Computer Graphics (Proceedings
+based on modal warping [Choi and Ko 2005], however we found                       of SIGGRAPH 92), 303–308.
+element-based cubature schemes susceptible to element inversion,
+presumably due to highly extrapolated element deformations.                     BARBI Č , J., AND JAMES , D. L. 2005. Real-Time Subspace In-
+   Future work includes applying subspace-based cubature opti-                    tegration for St. Venant-Kirchhoff Deformable Models. ACM
+mization to the simulation of physical phenomena other than volu-                 Trans. on Graphics 24, 3 (Aug.), 982–990.
+                                                                       ACM Transactions on Graphics, Vol. 27, No. 5, Article 165, Publication date: December 2008.
+165:10         •      S. An et al.
+
+BARBI Č , J., AND JAMES , D. L. 2007. Time-critical distributed                          JAMES , D. L., BARBI Č , J., AND PAI , D. K. 2006. Precomputed
+  contact for 6-dof haptic rendering of adaptively sampled reduced                          Acoustic Transfer: Output-sensitive, accurate sound generation
+  deformable models. In Proceedings of ACM SIGGRAPH Sym-                                    for geometrically complex vibration sources. ACM Transactions
+  posium on Computer Animation (SCA 2007), San Diego, CA.                                   on Graphics 25, 3 (July), 987–995.
+
+BARBI Č , J. 2007. Real-time Reduced Large-Deformation Models                            K AUFMANN , P., M ARTIN , S., B OTSCH , M., AND G ROSS , M.
+  and Distributed Contact for Computer Graphics and Haptics.                                 2008. Flexible Simulation of Deformable Models Using Dis-
+  PhD thesis, Carnegie Mellon University.                                                    continuous Galerkin FEM. In ACM SIGGRAPH/Eurographics
+                                                                                             Symposium on Computer Animation, 105–115.
+BATHE , K.-J. 1996. Finite Element Procedures, second ed. Pren-
+                                                                                          K RY, P. G., JAMES , D. L., AND PAI , D. K. 2002. EigenSkin:
+  tice Hall.
+                                                                                             Real Time Large Deformation Character Skinning in Hardware.
+B ONET, J., AND W OOD , R. D. 2008. Nonlinear Continuum Me-                                  In ACM SIGGRAPH Symposium on Computer Animation, 153–
+   chanics for Finite Element Analysis, second ed. Cambridge Uni-                            160.
+   versity Press, New York.                                                               K RYSL , P., L ALL , S., AND M ARSDEN , J. E. 2001. Dimensional
+                                                                                             model reduction in non-linear finite element dynamics of solids
+C APELL , S., G REEN , S., C URLESS , B., D UCHAMP, T., AND                                  and structures. International Journal for Numerical Methods in
+   P OPOVI Ć , Z. 2002. A Multiresolution Framework for Dynamic                             Engineering 51, 479–504.
+   Deformations. In ACM SIGGRAPH Symposium on Computer
+   Animation, 41–48.                                                                      L AWSON , C. L., AND H ANSON , R. J. 1974. Solving Least Square
+                                                                                             Problems. Prentice Hall, Englewood Cliffs, NJ.
+C HOI , M. G., AND KO , H.-S. 2005. Modal Warping: Real-Time
+   Simulation of Large Rotational Deformation and Manipulation.                           L EWIS , J. P., C ORDNER , M., AND F ONG , N. 2000. Pose Space
+   IEEE Transactions on Visualization and Computer Graphics 11,                              Deformations: A Unified Approach to Shape Interpolation and
+   1 (Jan./Feb.), 91–101.                                                                    Skeleton-Driven Deformation. In Proceedings of ACM SIG-
+                                                                                             GRAPH 2000, Computer Graphics Proceedings, Annual Con-
+C OTIN , S., D ELINGETTE , H., AND AYACHE , N. 1999. Real-time                               ference Series, 165–172.
+   elastic deformations of soft tissues for surgery simulation. IEEE                      L IU , Y., K ERDOK , A. E., AND H OWE , R. D. 2004. A nonlinear fi-
+   Transactions on Visualization and Computer Graphics 5, 1 (Jan./                           nite element model of soft tissue indentation. In Proc. Intl. Symp.
+   Mar.), 62–73.                                                                             Medical Simulation (ISMS 2004), Lecture Notes in Computer
+                                                                                             Science, vol. 3078, Springer-Verlag, S. Cotin and D. Metaxas,
+D EBUNNE , G., D ESBRUN , M., C ANI , M.-P., AND BARR , A. H.
+                                                                                             Eds., 67–76.
+   2001. Dynamic Real-Time Deformations Using Space & Time
+   Adaptive Sampling. In Proc. of ACM SIGGRAPH 2001, 31–36.                               M EYER , M., AND A NDERSON , J. 2007. Key Point Subspace
+                                                                                            Acceleration and Soft Caching. ACM Transactions on Graphics
+G RINSPUN , E., K RYSL , P., AND S CHR ÖDER , P. 2002. CHARMS:                             26, 3 (July), 74:1–74:8.
+   A Simple Framework for Adaptive Simulation. ACM Trans. on
+   Graphics 21, 3 (July), 281–290.                                                        N ELLES , O. 2000. Nonlinear System Identification: From Classi-
+                                                                                             cal Approaches to Neural Networks and Fuzzy Models. Springer
+G RZESZCZUK , R., T ERZOPOULOS , D., AND H INTON , G. 1998.                                  Verlag, December.
+   NeuroAnimator: Fast Neural Network Emulation and Control of
+   Physics-Based Models. In Proc. of SIGGRAPH 98, Computer                                O’B RIEN , J. F., C OOK , P. R., AND E SSL , G. 2001. Synthe-
+   Graphics Proceedings, Annual Conference Series, 9–20.                                    sizing sounds from physically based motion. In Proceedings of
+                                                                                            ACM SIGGRAPH 2001, Computer Graphics Proceedings, An-
+H EATH , M. T. 2002. Scientific Computing: An Introductory Sur-                             nual Conference Series, 529–536.
+   vey. McGraw-Hill Higher Education, New York.                                           P ENTLAND , A., AND W ILLIAMS , J. 1989. Good vibrations:
+                                                                                             Modal dynamics for graphics and animation. In Computer
+H ILDEBRAND , F. B. 1956. Introduction to Numerical Analysis.
+                                                                                             Graphics (Proceedings of SIGGRAPH 89), 215–222.
+   McGraw-Hill, New York.
+                                                                                          P RESS , W. H., T EUKOLSKY, S. A., V ETTERLING , W. T., AND
+H OBEROCK , J., AND J IA , Y. 2008. Chapter 12: High-Quality                                 F LANNERY, B. P. 1992. Numerical Recipes in C: The Art of
+   Ambient Occlusion. In GPU Gems 3, H. Nguyen, Ed. Addison-                                 Scientific Computing. Cambridge University Press, New York,
+   Wesley, 257–274.                                                                          NY, USA. (Gaussian quadrature is discussed in section 4.5).
+JAMES , D. L., AND FATAHALIAN , K. 2003. Precomputing in-                                 T ERZOPOULOS , D., AND W ITKIN , A. 1988. Physically Based
+  teractive dynamic deformable scenes. ACM Transactions on                                   Models with Rigid and Deformable Components. IEEE Com-
+  Graphics 22, 3 (July), 879–887.                                                            puter Graphics & Applications 8, 6 (Nov.), 41–51.
+
+JAMES , D. L., AND PAI , D. K. 1999. ArtDefo: Accurate real time                          T ERZOPOULOS , D., P LATT, J., BARR , A., AND F LEISCHER , K.
+  deformable objects. In Proceedings of SIGGRAPH 99, Com-                                    1987. Elastically Deformable Models. In Computer Graphics
+  puter Graphics Proceedings, Annual Conference Series, 65–72.                               (Proceedings of SIGGRAPH 87), 205–214.
+                                                                                          VAKAKIS , A. 2001. Normal modes and localization in nonlinear
+JAMES , D. L., AND PAI , D. K. 2002. DyRT: Dynamic response                                 systems. Kluwer Academic Publishers.
+  textures for real time deformation simulation with graphics hard-
+  ware. ACM Transactions on Graphics 21, 3 (July), 582–585.                               W ITKIN , A., AND W ELCH , W. 1990. Fast Animation and Control
+                                                                                            of Nonrigid Structures. In Computer Graphics (Proceedings of
+JAMES , D. L., AND T WIGG , C. D. 2005. Skinning mesh anima-                                SIGGRAPH 90), 243–252.
+  tions. ACM Transactions on Graphics 24, 3 (Aug.), 399–407.
+ACM Transactions on Graphics, Vol. 27, No. 5, Article 165, Publication date: December 2008.
+

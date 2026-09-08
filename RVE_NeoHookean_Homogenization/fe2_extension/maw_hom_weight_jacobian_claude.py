@@ -38,19 +38,25 @@ def maw_hom_weight_and_jacobian_single_model(
     """Returns (w_current (n_current_elements,), dw_current_dE (n_current_elements,3)).
     Mirrors hprom_ann_solver_rve.py's _evaluate_maw_hom_weights_current for
     the ann/mu/model branch only."""
-    coord_label = str(target_model.get("coord_label", "q")).strip().lower()
-    if coord_label != "mu":
-        raise NotImplementedError(
-            f"Consistent tangent only implemented for coord_label='mu' (got '{coord_label}')."
-        )
     regressor_type = str(target_model.get("regressor_type", "rbf")).strip().lower()
-    if regressor_type != "ann":
-        raise NotImplementedError(
-            f"Consistent tangent only implemented for regressor_type='ann' (got '{regressor_type}')."
-        )
-
-    q_query = np.asarray(E, dtype=float).reshape(1, -1)
-    w_support, dw_support_dE = eval_mawecm_ann_with_jacobian(q_query, target_model["ann_model"])
+    if regressor_type == "fixed_classic":
+        # w_support is a constant vector (no E-dependence at all -- classic
+        # ECM's own fixed weight, not a regressor evaluated at E), so its
+        # Jacobian is exactly zero. Scatter/gather below are unchanged.
+        w_support = np.asarray(target_model["w_fixed"], dtype=float).reshape(-1)
+        dw_support_dE = np.zeros((w_support.size, 3), dtype=float)
+    else:
+        coord_label = str(target_model.get("coord_label", "q")).strip().lower()
+        if coord_label != "mu":
+            raise NotImplementedError(
+                f"Consistent tangent only implemented for coord_label='mu' (got '{coord_label}')."
+            )
+        if regressor_type != "ann":
+            raise NotImplementedError(
+                f"Consistent tangent only implemented for regressor_type='ann' (got '{regressor_type}')."
+            )
+        q_query = np.asarray(E, dtype=float).reshape(1, -1)
+        w_support, dw_support_dE = eval_mawecm_ann_with_jacobian(q_query, target_model["ann_model"])
 
     z_full = np.asarray(target_model["z_support_full"], dtype=np.int64).reshape(-1)
     if z_full.size != w_support.size:

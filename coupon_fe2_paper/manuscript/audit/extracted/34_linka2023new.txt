@@ -1,0 +1,1398 @@
+                                        Available online at www.sciencedirect.com
+                                                    ScienceDirect
+
+                                    Comput. Methods Appl. Mech. Engrg. 403 (2023) 115731
+                                                                                                                 www.elsevier.com/locate/cma
+
+
+
+
+    A new family of Constitutive Artificial Neural Networks towards
+                     automated model discovery
+                                                  Kevin Linka, Ellen Kuhl ∗
+                            Department of Mechanical Engineering, Stanford University, Stanford, CA, United States
+                      Received 1 September 2022; received in revised form 18 October 2022; accepted 19 October 2022
+                                                   Available online 9 November 2022
+                                           Dataset link: https://github.com/LivingMatterLab/CANN
+ We dedicate this manuscript to our Continuum Mechanics teachers, whose insights and passion for Continuum Mechanics have stimulated the
+     ideas of this work, Wolfgang Ehlers, Mikhail Itskov, Christian Miehe, Michael Ortiz, Jörg Schröder, Erwin Stein, and Paul Steinmann
+
+
+
+
+Graphical Abstract
+
+
+
+
+Abstract
+   For more than 100 years, chemical, physical, and material scientists have proposed competing constitutive models to best
+characterize the behavior of natural and man-made materials in response to mechanical loading. Now, computer science offers a
+
+  ∗ Corresponding author.
+    E-mail address: ekuhl@stanford.edu (E. Kuhl).
+
+https://doi.org/10.1016/j.cma.2022.115731
+0045-7825/© 2022 The Author(s). Published by Elsevier B.V. This is an open access article under the CC BY license (http://creativecommons.
+org/licenses/by/4.0/).
+K. Linka and E. Kuhl                                         Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+universal solution: Neural Networks. Neural Networks are powerful function approximators that can learn constitutive relations
+from large data without any knowledge of the underlying physics. However, classical Neural Networks entirely ignore a century
+of research in constitutive modeling, violate thermodynamic considerations, and fail to predict the behavior outside the training
+regime. Here we design a new family of Constitutive Artificial Neural Networks that inherently satisfy common kinematical,
+thermodynamical, and physical constraints and, at the same time, constrain the design space of admissible functions to create
+robust approximators, even in the presence of sparse data. Towards this goal we revisit the non-linear field theories of mechanics
+and reverse-engineer the network input to account for material objectivity, material symmetry and incompressibility; the network
+output to enforce thermodynamic consistency; the activation functions to implement physically reasonable restrictions; and
+the network architecture to ensure polyconvexity. We demonstrate that this new class of models is a generalization of the
+classical neo Hooke, Blatz Ko, Mooney Rivlin, Yeoh, and Demiray models and that the network weights have a clear physical
+interpretation in the form of shear moduli, stiffness-like parameters, and exponential coefficients. When trained with classical
+benchmark data for rubber under uniaxial tension, biaxial extension, and pure shear, our network autonomously selects the best
+constitutive model and learns its set of parameters. Our findings suggest that Constitutive Artificial Neural Networks have the
+potential to induce a paradigm shift in constitutive modeling, from user-defined model selection to automated model discovery.
+Our source code, data, and examples is available at https://github.com/LivingMatterLab/CANN.
+© 2022 The Author(s). Published by Elsevier B.V. This is an open access article under the CC BY license
+(http://creativecommons.org/licenses/by/4.0/).
+Keywords: Automated science; Machine learning; Neural Networks; Constitutive Artificial Neural Networks; Constitutive modeling;
+Thermodynamics; Automated model discovery
+
+
+
+1. Motivation
+   “What can your Neural Network tell you about the underlying physics?” is the most common question when we
+apply Neural Networks to study the behavior of materials and “Nothing”. is the honest and disappointing answer.
+This manuscript challenges the notion that Neural Networks can teach us nothing about the physics of a material.
+It seeks to integrate more than a century of knowledge in continuum mechanics [1–8] and modern machine
+learning [9–11] to create a new family of Constitutive Artificial Neural Networks that inherently satisfy kinematical,
+thermodynamical, and physical constraints, and constrain the space of admissible functions to train robustly,
+even when data are space. While this general idea is by no means new and builds on several important recent
+discoveries [12–15], the true novelty of our Constitutive Artificial Neural Networks is that they autonomously
+discover a constitutive model, and, at the same time, learn a set of physically meaningful parameters associated
+with it.
+   Interestingly, the first Neural Network for constitutive modeling approximates the incremental principal strains
+in concrete from known principal strains, stresses, and stress increments and is more than three decades old [16]. In
+the early days, Neural Networks served merely as regression operators and were commonly viewed as a black box.
+The lack of transparency is probably the main reason why these early approaches never really generated momentum
+in the constitutive modeling community. More than 20 years later, data-driven constitutive modeling gained new
+traction, in part powered by a new computing paradigm, which directly uses experimental data and bypasses
+constitutive modeling altogether [17]. While data-driven elasticity builds on a transparent and rigorous mathematical
+foundation [18], it can also become fairly complex, especially when expanding the theory to anisotropic [19] or
+history-dependent [20] materials. Rather than following this path and eliminate the constitutive model entirely, here
+we attempt to build our prior physical knowledge into the Neural Network and learn something about the constitutive
+response [21].
+   Two successful but fundamentally different strategies have emerged to integrate physical knowledge into network
+modeling, Physics-Informed Neural Networks that add physics equations as additional terms to the loss function [9]
+and Constitutive Artificial Neural Networks that explicitly modify the network input, output, and architecture to
+hardwire physical constraints into the network design [14]. The former approach is more general and typically works
+well for incorporating ordinary [10] or partial [11] differential equations, while the latter is specifically tailored
+towards constitutive equations [22]. In fact, one such Neural Network, with strain invariants as input, free energy
+functions as output, and a single hidden layer with logistic activation functions in between, has been proposed
+for rubber materials almost two decades ago [23] and recently regained attention in the constitutive modeling
+community [24]. While these Constitutive Artificial Neural Networks generally provide excellent fits to experimental
+data [25–27], exactly how they should integrate thermodynamic constraints remains a question of ongoing debate.
+                                                                     2
+K. Linka and E. Kuhl                                        Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+    Thermodynamics-based Artificial Neural Networks a priori build the first and second law of thermodynamics
+into the network architecture and select specific activation functions to ensure compliance with thermodynamic
+constraints [15]. Recent studies suggest that this approach can successfully reproduce the constitutive behavior of
+rubber-like materials [28]. Alternative approaches use a regular Artificial Neural Network and ensure thermodynamic
+consistency a posteriori via a pseudo-potential based correction in a post processing step [29]. To demonstrate
+the versatility of these different approaches, several recent studies have successfully embedded Neural Networks
+within a Finite Element Analysis, for example, to model plane rubber sheets [14], sheets with holes [30], or entire
+tires [23], the numerical homogenization of discrete lattice structures [31], the deployment of parachutes [12], or
+the anisotropic response of skin in reconstructive surgery [32]. Regardless of all these success stories, one limitation
+remains: the lack of an intuitive interpretation of the model and its parameters [13].
+    The general idea of this manuscript is to reverse-engineer a new family of Constitutive Artificial Neural
+Networks that are, by design, a generalization of widely used and commonly accepted hyperelastic constitutive
+models [25,26,33–36] with well-defined physical parameters [37,38]. Towards this goal, we review the underlying
+kinematics in Section 2 and discuss constitutive constraints in Section 3. We then introduce classical Neural
+Networks in Section 4 and our new family of Constitutive Artificial Neural Networks in Section 5. In Section 6, we
+briefly review the three special homogeneous deformation modes that we use to train our model in Section 7. We
+discuss our results, limitations, and future directions in Section 8 and close with a brief conclusion in Section 9.
+
+2. Kinematics
+   We begin by characterizing the motion of a body and introduce the deformation map ϕ that, at any point in
+time t, maps material particles X from the undeformed configuration to particles, x = ϕ(X, t), in the deformed
+configuration [1]. To characterize relative deformations within the body, we introduce the deformation gradient F,
+the gradient of the deformation map ϕ with respect to the undeformed coordinates X, and its Jacobian J ,
+      F = ∇X ϕ         with        J = det(F) > 0 .                                                                            (1)
+                                          t
+Multiplying F with its transpose F , either from the left or the right, introduces the right and left Cauchy Green
+deformation tensors C and b,
+      C = Ft · F         and        b = F · Ft .                                                                               (2)
+In the undeformed state, all three tensors are identical to the unit tensor, F = I, C = I, and b = I, and the
+Jacobian is one, J = 1. A Jacobian smaller than one, 0 < J < 1, denotes compression and a Jacobian larger than
+one, 1 < J , denotes extension.
+
+Isotropy. To characterize an isotropic material, we introduce the three principal invariants I1 , I2 , I3 , either in terms
+of the deformation gradient F,
+      I1 = F : F                                                ∂ F I1 =           2F
+      I2 =    1
+              2
+                [I12 − [ F t · F ] : [ F t · F ]]   with        ∂ F I2 = 2 [ I1 F − F · F t · F ]                              (3)
+                     t
+      I3 = det (F · F) = J       2
+                                                                ∂ F I3 =        2 I3 F ,
+                                                                                       −t
+
+
+or, equivalently, in terms of the right or left Cauchy Green deformation tensors C or b,
+      I1 = tr (C) = C : I           ∂ C I1 = I                          I1 = tr (b) = b : I      ∂ b I1 = I
+      I2 =    1
+              2
+                [I12 − C : C]       ∂ C I2 = I1 I − C          or       I2 =   1
+                                                                               2
+                                                                                 [I12 − b : b]   ∂ b I2 = I1 I − b             (4)
+      I3 = det (C) = J    2
+                                    ∂ C I3 = I3 C   −t
+                                                                        I3 = det (b) = J   2
+                                                                                                 ∂ b I3 = I3 b .
+                                                                                                              −t
+
+
+In the undeformed state, F = I, and the three invariants are equal to three and one, I1 = 3, I2 = 3, and I3 = 1.
+
+Near incompressibility. To characterize an isotropic, nearly incompressible material, we perform a multiplicative
+decomposition of deformation gradient, F = J 1/3 I · F̄, into a volumetric part, J 1/3 I, and an isochoric part, F̄ [39],
+
+      F̄ = J −1/3 F        and        J¯ = det( F̄) = 1 ,                                                                      (5)
+                                                                    3
+K. Linka and E. Kuhl                                    Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+and introduce the isochoric right and left Cauchy Green deformation tensors C̄ and b̄,
+              t                                           t
+      C̄ = F̄ · F̄ = J −2/3 C       and       b̄ = F̄ · F̄ = J −2/3 b .                                                    (6)
+We can then introduce an alternative set of invariants for nearly incompressible materials, I¯1 , I¯2 , J , in terms of the
+deformation gradient F̄,
+
+      I¯1 = I1 /J 2/3 = F : F/J 2/3                          ∂ F I¯1 = 2/J 2/3 F − 32 I¯1 F −t
+      I¯2 = I2 /J 4/3 = 2 [ I¯1 − [F · F] : [F · F]/J ] with ∂ F I¯2 = 2/J 2/3 I¯1 F − 2/J 4/3 F · F t · F − 34 I¯2 F −t
+                        1           t         t      4/3
+
+      J = det(F)                                             ∂ F J = J F −t ,
+                                                                                                                           (7)
+or, equivalently, in terms of the right and left Cauchy Green deformation tenors C or b,
+      I¯1 = I1 /J 2/3 = C : I/J 2/3                           I¯1 = I1 /J 2/3 = b : I/J 2/3
+      I¯2 = I2 /J 4/3 = 1 [ I¯1 − C : C/J 4/3 ]
+                              2
+                                                   or         I¯2 = I2 /J 4/3 = 1 [ I¯1 − b : b/J 4/3 ]
+                                                                                       2
+                                                                                                                           (8)
+      J = det     1/2
+                        (C)                                   J = det    1/2
+                                                                               (b) .
+Perfect incompressibility. To characterize an isotropic, perfectly incompressible material, we recall that the third
+invariant always remains identical to one, I3 = J 2 = 1. This implies that the principal and isochoric invariants are
+identical, I1 = I¯1 and I2 = I¯2 , and that the set of invariants reduces to only these two.
+Transverse isotropy. To characterize a transversely isotropic material with one constant pronounced direction
+with unit normal vector n, we introduce a fourth and fifth invariant [6],
+      I4 = n · F t · F · n       = C : N = λ2n                        ∂ C I4 = n ⊗ n = N
+                                                              with                                                         (9)
+                 t         t
+      I5 = n · F · F · F · F · n = [C · C] : N                        ∂ C I5 = n ⊗ C · n + C · n ⊗ n .
+Here N = n ⊗ n denotes the structural tensor associated with the pronounced direction n, with a unit length of
+∥ n ∥ = 1 in the reference configuration and a stretch of λn = ∥ F · n ∥ in the deformed configuration. In the
+undeformed state, F = I, and the stretch, the fourth and fifth invariants are one, λn = 1 and I4 = 1 and I5 = 1.
+
+3. Constitutive equations
+   In the most general form, constitutive equations in solid mechanics are tensor-valued tensor functions that define
+the relation between a stress, for example the Piola or nominal stress, P = limd A→0 ( d f /d A ), as the force d f per
+undeformed area d A, and a deformation measure, for example the deformation gradient F [3,7],
+      P = P(F) .                                                                                                          (10)
+Conceptually, we could use any Neural Network as a function approximator to simply learn the functional relation
+between P and F and many approaches in the literature actually do exactly that [15,16,40]. However, the functions
+P(F) that we learn through this approach might be too generic and violate well-known thermodynamical arguments
+and widely-accepted physical constraints [28]. Also, for limited amounts of data, the tensor-valued tensor function
+P(F) can be difficult to learn and there is a high risk of overfitting [13]. Our objective is therefore to design a
+Constitutive Artificial Neural Network that a priori guarantees thermodynamic consistency of the function P(F),
+and, at the same time, conveniently limits the space of admissible functions to ensure robustness and prevent
+overfitting when available data are sparse.
+Thermodynamic consistency. As a first step towards this goal, we ensure thermodynamically consistency and
+guarantee that the Piola stress P inherently satisfies the second law of thermodynamics, the entropy or Clausius–
+Duhem inequality [5], D = P : Ḟ−ψ̇ ≥ 0. It states that, for any thermodynamic process, the total change in entropy,
+the dissipation D, should always remain greater than or equal to zero, D ≥ 0. To a priori satisfy the dissipation
+inequality, we introduce the Helmholtz free energy as a function of the deformation gradient, ψ = ψ(F) such that
+ψ̇ = ∂ψ(F)/∂ F : Ḟ, and rewrite the dissipation inequality following the Coleman–Noll entropy principle [7] as
+                                                                     .
+D = [ P − ∂ψ/∂ F ] : Ḟ ≥ 0. For the hyperelastic case with D = 0, for all possible Ḟ, the entropy inequality
+                         .
+reduces to P − ∂ψ/∂ F = 0. The condition of thermodynamically consistency implies that the Piola stress P of a
+                                                                  4
+K. Linka and E. Kuhl                                  Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+hyperelastic, Green-elastic material is a thermodynamically conjugate function of the deformation gradient F [8],
+           ∂ψ(F)
+      P=           .                                                                                       (11)
+             ∂F
+For our Neural Network, this implies that, rather than approximating the nine stress components P(F) as nine
+generic functions of the nine components of the deformation gradient F, we train the network to learn the free
+energy function ψ(F) and derive the stress P in a post-processing step to a priori satisfy the second law of
+thermodynamics. As such, satisfying thermodynamic consistency according to Eq. (11) directly affects the output
+of the Neural Network.
+Material objectivity and frame indifference. Second, we further constrain the choice of the free energy
+function ψ to satisfy material objectivity or frame indifference to ensure that the constitutive laws do not depend
+on the external frame of Ref. [41]. Mathematically speaking, the Helmholtz free energy has to be invariant under
+rigid body motions, ψ(F) = ψ( Q · F), for all proper orthogonal tensors Q ∈ SO(3). The condition of objectivity
+implies that the arguments of the free energy function are independent of rotations and must be functions of the
+right Cauchy Green deformation tensor C [7],
+            ∂ψ(C)     ∂ψ(C) ∂ C              ∂ψ(C)
+      P=           =          :     =2F·              .                                                         (12)
+             ∂F         ∂C      ∂F             ∂C
+For our Neural Network, this implies that rather than using the nine independent components of the deformation
+gradient F as input, we constrain the input to the six independent components of the symmetric right Cauchy Green
+deformation tensor, C = F t · F. As such, satisfying material objectivity according to Eq. (12) directly affects the
+input of the Neural Network.
+Material symmetry and isotropy. Third, we further constrain the choice of the free energy function ψ to include
+constraints of material symmetry, which implies that the material response remains unchanged under transformations
+of the reference configuration, ψ(F) = ψ(F · Q). Here we consider the special case of isotropy for which
+the material response remains unchanged under proper orthogonal transformations of the reference configuration,
+ψ(F t · F) = ψ( Q t · F t · F · Q), for all proper orthogonal tensors Q ∈ SO(3) [1]. The condition of isotropy implies
+that the stress response functions, ψ(C) = ψ(b), must be functions of the left Cauchy Green deformation tensor,
+b = F · F t , and, together with the condition of objectivity, ψ(b) = ψ( Q t · b · Q), that the stress response functions
+must be functions of the invariants of C and b, for example ψ(I1 , I2 , I3 ) using the set of invariants from Eq. (3).
+The Piola stress for hyperelastic isotropic materials then becomes
+             ∂ψ(I1 , I2 , I3 )   ∂ψ ∂ I1 ∂ψ ∂ I2 ∂ψ ∂ I3            ∂ψ        ∂ψ          ∂ψ                    ∂ψ −t
+                                                                  [                ]
+       P=                      =         +         +         =2          + I1        F −2      F · F t · F +2I3      F . (13)
+                  ∂F             ∂ I1 F     ∂ I2 F    ∂ I3 F        ∂ I1      ∂ I2        ∂ I2                  ∂ I3
+For the case of near incompressibility, instead of using the invariants I1 , I2 , I3 , we can express the energy and
+stress as functions of the invariants I¯1 , I¯2 , J from Eq. (7) [3],
+
+            ∂ψ( I¯1 , I¯2 , J )           ∂ψ        ∂ψ            1 ∂ψ            2 ¯ ∂ψ             ∂ψ              ∂ψ −t
+                                        [                ]                          [                     ]
+                                     1
+       P=                       = 2 2/3           ¯
+                                               + I1        F − 2 4/3         t
+                                                                          F·F ·F−     I1          ¯
+                                                                                              + 2 I2        F −t + J    F .
+                 ∂F                J      ∂ I1
+                                            ¯       ∂ I2
+                                                      ¯         J    ∂ I2
+                                                                       ¯          3      ∂ I1
+                                                                                           ¯         ∂ I2
+                                                                                                       ¯             ∂J
+                                                                                                                        (14)
+For our Neural Network, this implies that rather than using the six independent components of the symmetric right
+Cauchy Green deformation tensor C as input, we constrain the input to a set of three invariants of the right and
+left Cauchy Green deformation tensors C and b, either I1 , I2 , I3 or I¯1 , I¯2 , J . In essence, considering materials with
+known symmetry classes according to Eqs. (13) or (14) directly affects, and ideally reduces, the input of the Neural
+Network.
+Perfect incompressibility. Fourth, we can further constrain the choice of the free energy function ψ for the
+special case of perfect incompressibility for which the Jacobian remains one, I3 = J 2 = 1. The condition of perfect
+incompressibility implies that Eqs. (13) and (14) simplify to an expression in terms of only the first two invariants
+I1 and I2 ,
+            ∂ψ ∂ I1    ∂ψ ∂ I2               ∂ψ        ∂ψ         ∂ψ
+                                           [                ]
+      P=            +          −pF=2              + I1        F−2      F · Ft · F − p F .                        (15)
+            ∂ I1 F     ∂ I2 F                ∂ I1      ∂ I2       ∂ I2
+                                                             5
+K. Linka and E. Kuhl                                  Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+Here, p = − 31 P : F is the hydrostatic pressure; it represents an additional unknown that we typically determine
+from the boundary conditions. For our Neural Network, perfect incompressibility implies that rather than using the
+set of three invariants of the right and left Cauchy Green deformation tensors, either I1 , I2 , I3 or I¯1 , I¯2 , J as input,
+we reduce the input to a set of only two invariants, I1 and I2 . Considering materials with perfect incompressibility
+according to Eq. (15) further reduces the input of the Neural Network.
+Physically reasonable constitutive restrictions. Fifth, in addition to systematically reducing the parame-
+terization of the free energy ψ from the nine components of the non-symmetric deformation gradient F, via the
+six components of the symmetric right Cauchy Green deformation tensor C, to three or even two scalar-valued
+invariants I1 , I2 , I3 and possibly I1 , I2 , we can restrict the functional form of the free energy ψ by including
+additional constitutive restrictions that are both physically reasonable and mathematically convenient [1]:
+(i) The free energy ψ is non-negative for all deformation states,
+      ψ(F) ≥ 0         ∀   F.                                                                                            (16)
+This is a condition that we can easily satisfy by adding any constant to ψ without altering the stress function.
+(ii) The free energy ψ is zero in the reference configuration, also known as the growth condition, and it a priori
+ensures a stress-free reference configuration,
+             .                  .
+      ψ(F) = 0 for P(F) = 0 at F = I .                                                                       (17)
+This is a condition that can become particularly challenging in the context of residual stresses [42], which we do
+not consider in the present manuscript.
+(iii) The free energy ψ is infinite at the extreme states of infinite compression, J → 0, and infinite expansion,
+J → ∞,
+      ψ(F) → ∞ for              J →0   or   J → ∞.                                                                       (18)
+In addition, it seems reasonable to require that an increase in a component of the strain should be accompanied by
+an increase in the corresponding component of the stress and that extreme deformations for which an eigenvalue
+of the strain is zero or infinite should result in infinite stresses. For our Neural Network, to facilitate a stress-free
+reference configuration according to Eq. (17), instead of using the invariants I1 , I2 , I3 themselves as input, we use
+their deviation from the energy- and stress-free reference state, [ I1 − 3 ], [ I2 − 3 ], [ I3 − 1 ], as input. In addition,
+from all possible activation functions, we select functional forms that comply with conditions (i), (ii), and (iii).
+As such, satisfying physical considerations according to Eqs. (16), (17), and (18) directly affects the activation
+functions of the Neural Network, especially those between the last hidden layer and the output layer.
+Polyconvexity. Sixth, to guide the selection of the functional forms for the free energy function ψ, and ultimately
+the selection of appropriate activation functions for our Neural Network, we consider polyconvexity requirements [2].
+From the general representation theorem we know that in its most generic form, the free energy of an isotropic
+material
+∑∞        can be expressed as an infinite series of products of powers of the invariants [43], ψ(I1 , I2 , I3 ) =
+                      j        k         l
+   j,k,l=0 jk [I1 − 3] [I2 − 3] [I3 − 1] , where a jkl are material constants. Importantly, mixed products of convex
+          a
+functions are generally not convex, and it is easier to show that the sum of specific convex subfunction usually
+is [44]. This motivates a special subclass of free energy functions in which the free energy is the sum of three
+individual polyconvex subfunctions ψ1 , ψ2 , ψ3 , such that ψ(F) = ψ1 (I1 ) + ψ2 (I2 ) + ψ3 (I3 ), is polyconvex by
+design and the stresses take the following form,
+            ∂ψ   ∂ψ1 ∂ I1   ∂ψ2 ∂ I2   ∂ψ3 ∂ I3
+      P=       =          +          +          .                                                                        (19)
+            ∂F   ∂ I1 ∂ F   ∂ I2 ∂ F   ∂ I3 ∂ F
+                                                                                                           3k/2      √
+Popular polyconvex subfunctions are the power functions, ψ1 (I1 ) = [I1k − 3k ]i and ψ2 (I2 ) = [I2 − (3 3)k ]i
+and ψ3 (I3 ) = [I3 − 1]k , the exponential functions, ψ1 (I1 ) = exp(ϕ1 (I1 )) − 1 and ψ2 (I2 ) = exp(ϕ2 (I2 )) − 1,
+and the logarithmic function, ψ3 (I3 ) = I3 − 2 ln((I3 )1/2 ) + 4 (ln(I3 )1/2 )2 , for non-negative coefficients, i, k ≥ 1.
+For our Neural Network, this implies that we can either select polyconvex activation functions from a set of
+algorithmically predefined activation functions [13] or custom-design our own activations functions from known
+polyconvex subfunctions ψ1 , ψ2 , ψ3 [12]. In addition, polyconvexity requirements suggest that we should carefully
+                                                              6
+K. Linka and E. Kuhl                                       Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+
+
+
+Fig. 1. Classical Neural Network. Example of a fully connected feed forward Neural Network with two hidden layers and eight nodes per
+layer to approximate the nine components of the tensor-valued Piola stress P(F) as a function of the nine components of the tensor-valued
+deformation gradient F. The upper arrows originate from the network nodes and are associated with the weights w, the lower arrows
+originate from the values one and are associated with the biases b. The total number of arrows defines the number of network parameters
+we need to learn during the training process. The network in this example has n w = 80 weights, n b = 17 biases, and a total number of
+n θ = 97 parameters.
+
+
+
+consider using a fully-connected network architecture, in which mixed products of the invariants I1 , I2 , I3 emerge
+naturally. Rather, polyconvexity points towards network architectures in which the three inputs I1 , I2 , I3 are
+decoupled and only combined additively when we collect the entries of last hidden layer into the free energy
+function, ψ = ψ1 + ψ2 + ψ3 . As such, satisfying polyconvexity, for example according to Eq. (19), generally
+enforces non-negative network weights [12] and directly affects the architecture and connectedness of the Neural
+Network [13].
+
+
+4. Classical Neural Networks
+
+   Classical Neural Networks are versatile function approximators that are capable of learning any nonlinear
+function [45]. However, as we will see, conventional off-the-shelf Neural Networks may violate the conditions
+of thermodynamic consistency, material objectivity, material symmetry, incompressibility, constitutive restrictions,
+and polyconvexity. In this section, we briefly summarize the input, output, architecture, and activation functions of
+classical Neural Networks to then, in the following section, modify these four elements as we design a new family
+of Constitutive Artificial Neural Networks that a priori satisfy the fundamental laws of physics.
+Neural Network input and output. In the constitutive modeling of hyperelastic materials, we can use Neural
+Networks as universal function approximators to map a second order tensor, the deformation gradient F or any
+other strain measure, onto another second order tensor, the Piola stress P or any other stress measure, according
+to Eq. (10). Fig. 1 illustrates a classical Neural Network with the nine components of the deformation gradient F
+as input and the nine components of the nominal or Piola stress P as output.
+Neural Network architecture. The architecture of the Neural Network determines how we approximate the
+relation between network input and output, in our case deformation gradient F and Piola stress P. The simplest
+architecture is a feed forward Neural Network in which information moves only in one direction – forward – from
+the input nodes, without any cycles or loops, to the output nodes. Between input and output, the information passes
+through one or multiple hidden layers. Each hidden layer consists of multiple nodes or neurons. In the simplest case
+of a fully connected feed forward Neural Network, all nodes of a layer receive information from all nodes of the
+previous layer, each multiplied by an individual weight, all summed up and modulated by a bias. Fig. 1 illustrates
+the example of a fully connected feed forward Neural Network with an input layer composed of the deformation
+gradient F, two hidden layers with eight nodes per layer, and an output layer composed of the Piola stress P. Let
+us denote the input as z0 , the nodal values of the hidden layer k as zk , and the output as zk+1 . For the example in
+Fig. 1 with two hidden layers, k = 1, 2, we calculate the values of each new layer from the values of the previous
+                                                                   7
+K. Linka and E. Kuhl                                           Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+
+
+
+Fig. 2. Activation functions for Classical Neural Networks. Popular activation functions f (x) along with their derivatives f ′ (x)
+include the identity, binary step, logistic or soft step, hyperbolic tangent, inverse tangent, rectified linear unit or ReLU, parametric rectified
+linear unit or PReLU, exponential linear unit or ELU, and soft plus functions. Activation functions can be continuous or discontinuous,
+linear or nonlinear, and bounded or unbounded.
+
+
+
+layer according to the following set of equations,
+
+
+         z0 =             F
+         z1 = f ( w1 z0 + b1 )
+                                                                                                                                            (20)
+         z2 = f ( w2 z1 + b2 )
+         z3 =     w3 z2 + b3 ≈ P(F) .
+
+
+Here, w are the set of network weights, b are the network biases, and f (◦) are the activation functions. In Fig. 1,
+the upper arrows that originate from the nodes of the previous layer and are associated with the weights w, the
+lower arrows that originate from the values one and are associated with the biases b. The total number of arrows
+defines the number of network parameters we need to learn during the training process. For the fully connected
+feed forward Neural Network in Fig. 1 with two hidden layers with eight nodes each, w1 ∈ R1×8 , w2 ∈ R8×8 ,
+w3 ∈ R8×1 , and b1 ∈ R8 , b2 ∈ R8 , b3 ∈ R1 , resulting in n w = 8 + 8 × 8 + 8 = 80 weights and n b = 8 + 8 + 1 = 17
+biases, and a total number of n θ = 97 network parameters.
+Activation functions. Activation functions translate the sum of the weighted inputs to each node into an output
+signal that will be fed into the next layer [45]. In analogy to the brain that processes input signals and decides
+whether a neuron should fire or not [46], activation functions decide whether the nodal input is important or not in
+the process of approximating the final function, in our case the stress P(F).
+    Fig. 2 illustrates the nine most popular activation functions f (x) in Neural Network modeling along with their
+derivatives f ′ (x). Depending on the final function we want to approximate, we can select from continuous or
+discontinuous, linear or nonlinear, and bounded or unbounded activation functions. In classical Neural Networks,
+all hidden layers typically use the same activation function, whereas the final output layer often uses a different
+activation function. For the simple example of a feed forward fully connected Neural Network similar to Fig. 1,
+with one input z 0 = F1 , one output z 3 = P1 , and two hidden layers with two nodes per layer, z1 = [ z 11 , z 12 ]
+and z2 = [ z 21 , z 22 ], the system of Eqs. (20) with activation functions of hyperbolic tangent type, f (x) = tanh(x),
+                                                                        8
+K. Linka and E. Kuhl                                     Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+results in the following explicit expressions,
+       z 0 = F11
+       z 11 = tanh ( w111 · F11 + b11 )
+       z 12 = tanh ( w112 · F11 + b12 )
+       z 21 = tanh ( w211 · z 11 + w212 · z 12 + b21 )
+       z 22 = tanh ( w221 · z 11 + w222 · z 12 + b22 )
+       z3 =          w321 · z 21 + w322 · z 22 + b31
+       P11 ≈         w321 · (tanh(w211 · tanh(w111 · F11 + b11 )) + tanh(w212 · tanh(w112 · F11 + b12 )) + b21 )
+                + w322 · (tanh(w221 · tanh(w111 · F11 + b11 )) + tanh(w222 · tanh(w112 · F11 + b12 )) + b22 ) + b31 ,
+                                                                                                                           (21)
+where the output of the last layer z 3 approximates the true solution, P1 ≈ z 3 . This specific Neural Network has
+w1 = [ w111 , w112 ], w2 = [ w211 , w212 , w221 , w222 ], w3 = [ w321 , w322 ], and b1 = [ b11 , b12 ], b2 = [ b21 , b22 ],
+b3 = [ b31 ], resulting in n w = 2 + 2 × 2 + 2 = 8 weights and n b = 2 + 2 + 1 = 5 biases, and a total number of
+n θ = 13 network parameters. The set of Eqs. (21) illustrates that, for every hidden layer, we add one more level
+of nested activation functions, in this case tanh(◦). The final approximated stress stretch relation P1 (F1 ) is fairly
+complex, inherently nonlinear, and difficult if not impossible to invert explicitly. From the set of Eqs. (21), it is
+clear that the network weights and biases have no clear physical interpretation.
+    The selection of appropriate activation functions depends on the type of prediction we expect from our model.
+In constitutive modeling, where we seek to approximate the stress P as a function of the deformation gradient F,
+we can immediately rule out some of the common activation functions in Fig. 2 – at least for the final output layer
+– when considering the physically reasonable constitutive restrictions (16), (17), and (18) from Section 3: (i) the
+binary step function is discontinuous at the origin, f (−0) ̸= f (+0), which violates our general understanding that
+the energy ψ and the stress P should be smooth and continuous for all hyperelastic deformations; (ii) the binary
+step function and rectified linear unit are constant over part or all of the domain, f (x) = 0 or f (x) = 1, which
+violates our general understanding that the stress P should not be constant, but rather increase with increasing
+deformation F; (iii) the binary step, logistic, hyperbolic tangent, and inverse tangent functions are horizontally
+asymptotic, f (−∞) = 0 and f (+∞) = 1, which violates the physically reasonable constitutive restriction (18)
+that the energy and stress should not be bounded, but rather become infinite, P → ∞, for extreme deformations,
+F → ∞; (iv) the rectified linear unit, parametric rectified linear unit, and exponential linear unit are continuous
+but non-differentiable at zero, f ′ (−0) ̸= f ′ (+0), which could be useful to model tension–compression asymmetry,
+but is not the most elegant choice to model the tension–compression transition at the origin. At the same time,
+the identity, f (x) = x, and the left branch of the exponential linear unit, f (x) = α [exp(x) − 1], remind us of
+the classical linear neo Hooke [35] and exponential Holzapfel [47] models. Together with the soft plus function,
+ f (x) = ln(1+exp(x)), they are the only three functions that are continuous, differentiable, and polyconvex [13]. This
+motivates the question, can we identify existing activation functions or design our own set of activation functions
+that mimic known constitutive models, or contributions to them, and, ideally, satisfy polyconvexity requirements by
+design?
+Loss function. The objective of a classical Neural Network is to learn the network parameters, θ = {wk , bk } , the
+network weights and biases, by minimizing a loss function L that penalizes the error between model and data. We
+commonly characterize this error as the mean squared error, the L 2 -norm of the difference between model P(F i )
+and data P̂ i , divided by the number of training points n trn ,
+                         n trn
+                    1 ∑
+      L(θ ; F) =               ∥ P(F i ) − P̂ i ∥2 → min .                                                                 (22)
+                   n trn i=1
+We train the network by minimizing the loss function (22) and learn the network parameters, θ = {wk , bk }, in
+our case using the ADAM optimizer, a robust adaptive algorithm for gradient-based first-order optimization. With
+appropriate training data, classical Neural Networks can interpolate data well, without any prior knowledge of the
+underlying physics. However, they typically fail to extrapolate and make informed predictions [21]. Since they
+usually have many degrees of freedom, they are inherently at risk of overfitting, especially if the available data are
+sparse [48]. In addition, they may violate the thermodynamic restrictions of Section 3. This motivates the question,
+                                                                9
+K. Linka and E. Kuhl                                                  Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+
+
+
+Fig. 3. Constitutive Artificial Neural Network. Family of a feed forward Constitutive Artificial Neural Networks with two hidden layers
+to approximate the single scalar-valued free energy function ψ(I1 , I2 , I3 , I4 , . . .) as a function of the scalar-valued invariants I1 , I2 , I3 , I4 , . . .
+of the deformation gradient F. The first layer generates powers (◦), (◦)2 , (◦)3 , . . . of the network input and the second layer applies
+thermodynamically admissible activation functions f (◦) to these powers. Constitutive Artificial Neural Networks are typically not fully
+connected by design to a priori satisfy the condition of polyconvexity.
+
+
+
+can we integrate physical information we already know to constrain the function P(F), prevent overfitting, and
+make the model more predictive?
+
+5. Constitutive Artificial Neural Networks
+   We now propose a new family of Constitutive Artificial Neural Networks that satisfy the conditions of
+thermodynamic consistency, material objectivity, material symmetry, incompressibility, constitutive restrictions, and
+polyconvexity by design. In the following, we discuss how this guides our selection of network input, output,
+architecture, and activation functions to a priori satisfy the fundamental laws of physics. We also demonstrate that,
+for special cases, members of this family reduce to well-known constitutive models, including the neo Hooke [35],
+Blatz Ko [25], Mooney Rivlin [26,34], Yeoh [36], Demiray [33] and Holzapfel [47] models, and that the network
+weights have a clear physical interpretation.
+Constitutive Artificial Neural Network input and output. To ensure thermodynamical consistency, rather
+than directly approximating the stress P as a function of the deformation gradient F, we use the Constitutive
+Artificial Neural Network as a universal function approximator to map the scalar-valued invariants I1 , I2 , I3 , I4 , I5
+onto the scalar-valued free energy function ψ according to Eqs. (13). The Piola stress P then follows naturally from
+the second law of thermodynamics as the derivative of the free energy ψ with respect to the deformation gradient
+F according to Eqs. (10) and (13). Fig. 3 illustrates a Constitutive Artificial Neural Network with the invariants I1 ,
+I2 , I3 , I4 as input and the free energy ψ as output.
+Constitutive Artificial Neural Network architecture. Since we seek to model a hyperelastic history-
+independent material, we select a feed forward architecture in which information only moves in one direction,
+from the input nodes, without any cycles or loops, to the output nodes. To control polyconvexity, rather than
+choosing a fully connected feed forward network, we select a network architecture in which nodes only receive
+an input from selected nodes of the previous layer. Specifically, according to Eq. (19), the nodes of the individual
+invariants are not connected, such that the free energy function does not contain mixed terms in the invariants. Fig. 3
+                                                                               10
+K. Linka and E. Kuhl                                           Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+
+
+
+Fig. 4. Activation functions for Constitutive Artificial Neural Networks. We use custom-designed activation functions f (x) along
+with their derivatives f ′ (x) that include linear and quadratic mappings, either as final activation functions themselves, top rows, or combined
+with exponential functions, bottom rows, to reverse engineer a free energy function that captures popular functional forms of constitutive
+terms.
+
+
+
+illustrates one possible architecture that attempts to a priori satisfy the polyconvexity condition (19) by decoupling
+the information of the individual invariants. For this particular network architecture, the free energy function that
+we seek to approximate takes the following format,
+
+        ψ(I1 , I2 , I3 , I4 ) = w2,1 f 1 (w1,1 [ I1 − 3 ]1 ) + w2,2 f 2 (w1,2 [ I1 − 3 ]1 ) + w2,3 f 3 (w1,3 [ I1 − 3 ]1 )
+                              + w2,4 f 1 (w1,4 [ I1 − 3 ]2 ) + w2,5 f 2 (w1,5 [ I1 − 3 ]2 ) + w2,6 f 3 (w1,6 [ I1 − 3 ]2 )
+                              + w2,7 f 1 (w1,7 [ I1 − 3 ]3 ) + w2,8 f 2 (w1,8 [ I1 − 3 ]3 ) + w2,9 f 3 (w1,9 [ I1 − 3 ]3 )
+                              + w2,10 f 1 (w1,10 [ I2 − 3 ]1 ) + w2,11 f 2 (w1,11 [ I2 − 3 ]1 ) + w2,12 f 3 (w1,12 [ I2 − 3 ]1 )
+                              + w2,13 f 1 (w1,13 [ I2 − 3 ]2 ) + w2,14 f 2 (w1,14 [ I2 − 3 ]2 ) + w2,15 f 3 (w1,15 [ I2 − 3 ]2 )
+                              + w2,16 f 1 (w1,16 [ I2 − 3 ]3 ) + w2,17 f 2 (w1,17 [ I2 − 3 ]3 ) + w2,18 f 3 (w1,18 [ I2 − 3 ]3 )
+                              + w2,19 f 1 (w1,19 [ I3 − 1 ]1 ) + w2,20 f 2 (w1,20 [ I3 − 1 ]1 ) + w2,21 f 3 (w1,21 [ I3 − 1 ]1 )
+                              + w2,22 f 1 (w1,22 [ I3 − 1 ]2 ) + w2,23 f 2 (w1,23 [ I3 − 1 ]2 ) + w2,24 f 3 (w1,24 [ I3 − 1 ]2 )
+                              + w2,25 f 1 (w1,25 [ I3 − 1 ]3 ) + w2,26 f 2 (w1,26 [ I3 − 1 ]3 ) + w2,27 f 3 (w1,27 [ I3 − 1 ]3 ) + · · · .
+                                                                                                                                           (23)
+
+This specific network has 5 × 3 × 3 + 4 × 3 × 3 = 90 weights for the transversely isotropic case with all five
+invariants I1 , I2 , I3 , I4 , I5 and 3 × 3 × 3 + 3 × 3 × 3 = 54 weights for the isotropic case with only three invariants
+I1 , I2 , I3 .
+Activation functions. To ensure that our network satisfies basic physically reasonable constitutive restrictions,
+rather than selecting from the popular pre-defined activation functions in Fig. 2, we custom-design our own activation
+functions to reverse-engineer a free energy function that captures popular forms of constitutive terms. Specifically,
+we select from linear, quadratic, cubic, and higher order powers for the first layer of the network, and from linear,
+exponential, or logarithmic functions for the second layer.
+    Fig. 4 illustrates the four activation functions f (x) along with their derivatives f ′ (x) that we use throughout
+the remainder of this work. Notably, in contrast to the activation functions for classical Neural Networks in Fig. 2,
+all four functions are not only monotonic, f (x + ε) ≥ f (x) for ε ≥ 0, such that increasing deformations result in
+increasing stresses, but also continuous at the origin, f (−0) = f (+0), continuously differentiable and smooth at the
+origin, f ′ (−0) = f ′ (+0), zero at the origin, f (0) = 0, to ensure an energy- and stress-free reference configuration
+according to Eq. (17), and unbounded, f (−∞) → ∞ and f (+∞) → ∞, to ensure an infinite energy and stress
+for extreme deformations according to Eq. (18).
+    Fig. 5 illustrates an example of an isotropic incompressible Constitutive Artificial Neural Network with two
+hidden layers and four and eight nodes. The first layer generates powers (◦) and (◦)2 of the network input and the
+second layer applies the identity, (◦), and the exponential function, (exp(α(◦)) − 1), to these powers. As such, the
+                                                                       11
+K. Linka and E. Kuhl                                          Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+
+
+
+Fig. 5. Constitutive Artificial Neural Network. Example of an isotropic perfectly incompressible Constitutive Artificial Neural Network
+with two hidden layers to approximate the single scalar-valued free energy function ψ(I1 , I2 ) as a function of the first and second invariants
+of the deformation gradient F using eight terms. The first layer generates powers (◦) and (◦)2 of the network input and the second layer
+applies the identity (◦) and exponential functions (exp(α(◦)) − 1) to these powers. The networks is not fully connected by design to a priori
+satisfy the condition of polyconvexity.
+
+
+
+first and fifths dark red and green inputs to the free energy in Fig. 5 correspond to the linear activation function in
+Fig. 4, the second and sixths red and light blue inputs correspond to the quadratic activation function, the third and
+sevenths orange and blue inputs correspond to the linear exponential function, and the fourth and eights yellow and
+dark blue inputs correspond to the quadratic exponential function. The set of equations for this networks takes the
+following explicit form,
+        ψ(I1 , I2 ) = w2,1 w1,1 [ I1 − 3 ] + w2,2 [ exp ( w1,2 [ I1 − 3 ] ) − 1 ]
+                    + w2,3 w1,3 [ I1 − 3 ]2 + w2,4 [ exp ( w1,4 [ I1 − 3 ]2 ) − 1 ]
+                                                                                                                                          (24)
+                    + w2,5 w1,5 [ I2 − 3 ] + w2,6 [ exp ( w1,6 [ I2 − 3 ] ) − 1 ]
+                    + w2,7 w1,7 [ I2 − 3 ]2 + w2,8 [ exp ( w1,8 [ I2 − 3 ]2 ) − 1 ] .
+ For this particular format, one of the first two weights of each row becomes redundant, and we can reduce the set of
+network parameters to twelve, w = [ (w1,1 w2,1 ), w1,2 , w2,2 , (w1,3 w2,3 ), w1,4 , w2,4 (w1,5 w2,5 ), w1,6 , w2,6 , (w1,7 w2,7 ),
+w1,8 , w2,8 ]. Using the second law of thermodynamics, we can derive an explicit expression for the Piola stress
+from Eq. (11), P = ∂ψ/∂ F, or, more specifically, for the case of perfect incompressibility from Eq. (15),
+P = ∂ψ/∂ I1 · ∂ I1 /∂ F + ∂ψ/∂ I2 · ∂ I2 /∂ F,
+         P =[             w2,1 w1,1 +w2,2 w1,2 exp ( w1,2 [ I1 − 3 ] )
+           + 2 [ I1 − 3 ][w2,3 w1,3 +w2,4 w1,4 exp ( w1,4 [ I1 − 3 ]2 )] ∂ I1 /∂ F
+                                                                                                                                          (25)
+           +[             w2,5 w1,5 +w2,6 w1,6 exp ( w1,6 [ I2 − 3 ] )
+           + 2 [ I2 − 3 ][w2,7 w1,7 +w2,8 w1,8 exp ( w1,8 [ I2 − 3 ]2 )] ∂ I2 /∂ F
+Compared to the stress stretch relation P(F) of classical Neural Networks (21), the stress stretch relation of
+Constitutive Artificial Neural Networks (25) is fairly simple by design. More importantly, the particular form (25)
+represents a generalization of many popular constitutive models for incompressible hyperelastic materials. It seems
+natural to ask whether and how our network parameters w relate to common well-known material parameters.
+Special types of constitutive equations. To demonstrate that the family of Constitutive Artificial Neural
+Networks in Fig. 3 and the specific example in Fig. 5 are a generalization of popular constitutive models, we
+consider several widely used models and systematically compare their material parameters to our network weights w:
+
+
+The neo Hooke model [35], the simplest of all models, has a free energy function that is a constant function of only
+the first invariant, [ I1 − 3 ], scaled by the shear modulus µ,
+       ψ = 12 µ [ I1 − 3 ]         where         µ = 2 w1,1 w2,1 in Eq. (24) .                                                            (26)
+The Blatz Ko model [25], has a free energy function that depends    √ only the second and third invariants, [ I2 − 3 ]
+and [ I3 − 1 ], scaled by the shear modulus µ, ψ = 21 µ [ I2 /I3 + 2 I3 − 5 ]. For perfectly incompressible materials,
+                                                                      12
+K. Linka and E. Kuhl                                   Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+I3 = 1, it simplifies to the following form,
+      ψ = 12 µ [ I2 − 3 ]      where       µ = 2 w1,5 w2,5 in Eq. (24) .                                                 (27)
+The Mooney Rivlin model [26,34] is a combination of both and accounts for the first and second invariants, [ I1 − 3 ]
+and [ I2 − 3 ], scaled by the moduli µ1 and µ2 that sum up to the overall shear modulus, µ = µ1 + µ2 ,
+      ψ = 21 µ1 [ I1 − 3 ] + 21 µ2 [ I2 − 3 ]      where      µ1 = 2 w1,1 w2,1 and µ2 = 2 w1,5 w2,5 in Eq. (24) .        (28)
+The Yeoh model [36] considers linear, quadratic, and cubic terms of only the first invariant, [I1 − 3], as
+
+      ψ = a1 [ I1 −3 ]+a2 [ I1 −3 ]2 +a3 [ I1 −3 ]3 where a1 = 2 w1,1 w2,1 and a2 = 2 w1,3 w2,3 and a3 = 0 in Eq. (23) .
+                                                                                                                         (29)
+The Demiray model [33] or Delfino model [49] uses linear exponentials of the first invariant, [I1 − 3], in terms of
+two parameters a and b,
+            1 a
+      ψ=        [ exp( b [ I1 − 3 ] ) − 1 ]  where       a = 2 w1,2 w2,2 and b = w1,2 in Eq. (24) .             (30)
+            2 b
+The Treloar model [35] and Mooney Rivlin model [26,34] for nearly incompressible materials both consider a
+quadratic term of the third invariant, [ J − 1 ], scaled by the bulk modulus κ, to additionally account for the bulk
+behavior,
+      ψ̄ = 12 κ [ J − 3 ]2     where       κ = 2 w1,13 w2,13 in Eq. (23) .                                               (31)
+The Holzapfel model [47] uses quadratic exponentials of the fourth invariant, [ I4 − 1 ], in terms of two parameters
+a and b to additionally account for a transversely isotropic behavior,
+           1 a
+      ψ̄ =     [ exp( b [ I4 − 1 ]2 ) − 1 ] where a = 2 w1,22 w2,22 and b = w1,22 in Eq. (23) .        (32)
+           2 b
+These simple examples demonstrate that we can recover popular constitutive functions for which the network
+weights gain a well-defined physical meaning.
+Loss function. The objective of a Constitutive Artificial Neural Network is to learn the network parameters
+θ = {wk } , the network weights, by minimizing a loss function L that penalizes the error between model and data.
+Similar to classical Neural Networks, we characterize this error as the mean squared error, the L 2 -norm of the
+difference between model P(F i ) and data P̂ i , divided by the number of training points n trn ,
+                       n trn
+                  1 ∑
+      L(θ ; F) =             ∥ P(F i ) − P̂ i ∥2 → min .                                                                 (33)
+                 n trn i=1
+
+While this is not the focus of the present work, in the spirit of Physics Informed Neural Networks, we could
+add additional thermodynamic constraints to the loss function [9,10]. For the perfectly incompressible hyperelastic
+materials we consider here, the thermodynamics are already well represented and hardwired into the network through
+input, output, architecture and activation functions, and we do not need to consider this extra step. We train the
+network by minimizing the loss function (33) and learn the network parameters θ = {w} using the ADAM optimizer,
+a robust adaptive algorithm for gradient-based first-order optimization, and constrain the network weights to always
+remain non-negative, w ≥ 0. While we could equally well solve the optimization problem (33) using a different
+optimization solver, we capitalize on the power and robustness of optimizers developed for machine learning and
+opt for the widely used ADAM optimizer, rather than implementing this minimization ourselves.
+With only small amounts of training data, Constitutive Artificial Neural Networks can both interpolate and
+extrapolate well and make informed predictions within the range of validity of the underlying thermodynamic
+assumptions. Since they limit the number of degrees of freedom, they are less likely to overfit, especially if the
+available data are sparse. By design, Constitutive Artificial Neural Networks are compliant with the thermodynamic
+restrictions of Section 3. Most importantly, for practical applications, they do not operate as a black box; rather
+they are a generalization of existing constitutive models and their parameters have a clear physical interpretation.
+                                                              13
+K. Linka and E. Kuhl                                       Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+
+
+
+Fig. 6. Special homogeneous deformation modes. Invariant-stretch relations for the special modes of perfectly incompressible uniaxial
+tension with F = diag { λ, λ−1/2 , λ−1/2 }, equibiaxial tension with F = diag { λ, λ, λ−2 }, and pure shear with F = diag { λ, 1, λ−1 }.
+
+
+
+6. Special homogeneous deformation modes
+
+   To demonstrate the features of our thermodynamically consistent Constitutive Artificial Neural Networks, we
+consider an isotropic, perfectly incompressible material for which the principal stretches λi and nominal stresses Pi
+are related via
+            ∂ψ     1
+       Pi =     −      p     ∀      i = 1, 2, 3,                                                                 (34)
+            ∂λi    λi
+where p denotes the hydrostatic pressure. Using the chain rule, we can reparameterize Eq. (34) in terms of the
+invariants I1 and I2 , recalling the incompressibility constraint I3 = 1, such that
+              ∂ψ ∂ I1    ∂ψ ∂ I2    1
+       Pi =            +          −    p           ∀       i = 1, 2, 3.                                                            (35)
+              ∂ I1 ∂λi   ∂ I2 ∂λi   λi
+In the following, we summarize the deformation gradients F, the invariants I1 and I2 , their derivatives ∂ I1 /∂λ
+and ∂ I2 /∂λ, and the resulting nominal stress P for the special homogeneous deformation modes of incompressible
+uniaxial tension, equibiaxial tension, and pure shear [4]. Fig. 6 summarizes the stretch-invariant relationship for all
+three cases.
+Uniaxial tension. For the special case of incompressible uniaxial tension, we stretch the specimen in one direction,
+λ1 = λ. From isotropy and incompressibility, I3 = λ21 λ22 λ23 = 1, we conclude that the stretches orthogonal to this
+direction are the same and equal to the square root of the stretch, λ2 = λ3 = λ−1/2 . The deformation gradient F
+and Piola stress P for incompressible uniaxial tension follow as
+       F = diag { λ, λ−1/2 , λ−1/2 }     and     P = diag { P1 , 0, 0 } .                                                          (36)
+We can use the explicit expressions of the first and second invariants and their derivatives,
+                                                   ∂ I1                        ∂ I2
+                                                           [        ]                    [      ]
+                2                     1                           1                           1
+     I1 = λ +
+           2
+                    and I2 = 2λ + 2 with                =2 λ− 2          and        =2 1− 3 ,                                      (37)
+                λ                    λ             ∂λ             λ            ∂λ             λ
+to determine the pressure p from the zero stress condition in the transverse directions, P2 = 0 and P3 = 0, using
+Eq. (35),
+           2 ∂ψ            1 ∂ψ
+                     [        ]
+      p=          +2 λ+ 2            ,                                                                       (38)
+           λ ∂ I1          λ    ∂ I2
+and obtain an explicit analytical expression for the nominal stress P1 in terms of the stretch λ from Eq. (35),
+               ∂ψ      1 ∂ψ
+             [                ][       ]
+                                     1
+     P1 = 2         +           λ− 2 .                                                                          (39)
+               ∂ I1    λ ∂ I2       λ
+Equibiaxial tension. For the special case of incompressible equibiaxial tension, we stretch the specimen equally
+in two directions, λ1 = λ2 = λ. From the incompressibility condition, I3 = λ21 λ22 λ23 = 1, we conclude that
+the stretch in the third direction is λ3 = λ−2 . The deformation gradient F and Piola stress P for incompressible
+equibiaxial tension follow as
+       F = diag { λ, λ, λ−2 }      and    P = diag { P1 , P2 , 0 } .                                                               (40)
+                                                                  14
+K. Linka and E. Kuhl                                          Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+
+
+
+Fig. 7. Special homogeneous deformation modes. Stress–stretch relations for the example of the free energy function ψ in Eq. (25)
+for the special modes of perfectly incompressible uniaxial tension, equibiaxial tension, and pure shear. The eight curves highlight the linear,
+quadratic, linear exponential, and quadratic exponential contributions of the first and second invariants I1 and I2 to the final stress function
+P1 (λ) in Eqs. (39), (43), and (47). The color-code agrees with the nodes of the Constitutive Artificial Neural Network in Fig. 5.
+
+
+
+Using the explicit expressions of the first and second invariants and their derivatives,
+                                                     ∂ I1                         ∂ I2
+                                                              [        ]                  [       ]
+                   1                      2                          1                          1
+     I1 = 2λ2 + 4 and I2 = λ4 + 2 with                    =2 λ− 5           and        = 2 λ3 − 3 ,                                       (41)
+                  λ                      λ           ∂λ             λ             ∂λ           λ
+we determine the pressure p from the zero stress condition in the third direction, P3 = 0, using Eq. (35),
+            2 ∂ψ       4 ∂ψ
+       p=          + 2                                                                                              (42)
+           λ ∂ I1
+             4        λ ∂ I2
+and obtain an explicit analytical expression for the nominal stresses P1 and P2 in terms of the stretch λ from Eq. (35),
+
+                   ∂ψ        ∂ψ
+                        [                 ][     ]
+                                               1
+       P1 = P2 = 2      + λ2                λ− 5 .                                                                                        (43)
+                   ∂ I1      ∂ I2             λ
+Pure shear. For the special case of incompressible pure shear, we stretch a long rectangular specimen along its
+short axis, λ1 = λ, and assume that it remains undeformed along its long axis, λ2 = 1. From the incompressibility
+condition, I3 = λ21 λ22 λ23 = 1, we conclude that the stretch in the third direction is λ3 = λ−1 . The deformation
+gradient F and Piola stress P for incompressible pure shear are
+       F = diag { λ, 1, λ−1 }       and     P = diag { P1 , P2 , 0 } .                                                                    (44)
+Using the explicit expressions of the first and second invariants and their derivatives,
+                                       ∂ I1    ∂ I2
+                                                        [       ]
+                           1                                  1
+     I1 = I2 = λ + 1 + 2 with
+                  2
+                                             =      =2 λ− 3                                                                               (45)
+                          λ             ∂λ     ∂λ             λ
+we determine the pressure p from the zero stress condition in the third direction, P3 = 0, using Eq. (35),
+          2 ∂ψ              1 ∂ψ
+                      [       ]
+     p= 2        +2 1+ 2             ,                                                                                                    (46)
+          λ ∂ I1           λ    ∂ I2
+and obtain explicit analytical expressions for the nominal stresses P1 and P2 in terms of the stretch λ from Eq. (35),
+
+              ∂ψ     ∂ψ                                          ∂ψ        ∂ψ
+                 [              ][     ]                            [                 ][     ]
+                                     1                                                     1
+       P1 = 2      +              λ− 3            and     P2 = 2      + λ2              1− 2 .                                            (47)
+              ∂ I1   ∂ I2           λ                            ∂ I1      ∂ I2           λ
+   Fig. 7 illustrates the stress–stretch relations for the example of the free energy function ψ(λ) in Eq. (24) for the
+special homogeneous deformation modes of perfectly incompressible uniaxial tension, equibiaxial tension, and pure
+shear. The eight curves highlight the linear, quadratic, linear exponential, and quadratic exponential contributions
+of the first invariant I1 , top row, and second invariant I2 , bottom row, to the final stress function P1 (λ) in Eqs. (39),
+(43), and (47). For comparison, all curves are scaled to unity. Their color code corresponds to the eight nodes of
+the Constitutive Artificial Neural Network in Fig. 5. The stress contributions of the first invariant take a comparable
+shape for all three deformation modes: The linear term, [ I1 − 3 ], is concave for all three modes, whereas the other
+three terms are convex. The terms of the second invariant behave similarly under uniaxial tension and pure shear:
+                                                                        15
+K. Linka and E. Kuhl                                         Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+Table 1
+Benchmark stress-stretch data for single-mode training. Uniaxial tension (UT) experiments for rubber at 20◦ and 50◦ [27], gum
+stock and tread stock [26], and polymeric foam and rubber [25]. All reported stresses are converted from their initial units [kg/cm2 ] [27],
+[kg/2.5 · 3.2mm2 ] [26], and [Psi] [25] into the unified unit [MPa].
+
+                      UT                UT               UT                   UT               UT                UT
+                  rubber 20◦        rubber 50◦        gum stock           tread stock         foam             rubber
+                  Treloar [27]      Treloar [27]      Mooney [26]         Mooney [26]     Blatz Ko [25]     Blatz Ko [25]
+                   λ       P         λ       P         λ       P           λ       P        λ       P         λ       P
+                  [-]    [MPa]      [-]    [MPa]      [-]    [MPa]        [-]    [MPa]     [-]    [MPa]      [-]    [MPa]
+                 1.00     0.00     1.00     0.00     1.00     0.00        1.00   0.00     1.00     0.00     1.00     0.00
+                 1.01     0.00     1.11     0.17     1.46     0.31        1.16   0.31     1.05     0.04     1.05     0.03
+                 1.13     0.14     1.23     0.29     2.30     0.61        1.50   0.61     1.10     0.06     1.10     0.07
+                 1.23     0.24     1.57     0.54     4.66     1.23        2.56   1.23     1.15     0.07     1.16     0.10
+                 1.41     0.33     2.12     0.80     6.45     1.84        3.30   1.84     1.20     0.09     1.22     0.13
+                 1.61     0.43     2.73     1.03     6.77     2.45        3.53   2.45     1.30     0.12     1.27     0.16
+                 1.89     0.52     3.36     1.30     6.96     3.06        3.63   3.06     1.40     0.14     1.31     0.18
+                 2.17     0.59     3.95     1.57                          3.71   3.68     1.50     0.16     1.37     0.20
+                 2.45     0.68     4.39     1.79                                          1.60     0.16     1.41     0.22
+                 3.06     0.87     5.29     2.29                                          1.70     0.17     1.47     0.24
+                 3.62     1.06     6.11     2.80                                          1.80     0.18     1.52     0.26
+                 4.06     1.24     6.54     3.75                                          1.90     0.19     1.57     0.27
+                 4.82     1.60     6.95     5.27                                          2.00     0.20     1.62     0.29
+                 5.41     1.95     7.43     7.73                                          2.10     0.20
+                 5.79     2.30     7.76    10.21                                          2.20     0.21
+                 6.23     2.68                                                            2.30     0.21
+                 6.46     3.03                                                            2.34     0.21
+                 6.67     3.40
+                 6.96     3.78
+                 7.14     4.16
+                 7.25     4.49
+                 7.36     4.86
+                 7.49     5.24
+                 7.60     5.60
+                 7.69     6.33
+
+
+
+The linear term, [ I2 − 3 ], is concave and the other three terms are convex. For equibiaxial tension, however, all
+four terms, including the [ I2 − 3 ] term, are convex. Notably, both quadratic exponential terms increase rapidly for
+all six cases. In the following section, when we train our Constitutive Artificial Neural Network with real data, we
+will explore how linear combinations of these eight terms, scaled by the learnt twelve network weights w, make up
+the free energy function ψ(λ), and with it the stress P(λ) that best approximates the data P̂.
+
+7. Results
+   To demonstrate the performance of our new family of Constitutive Artificial Neural Networks, we perform a
+systematic side-by-side comparison of classical Neural Networks and Constitutive Neural Networks using widely-
+used benchmark data for rubber elasticity. Specifically, we train and compare the fully connected two-layer
+eight-term Neural Network from Fig. 1 and the two-layer eight-term Constitutive Artificial Neural Networks for
+isotropic perfectly incompressible materials from Fig. 5. We consider two training scenarios, single-mode training
+and multi-mode training, for the special deformation modes of uniaxial tension, biaxial tension, and pure shear.
+Table 1 summarizes our benchmark data for single-mode training from uniaxial tension experiments for rubber at
+20◦ and 50◦ [27], for gum stock and tread stock [26], and for polymeric foam and rubber [25]. For comparison,
+we converted all reported stresses from their initial units [kg/cm2 ] [27], [kg/2.5 · 3.2 mm2 ] [26], and [Psi] [25]
+into the unified unit [MPa]. Table 2 summarizes our benchmark data for multi-mode training from uniaxial tension,
+equibiaxial tension, and pure shear experiments for rubber at 20◦ and 50◦ [27]. For comparison, we multiplied the
+equibiaxial stresses by their stretches and converted all reported stresses from their initial unit [kg/cm2 ] into the
+unified unit [MPa].
+
+
+                                                                     16
+K. Linka and E. Kuhl                                      Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+Table 2
+Benchmark stress-stretch data for multi-mode training. Uniaxial tension (UT), equibiaxial tension (ET), and pure shear (PS)
+experiments for rubber at 20◦ and 50◦ [27]. Equibiaxial stresses are multiplied by their stretches and all stresses are converted from
+their initial unit [kg/cm2 ] into the unified unit [MPa].
+
+                     UT               ET                PS                  UT             ET               PS
+                 rubber 20◦       rubber 20◦        rubber 20◦          rubber 50◦     rubber 50◦       rubber 50◦
+                 Treloar [27]     Treloar [27]      Treloar [27]        Treloar [27]   Treloar [27]     Treloar [27]
+                  λ       P        λ       P         λ      P            λ       P      λ       P        λ       P
+                 [-]    [MPa]     [-]    [MPa]      [-]   [MPa]         [-]    [MPa]   [-]    [MPa]     [-]    [MPa]
+                1.00    0.00     1.00     0.00     1.00    0.00         1.00    0.00   1.00    0.00    1.00     0.00
+                1.01    0.00     1.04     0.09     1.05    0.06         1.11    0.17   1.02    0.15    1.04     0.17
+                1.13    0.14     1.08     0.16     1.13    0.16         1.23    0.29   1.08    0.30    1.23     0.40
+                1.23    0.24     1.12     0.24     1.20    0.24         1.57    0.54   1.16    0.48    1.48     0.63
+                1.41    0.33     1.15     0.26     1.33    0.33         2.12    0.80   1.37    0.74    2.52     1.03
+                1.61    0.43     1.21     0.33     1.45    0.42         2.73    1.03   1.57    0.92    3.51     1.49
+                1.89    0.52     1.32     0.44     1.86    0.59         3.36    1.30   1.96    1.17    4.33     1.90
+                2.17    0.59     1.43     0.51     2.40    0.77         3.95    1.57   2.46    1.49    5.07     2.36
+                2.45    0.68     1.70     0.66     2.99    0.95         4.39    1.79   2.79    1.78    5.74     2.74
+                3.06    0.87     1.95     0.77     3.50    1.13         5.29    2.29   3.14    2.04    6.24     3.22
+                3.62    1.06     2.50     0.97     3.98    1.29         6.11    2.80   3.45    2.33    6.36     3.63
+                4.06    1.24     3.04     1.26     4.39    1.48         6.54    3.75   3.60    2.53    6.65     4.49
+                4.82    1.60     3.44     1.47     4.72    1.65         6.95    5.27   3.86    2.96    6.91     5.34
+                5.41    1.95     3.76     1.73     4.99    1.82         7.43    7.73   4.11    3.24    7.06     6.23
+                5.79    2.30     4.03     1.97                          7.76   10.21   4.60    4.24    7.26     7.00
+                6.23    2.68     4.26     2.23                                         5.06    6.15    7.42     7.89
+                6.46    3.03     4.45     2.45                                         5.28    6.99    7.56     9.18
+                6.67    3.40                                                           5.42    8.18    7.83    10.90
+                6.96    3.78                                                           5.59    9.87
+                7.14    4.16                                                           5.67   11.59
+                7.25    4.49
+                7.36    4.86
+                7.49    5.24
+                7.60    5.60
+                7.69    6.33
+
+
+
+Classical Neural Networks can describe data well but cannot predict beyond the training regime.
+Fig. 8 illustrates the effect of network depth and breadth for six classical fully connected feed forward Neural
+Networks with one and two layers and two, four, and eight nodes. The number of network weights and biases
+increases with increasing number of layers and nodes: The simplest model with one hidden layer and two nodes
+has n w = 2 + 2 = 4 weights and n b = 2 + 1 = 3 biases and a total number of n θ = 7 network parameters; the most
+complex model with two hidden layers and eight nodes has n w = 8+8×8+8 = 80 weights and n b = 8+8+1 = 17
+biases and a total number of n θ = 97 network parameters. For this example, for all nodes, we use the hyperbolic
+tangent activation function according to Fig. 2. Specifically, the network with two layers and two nodes uses the
+set of Eqs. (21). The networks learn the approximation of the Piola stress P(λ) as a function of the stretch λ using
+the uniaxial tension data P̂ for rubber at 20◦ [27] from Tables 1 and 2. The dots illustrate the training data P̂ and
+the color-coded areas highlight the contributions of the color-coded nodes to the final stress function P(λ). First
+and foremost, all six networks robustly approximate the stress P(λ) as a function of the stretch λ with virtually no
+error compared to the dots of the experimental data P̂. In general, the cost of training a Neural Network increases
+with the number of nodes per layer and with the number of layers. Similar to a mesh refinement in a finite element
+analysis, in the spirit of h-adaptivity, we expect the approximation to improve with increasing network breadth and
+depth. The dots in Fig. 8 indicate that the behavior of rubber under uniaxial tension is nonlinear, but monotonic and
+fairly smooth [27]. As a result, all six networks perform exceptionally well at describing or interpolating the data
+within the training regime of 1 ≤ λ ≤ 8, even the simplest network with only one layer and two nodes. However,
+all six networks do a poor job at predicting or extrapolating the behavior outside the training regime for λ > 8.
+Classical Neural Networks perform well for big data but tend to overfit sparse data. Fig. 9 illustrates
+the performance of classical Neural Networks for different uniaxial tension data. For this example, we use a fully
+
+                                                                   17
+K. Linka and E. Kuhl                                        Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+
+
+
+Fig. 8. Classical Neural Networks. Effect of network depth and breadth. Piola stress P(λ) as a function of the stretch λ for six
+fully connected feed forward Neural Networks with one and two layers and two, four, and eight nodes using the hyperbolic tangent activation
+function from Fig. 2. Dots illustrate the uniaxial tension data P̂ for rubber at 20◦ [27] from Tables 1 and 2; color-coded areas highlight
+the contributions of the color-coded nodes to the final stress function P(λ).
+
+
+
+
+Fig. 9. Classical Neural Network. Uniaxial tension. Piola stress P(λ) as a function of the stretch λ for a fully connected feed forward
+Neural Network with one layer, eight nodes, 16 weights, and nine biases, using the hyperbolic tangent activation function from Fig. 2. Dots
+illustrate the uniaxial tension data P̂ for rubber at 20◦ and 50◦ [27], gum stock and tread stock [26], and polymeric foam and rubber [25]
+from Table 1; color-coded areas highlight the contributions of the color-coded nodes to the final stress function P(λ).
+
+
+
+connected feed forward Neural Network with one layer, eight nodes, 16 weights, nine biases, and the hyperbolic
+tangent activation function from Fig. 2 for all nodes. The network learns the approximation of the Piola stress P(λ)
+as a function of the stretch λ using the uniaxial tension data P̂ for rubber at 20◦ and 50◦ [27], gum stock and
+tread stock [26], and polymeric foam and rubber [25] from Table 1. The dots illustrate the training data P̂ and the
+color-coded areas highlight the contributions of the color-coded nodes to the final stress function P(λ). In general,
+our observations agree with Fig. 8 and suggest that classical Neural Networks robustly interpolate uniaxial tension
+data for rubber for all six experiments. However, for the example of gum stock with only seven data points and
+n θ = 25 network parameters, we observe oscillations in the approximated stress function P(λ) in the center region
+between 2.4 ≤ λ ≤ 6.4, where we only have one data point. These oscillations are a result of negative weights in
+the final output layer that make the approximated function non-convex. While this single example is by no means
+a rigorous mathematical proof, it supports the general notion that classical Neural Networks fit big data well but
+tend to overfit sparse data.
+
+                                                                    18
+K. Linka and E. Kuhl                                          Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+
+
+
+Fig. 10. Classical Neural Network. Uniaxial tension, equibiaxial tension, and pure shear. Piola stress P(λ) as a function of the
+stretch λ for a fully connected feed forward Neural Network with one layer, eight nodes, 16 weights, and nine biases, using the hyperbolic
+tangent activation function from Fig. 2. Dots illustrate the uniaxial tension, equibiaxial tension, and pure shear data P̂ for rubber at 20◦ and
+50◦ [27] from Table 2; color-coded areas highlight the contributions of the color-coded nodes to the final stress function P(λ) for individual
+single-mode training.
+
+
+
+Classical Neural Networks perform well for multi-mode data but provide no physical insight. Fig. 10
+illustrates the performance of classical Neural Networks for multi-mode data, trained individually for each mode.
+Similar to the previous example, we use a fully connected feed forward Neural Network with one layer, eight nodes,
+16 weights, nine biases, and the hyperbolic tangent activation function from Fig. 2 for all nodes. The network learns
+the approximation of the Piola stress P(λ) as a function of the stretch λ and trains individually on the uniaxial
+tension, equibiaxial tension, and pure shear data for rubber at 20◦ and 50◦ [27] from Table 2. The dots illustrate
+the training data P̂ and the color-coded areas highlight the contributions of the color-coded nodes to the final stress
+function P(λ). The network performs robustly on all six training sets and generates stress approximations P(λ) that
+fit the stress–stretch data well, even for the S-shaped curves and in the presence of pronounced stretch stiffening.
+For all six cases, the loss function rapidly decreases by four orders of magnitude within less than 20,000 epochs
+and the error between model P(λ) and data P̂ is virtually invisible from the graphs. The full color spectrum in
+each graph suggests that all eight nodes contribute to the final stress approximation and that all weights between the
+last hidden layer and the output layer are non-zero. We conclude that we can robustly learn the n θ = 25 network
+weights and biases from multi-modal training data; yet, these parameters have no physical meaning and do not
+contribute to interpreting or explaining the physics of rubber under uniaxial tension, equibiaxial tension, or pure
+shear.
+Constitutive Artificial Neural Networks describe and predict well and prevent overfitting. Fig. 11
+demonstrates the performance of our new class of Constitutive Artificial Neural Networks for different uniaxial
+tension data. For this example, we use the feed forward Constitutive Artificial Neural Network from Fig. 5 with
+two layers, eight nodes, and twelve weights using the custom-designed activation functions from Fig. 4. The network
+learns the approximation of the free energy as a function of the invariants ψ(I1 , I2 ), where pre-processing generates
+the invariants as functions of the stretch I1 (λ), I2 (λ), and post-processing generates the stress as a function of the
+free energy P(ψ). The network trains on the uniaxial tension data P̂ for rubber at 20◦ and 50◦ [27], gum stock
+and tread stock [26], and polymeric foam and rubber [25] from Table 1. The dots illustrate the training data P̂ and
+the color-coded areas highlight the contributions of the color-coded nodes to the final stress function P(λ). First
+and foremost, similar to the classical Neural Network in Fig. 9, the new Constitutive Artificial Neural Network in
+Fig. 11 performs robustly on all six training sets and learns stress functions P(λ) that approximate the stress–stretch
+data well, even for S-shaped curves and in the presence of pronounced stretch stiffening. For all six cases, the loss
+function rapidly decreases by four orders of magnitude within less than 10,000 epochs and the error between model
+P(λ) and data P̂ is virtually invisible from the graphs. In contrast to the Neural Network example in Fig. 8 where
+
+                                                                      19
+K. Linka and E. Kuhl                                            Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+
+
+
+Fig. 11. Constitutive Artificial Neural Network. Uniaxial tension. Piola stress P(λ) as a function of the stretch λ for the feed forward
+Constitutive Artificial Neural Network from Fig. 5 with two layers, eight nodes, and twelve weights using the custom-designed activation
+functions from Fig. 4. Dots illustrate the uniaxial tension data P̂ for rubber at 20◦ and 50◦ [27], gum stock and tread stock [26], and
+polymeric foam and rubber [25] from Table 1; color-coded areas highlight the contributions of the color-coded nodes to the final stress
+function P(λ).
+
+
+
+
+Fig. 12. Constitutive Artificial Neural Network. Effect of initial conditions and non-uniqueness. Six Piola stresses P(λ) as
+functions of the stretch λ for the feed forward Constitutive Artificial Neural Network from Fig. 5 with two layers, eight nodes, and 12
+weights, initialized with six different sets of initial conditions. Dots illustrate the uniaxial tension data P̂ for rubber at 20◦ [27] from Table 1;
+color-coded areas highlight the contributions of the color-coded nodes to the stress functions P(λ) for six different sets of initial conditions.
+
+
+
+
+the learned stresses flatline abruptly outside the training regime, all six stress approximations continue smoothly
+beyond the initial training regime. In contrast to the gum stock example with only seven data points in Fig. 9,
+the Constitutive Artificial Neural Network generates smooth non-oscillatory stresses P(λ), even in regions with
+sparse data. These observations suggest that our new Constitutive Artificial Neural Networks succeed at describing,
+predicting, and preventing overfitting, even in regions where data are sparse.
+Constitutive Artificial Neural Networks generate non-unique solutions for insufficiently rich data.
+Fig. 12 illustrates the effect of the initial conditions for the feed forward Constitutive Artificial Neural Network
+from Fig. 5 with two layers, eight nodes, and twelve weights, and the custom-designed activation functions from
+Fig. 4. For this example, we initialize the twelve network weights with six different sets of randomly generated
+numbers and compare their contributions to the final stress approximation P(λ) as an indicator for the magnitude
+
+                                                                         20
+K. Linka and E. Kuhl                                         Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+
+
+
+Fig. 13. Constitutive Artificial Neural Network. Uniaxial tension, equibiaxial tension, and pure shear. Piola stress P(λ) as a
+function of the stretch λ for the feed forward Constitutive Artificial Neural Network from Fig. 5 with two layers, eight nodes, and twelve
+weights using the custom-designed activation functions from Fig. 4. Dots illustrate the uniaxial tension, equibiaxial tension, and pure shear
+data P̂ for rubber at 20◦ and 50◦ [27] from Table 2; color-coded areas highlight the contributions of the color-coded nodes to the final
+stress function P(λ) for individual single-mode training.
+
+
+
+of the learned weights. The dots indicate the uniaxial tension data P̂ for rubber at 20◦ [27] from Table 1, and
+the color-coded areas highlight the contributions of the color-coded nodes to the stress functions P(λ) for the six
+different sets of initial conditions. First and most importantly, within less than 10,000 epochs, all six sets of initial
+conditions robustly converge towards a set of weights that reduce the loss function by more than four orders of
+magnitude and interpolate the training equally data well. Interestingly, in contrast to the classical Neural Network
+graphs in Figs. 9 and 10, none of the six graphs in Fig. 12 covers the full color spectrum. This suggests that only
+a subset of the eight nodes of the last hidden layer contribute to the final stress approximation, while most of the
+weights between the last hidden layer and the output layer train to zero. For example, the fourth graph approximates
+the stress exclusively in terms of the third and fifth terms, [ I1 − 3 ]2 and [I2 − 3], whereas the fifth graph uses the
+first, sixths, and eights terms, [I1 − 3], [exp([I2 − 3]) − 1], and, [exp([I2 − 3]2 ) − 1]. From comparing the curves and
+the colored stress contributions in all six graphs, we conclude that the selection of weights that best approximate
+the stress–stretch relation is non-unique. While this is also true and well-known for classical Neural Networks,
+it is unfortunate for Constitutive Artificial Neural Networks since we attempt to correlate the network weights to
+constitutive parameters with a clear physical interpretation. It seems natural to ask whether this non-uniqueness
+is an inherent property of the Constitutive Artificial Neural Network itself or rather a result of insufficiently rich
+training data.
+Constitutive Artificial Neural Networks are a natural generalization of existing constitutive models.
+Fig. 13 illustrates the performance of Constitutive Artificial Neural Networks for multi-mode data, trained
+individually for each mode. Similar to the previous two examples, we use the feed forward Constitutive Artificial
+Neural Network from Fig. 5 with two layers, eight nodes, and twelve weights using the custom-designed activation
+functions from Fig. 4. The network learns the approximation of the free energy as a function of the invariants
+ψ(I1 , I2 ) and trains individually on the uniaxial tension, equibiaxial tension, and pure shear data for rubber at 20◦
+and 50◦ [27] from Table 2. Similar to the classical Neural Network in Fig. 10, the Constitutive Artificial Neural
+Network in Fig. 13 performs robustly on all six training sets and generates stress functions P(λ) that approximate
+the stress–stretch data P̂ well, even for the S-shaped curves and in the presence of pronounced stretch stiffening.
+Similar to the previous example, none of the six graphs in Fig. 13 covers the full color spectrum and most of
+the weights between the last hidden layer and the output layer train to zero. Interestingly, some of the non-zero
+terms correlate well with the widely-used constitutive models for rubber elasticity: The dominant dark red [ I1 − 3 ]
+term for the 20◦ equibiaxial tension data correlates well with the classical neo Hooke model [35] in Eq. (26), the
+dominant green [ I1 − 2 ] term for the 20◦ pure shear data correlates well with the Blatz Ko model [25] in Eq. (27),
+
+                                                                     21
+K. Linka and E. Kuhl                                         Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+
+
+
+Fig. 14. Constitutive Artificial Neural Network. Uniaxial tension, equibiaxial tension, and pure shear. Piola stress P(λ) as a
+function of the stretch λ for the feed forward Constitutive Artificial Neural Network from Fig. 5 with two layers, eight nodes, and twelve
+weights using the custom-designed activation functions from Fig. 4. Dots illustrate the uniaxial tension, equibiaxial tension, and pure shear
+data P̂ for rubber at 20◦ and 50◦ [27] from Table 2; color-coded areas highlight the contributions of the color-coded nodes to the final
+stress function P(λ) for simultaneous multi-mode training.
+
+
+
+the interacting [ I1 −1 ] and [ I1 −2 ] terms for the 20◦ and 50◦ pure shear data correlate well with the Mooney Rivlin
+model [26,34] in Eq. (28), and the dominant [exp([I1 − 3])] term for the 50◦ uniaxial and equibiaxial tension data
+correlates well with the Demiray model [33] in Eq. (30). This suggests that Constitutive Artificial Neural Networks
+are a generalization of existing constitutive models that naturally self-select terms from subsets of well-known
+constitutive models that best explain the data.
+Constitutive Artificial Neural Networks identify a single unique model and parameter set for
+sufficient data. Fig. 14 illustrates the performance of Constitutive Artificial Neural Networks for multi-mode data,
+trained simultaneously for all three modes. Similar to the previous examples, we use the feed forward Constitutive
+Artificial Neural Network from Fig. 5 with two layers, eight nodes, and twelve weights using the custom-designed
+activation functions from Fig. 4. The network learns the approximation of the free energy as a function of the
+invariants ψ(I1 , I2 ) and trains simultaneously on the uniaxial tension, equibiaxial tension, and pure shear data for
+rubber at 20◦ and 50◦ [27] from Table 2. Overall, the network trains robustly and uniquely for multi-mode data,
+both for the 20◦ and the 50◦ training sets. It is insensitive to the initial conditions and repeatedly converges towards
+the same set of weights to reduce the loss function by more than four orders of magnitude within less than 10,000
+epochs. Similar to the other Constitutive Artificial Neural Network examples, and in contrast to the classical Neural
+Network, the final approximation uses only a subset of non-zero weights, while most of the weights are zero.
+Compared to the individual single-mode training in Fig. 13, the simultaneous multi-mode training in Fig. 14 seeks
+to approximate all three deformation modes simultaneously at the cost of a perfect fit: While the stress approximation
+P(λ) slightly underestimates the training stress P̂ in equibiaxial tension, it slightly overestimates the training stress
+P̂ in the stiffening region in uniaxial tension and pure shear. Most importantly though, the Constitutive Artificial
+Neural Network robustly identifies one unique model and parameter set for rubber at 20◦ and one set for rubber at
+50◦ . For the low-temperature regime, the free energy reduces to a three-term function in terms of the first invariant
+and the linear exponentials of the first and second invariants,
+
+                       1                 1 a1                               1 a2
+       ψ(I1 , I2 ) =     µ1 [ I1 − 3 ] +      [ exp( b1 [ I1 − 3 ]) − 1 ] +      [ exp( b2 [ I2 − 3 ]) − 1 ] .                         (48)
+                       2                 2 b1                               2 b2
+
+It introduces five network weights that translate into five physically meaningful parameters with well-defined
+physical units, the shear modulus, µ1 = 2 w1,1 w2,1 = 0.2370 MPa, the stiffness-like parameters a1 = 2 w1,2 w2,2 =
+0.0582 MPa and a2 = 2 w1,6 w2,6 = 0.0013 MPa, and the unit-less exponential coefficients b1 = w1,2 = 0.0387 and
+b2 = w1,6 = 0.0022. For the high-temperature regime, the free energy reduces to a three-term function in terms of
+                                                                     22
+K. Linka and E. Kuhl                                Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+the first and second invariants and the linear exponential of the first invariant,
+                    1               1                 1 a1
+       ψ(I1 , I2 ) = µ1 [ I1 − 3 ] + µ2 [ I1 − 3 ] +       [ exp( b1 [ I1 − 3 ] ) − 1 ] .                          (49)
+                    2               2                 2 b1
+It introduces four network weights that translate into four physically meaningful parameters with well-defined
+physical units, the shear moduli, µ1 = 2 w1,1 w2,1 = 0.2830 MPa and µ2 = 2 w1,5 w2,5 = 0.0141 MPa, the stiffness-
+like parameter a1 = 2 w1,2 w2,2 = 0.0434 MPa, and the unit-less exponential coefficient b1 = w1,2 = 0.0541.
+This example suggests that the non-uniqueness of the fit in Fig. 12 is not an inherent problem of Constitutive
+Artificial Neural Networks per se, but rather a problem of insufficiently rich data to appropriately train the network.
+With multi-mode data from uniaxial tension, biaxial tension, and pure shear, our Constitutive Artificial Neural
+Network trains robustly and uniquely and simultaneously learns both model and parameters. Interestingly, the
+training autonomously selects a subset of weights that activate the relevant terms to the free energy function,
+while the remaining weights train to zero. This suggests that Constitutive Artificial Neural Networks are capable of
+identifying a free energy function and its material parameters – out of a broad spectrum of functions and parameters
+– to best explain the data.
+
+8. Discussion
+Constitutive Artificial Neural Networks simultaneously learn both model and parameters. For
+decades, chemical, physical, and material scientists alike have been modeling the hyperelastic response of rubber
+under large deformations [4,25–27,50]. They have proposed numerous competing constitutive models to best
+characterize the behavior of artificial and biological polymers and calibrated the model parameters in response
+to different modes of mechanical loading [33,38,47,51–56]. Here we propose a radically different approach towards
+constitutive modeling and abandon the common strategy to first select a constitutive model and then tune its
+parameters by fitting the model to data. Instead, we propose a family of Constitutive Artificial Neural Networks
+that simultaneously learn both the constitutive model and its material parameters.
+Classical Neural Networks ignore the underlying physics. In the most general form, constitutive equations
+in solid mechanics are tensor-valued tensor functions that define a second order stress tensor, in our case the Piola
+stress, as a function of a second order deformation or strain measure, in our case the deformation gradient [7,8].
+Classical Neural Networks are universal function approximators that learn these functions [45], in our case the
+stress, from training data, in our case experimentally measured stress–strain data, by minimizing a loss function,
+in our case the mean squared error between model and data stress. Neural Networks have advanced as a powerful
+technology to interpolate or describe big data; yet, they fail to extrapolate or predict scenarios beyond the training
+regime [21]. They are an excellent choice when we have no information about the underlying data, but in constitutive
+modeling, they entirely ignore our prior knowledge and thermodynamic considerations [48].
+Constitutive Artificial Neural Networks include kinematical, thermodynamical, and physical con-
+straints. The general idea of this manuscript is to design a new family of Neural Networks that inherently satisfy
+common kinematical, thermodynamical, and physical constrains while, at the same time, constraining the design
+space of all admissible functions to make the network robust and reliable, even in the presence of small training data.
+Our approach is to reverse-engineer Constitutive Artificial Neural Networks that are, by design, a generalization of
+widely used and commonly accepted constitutive models with well-defined physical parameters [37,38]. Towards
+this goal we revisit the non-linear field theories of mechanics [1,7,8] and suggest to constrain the network
+output to enforce thermodynamic consistency; the network input to enforce material objectivity, and, if desired,
+material symmetry and incompressibility; the activation functions to implement physically reasonable constitutive
+restrictions; and the network architecture to ensure polyconvexity.
+Constitutive Artificial Neural Networks are a generalization of popular constitutive models. We proto-
+type the design of Constitutive Artificial Neural Networks for the example of an isotropic perfectly incompressible
+feed forward network with two hidden layers and twelve weights that takes the scalar-valued first and second
+invariants of the deformation gradient, [ I1 − 3 ] and [ I2 − 3 ], as input and approximates the scalar-valued free
+energy function, ψ(I1 , I2 ), as output. The first layer generates the first and second powers, ( ◦ ) and ( ◦ )2 , of the
+input and the second layer applies the identity and the exponential, ( ◦ ) and (exp(α(◦)) − 1), to these powers. This
+results in eight individual subfunctions that additively feed into the final free energy function ψ from which we
+                                                           23
+K. Linka and E. Kuhl                                 Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+derive the Piola stress, P = ∂ψ/∂ F, following standard arguments of thermodynamics. We demonstrate that the
+approximated free energy function of our network is a generalization of popular constitutive models with the neo
+Hooke [35], Blatz Ko [25], Mooney Rivlin [26,34], Yeoh [36], and Demiray [33] models as special cases. Most
+importantly, through a direct comparison with these models, the twelve weights of the network gain a clear physical
+interpretation.
+Classical Neural Networks can interpolate robustly, but fail to extrapolate. In a side-by-side comparison
+with a classical Neural Network, we demonstrate the features of our new Constitutive Artificial Neural Network
+for several classical benchmark data sets for rubber in uniaxial tension [25–27], equibiaxial tension [27], and pure
+shear [27]. Both methods robustly identify functions that approximate the data well and reduce the error between
+model and data within less than 10,000 epochs: The classical Neural Network, without any prior knowledge of the
+underlying physics, directly learns the stress as a function of the deformation gradient, P(F), while the Constitutive
+Artificial Neural Network learns the free energy as a function of the strain invariants, ψ(I1 , I2 ). Our results in Fig. 8
+support the general notion that classical Neural Networks describe or interpolate data well, but cannot predict or
+extrapolate the behavior outside the training regime [21]. We also confirm in Fig. 9 that they fit big data well,
+but tend to overfit sparse data [48]. To quickly assess the importance of the individual nodes, we color-code their
+outputs and visually compare their contributions to the final output layer. From the color spectrum in Fig. 10, we
+conclude that classical Neural Networks tend to activate all nodes of the final layer with non-zero weights, but that
+these weights have no physical meaning and do not contribute to interpret or explain the underlying physics.
+Constitutive Artificial Neural Networks robustly learn both model and parameters, even for sparse
+data. Our new family of Constitutive Artificial Neural Network addresses the limitations of conventional classical
+Neural Networks by including thermodynamic considerations by design. Fig. 11 suggests that they are both
+descriptive and predictive, without overfitting the data. From the reduced color spectra in Figs. 12 and 13, we
+conclude that our networks self-select subsets of activation functions, while most of their weights remain zero.
+Fig. 13 also shows that, for insufficiently rich data, the network still approximates the overall function ψ(I1 , I2 )
+robustly, but the distribution of the individual contributions of the I1 and I2 terms is non-unique. Enriching the
+training data by multi-mode data from uniaxial tension, equibiaxial tension, and pure shear in Fig. 14 eliminates
+these non-uniqueness. This suggests that, when trained with sufficiently rich data, Constitutive Artificial Neural
+Networks simultaneously learn both a unique model and parameter set.
+Constitutive Artificial Neural Networks enable automated model discovery. For the example of rubber
+in the high and low temperature regimes, our new Constitutive Artificial Neural Network discovers two three-
+term models in terms of the first and second invariants, 21 µ2 [ I1 − 3 ] and 21 µ2 [ I2 − 3 ], similar to the classical
+Mooney Rivlin model [26,34], and in terms of their linear exponentials, 12 a1 [ exp(b1 [I1 − 3]) − 1]/b1 and
+1
+  a [ exp(b2 [I2 −3])−1]/b2 , similar to the Demiray model [33]. The non-zero network weights take the interpretation
+2 2
+of the shear moduli, µ1 and µ2 , stiffness-like parameters, a1 and a2 , and exponential coefficients, b1 and b2 of
+these models. Since the network autonomously self-selects the model and parameters that best approximate the
+data, the human user no longer needs to decide which model to choose. The underlying concept has elements that
+are more commonly seen in sparse system identification [57], for example, with applications to model discovery in
+developmental biology [58] or in the characterization of soft materials [59], where the identification process self-
+selects the relevant terms from a library of admissible terms. Yet, instead of designing the identification algorithms
+from scratch, our scientific model discovery capitalizes on existing robust algorithms that have been developed
+and proven successful for classical neural networks. This could have enormous implications, for example in finite
+element simulations: Instead of selecting a specific material model from a library of available models, finite element
+solvers could be built around a single generalized model, the Constitutive Artificial Neural Network autonomously
+discovers the model from data, populates the model parameters, and activates the relevant terms.
+Current limitations and future applications. In the present work, we have shown the application of
+Constitutive Artificial Neural Networks for the special case of perfectly incompressible isotropic hyperelastic
+materials according to Fig. 5. It is easy to see that the general concept in Fig. 3 extends naturally to compressible
+or nearly incompressible materials with other symmetry classes, transversely isotropic or orthotropic, simply by
+expanding the network input to other sets of strain invariants. A more involved extension would be to consider
+
+
+                                                            24
+K. Linka and E. Kuhl                                       Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+history-dependent, inelastic materials, for example by replacing the feed forward architecture through a long short-
+term memory network with feedback connections [60], while still keeping the same overall network input, output,
+activation functions, and basic architecture. In parallel, we could revisit the network architecture in Fig. 3 by
+expressing the free energy as a truncated infinite series of products of powers of the invariants, which would result
+in a fully connected feed forward network architecture. This would be critical to capture more complex materials
+for which the invariants are coupled, including arteries [47] or the brain [61]. One limitation we foresee for these
+more complex networks, is that the majority of weights might no longer train to zero. If the network learns a large
+set of non-zero weights, and with them, activates too many terms that feed into the final free energy function, we
+could reduce the model to the most relevant terms by network pruning, a neurologically inspired process in which
+the network gradually self-eliminates less relevant connections from its overall architecture [46]. Of course, we
+could also always enforce certain weights to zero, recover a popular subclasses of models, and use the Constitutive
+Artificial Neural Network for a plain inverse analysis and parameter identification. Finally, one important extension
+would be to embed the network in a Bayesian framework to supplement the analysis with uncertainty quantification.
+Instead of simple point estimates for the network parameters, a Bayesian Constitutive Artificial Neural Network
+would learn parameter distributions with means and credible intervals. In contrast to classical Bayesian Neural
+Networks, here, these distributions would have a clear physical interpretation, since our network weights have a
+well-defined physical meaning.
+
+9. Conclusion
+    Constitutive Artificial Neural Networks are a new family of neural networks that satisfy kinematical, thermody-
+namical, and physical constraints by design, and, at the same time, constrain the space of admissible functions to
+train robustly, even for space data. In contrast to classical Neural Networks, they can describe, predict, and explain
+data and reduce the risk of overfitting. Constitutive Artificial Neural Networks integrate more than a century of
+knowledge in continuum mechanics and modern machine learning to create Neural Networks with specific network
+input, output, activation functions, and architecture to a priori guarantee thermodynamic consistency, material
+objectivity, material symmetry, physical restrictions, and polyconvexity. The resulting network is a generalization
+of widely used popular constitutive models with network weights that have a clear physical interpretation. When
+trained with sufficiently rich data, Constitutive Artificial Neural Networks can simultaneously learn both a unique
+model and set of parameters, while most of the network weights train to zero. This suggests that Constitutive
+Artificial Neural Networks have the potential to enable automated model discovery and could induce a paradigm
+shift in constitutive modeling, from user-defined to automated model selection and parameterization.
+
+Declaration of competing interest
+   The authors declare that they have no known competing financial interests or personal relationships that could
+have appeared to influence the work reported in this paper.
+
+Data availability
+   Our source code, data, and examples will be available at https://github.com/LivingMatterLab/CANN.
+
+Acknowledgments
+   We thank Oliver Weeger, Wolfgang Ehlers, and Paul Steinmann for asking the right questions and Greg
+Bronevetsky, Serdar Göktepe, and Andreas Menzel for helping us find the right answers. This work was supported by
+a DAAD Fellowship to Kevin Linka and by the Stanford School of Engineering Covid-19 Research and Assistance
+Fund and Stanford Bio-X IIP seed grant to Ellen Kuhl.
+
+References
+ [1] S.S. Antman, Nonlinear Problems of Elasticity, Second ed., Springer-Verlag New York, 2005.
+ [2] J.M. Ball, Convexity conditions and existence theorems in nonlinear elasticity, Arch. Ration. Mech. Anal. 63 (1977) 337–403.
+ [3] G. Holzapfel, Nonlinear Solid Mechanics: A Continuum Approach to Engineering, John Wiley & Sons, Chichester, 2000.
+ [4] R.W. Ogen, Large deformation isotropic elasticity – on the correlation of theory and experiment for incompressible rubberlike solids,
+     Proc. R. Soc. London Series A 326 (1972) 565–584.
+                                                                   25
+K. Linka and E. Kuhl                                         Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+ [5] M. Planck, Vorlesungen Über Thermodynamik, Verlag von Veit & Comp, Leipzig, 1897.
+ [6] A.J.M. Spencer, Theory of invariants, in: A.C. Eringen (Ed.), Continuum Physics, Vol. 1, Academic Press, New York, 1971,
+     pp. 239–353.
+ [7] C. Truesdell, W. Noll, Non-linear field theories of mechanics, in: S. Flügge (Ed.), Encyclopedia of Physics, III/3, Spinger, Berlin,
+     1965.
+ [8] C. Truesdell, Rational Thermodynamics, in: Lecture 5, McGraw-Hill, New York, 1969.
+ [9] G.E. Karniadakis, I.G. Kevrekidis, L. Lu, P. Perdikaris, S. Wang, L. Yang, Physics-informed machine learning, Nat. Rev. Phys. 3
+     (2021) 422–440.
+[10] K. Linka, A. Schafer, X. Meng, Z. Zou, G.E. Karniadakis, E. Kuhl, Bayesian physics-informed neural networks for real-world nonlinear
+     dynamical systems, Comput. Methods Appl. Mech. Engrg. (2022) http://dx.doi.org/10.1016/j.cma.2022.115346.
+[11] M. Raissi, P. Perdikaris, G.E. Karniadakis, Physics-informed neural networks: a deep learning framework for solving forward and
+     inverse problems involving nonlinear partial differential equations, J. Comput. Phys. 378 (2019) 686–707.
+[12] F. As’ad, P. Avery, C. Farhat, A mechanics-informed artificial neural network approach in data-driven constitutive modeling, Internat.
+     J. Numer. Methods Engrg. 123 (2022) 2738–2759.
+[13] D.K. Klein, M. Fernandez, R.J. Martin, P. Neff, O. Weeger, Polyconvex anisotropic hyperelasticity with neural networks, J. Mech.
+     Phys. Solics 159 (2022) 105703.
+[14] K. Linka, M. Hillgartner, K.P. Abdolazizi, R.C. Aydin, M. Itskov, C.J. Cyron, Constitutive artificial neural networks: A fast and general
+     approach to predictive data-driven constitutive modeling by deep learning, J. Comput. Phys. 429 (2021) 110010.
+[15] F. Masi, I. Stefanou, P. Vannucci, V. Maffi-Berthier, Thermodynamics-based artificial neural networks for constitutive modeling, J.
+     Mech. Phys. Solids 147 (04277) (2021).
+[16] J. Ghaboussi, J.H. Garrett, X. Wu, Knowledge-based modeling of material behavior with neural networks, J. Eng. Mech. 117 (1991)
+     132–153.
+[17] T. Kirchdoerfer, M. Ortiz, Data-driven computational mechanics, Comput. Methods Appl. Mech. Engrg. 304 (2016) 81–101.
+[18] S. Conti, S. Müller, M. Ortiz, Data-driven problems in elasticity, Arch. Ration. Mech. Anal. 229 (2018) 79–123.
+[19] F.A. Denli, M. Kaliske, A.K. Aan, M.E. Tüfekcioglu, H. Dal, Data driven constitutive modeling of rubberlike materials, in: Research
+     Gate, 2022, Preprint 362157074.
+[20] R. Eggersmann, L. Stainier, M. Ortiz, S. Reese, Model-free data-driven computational mechanics enhanced by tensor voting, Comput.
+     Methods Appl. Mech. Engrg. 373 (2010) 113499.
+[21] M. Alber, A. Buganza Tepole, W. Cannon, S. De, S. Dura-Bernal, K. Garikipati, G.E. Karniadakis, W.W. Lytton, P. Perdikaris, L.
+     Petzold, E. Kuhl, Integrating machine learning and multiscale modeling: Perspectives, challenges, and opportunities in the biological,
+     biomedical, and behavioral sciences, Npj Digit. Med. 2 (2019) 115.
+[22] K. Linka, C. Cavinato, J.D. Humphrey, C.J. Cyron, Predicting and understanding arterial elasticity from key microstructural features
+     by bidirectional deep learning by deep learning, Acta Biomater. 147 (2022) 63–72.
+[23] Y. Shen, K. Chandrashekhara, W.F. Breig, L.R. Oliver, Neural network based constitutive model for rubber material, Rubber Chem.
+     Technol. 77 (2004) 257–277.
+[24] C. Zopf, M. Kaliske, Numerical characterisation of uncured elastomers by a neural network based approach, Comput. Struct. 182
+     (2017) 504–525.
+[25] P.J. Blatz, W.L. Ko, Application of finite elastic theory to the deformation of rubbery materials, Trans. Soc. Rheol. 6 (1962) 223–251.
+[26] M. Mooney, A theory of large elastic deformations, J. Appl. Phys. 11 (1940) 582–590.
+[27] L.R.G. Treloar, Stress–strain data for vulcanised rubber under various types of deformation, Trans. Faraday Soc. 40 (1944) 59–70.
+[28] A. Ghaderi, V. Morovati, R. Dargazany, A physics-informed assembly for feed-forward neural network engines to predict inelasticity
+     in cross-linked polymers, Polymers 12 (2628) (2020).
+[29] K.A. Kalina, L. Linden, J. Brummund, P. Metsch, M. Kästner, Automated constitutive modeling of isotropic hyperelasticity based on
+     artificial neural networks, Comput. Mech. 69 (2022) 213–232.
+[30] P. Thakolkaran, A. Joshi, Y. Zheng, M. Flaschel, L. De Lorenzis, S. Kumar, NN-EUCLID: Deep-learning hyperelasticity without stress
+     data, J. Mech. Phys. Solids 169 (2022) 105076.
+[31] F. Masi, I. Stefanou, Multiscale modeling of inelastic materials with thermodynamics-based artificial neural networks (TANN), Comput.
+     Methods Appl. Mech. Engrg. 398 (2022) 115190.
+[32] V. Tac, F. Sahli Costabal, A. Buganza Tepole, Data-driven tissue mechanics with polyconvex neural ordinary differential equations,
+     Comput. Methods Appl. Mech. Engrg. 398 (2022) 115248.
+[33] H. Demiray, A note on the elasticity of soft biological tissues, J. Biomech. 5 (1972) 309–311.
+[34] R.S. Rivlin, Large elastic deformations of isotropic materials. IV. Further developments of the general theory, Philos. Trans. R. Soc.
+     London Series A 241 (1948) 379–397.
+[35] L.R.G. Treloar, Stresses and birefringence in rubber subjected to general homogeneous strain, Proc. Phys. Soc. 60 (1948) 135–144.
+[36] O.H. Yeoh, Some forms of the strain energy function for rubber, Rubber Chem. Technol. 66 (1993) 754–771.
+[37] R. Mahnken, Strain mode-dependent weighting functions in hyperelasticity accounting for verification, validation, and stability of
+     material parameters, Arch. Appl. Mech. 92 (2022) 713–754.
+[38] P. Steinmann, M. Hossain, G. Possart, Hyperelastic models for rubber-like materials: consistent tangent operators and suitability for
+     Treloar’s data, Arch. Appl. Mech. 82 (2012) 1183–1217.
+[39] P.J. Flory, Thermodynamic relations for high elastic materials, Trans. Faraday Soc. 57 (1961) 829–838.
+[40] R. Schulte, C. Karca, R. Ostwald, A. Menzel, Machine learning-assisted parameter identification for constitutive models based on
+     concatenated loading path sequences, Eur. J. Mech. A Solids (2022).
+                                                                     26
+K. Linka and E. Kuhl                                          Computer Methods in Applied Mechanics and Engineering 403 (2023) 115731
+
+[41] W. Noll, A mathematical theory of the mechanical behavior of continuous media, Arch. Rational Mech. Anal. 2 (1958) 197–226.
+[42] C. Polindara, T. Waffenschmidt, A. Menzel, Simulation of balloon angioplasty in residually stressed blood vessels, J. Biomech. 49
+     (2016) 2341–2348.
+[43] R.S. Rivlin, D.W. Saunders, Large elastic deformations of isotropic materials. VII. Experiments on the deformation of rubber, Philos.
+     Trans. R. Soc. London Series A 243 (1951) 251–288.
+[44] S. Hartmann, P. Neff, Polyconvexity of generalized polynomial-type hyperelastic strain energy functions for near-incompressibility, Int.
+     J. Solids Struct. 40 (2003) 2767–2791.
+[45] W.S. McCulloch, W. Pitts, A logical calculus of the ideas immanent in nervous activity, Bull. Math. Biophys. 5 (1943) 115–133.
+[46] S. Budday, P. Steinmann, E. Kuhl, Physical biology of human brain development, Front. Cellular Neurosci. 9 (257) (2015).
+[47] G.A. Holzapfel, T.C. Gasser, R.W. Ogden, A new constitutive framework for arterial wall mechanics and comparative study of material
+     models, J. Elasticity 61 (2000) 1–48.
+[48] G.C.Y. Peng, M. Alber, A. Buganza Tepole, W. Cannon, S. De, S. Dura-Bernal, K. Garikipati, G.E. Karniadakis, W.W. Lytton, P.
+     Perdikaris, L. Petzold, E. Kuhl, Multiscale modeling meets machine learning: What can we learn? Arch. Comput. Methods Eng. 28
+     (2021) 1017–1037.
+[49] A. Delfino, N. Stergiopulos, J.E. Moore, J.J. Meister, Residual strain effects on the stress field in a thick wall finite element model of
+     the human carotid bifurcation, J. Biomech. 30 (1997) 777–786.
+[50] H.M. James, E. Guth, Theory of the elastic properties of rubber, J. Chem. Phys. 11 (1943) 455–481.
+[51] M.C. Boyce, D.M. Parks, A.S. Argon, Large inelastic deformation of glassy polymers, Part I: Rate Depend. Constit. Model Mech.
+     Mater. 7 (1988) 15–33.
+[52] H. Dal, M. Kaliske, A micro-continuum-mechanical material model for failure of rubber-like materials, J. Mech. Phys. Solids 57 (2009)
+     1340–1356.
+[53] A. Gent, A new constitutive relation for rubber, Rubber Chem. Technol. 69 (1996) 59–61.
+[54] G.A. Holzapfel, J.C. Simo, Entropy elasticity of isotropic rubber-like solids at finite strains, Comput. Methods Appl. Mech. Engrg.
+     132 (1996) 17–44.
+[55] C. Miehe, S. Göktepe, F. Lulei, A micro-macro approach to rubber-like materials?part I: the non-affine micro-sphere model of rubber
+     elasticity, J. Mech. Phys. Solids 52 (2004) 2617–2660.
+[56] S. Reese, S. Govindjee, A theory of finite viscoelasticity and numerical aspects, Int. J. Solids Struct. 35 (1998) 3455–3482.
+[57] A.A. Kaptanoglu, BM. de Silva, U. Fasel, K. Kaheman, J.L. Callaham, C.B. Delahunt, K. Champion, J.C. Loiseau, J.N. Kutz, S.L.
+     Brunton, PySINDy: A comprehensive python package for robust sparse system identification, 2021, arXiv preprint arXiv:2111.08481.
+[58] Z. Wang, X. Huan, K. Garikipati, Variational system identification of the partial differential equations governing the physics of
+     pattern-formation: Inference under varying fidelity and noise, Comput. Methods Appl. Mech. Engrg. 356 (2019) 44–74.
+[59] Z. Wang, J.B. Estrada, E.M. Arruda, K. Garikipati, Inference of deformation mechanisms and constitutive response of soft material
+     surrogates of biological tissue by full-field characterization and data-driven variational system identification, J. Mech. Phys. Solids 153
+     (2021) 104474.
+[60] M.A. Bhouri, F. Sahli Costabal, H. Wang, K. Linka, M. Peirlinck, E. Kuhl, P. Perdikaris, COVID-19 dynamics across the US: A deep
+     learning study of human mobility and social behavior, Comput. Methods Appl. Mech. Engrg. 382 (2021) 113891.
+[61] S. Budday, G. Sommer, C. Birkl, C. Langkammer, J. Jaybaeck, Kohnert, M. Bauer, F. Paulsen, P. Steinmann, E. Kuhl, G.A. Holzapfel,
+     Mechanical characterization of human brain tissue, Acta Biomater. 48 (2017) 319–340.
+
+
+
+
+                                                                      27
+

@@ -1,0 +1,2066 @@
+                                                    Journal of Computational Physics 404 (2020) 108973
+
+
+
+                                                      Contents lists available at ScienceDirect
+
+
+                                              Journal of Computational Physics
+                                                             www.elsevier.com/locate/jcp
+
+
+
+
+Model reduction of dynamical systems on nonlinear manifolds
+using deep convolutional autoencoders
+Kookjin Lee ∗ , Kevin T. Carlberg
+Sandia National Laboratories, United States
+
+
+
+a r t i c l e           i n f o                       a b s t r a c t
+
+Article history:                                      Nearly all model-reduction techniques project the governing equations onto a linear
+Received 20 December 2018                             subspace of the original state space. Such subspaces are typically computed using
+Received in revised form 18 September                 methods such as balanced truncation, rational interpolation, the reduced-basis method,
+2019
+                                                      and (balanced) proper orthogonal decomposition (POD). Unfortunately, restricting the state
+Accepted 19 September 2019
+Available online 15 November 2019
+                                                      to evolve in a linear subspace imposes a fundamental limitation to the accuracy of the
+                                                      resulting reduced-order model (ROM). In particular, linear-subspace ROMs can be expected
+Keywords:                                             to produce low-dimensional models with high accuracy only if the problem admits a
+Model reduction                                       fast decaying Kolmogorov n-width (e.g., diffusion-dominated problems). Unfortunately,
+Deep learning                                         many problems of interest exhibit a slowly decaying Kolmogorov n-width (e.g., advection-
+Autoencoders                                          dominated problems). To address this, we propose a novel framework for projecting
+Machine learning                                      dynamical systems onto nonlinear manifolds using minimum-residual formulations at
+Nonlinear manifolds
+                                                      the time-continuous and time-discrete levels; the former leads to manifold Galerkin
+Optimal projection
+                                                      projection, while the latter leads to manifold least-squares Petrov–Galerkin (LSPG) projection.
+                                                      We perform analyses that provide insight into the relationship between these proposed
+                                                      approaches and classical linear-subspace reduced-order models; we also derive a posteriori
+                                                      discrete-time error bounds for the proposed approaches. In addition, we propose a
+                                                      computationally practical approach for computing the nonlinear manifold, which is based
+                                                      on convolutional autoencoders from deep learning. Finally, we demonstrate the ability
+                                                      of the method to signiﬁcantly outperform even the optimal linear-subspace ROM on
+                                                      benchmark advection-dominated problems, thereby demonstrating the method’s ability to
+                                                      overcome the intrinsic n-width limitations of linear subspaces.
+                                                                                                            © 2019 Elsevier Inc. All rights reserved.
+
+
+
+
+1. Introduction
+
+    Physics-based modeling and simulation has become indispensable across many applications in engineering and science,
+ranging from aircraft design to monitoring national critical infrastructure. However, as simulation is playing an increasingly
+important role in scientiﬁc discovery, decision making, and design, greater demands are being placed on model ﬁdelity.
+Achieving high ﬁdelity often necessitates including ﬁne spatiotemporal resolution in computational models of the system
+of interest; this can lead to very large-scale models whose simulations consume months on thousands of computing cores.
+This computational burden precludes the integration of such high-ﬁdelity models in important scenarios that are real time
+
+
+
+ * Correspondence to: 7011 East Ave, MS 9159, Livermore, CA 94550, United States.
+    E-mail addresses: koolee@sandia.gov (K. Lee), ktcarlb@sandia.gov (K.T. Carlberg).
+    URL: http://sandia.gov/~ktcarlb (K.T. Carlberg).
+
+https://doi.org/10.1016/j.jcp.2019.108973
+0021-9991/© 2019 Elsevier Inc. All rights reserved.
+2                                  K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973
+
+
+or many queries in nature, as these scenarios require the (parameterized) computational model to be simulated very rapidly
+(e.g., model predictive control) or thousands of times (e.g., uncertainty propagation).
+    Projection-based reduced-order models (ROMs) provide one approach for overcoming this computational burden. These
+techniques comprise two stages: an oﬄine stage and an online stage. During the oﬄine stage, these methods perform com-
+putationally expensive training tasks (e.g., simulating the high-ﬁdelity model at several points in the parameter space) to
+compute a representative low-dimensional ‘trial’ subspace for the system state. Next, during the inexpensive online stage,
+these methods rapidly compute approximate solutions for different points in the parameter space via projection: they com-
+pute solutions in the low-dimensional trial subspace by enforcing the high-ﬁdelity-model residual to be orthogonal to a
+low-dimensional test subspace of the same dimension.
+    As suggested above, nearly all projection-based model-reduction approaches employ linear trial subspaces. This includes
+the reduced-basis technique [64,69] and proper orthogonal decomposition (POD) [39,16] for parameterized stationary prob-
+lems; balanced truncation [56], rational interpolation [5,34], and Craig–Bampton model reduction [21] for linear time in-
+variant (LTI) systems; and Galerkin projection [39], least-squares Petrov–Galerkin projection [14], and other Petrov–Galerkin
+projections [80] with (balanced) POD [39,46,80,68] for nonlinear dynamical systems.
+    The Kolmogorov n-width [63] provides one way to quantify the optimal linear trial subspace; it is deﬁned as
+
+      dn (M) := inf sup inf  f − g ,
+                 Sn f ∈M g ∈Sn
+
+where the ﬁrst inﬁmum is taken over all n-dimensional subspaces of the state space, and M denotes the manifold of
+solutions over all time and parameters. Assuming the dynamical system has a unique trajectory for each parameter instance,
+the intrinsic solution-manifold dimensionality is (at most) equal to the number of parameters plus one (time). For problems
+that exhibit a fast decaying Kolmogorov n-width (e.g., diffusion-dominated problems), employing a linear trial subspace is
+theoretically justiﬁable [4,7] and has enjoyed many successful demonstrations. Unfortunately, many computational problems
+exhibit slowly decaying Kolmogorov n-width (e.g., advection-dominated problems). In such cases, the use of low-dimensional
+linear trial subspaces often produces inaccurate results; the ROM dimensionality must be signiﬁcantly increased to yield
+acceptable accuracy [60]. Indeed, the Kolmogorov n-width with n equal to the intrinsic solution-manifold dimensionality is
+often quite large for such problems.
+    Several approaches have been pursued to address this n-width limitation of linear trial subspaces. One set of approaches
+transforms the trial basis to improve its approximation properties for advection-dominated problems. Such methods include
+separating transport dynamics via ‘freezing’ [59], applying a coordinate transformation to the trial basis [42,58,11], shifting
+the POD basis [65], transforming the physical domain of the snapshots [79,78], constructing the trial basis on a Lagrangian
+formulation of the governing equations [55], and using Lax pairs of the Schrödinger operator to construct a time-evolving
+trial basis [29]. Other approaches pursue the use of multiple linear subspaces instead of employing a single global linear
+trial subspace; these local subspaces can be tailored to different regions of the time domain [26,24], physical domain [73],
+or state space [3,62]; Ref. [2] employs local trial subspaces in time and parameter spaces and applies 1 -norm minimiza-
+tions of the residual. Ref. [12] aims to overcome the limitations of using a linear trial subspace by providing online-adaptive
+h-reﬁnement mechanism that constructs a hierarchical sequence of linear subspaces that converges to the original state
+space. However, all of these methods attempt to construct, manually transform, or reﬁne a linear basis to be locally accu-
+rate; they do not consider nonlinear trial manifolds of more general structure. Further, many of these approaches rely on
+substantial additional knowledge about the problem, such as the particular advection phenomena governing basis shifting.
+    This work aims to address the fundamental n-width deﬁciency of linear trial subspaces. However, in contrast to the
+above methods, we pursue an approach that is both more general (i.e., it should not be limited to piecewise linear manifolds
+or mode transformations) and only requires the same snapshot data as typical POD-based approaches (e.g., it should require
+no special knowledge about any particular advection phenomena). To accomplish this objective, we propose an approach
+that (1) performs optimal projection of dynamical systems onto arbitrary nonlinear trial manifolds (during the online stage),
+and (2) computes this nonlinear trial manifold from snapshot data alone (during the oﬄine stage).
+    For the ﬁrst component, we perform optimal projection onto arbitrary (continuously differentiable) nonlinear trial man-
+ifolds by applying minimum-residual formulations at the time-continuous (ODE) and time-discrete (OE) levels. The time-
+continuous formulation leads to manifold Galerkin projection, which can be interpreted as performing orthogonal projection
+of the velocity onto the tangent space of the trial manifold. The time-discrete formulation leads to manifold least-squares
+Petrov–Galerkin (LSPG) projection, which can also be straightforwardly extended to stationary (i.e., steady-state) problems.
+We also perform analyses that illustrate the relationship between these manifold ROMs and classical linear-subspace ROMs.
+Manifold Galerkin and manifold LSPG projection require the trial manifold to be characterized as a (generally nonlinear)
+mapping from the low-dimensional reduced state to the high-dimensional state; the mapping from the high-dimensional
+state to the low-dimensional state is not required.
+    The second component aims to compute a nonlinear trial manifold from snapshot data alone. Many machine-learning
+methods exist to perform nonlinear dimensionality reduction. However, many of these methods do not provide the required
+mapping from the low-dimensional embedding to the high-dimensional input; examples include Isomap [75], locally linear
+embedding (LLE) [67], Hessian eigenmaps [25], spectral embedding [6], and t-SNE [51]. Methods that do provide this re-
+quired mapping include self-organizing maps [45], generative topographic mapping [8], kernel principal component analysis
+(PCA) [72], Gaussian process latent variable model [47], diffeomorphic dimensionality reduction [77], and autoencoders [37].
+                                   K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973               3
+
+
+In principle, manifold Galerkin and manifold LSPG projection could be applied with manifolds constructed by any of the
+methods in the latter category. However, this study restricts focus to autoencoders—more speciﬁcally deep convolutional
+autoencoders—due to their expressiveness and scalability, as well as the availability of high-performance software tools for
+their construction.
+   Autoencoders (also known as auto-associators [23]) comprise a speciﬁc type of feedforward neural network that aim to
+learn the identity mapping: they attempt to copy the input to an accurate approximation of itself. Learning the identity map-
+ping is not a particularly useful task unless, however, it associates with a dimensionality-reduction procedure comprising
+data compression and subsequent recovery. This is precisely what autoencoders accomplish by employing a neural-network
+architecture consisting of two parts: an encoder that provides a nonlinear mapping from the high-dimensional input to a
+low-dimensional embedding, and a decoder that provides a nonlinear mapping from the low-dimensional embedding to an
+approximation of the high-dimensional input. Convolutional autoencoders are a speciﬁc type of autoencoder that employ
+convolutional layers, which have been shown to be effective for extracting representative features in images [53]. Inspired
+by the analogy between images and spatially distributed dynamical-system states (e.g., when the dynamical system cor-
+responds to the spatial discretization of a partial-differential-equations model), we propose a speciﬁc deep convolutional
+autoencoder architecture tailored to dynamical systems with states that are spatially distributed. Critically, training this
+autoencoder requires only the same snapshot data as POD; no additional problem-speciﬁc information is needed.
+   In summary, new contributions of this work include:
+
+ 1. Manifold Galerkin (Section 3.2) and manifold LSPG (Section 3.3) projection techniques, which project the dynamical-
+    system model onto arbitrary continuously-differentiable manifolds. We equip these methods with
+    (a) the ability to exactly satisfy the initial condition (Remark 3.1), and
+    (b) quasi-Newton solvers (Section 3.4) to solve the system of algebraic equations arising from implicit time integration.
+ 2. Analysis (Section 4), which includes
+    (a) demonstrating that employing an aﬃne trial manifold recovers classical linear-subspace Galerkin and LSPG projec-
+        tion (Proposition 4.1),
+    (b) suﬃcient conditions for commutativity of time discretization and manifold Galerkin projection (Theorem 4.1),
+    (c) conditions under which manifold Galerkin and manifold LSPG projection are equivalent (Theorem 4.2), and
+    (d) a posteriori discrete-time error bounds for both the manifold Galerkin and manifold LSPG projection methods (The-
+        orem 4.3).
+ 3. A novel convolutional autoencoder architecture tailored to spatially distributed dynamical-system states (Section 5.2)
+    with accompanying oﬄine training algorithm that requires only the same snapshot data as POD (Section 6).
+ 4. Numerical experiments on advection-dominated benchmark problems (Section 7). These experiments illustrate the abil-
+    ity of the method to outperform even the projection of the solution onto the optimal linear subspace; further, the
+    proposed method is close to achieving the optimal performance of any nonlinear-manifold method. This demonstrates
+    the method’s ability to overcome the intrinsic n-width limitations of linear trial subspaces.
+
+We note that the methodology is applicable to both linear and nonlinear dynamical systems.
+   To the best of our knowledge, Refs. [35,43] comprise the only attempts to incorporate an autoencoder within a projection-
+based ROM. These methods seek solutions in the nonlinear trial manifold provided by an autoencoder; however, these
+methods reduce the number of equations by applying the encoder to the velocity. Unfortunately, as we discuss in Re-
+mark 3.5, this approach is kinematically inconsistent, as the velocity resides in the tangent space to the manifold, not the
+manifold itself. Thus, encoding the velocity can produce signiﬁcant approximation errors. Instead, the proposed manifold
+Galerkin and manifold LSPG projection methods produce approximations that associate with minimum-residual formula-
+tions and adhere to the kinematics imposed by the trial manifold.
+   Relatedly, Ref. [33] proposes a general framework for projection of dynamical systems onto nonlinear manifolds. However,
+the proposed method constructs a piecewise linear trial manifold by generating local linear subspaces and concatenating
+those subspaces. Then, the method projects the residual of the governing equations onto a nonlinear test manifold that
+is also piecewise linear; this is referred to as a ‘piecewise linear projection function’. Thus, the approach is limited to
+piecewise-linear manifolds, and the resulting approximation does not associate with any optimality property.
+   We also note that autoencoders have been applied to various non-intrusive model-reduction methods that are purely
+data driven in nature and are not based on a projection process. Examples include Ref. [54], which constructs a nonlinear
+model of wall turbulence using an autoencoder; Ref. [31], which applies an autoencoder to compress the state, followed by
+a recurrent neural network (RNN) [70] to learn the dynamics; Refs. [74,61,50,57], which apply autoencoders to learn ap-
+proximate invariant subspaces of the Koopman operator; and Ref. [18], which applies hierarchical dimensionality reduction
+comprising autoencoders and PCA followed by dynamics learning to recover missing CFD data.
+   The paper is organized as follows. Section 2 describes the full-order model, which corresponds to a parameterized sys-
+tem of (linear or nonlinear) ordinary differential equations. Section 3 describes model reduction on nonlinear manifolds,
+including the mathematical characterization of the nonlinear trial manifold (Section 3.1), manifold Galerkin projection (Sec-
+tion 3.2), manifold LSPG projection (Section 3.3), and associated quasi-Newton methods to solve the system of algebraic
+equations arising at each time instance in the case of implicit time integration (Section 3.4). Section 4 provides the afore-
+mentioned analysis results. Section 5 describes a practical approach for constructing the nonlinear trial manifold using deep
+4                                            K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973
+
+
+convolutional autoencoders, including a brief description of autoencoders (Section 5.1), the proposed autoencoder architec-
+ture applicable to spatially distributed states (Section 5.2), and the way in which the proposed autoencoder can be used to
+satisfy the initial condition (Section 5.3). When the manifold Galerkin and manifold LSPG ROMs employ this choice of de-
+coder, we refer to them as Deep Galerkin and Deep LSPG ROMs, respectively. Section 6 describes oﬄine training, which entails
+snapshot-based data collection (Section 6.1), data standardization (Section 6.2), and autoencoder training (Section 6.3); Algo-
+rithm 1 summarizes the oﬄine training stage. Section 7 assesses the performance of the proposed Deep Galerkin and Deep
+LSPG ROMs compared to (linear-subspace) POD–Galerkin and POD–LSPG ROMs on two advection-dominated benchmark
+problems. Finally, Section 8 concludes the paper.
+
+2. Full-order model
+
+   This work considers the full-order model (FOM) to correspond to a dynamical system expressed as a parameterized
+system of ordinary differential equations (ODEs)
+
+        ẋ = f (x, t ; μ),         x(0; μ) = x0 (μ),                                                                          (2.1)
+where t ∈ [0, T ] denotes time with ﬁnal time T ∈ R+ , and x : [0, T ] × D → R denotes the time-dependent, parameterized
+                                                                                                           N
+
+state implicitly deﬁned as the solution to problem (2.1) given the parameters μ ∈ D . Here, D ⊆ Rnμ denotes the parameter
+space, x0 : D → R N denotes the parameterized initial condition, and f : R N × [0, T ] × D → R N denotes the velocity, which
+may be linear or nonlinear in its ﬁrst argument. We denote differentiation of a variable x with respect to time by ẋ. Such
+dynamical systems may arise from the semidiscretization of a partial-differential-equations (PDE) model, for example. We
+refer to Eq. (2.1) as the FOM ODE.
+   Numerically solving the FOM ODE (2.1) requires application of a time-discretization method. For simplicity, this work
+restricts attention to linear multistep methods; see Ref. [13] for analysis of both (linear-subspace) Galerkin and LSPG
+reduced-order models with Runge–Kutta schemes. A linear k-step method applied to numerically solve the FOM ODE (2.1)
+leads to solving the system of algebraic equations
+
+        r n (xn ; μ) = 0,     n = 1, . . . , N t ,                                                                           (2.2)
+
+where the time-discrete residual r : R × D → R
+                                             n       N               N
+                                                                         is deﬁned as
+
+                                                            
+                                                            k                        
+                                                                                     k
+        r n : (ξ ; ν ) → α0 ξ − t β0 f (ξ , t n ; ν ) +           α j xn− j − t          β j f (xn− j , t n− j ; ν ).     (2.3)
+                                                             j =1                    j =1
+
+Here, t ∈ R+ denotes the time step, xk denotes the numerical approximation to x(kt ; μ), and the coeﬃcients α j and
+                              k
+β j , j = 0, . . . , k with
+                         j =0 α j = 0 deﬁne a particular linear multistep scheme. These methods are implicit if β0 = 0. For
+notational simplicity, we have assumed a uniform time step t and a ﬁxed number of steps k for each time instance; the
+extensions to nonuniform grids and a non-constant value of k are straightforward. We refer to Eq. (2.2) as the FOM OE.
+
+Remark 2.1 (Intrinsic solution-manifold dimensionality). Assuming the initial value problem (2.2) has a unique solution for
+each parameter instance μ ∈ D , the intrinsic dimensionality of the solution manifold {x(t ; μ) | t ∈ [0, T ], μ ∈ D } is (at most)
+p  = nμ + 1, as the mapping (t ; μ) → x is unique in this case. This provides a practical lower bound on the dimension of a
+nonlinear trial manifold for exactly representing the dynamical-system state.
+
+3. Model reduction on nonlinear manifolds
+
+    This section proposes two classes of residual-minimizing ROMs on nonlinear manifolds. The ﬁrst minimizes the (time-
+continuous) FOM ODE residual and is analogous to classical Galerkin projection, while the second minimizes the (time-
+discrete) FOM OE residual and is analogous to least-squares Petrov–Galerkin (LSPG) projection [14,17,13]. Section 3.1
+introduces the notion of a nonlinear trial manifold, Section 3.2 describes the manifold Galerkin ROM resulting from time-
+continuous residual minimization, and Section 3.3 describes the manifold LSPG ROM resulting from time-discrete residual
+minimization.
+
+3.1. Nonlinear trial manifold
+
+    We begin by prescribing the subset of the original state space R N on which the ROM techniques will seek approximate
+solutions. Rather than introducing a classical aﬃne trial subspace for this purpose, we instead introduce a continuously
+differentiable nonlinear trial manifold. In particular, we seek approximate solutions x̃ ≈ x of the form
+
+        x̃(t ; μ) = xref (μ) + g (x̂(t ; μ)),                                                                                 (3.1)
+                                                      K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973      5
+
+
+where x̃ : R+ × D → xref (μ) + S and S := { g (ξ̂ ) | ξ̂ ∈ R p } denotes the nonlinear trial manifold from the extrinsic view.
+Here, xref : D → R N denotes a parameterized reference state and g : ξ̂ → g (ξ̂ ) with g : R p → R N and p ≤ N denotes
+the parameterization function, which we refer to in this work as the decoder, which comprises a nonlinear mapping from
+low-dimensional generalized coordinates x̂ : R+ × D → R p to the high-dimensional state approximation. From application
+of the chain rule, the approximated velocity is then
+
+        x̃˙ (t ; μ) = J (x̂(t ; μ))x̂˙ (t ; μ),                                                                                    (3.2)
+
+where J : ξ̂ →
+                    dg
+                          (ξ̂ ) with J : R p → RN × p denotes the Jacobian of the decoder. This Jacobian deﬁnes the tangent space to
+                    dξ̂
+the manifold
+
+        T x̂ S ≡ Ran( J (x̂)),                                                                                                     (3.3)
+where Ran( A ) denotes the range of matrix A. From Remark 2.1, we observe that the nonlinear trial manifold dimension
+must be greater than or equal to the intrinsic solution-manifold dimension, i.e., p ≥ p  , to be able to exactly represent the
+state.
+
+Remark 3.1 (Initial-condition satisfaction). Satisfaction of the initial conditions requires the initial generalized coordinates
+             0                    0                                                        0
+x̂(0; μ) = x̂ (μ) to satisfy g (x̂ (μ)) = x0 (μ). This can be achieved for any choice of x̂ (μ) provided the reference state is
+set to
+                                          0
+        xref (μ) = x0 (μ) − g (x̂ (μ)).                                                                                            (3.4)
+However, doing so must ensure that the decoder can accurately represent deviations from this reference state (3.4). In
+the context of the proposed autoencoder-based trial manifold, Section 5.3 describes a strategy for computing the initial
+                          0
+generalized coordinates x̂ (μ) and deﬁning training data for manifold construction such that the decoder accomplishes this.
+
+Remark 3.2 (Linear trial subspace). The classical linear (or more precisely aﬃne) trial subspace corresponds to a speciﬁc
+case of a nonlinear trial manifold; this occurs when the decoder is linear. In this case, the decoder can be expressed as
+                           N×p
+g : ξ̂ → ξ̂ , where  ∈ R   denotes trial-basis matrix and Rn ×m denotes the set of full-column-rank n × m matrices (the
+non-compact Stiefel manifold). In this case, the approximated state and velocity can be expressed as
+
+        x̃(t ; μ) = x0 (μ) + x̂(t ; μ)                 and     x̃˙ (t ; μ) = x̂˙ (t ; μ),                                        (3.5)
+respectively, such that the trial manifold is aﬃne, i.e., S = Ran(), and the decoder Jacobian is the constant matrix
+ J (x̂(t ; μ)) = J = . Note that this approach can enforce the initial condition by setting the initial generalized coordinates
+  0
+x̂ (μ) to zero and subsequently setting xref (μ) = x0 (μ). Common choices for computing the reduced-basis matrix  when
+the velocity is linear in its ﬁrst argument include balanced truncation [56], rational interpolation [5,34], the reduced-basis
+method [64,69], Rayleigh–Ritz eigenvectors [21]; common choices when the velocity is nonlinear include POD [38] and
+balanced POD [46,80,68].
+
+3.2. Manifold Galerkin ROM: time-continuous residual minimization
+
+     We now derive the ROM corresponding to time-continuous residual minimization. To do so, deﬁne the FOM ODE residual
+as
+
+        r : v − f (ξ , τ ; ν )
+
+with r : R N × R N × R+ × D → R N . It can be easily veriﬁed that the FOM ODE (2.1) is equivalent to
+
+        r (ẋ, x, t ; μ) = 0,             x(0; μ) = x0 (μ).                                                                        (3.6)
+
+   To derive the time-continuous residual-minimizing ROM, we substitute the approximated state x ← x̃ deﬁned in Eq. (3.1)
+and velocity ẋ ← x̃˙ deﬁned in Eq. (3.2) into the FOM ODE (3.6) and minimize the 2 -norm of the residual, i.e.,
+                                                                                                2
+        x̂˙ (t ; μ) = arg min r J (x̂(t ; μ)) v̂ , xref (μ) + g (x̂(t ; μ)), t ; μ 2                                             (3.7)
+                          v̂ ∈R p
+
+                                                  0
+with initial condition x̂(0; μ) = x̂ (μ). If the Jacobian J (x̂(t ; μ)) has full column rank, then Problem (3.7) is convex and has
+a unique solution that leads to the manifold Galerkin ODE
+                                                                                   
+        x̂˙ (t ; μ) = J (x̂(t ; μ))+ f xref (μ) + g (x̂(t ; μ)), t ; μ ,
+                                                                                                           0
+                                                                                           x̂(0; μ) = x̂ (μ),                      (3.8)
+6                                            K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973
+
+
+where the superscript + denotes the Moore–Penrose pseudoinverse.
+   We note that although the state evolves on the nonlinear manifold S , the generalized coordinates evolve in the Euclidean
+space R p , which facilitates time integration of the manifold Galerkin ODE (3.8). Indeed, this can be accomplished using any
+time integrator. If a linear multistep scheme is employed, then the manifold Galerkin OE corresponds to
+        n   n
+       r̂ G (x̂ ; μ) = 0,                                                                                                                          (3.9)
+where the manifold Galerkin OE residual is
+
+       r̂ G : (ξ̂ ; ν ) →α0 ξ̂ − t β0 J (ξ̂ )+ f (xref (ν ) + g (ξ̂ ), t n ; ν )+
+        n
+
+
+                          
+                          k                        
+                                                   k
+                                                                                                                                                  (3.10)
+                                 α j x̂n− j − t                  n− j +
+                                                          β j J (x̂        ) f (xref (ν ) + g (x̂
+                                                                                                     n− j
+                                                                                                            ), t n− j ; ν ).
+                          j =1                     j =1
+
+We note that the manifold Galerkin OE is nonlinear if either the velocity is nonlinear in its ﬁrst argument or if the trial
+manifold is nonlinear.
+
+Remark 3.3 (Manifold Galerkin projection as orthogonal projection onto the tangent space). Eq. (3.7) can be written equivalently
+as
+                                                                                        2
+       x̃˙ (t ; μ) = arg min  v − f xref (μ) + g (x̂(t ; μ)), t ; μ 2 ,                                                                         (3.11)
+                   v ∈ T x̂(t ;μ) S
+
+
+where the tangent space is deﬁned in Eq. (3.3). The solution to this minimization problem is x̃˙ (t ; μ) =
+J (x̂(t ; μ)) J (x̂(t ; μ))+ f (xref (μ) + g (x̂(t ; μ)), t ; μ). Thus, Manifold Galerkin projection can be interpreted as computing the
+orthogonal (i.e., 2 -optimal) projection of the velocity onto the tangent space T x̂(t ;μ) S of the trial manifold.
+
+
+Remark 3.4 (Weighted 2 -norms for manifold Galerkin projection). We note that the minimization problem (3.7) could be posed
+in other norms.For example, if we consider residual minimization in the weighted 2 -norm  ·  satisfying x ≡ (x, x)
+with (x, y ) ≡ x T  y and  ≡  T /2 1/2 , then Problem (3.7) becomes
+                                                                                                2
+       x̂˙ (t ; μ) = arg min r J (x̂(t ; μ)) v̂ , xref (μ) + g (x̂(t ; μ)), t ; μ  ,                                                           (3.12)
+                     v̂ ∈R p
+
+leading to the manifold Galerkin ODE
+                                                                                                   
+       x̂˙ (t ; μ) = [1/2 J (x̂(t ; μ))]+ 1/2 f xref (μ) + g (x̂(t ; μ)), t ; μ ,
+                                                                                                                                0
+                                                                                                             x̂(0; μ) = x̂ (μ),                   (3.13)
+and manifold Galerkin OE residual
+
+       r̂ G : (ξ̂ ; ν ) → α0 ξ̂ − t β0 [1/2 J (ξ̂ )]+ 1/2 f (xref (ν ) + g (ξ̂ ), t n ; ν ) +
+        n
+                                                                                                                                                  (3.14)
+                         
+                         k                         
+                                                   k
+                                 α j x̂n− j − t          β j [1/2 J (x̂
+                                                                               n− j
+                                                                                      )]+ 1/2 f (xref (ν ) + g (x̂
+                                                                                                                        n− j
+                                                                                                                               ), t n− j ; ν ).   (3.15)
+                          j =1                     j =1
+
+For notational simplicity, this work restricts attention to the 2 -norm; future work will consider such weighted norms, e.g.,
+to enable hyper-reduction.
+
+Remark 3.5 (Alternative Galerkin projection). Refs. [35,43] provide an alternative way to perform Galerkin projection on non-
+linear manifolds constructed from autoencoders. In contrast to the proposed manifold Galerkin ROM (and manifold LSPG
+ROM introduced in Section 3.3 below), these methods additionally require the existence of an encoder ḡ : R N → R p that
+satisﬁes g ◦ ḡ : x → x̃ with x̃ ≈ x, which is trained on state-snapshot data. These methods then form the low-dimensional
+system of ODEs
+                                                                    
+       x̂˙ (t ; μ) = ḡ f xref (μ) + g (x̂(t ; μ)), t ; μ                  ,   x̂(0; μ) = ḡ (x0 (μ)).                                            (3.16)
+One problem with this approach is that it implicitly assumes that the velocity f can be represented on the manifold used to
+represent the state. This is kinematically inconsistent, as the velocity resides in the tangent space to this manifold as derived
+in Eq. (3.2), i.e., x̃˙ (t ; μ) ∈ T x̂(t ;μ) S ; the tangent space and the manifold coincide if and only if the trial manifold associates
+with a linear trial subspace. Thus, encoding the velocity is likely to produce a poor approximation of the reduced-state
+velocity x̂˙ (t ; μ). Instead, the proposed manifold Galerkin ROM performs orthogonal projection of the velocity onto the
+tangent space (see Remark 3.3). We also note the approaches proposed in Refs. [35,43] compute the initial state by encoding
+the initial condition, which is not guaranteed to satisfy the initial conditions as discussed in Remark 3.1.
+                                            K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973                   7
+
+
+3.3. Manifold LSPG ROM: time-discrete residual minimization
+
+   Analogously to the previous section, we now derive the ROM corresponding to time-discrete residual minimization. To
+do so, we now derive the ROM corresponding to time-discrete residual minimization. To do so, we simply substitute the
+approximated state x ← x̃ deﬁned in Eq. (3.1) into the FOM OE (2.2) and minimize the 2 -norm of the residual, i.e.,
+                                                              2
+       n                                                       
+      x̂ (μ) = arg min rn xref (μ) + g (ξ̂ ); μ)  ,                                                                               (3.17)
+                                                                    2
+                   ξ̂ ∈R p
+
+                                                                                                           0
+which is solved sequentially for n = 1, . . . , N t with initial condition x̂(0; μ) = x̂ (μ). Necessary optimality conditions for
+                                                                                           n
+Problem (3.17) correspond to stationarity of the objective function, i.e., the solution x̂ satisﬁes the manifold LSPG OE
+
+            n                        n    
+      n (x̂ ; μ)T rn xref (μ) + g (x̂ ); μ = 0,                                                                                    (3.18)
+                                                            N×p
+where the test basis matrix  : R × D → R
+                                       n     p
+                                                                    is deﬁned as
+
+                           ∂ rn                                                  ∂f 
+      n : (ξ̂ ; ν ) →         (xref (ν ) + g (ξ̂ ); ν ) J (ξ̂ ) = α0 I − t β0      xref (ν ) + g (ξ̂ ), t n ; ν       J (ξ̂ ).   (3.19)
+                           ∂ξ                                                    ∂ξ
+As with the manifold Galerkin OE, the manifold LSPG OE is nonlinear if either the velocity is nonlinear in its ﬁrst
+argument or if the trial manifold is nonlinear.
+
+
+Remark 3.6 (Weighted 2 -norms for manifold LSPG projection). As discussed in Remark 3.4, the minimization problem in (3.17)
+could be posed in other norms. If the weighted 2 -norm  ·  is employed, then Problem (3.17) becomes
+                                                              2
+       n                                                       
+      x̂ (μ) = arg min rn xref (μ) + g (ξ̂ ); μ)  ,                                                                               (3.20)
+                                                                    
+                   ξ̂ ∈R p
+
+and the test basis matrix in the manifold LSPG OE (3.18) becomes
+
+                             ∂ rn
+      n : (ξ̂ ; ν ) →          (xref (ν ) + g (ξ̂ ); ν ) J (ξ̂ ).
+                             ∂ξ
+As with manifold Galerkin projection, this work restricts attention to the 2 -norm for notational simplicity.
+
+
+Remark 3.7 (Application to stationary problems). Manifold LSPG projection can also be applied to stationary (i.e., steady-state)
+problems. Stationary problems are characterized by computing x(μ) as the implicit solution to Eq. (2.1) with ẋ = 0, i.e.,
+
+       f (x; μ) = 0,                                                                                                                (3.21)
+
+where the (time-independent) velocity is equivalent to the stationary-problem residual. Substituting the approximated state
+x(μ) ← x̃(μ) = xref (μ) + g (x̂(μ)) into Eq. (3.21) and subsequently minimizing the 2 -norm of the residual yields
+                                                            2
+                                                             
+      x̂(μ) = arg min  f          xref (μ) + g (ξ̂ ); μ)  ,                                                                       (3.22)
+                                                                2
+                 ξ̂ ∈R p
+
+which has the same nonlinear-least-squares form as manifold LSPG projection applied to the dynamical system model (3.17).
+In this case, necessary optimality conditions for Problem (3.22) correspond to stationarity of the objective function, i.e., the
+solution x̂(μ) satisﬁes the system of algebraic equations
+                                           
+      (x̂(μ); μ)T f xref (μ) + g (x̂(μ)); μ = 0,                                                                                   (3.23)
+
+where the test basis matrix  : R p × D → R N × p is deﬁned as
+
+                         ∂f 
+       : (ξ̂ ; ν ) →        xref (ν ) + g (ξ̂ ); ν J (ξ̂ ).
+                         ∂ξ
+Note that we do not consider a manifold Galerkin projection applied to stationary problems, as the manifold Galerkin ROM
+was derived by minimizing the time-continuous residual, and a Galerkin-like projection of the form J (x̂(μ)) T f (xref (μ) +
+g (x̂(μ)); μ) = 0 does not generally associate with any optimality property.
+8                                                                 K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973
+
+
+3.4. Quasi-Newton methods for implicit integrators
+
+   When an implicit time integrator is employed such that β0 = 0 and the trial manifold is nonlinear, then solving the
+manifold Galerkin OE (3.10) and manifold LSPG OE (3.18) using Newton’s method is challenging, as the residual Jacobians
+involve high-order derivatives of the decoder. For this purpose, we propose quasi-Newton methods that approximate these
+Jacobians while retaining convergence of the nonlinear solver to the solution of the OEs under certain conditions.
+   Manifold Galerkin. We ﬁrst consider the manifold Galerkin case. If an implicit integrator is employed (i.e., β0 = 0), then
+the manifold Galerkin OE (3.9) corresponds to a system of algebraic equations. Applying Newton’s method to solve this
+system can be challenging for nonlinear decoders, as the Jacobian of the residual requires computing a third-order tensor of
+second derivatives in this case. Indeed, the ith column of the Jacobian is
+
+                                                                           ∂ J+  
+                n
+       ∂ r̂ G                                                                                                                                  ∂f
+                    : ( ŵ ; ν ) → α0 ê i − t β0                                      ŵ f (xref (ν ) + g ( ŵ ), t n ; ν ) + J ( ŵ )+        (xref (ν ) + g ( ŵ ), t n ; ν ) J ( ŵ )ê i
+        ∂ ξ̂i                                                              ∂ ξ̂i                                                               ∂ξ
+for i = 1, . . . , p, where ê i ∈ {0, 1} p denotes the ith canonical unit vector. The gradient of the pseudo-inverse of the decoder
+Jacobian, which appears in the second term of the right-hand side, can be computed from the gradients of this Jacobian as
+
+       ∂ J+                                         ∂J                                                          ∂ JT  
+                         ŵ = − J ( ŵ )+                         ŵ J ( ŵ )+ + J ( ŵ )+ J ( ŵ )+ T                         ŵ ( I − J ( ŵ ) J ( ŵ )+ )
+        ∂ ξ̂i                                         ∂ ξ̂i                                                          ∂ ξ̂i
+                                                                              ∂ JT  
+                                   + ( I − J ( ŵ )+ J ( ŵ ))                              ŵ J ( ŵ )+ T J ( ŵ )+
+                                                                                 ∂ ξ̂i
+The primary diﬃculty of computing this term is the requirement of computing second derivatives of the form ∂ J /∂ ξ̂i =
+                                                                                           n
+∂ 2 g /∂ ξ̂ ∂ ξ̂i . For this reason, we propose to approximate the residual Jacobian as J̃ r̂ G ≈ ∂ r̂ G /∂ ξ̂ by neglecting this term such
+that
+            n                                                                      ∂f
+       J̃ r̂ G : ( ŵ ; ν ) → α0 I − t β0 J ( ŵ )+                                 (xref (ν ) + g ( ŵ ), t n ; ν ) J ( ŵ )
+                                                                                   ∂ξ
+The resulting quasi-Newton method to solve the manifold Galerkin OE (3.9) takes the form
+            n           n(k)                                      n(k)
+        J̃ r̂ G (x̂            ; μ) pn(k) = −r̂ G (x̂                     ; μ)
+                                                                                                                                                                                              (3.24)
+         n(k+1)                   n(k)
+       x̂                  = x̂          + αn(k) pn(k) ,
+                                             n(0)                                                                        n−1
+for k = 0, . . . , K . Here, x̂ is the initial guess (often taken to be x̂ or a data-driven extrapolation [19]), and αn(k) ∈ R is
+the step length. Convergence of the quasi-Newton iterations (3.24) to a root of r̂ G (·; μ) is ensured if
+                                                                      n
+                    n(k)                 n     n(k)               ∂ r̂ G      n(k)                   n(k)
+       r̂ G (x̂            ; μ)T J̃ r̂ G (x̂          ; μ)T                (x̂        ; μ)r̂ G (x̂          ; μ ) > 0,    k = 0, . . . , K
+                                                                   ∂ ξ̂
+and αn(k) ∈ R , k = 0, . . . , K is computed to satisfy the strong Wolfe conditions, as this ensures that the search direction
+                                                                                            n(k)
+pn(k) is a descent direction of the function r̂ G (ξ̂ ; ν )22 evaluated at (ξ̂ ; ν ) = (x̂     ; μ) for k = 0, . . . , K [52].
+    Manifold LSPG. We now consider the manifold LSPG case. As in previous works that considered applying LSPG on aﬃne
+trial subspaces [14,17,13], we propose to solve the nonlinear least-squares problem (3.17) using the Gauss–Newton method,
+which leads to the iterations
+                                                                                                            
+                        n(k)                   n(k)                                          n(k)                            n(k)
+       n (x̂                  ; μ)T n (x̂           ; μ) pn(k) = −n (x̂                          ; μ)T rn xref (μ) + g (x̂ ); μ
+                                                                                                                                                                                              (3.25)
+         n(k+1)                   n(k)
+       x̂                  = x̂          + αn(k) pn(k) ,
+                                             n(0)
+for k = 0, . . . , K with x̂  a provided initial guess, and αn(k) ∈ R is a step length chosen to satisfy the strong Wolfe
+conditions, which ensure global convergence to a local minimum of the manifold LSPG objective function in (3.17) that
+satisﬁes the stationarity conditions associated with the LSPG OE (3.18).
+    To show the connection between the Gauss–Newton method and the quasi-Newton approach proposed for the manifold
+Galerkin method, we deﬁne the discrete residual associated with manifold LSPG projection as
+                                                              
+        n
+       r̂ L : (ξ̂ ; ν ) → n (ξ̂ ; ν ) T rn xref (ν ) + g (ξ̂ ); ν                                                                                                                           (3.26)
+
+such that the manifold LSPG OE (3.18) can be expressed simply as the system of algebraic equations
+        n           n
+       r̂ L (x̂ ; μ) = 0.                                                                                                                                                                     (3.27)
+                                                  K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973                    9
+
+
+Solving Eq. (3.27) using Newton’s method requires computing the residual Jacobian, whose ith column is
+            n
+       ∂ r̂ L                     ∂ n                                        
+                : ( ŵ ; ν ) →          ( ŵ ; ν )T rn xref (ν ) + g ( ŵ ); ν + n ( ŵ ; ν )T n ( ŵ ; ν )ê i
+        ∂ ξ̂i                  ∂ ξ̂i
+                             ∂ J  T ∂ rn                         T                         
+                           =         ŵ      xref (ν ) + g ( ŵ ); ν r n xref (ν ) + g ( ŵ ); ν + n ( ŵ ; ν ) T n ( ŵ ; ν )ê i .
+                             ∂ ξ̂i      ∂ξ
+Thus, it is clear that the Gauss–Newton iterations (3.25) are equivalent to employing a quasi-Newton method to
+                                                                             n          n                     n
+solve the manifold LSPG OE (3.27) with an approximated residual Jacobian J̃ r̂ L ≈ ∂ r̂ L /∂ ξ̂ deﬁned as J̃ r̂ L : ( ŵ ; ν ) →
+n ( ŵ ; ν )T n ( ŵ ; ν ), which is obtained from neglecting the term containing second derivatives of the decoder, namely
+∂ J /∂ ξ̂i = ∂ 2 g /∂ ξ̂ ∂ ξ̂i .
+
+4. Analysis
+
+   We now perform analysis of the proposed manifold Galerkin and manifold LSPG projection methods. For notational
+simplicity, this section omits the dependence of operators on parameters μ.
+
+Proposition 4.1 (Aﬃne trial manifold recovers classical Galerkin and LSPG). If the trial manifold is aﬃne, then manifold LSPG projection
+is equivalent to classical linear-subspace LSPG projection. If additionally the decoder mapping associates with an orthgonal matrix, then
+manifold Galerkin projection is equivalent to classical linear-subspace Galerkin projection.
+
+Proof. If the trial manifold is aﬃne, then the decoder can be expressed as the linear mapping
+
+       g : ξ̂ → ξ̂                                                                                                                        (4.1)
+                N×p
+with  ∈ R     .
+Manifold Galerkin. Substituting the linear decoder (4.1) into the manifold Galerkin ODE (3.8) yields
+                                                 
+       x̂˙ (t ) = + f xref + x̂(t ), t ,             x̂(0) = 0.                                                                           (4.2)
+
+Similarly, substituting the linear decoder (4.1) into the manifold Galerkin OE Eq. (3.9) yields the same system, but with
+the residual deﬁned as
+                                              n
+       r̂ G : ξ̂ → + r n (xref + ξ̂ ).
+        n
+                                                                                                                                            (4.3)
+
+If additionally the trial-basis matrix is orthogonal, i.e., then + =  T and the ODE (4.2) is equivalent to the classical
+Galerkin ODE
+                                                 
+       x̂˙ (t ) =  T f xref + x̂(t ), t ,            x̂(0) = 0,                                                                           (4.4)
+
+while the OE residual (4.3) is equivalent to the classical Galerkin OE residual
+        n                                     n
+       r̂ G : ξ̂ →  T r n (xref + ξ̂ ).                                                                                                  (4.5)
+
+Manifold LSPG. Substituting the linear decoder (4.1) into the manifold LSPG OE (3.18) yields the classical LSPG OE
+             n               n
+       n (x̂ )T rn xref + x̂ = 0                                                                                                          (4.6)
+
+with classical LSPG test basis
+                                            ∂f 
+       n : ξ̂ → α0 I − t β0                   xref + ξ̂ , t n       . 2
+                                            ∂ξ
+
+   The manifold Galerkin OE (3.9)–(3.10) was derived using a project-then-discretize approach, as we formulated the
+residual-minimization problem (3.7) at the time-continuous level, and subsequently discretized the equivalent ODE (3.8) in
+time. We now derive conditions under which an equivalent model could have been derived using a discretize-then-project
+approach, i.e., by substituting the approximated state x ← x̃ deﬁned in Eq. (3.1) into the FOM OE (2.2) and subsequently
+premultiplying the overdetermined system by a test basis.
+
+Theorem 4.1 (Commutativity of time discretization and manifold Galerkin projection). For manifold Galerkin projection, time dis-
+cretization and projection are commutative if either (1) the trial manifold corresponds to an aﬃne subspace, or (2) the nonlinear trial
+                                                  n− j     n
+manifold is twice continuously differentiable; x̂     − x̂  = O (t ) for all n ∈ {1, . . . , N t }, j ∈ {1, . . . , k}; and the limit t → 0 is
+taken.
+10                                                   K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973
+
+
+Proof. The discrete residual characterizing the manifold Galerkin OE (3.9), which was derived using a project-then-
+                                         n
+discretize approach, is deﬁned as r̂ G in Eq. (3.10).
+                                                                                                               n
+Substituting the approximated state x ← x̃ deﬁned in Eq. (3.1) into the FOM OE (2.2) yields r n (xref + g (x̂ )) = 0. This is
+an overdetermined system of equations and thus may not have a solution. As such, we perform projection by enforcing
+orthgonality of this residual to a test basis G : R p → R N × p such that the discretize-then-project manifold Galerkin OE
+                 n           n
+corresponds to r̂ G ,disc (x̂ ) = 0 with
+        n
+      r̂ G ,disc : ξ̂ → G (ξ̂ ) T rn (xref + g (ξ̂ )).                                                                               (4.7)
+
+The discretize-then-project manifold Galerkin ROM is equivalent to the proposed manifold Galerkin ROM if and only if there
+                                        p× p
+exists a full-rank matrix A nG : R p → R    such that
+        n                       n
+      r̂ G (ξ̂ ) = A nG (ξ̂ )r̂ G ,disc (ξ̂ ).                                                                                         (4.8)
+                                                                                                                                          n
+Case 1. We now consider the general (non-asymptotic) case. Eq. (4.8) holds for any sequence of approximate solutions x̂ ,
+n = 1, . . . , N t if and only if each term in this expansion matches, i.e.,
+
+                                                           ξ̂ = AnG (ξ̂ )G (ξ̂ )T g (ξ̂ )
+                        J (ξ̂ )+ f (xref + g (ξ̂ ), t n ) = A nG (ξ̂ )G (ξ̂ ) T f (xref + g (ξ̂ ), t n )
+                                                       n− j                             n− j
+                                                                                                                                       (4.9)
+                                                      x̂      = AnG (ξ̂ )G (ξ̂ )T g (x̂       )
+              n− j +                      n− j                                                      n− j
+       J (x̂         ) f (xref + g (x̂           ), t n− j ) = AnG (ξ̂ )G (ξ̂ )T f (xref + g (x̂          ), t n− j ),
+                              k
+where we have used     j =0 α j = 0. We ﬁrst consider the ﬁrst and third conditions of (4.9). Because the inverse of a nonlinear
+operator—if it exists—must also be nonlinear, a necessary condition for these two requirements is that the trial manifold
+corresponds is aﬃne such that the decoder satisﬁes (4.1). Substituting Eq. (4.1) into the ﬁrst and third of the conditions of
+(4.9) yields
+
+              ξ̂ = AnG (ξ̂ )G (ξ̂ )T ξ̂
+        n− j                                 n− j
+                                                                                                                                      (4.10)
+       x̂       = AnG (ξ̂ )G (ξ̂ )T x̂
+for j = 1, . . . , k. A necessary and suﬃcient conditions for these to hold is
+
+       A nG (ξ̂ ) = [G (ξ̂ ) T ]−1 .                                                                                                (4.11)
+
+We now consider the second and fourth conditions of (4.9). Substituting Eqs. (4.1) and (4.11) into these conditions yields
+
+                    + f (xref + ξ̂ , t n ) =[G (ξ̂ )T ]−1 G (ξ̂ )T f (xref + ξ̂ , t n )
+                                n− j                                                               n− j
+                                                                                                                                      (4.12)
+       + f (xref + x̂                , t n− j ) =[G (ξ̂ )T ]−1 G (ξ̂ )T f (xref + x̂                , t n− j )
+for j = 1, . . . , k. Noting that + = [ T ]−1  T , a necessary and suﬃcient condition for (4.12) to hold is + =
+[G (ξ̂ ) T ]−1 G (ξ̂ ) T . Because  has no dependence on the generalized state, the test basis must also be independent
+of the generalized state, which yields
+
+      + = [GT ]−1 GT .                                                                                                            (4.13)
+
+Thus, without using any asymptotic arguments, the proposed manifold Galerkin ROM could have been derived using a
+discretize-then-project approach if and only if the test basis G applied to the overdetermined FOM OE acting on the trial
+manifold satisﬁes Eq. (4.13). Examples of test bases that satisfy this condition include G = [+ ] T and G = γ  for some
+nonzero scalar γ ∈ R .
+Case 2. We now consider asymptotic arguments. Assuming the nonlinear trial manifold is twice continuously differentiable,
+       n− j     n                                                n                  n
+and x̂     − x̂  = O (t ), then for ξ̂ in a neighborhood of x̂ such that ξ̂ − x̂  = O (t ), we have
+              n− j +
+                     ) = J (x̂ )+ + O (t )
+                                 n
+       J (x̂
+               J (ξ̂ )+ = J (x̂ )+ + O (t )
+                                 n
+
+                n− j             n               n    n− j        n
+                                                                                                                                      (4.14)
+            g (x̂      ) = g (x̂ ) + J (x̂ )[x̂              − x̂ ] + O (t )
+                                 n               n            n
+                g (ξ̂ ) = g (x̂ ) + J (x̂ )[ξ̂ − x̂ ] + O (t ).
+                                                                                                                                  n
+Substituting these expressions into the deﬁnition of the discretize-then-project manifold Galerkin residual r̂ G ,disc and en-
+forcing equivalence of each term in the matching conditions (4.8) and taking the limit t → 0 yields
+                                                          K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973               11
+
+                                                                                           n
+                                                            ξ̂ = AnG (ξ̂ )G (ξ̂ )T J (x̂ )ξ̂
+                J (x̂ )+ f (xref + g (ξ̂ ), t n ) = A nG (ξ̂ )G (ξ̂ ) T f (xref + g (ξ̂ ), t n )
+                     n
+
+                                                       n− j                                n     n− j
+                                                                                                                                               (4.15)
+                                                     x̂        = AnG (ξ̂ )G (ξ̂ )T J (x̂ )x̂
+                                      n− j                                                                n− j
+       J (x̂ )+ f (xref + g (x̂                   ), t n− j ) = AnG (ξ̂ )G (ξ̂ )T f (xref + g (x̂               ), t n− j ),
+            n
+
+                              k
+where we have used                 j =0   α j = 0. A necessary and suﬃcient condition for the ﬁrst and third conditions to hold is
+
+       A nG (ξ̂ ) = [G (ξ̂ ) T J (x̂ )]−1 .
+                                          n
+                                                                                                                                               (4.16)
+
+Then, a necessary and suﬃcient condition for the second and fourth conditions to hold is
+
+       J (x̂ )+ = [G (ξ̂ ) T J (x̂ )]−1 G (ξ̂ ) T .
+            n                                 n
+                                                                                                                                               (4.17)
+
+Examples of test bases that satisfy Eq. (4.17) include G (ξ̂ ) = [ J (x̂ )+ ] T and G = γ J (x̂ ) for some nonzero scalar
+                                                                                                                 n                     n
+
+γ ∈ R. 2
+
+    Theorem 4.1 shows that manifold Galerkin can be derived using a discretize-then-project approach for nonlinear trial
+manifolds. This shows that previous analysis [13, Theorem 3.4] related to commutativity of (residual-minimizing) Galerkin
+projection and time discretization extends to the case of nonlinear trial manifolds.
+    We now show that the limiting equivalence result reported in [13, Section 5] between Galerkin and LSPG projection for
+linear subspaces also extends to nonlinear trial manifolds.
+
+Theorem 4.2 (Limiting equivalence). Manifold Galerkin and manifold LSPG are equivalent if either (1) the trial manifold corresponds
+to an aﬃne subspace and either an explicit scheme is employed or the limit t → 0 is taken, or (2) the nonlinear manifold is twice
+                                n− j     n
+continuously differentiable; x̂     − x̂  = O (t ) for all n ∈ {1, . . . , N t }, j ∈ {1, . . . , k}; and the limit t → 0 is taken.
+
+                                                                                                                                           n
+Proof. The proof follows similar steps to those applied in the proof of Theorem 4.1. The discrete residual r̂ L deﬁned in
+(3.27), which characterizes the manifold LSPG OE (3.18), can be written as
+        n
+       r̂ L : ξ̂ →α0 n (ξ̂ ) T g (ξ̂ ) − t β0 n (ξ̂ ) T f (xref + g (ξ̂ ), t n )+
+                    
+                    k                                                  
+                                                                       k
+                                                                                                                                               (4.18)
+                            α j n (ξ̂ )T g (x̂n− j ) − t                    β j n (ξ̂ )T f (xref + g (x̂
+                                                                                                               n− j
+                                                                                                                       ), t n− j )
+                     j =1                                              j =1
+                              k
+where we have used      i =0 αi = 0. Manifold LSPG projection is equivalent to manifold Galerkin projection if and only if the
+OEs characterizing the two methods are equivalent, which is equivalent to requiring the existence of a full-rank matrix
+             p× p
+A n : R p → R    such that
+
+        n                      n
+      r̂ G (ξ̂ ) = A n (ξ̂ )r̂ L (ξ̂ ).                                                                                                        (4.19)
+                                                                                                                                                   n
+Case 1. We now consider the general (non-asymptotic) case. Eq. (4.19) holds for any sequence of approximate solutions x̂ ,
+n = 1, . . . , N t if and only if each term in this expansion matches, i.e.,
+
+                                                               ξ̂ = An (ξ̂ )n (ξ̂ )T g (ξ̂ )
+                     J (ξ̂ )+ f (xref + g (ξ̂ ), t n ) = A n (ξ̂ )n (ξ̂ ) T f (xref + g (ξ̂ ), t n )
+                                                            n− j                               n− j
+                                                                                                                                               (4.20)
+                                                          x̂       = An (ξ̂ )n (ξ̂ )T g (x̂          )
+            n− j +                            n− j                                                            n− j
+       J (x̂     ) f (xref + g (x̂                   ), t n− j ) = An (ξ̂ )n (ξ̂ )T f (xref + g (x̂                 ), t n− j )
+for j = 1, . . . , k. Comparing Conditions (4.20) with (4.9), we see that the requirements are the same as in Theorem 4.1, but
+with n (ξ̂ ; ν ) replacing G and A n replacing A nG . Thus, we arrive at the same result: necessary and suﬃcient conditions for
+equivalence are that the trial manifold corresponds to an aﬃne subspace such that the decoder satisﬁes (4.1) and the test
+basis n (ξ̂ ) satisﬁes
+
+      + = [n (ξ̂ )T ]−1 n (ξ̂ )T .                                                                                                         (4.21)
+
+Note that necessary conditions for Eq. (4.21) to hold are Ran( (ξ̂ )) = Ran(). Examples of test basis that satisfy this
+                                                                                                          n
+
+condition include n (ξ̂ ) = [+ ] T and n (ξ̂ ) = γ  for some nonzero scalar γ ∈ R . However, unlike in Theorem 4.1, we are
+not free to choose the test basis; rather, it is deﬁned as
+12                                                      K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973
+
+
+                                              ∂f 
+       n : ξ̂ → α0 I − t β0                     xref + ξ̂ , t n            .                                                                (4.22)
+                                              ∂ξ
+For the necessary condition Ran(n (ξ̂ )) = Ran() to hold, the second term in Eq. (4.22) must be zero. This occurs if and only
+if either (1) an explicit scheme is employed such that β0 = 0, or (2) the limit t → 0 is taken. In both cases, n (ξ̂ ) = γ 
+holds with γ = α0 .
+Case 2. We now consider asymptotic arguments. Assuming the nonlinear trial manifold is twice continuously differentiable,
+        n− j     n                                                n                  n
+and x̂      − x̂  = O (t ), then for ξ̂ in a neighborhood of x̂ such that ξ̂ − x̂  = O (t ), we obtain the expressions (4.14).
+                                                              n
+Substituting these expressions into the deﬁnition of the r̂ L in Eq. (4.18), enforcing equivalence of each term in the matching
+conditions (4.19), and taking the limit t → 0 yields
+                                                                                           n
+                                                          ξ̂ = An (ξ̂ )n (ξ̂ )T J (x̂ )ξ̂
+                J (x̂ )+ f (xref + g (ξ̂ ), t n ) = A n (ξ̂ )n (ξ̂ ) T f (xref + g (ξ̂ ), t n )
+                       n
+
+                                                    n− j                                   n     n− j
+                                                                                                                                                 (4.23)
+                                                   x̂        = An (ξ̂ )n (ξ̂ )T J (x̂ )x̂
+                                   n− j                                                                 n− j
+        J (x̂ )+ f (xref + g (x̂              ), t n− j ) = An (ξ̂ )n (ξ̂ )T f (xref + g (x̂                  ), t n− j ),
+            n
+
+                           k
+where we have used             j =0   α j = 0. A necessary and suﬃcient condition for the ﬁrst and third conditions to hold is
+
+       A n (ξ̂ ) = [n (ξ̂ ) T J (x̂ )]−1 .
+                                      n
+                                                                                                                                                 (4.24)
+
+Then, a necessary and suﬃcient condition for the second and fourth conditions to hold is
+
+       J (x̂ )+ = [n (ξ̂ ) T J (x̂ )]−1 n (ξ̂ ) T .
+            n                             n
+                                                                                                                                                 (4.25)
+                                                                                                                                     n
+As in Case 1 above, a necessary condition for (4.25) to hold is that Ran( (ξ̂ )) = Ran( J (x̂ )). Due to the deﬁnition of the
+                                                                                                                      n
+
+test basis, this requires the second term on the right-hand side of Eq. (3.19) to be zero. This is already satisﬁed by the stated
+assumption that the limit t → 0 is taken, in which case n (ξ̂ ) = γ J (ξ̂ ) holds with γ = α0 . It can be easily veriﬁed that
+this test basis satisﬁes the condition (4.25). 2
+
+   We now derive a posteriori local discrete-time error bounds for both the manifold Galerkin and manifold LSPG projection
+methods in the context of linear multistep methods, and demonstrate that manifold LSPG projection sequentially mini-
+mizes the error bound in time. For notational simplicity, we suppress the second argument of the velocity f , as the time
+superscript appearing in the second argument always matches that of the ﬁrst argument.
+
+Theorem 4.3 (Error bound). If the velocity f is Lipschitz continuous, i.e., there exists a constant κ > 0 such that  f (x) − f ( y )2 ≤
+κ x − y 2 for all x, y ∈ RN , and the time step is suﬃciently small such that t < |α0 |/|β0 | κ , then
+
+                                1                n 
+                                                           
+                                                           k
+                         n
+       xn − xref − g (x̂G )2 ≤ r̃n xref + g (x̂G ) 2 +   γ j xn− j − xref − g (x̂nG− j )2                                                  (4.26)
+                                               h
+                                                                                          j =1
+
+                                               1                                   
+                                                                                   k
+                             n
+       xn − xref − g (x̂ P )2 ≤                                    n
+                                                        min r̃ (ξ ) 2 +                  γ j xn− j − xref − g (x̂nP− j )2 ,                  (4.27)
+                                               h ξ ∈xref +S
+                                                                                    j =1
+
+        n                                                                                               n
+where x̂G denotes the manifold Galerkin solutionsatisfying (3.9) and x̂ P denotes the manifold LSPG solution satisfying (3.17). Here,
+h := |α0 | − |β0 | κ t and γ j := α j + β j κ t /h.
+
+Proof. We begin by deﬁning linear multistep residual operators associated with the FOM sequence of solutions {x j }nj=1 and
+                                                                               j
+an (arbitrary) sequence of approximate solutions {x̃ }nj=1 , i.e.,
+
+                                                         
+                                                         k                         
+                                                                                   k
+       r n : ξ → α0 ξ − t β0 f (ξ ) +                         α j xn− j − t           β j f (xn− j )                                         (4.28)
+                                                          j =1                     j =1
+
+                                                         
+                                                         k                         
+                                                                                   k
+        n
+       r̃ : ξ → α0 ξ − t β0 f (ξ ) +                           α j x̃n− j − t          β j f (x̃n− j ).                                       (4.29)
+                                                          j =1                     j =1
+
+                   j                      j                                                                                              j   j
+We note that x̃ = xref + g (x̂G ), j = 1, . . . , n in the case ofmanifold Galerkin
+                                                                                      projection, and x̃ = xref + g(x̂ P), j = 1, . . . , n
+                                                             n    n
+in the case of manifold LSPG projection. Subtracting r̃ x̃ from r n xn and noting from Eq. (2.2) that r n xn = 0 yields
+                                                             K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973                                           13
+
+
+                                                                k                        
+                                                                                            k    
+            n  n                        
+      −r̃     x̃       = α0 xn − x̃n − t β0 f (xn ) − f (x̃n ) +   α j xn− j − x̃n− j − t   β j f (xn− j ) − f (x̃n− j ) .
+                                                                                                      j =1                                      j =1
+
+Rearranging this expression gives
+
+               n         t β0                                 n 
+       xn − x̃ −                           f (xn ) − f (x̃ ) =
+                              α0
+                                                                    
+                                     (I)
+
+                                                1 
+                                                    k                                            t 
+                                                                                                      k                                                                      (4.30)
+                   1         n  n
+             −          r̃     x̃     −                  α j xn− j − x̃n− j +                              β j f (xn− j ) − f (x̃n− j ) .
+                   α0                           α0 j=1                                            α0 j=1
+                                                                                                                                          
+                                                                                     (II)
+
+We proceed by bounding (I)2 from below, and (II)2 from above. To bound (I)2 from below, we apply the reverse
+triangle to obtain
+
+
+                                                    t β0                                  n 
+      (I)2 ≥ xn − x̃n 2 −                                        f (xn ) − f (x̃ ) 2 .                                                                                  (4.31)
+                                                        α0
+                                                                                           
+                                                                          (I.a)
+
+We now use Lipschitz continuity of the velocity f to bound (I.a)2 from above as
+
+                        t |β0 | κ n
+      (I.a)2 ≤                  x − x̃n 2 .                                                                                                                               (4.32)
+                          |α0 |
+If time-step-restriction condition t < |α0 |/|β0 | κ holds, then we can combine inequalities (4.31) and (4.32) as
+
+                        h
+      (I)2 ≥                 xn − x̃n 2 .                                                                                                                                 (4.33)
+                    |α0 |
+   To bound (II)2 in Eq. (4.30) from above, we apply the triangle inequality and employ Lipschitz continuity of the
+velocity f , which gives
+
+                                                              1 
+                                                                k
+                         1           n  n                                                           
+      (II)2 ≤                r̃         x̃    2 +                             α j + β j κ t xn− j − x̃n− j 2 .                                                         (4.34)
+                       |α0 |                                 |α0 |
+                                                                      j =1
+
+Combining Eq. (4.30) with inequalities (4.33) and (4.34) gives
+
+                    1            
+                                   k
+      xn − x̃n 2 ≤ r̃n x̃n 2 +   γ j xn− j − x̃n− j 2 .                                                                                                                 (4.35)
+                               h
+                                                               j =1
+
+                                                                                                                          j                 j
+The manifold-Galerkin error bound (4.26) results from substituting x̃ = xref + g (x̂G ), j = 1, . . . , n in (4.35), while the
+                                                                                                             j                  j
+manifold-LSPG error bound (4.27) results from substituting x̃                                                    = xref + g (x̂ P ),   j = 1, . . . , n in (4.35) and noting that the
+                                                         j
+manifold LSPG solution xref + g (x̂ P ) satisﬁes the time-discrete residual-minimization property (3.17).                                                     2
+
+    This result illustrates that the time-discrete residual minimization property of manifold LSPG projection allows its ap-
+proximation to sequentially minimize the error bound, as the ﬁrst term on the right-hand side of bound (4.27) corresponds
+to the new contribution to the error bound at time instance t n , while the second term on the right-hand side comprises the
+recursive term in the bound.
+
+5. Nonlinear trial manifold based on deep convolutional autoencoders
+
+    This section describes the approach we propose for constructing the decoder g : R p → R N that deﬁnes the nonlinear
+trial manifold. As described in the introduction, any nonlinear-manifold learning method equipped with a continuously dif-
+ferentiable mapping from the generalized coordinates (i.e., the latent state) to an approximation of the state (i.e., the data)
+is compatible with the manifold Galerkin and manifold LSPG methods proposed in Section 3. Here, we pursue deep con-
+volutional autoencoders for this purpose, as they are very expressive and scalable; there is also high-performance software
+available for their construction. When the nonlinear trial manifold is constructed using the proposed deep convolutional
+14                                             K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973
+
+
+autoencoder, we refer to the Manifold Galerkin ROM as the Deep Galerkin ROM and the Manifold LSPG ROM as the Deep
+LSPG ROM.1
+   Section 5.1 describes the mathematical structure of autoencoders, which provides a neural-network model for the de-
+coder g (·; θ ) : R p → R N , where θ denotes the neural-network parameters to be computed during training; Section 5.2
+describes the proposed autoencoder architecture, which is tailored to spatially distributed dynamical-system states; Sec-
+tion 5.3 describes how we propose to satisfy the initial condition using the proposed autoencoder in line with Remark 3.1.
+
+5.1. Autoencoder
+
+    An autoencoder is a type of feedforward neural network that aims to learn the identity mapping, i.e., h : x → x̃ with
+x̃ ≈ x and h : Rnx → Rnx . Autoencoders achieve this using an architecture composed of two parts: the encoder h enc : x → x̂
+with henc : Rnx → Rnx̂ and nx̂  nx , which maps a high-dimensional vector x to a low-dimensional code x̂; and the decoder
+hdec : x̂ → x̃ with hdec : Rnx̂ → Rnx , which maps the code x̂ to an approximation of the original high-dimensional vector x̃.
+Thus, the resulting autoencoder takes the form
+
+       h : x → hdec ◦ henc (x).
+If h(x) ≈ x over a data set x ∈ {x(i ) }i , then the low-dimensional codes h enc (x(i ) ) contain suﬃcient information to recover
+                                           (i )
+accurate approximations of the data x̃ ≈ x(i ) via the application of the decoder h dec . In this work, we propose to employ
+the autoencoder decoder hdec for the decoder g used to deﬁne the nonlinear trial manifold introduced in Section 3.1.
+    In feedforward networks, each network layer typically corresponds to a vector or tensor, whose values are computed
+by applying an aﬃne transformation to the previous layer followed by a nonlinear activation function. An encoder with nL
+layers takes the form
+
+       henc : (x; θ enc ) → hnL (·; nL ) ◦ hnL −1 (·; nL −1 ) ◦ · · · ◦ h1 (x; 1 ),
+
+where h i (·; i ) : R p i−1 → R p i , i = 1, . . . , nL denotes the function applied at layer i of the neural network; i , i = 1, . . . , nL
+denotes the weights and the biases employed at layer i with θ enc ≡ (1 , . . . , nL ); and p i , i = 1, . . . , nL denotes the di-
+mensionality of the output at layer i. The input has dimension p 0 = nx and the ﬁnal layer produces a code with dimension
+pnL = nx̂ . The nonlinear activation function is applied in layers 1 to nL to a function of the weights, biases, and the outputs
+from the previous layer such that
+
+       h i : (x; i ) → φ i (h i (i , x)),
+where φ i is an element-wise nonlinear activation function. For fully-connected layers as in the traditional multilayer per-
+ceptron (MLP), h i (i , x) = i [1, x T ] T with i ∈ R p i ×( p i−1 +1) a real-valued matrix. For convolutional layers, h i corresponds
+to a convolution operator with i providing the convolutional-ﬁlter weights.
+   A decoder with n̄L layers also corresponds to a feedforward network; it takes the form
+
+                                        ¯ n̄ ) ◦ h̄n̄ −1 (·; 
+       hdec : (x̂; θ dec ) → h̄n̄L (·;                     ¯ n̄ −1 ) ◦ · · · ◦ h̄1 (x̂; 
+                                                                                          ¯ 1)
+                                            L        L           L
+
+with h̄ i (·;                                                              ¯ 1, . . . , 
+              ¯ i ) : R p̄ i−1 → R p̄ i , i = 1, . . . , n̄L , and θ dec ≡ (            ¯ n̄ ). The dimension of the input is p̄ 0 = nx̂ and the di-
+                                                                                             L
+mension of the ﬁnal layer (i.e., the output layer) is p̄n̄L = nx . Again, the nonlinear activation is applied to the output of the
+previous layer such that
+
+                  ¯ i ) → φ̄ i (h̄i (
+       h̄ i : (x;                    ¯ i , x)).
+                         ¯ i , x) = 
+As in the encoder, h̄ i (          ¯ i [1, xT ] T with 
+                                                        ¯ i ∈ R p̄ i ×( p̄ i−1 +1) a real-valued matrix for fully-connected layers, while h̄i
+corresponds to a convolution operator with h̄ i providing transposed convolutional-ﬁlter weights for convolutional layers.
+   Because MLP autoencoders are fully connected, the number of parameters (corresponding to the edge weights and biases)
+can be extremely large when the number of inputs nx is large; in such scenarios, these models typically require a large
+amount of training data. As this work aims to enable model reduction for large-scale dynamical systems, directly applying an
+MLP autoencoder to the state such that nx = N is not practical in many scenarios. To address this, alternative neural-network
+architectures have been devised that make use of parameter sharing to reduce the total number of parameters in the model,
+and thus the amount of data needed for training. In the context of dynamical systems characterized by a state that can be
+represented as spatially distributed data, we propose to apply convolutional autoencoders. Such methods are applicable to
+multi-channel spatially distributed input data and employ parameter sharing such that they can be trained with less data.
+Further, such models tend to generalize well to unseen test data [48,49] because they exploit three key properties of natural
+signals: local connectivity, parameter sharing, and equivariance to translation [32,48].
+
+
+ 1
+   This is analogous to the naming convention employed for linear-subspace ROMs, as linear-subspace Galerkin projection with POD is referred to as a
+POD–Galerkin ROM.
+                                        K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973                 15
+
+
+5.2. Deep convolutional autoencoders for spatially distributed states
+
+   Many dynamical systems are characterized by a state that can be represented as spatially distributed data, e.g., spatially
+discretized partial-differential-equations models. In such cases, there is a restriction operator R that maps the state to a
+tensor representing spatially distributed data, i.e.,
+
+       R : R N → Rn1 ×···×nd ×nchan ,                                                                                            (5.1)
+
+where ni denotes the number of discrete points in spatial dimension i; d ∈ {1, 2, 3} denotes the spatial dimension, and nchan
+denotes the number of channels. For images, typically nchan = 3 (i.e., red, green, and blue). For dynamical system models
+the number of channels nchan is equal to the number of state variables deﬁned at a given spatial location; for example,
+nchan is equal to the number of conserved variables when the dynamical system arises from the spatial discretization of a
+conservation law. We also write the associated prolongation operator, which aims to provide the inverse mapping such that
+
+       P : Rn1 ×···×nd ×nchan → R N .                                                                                           (5.2)
+For coarse discretizations of the spatial domain, it is possible to ensure R ◦ P (·) corresponds to the identity map; for ﬁne
+discretizations, it is possible to ensure P ◦ R (·) corresponds to the identity map; for cases where underlying grid provides
+an isomorphic representation of the state, it is possible to achieve both [18].
+    After reformatting the state from a vector to a tensor by applying the restriction operator R, we apply an invertible aﬃne
+scaling operator S : Rn1 ×···×nd ×nchan → Rn1 ×···×nd ×nchan for data-standardization purposes. Section 6.2 deﬁnes the speciﬁc
+elements of this operator, which are computed from the training data.
+    Fig. 1 depicts the architecture of the proposed deep convolutional autoencoder. Before the ﬁrst convolutional layer, the
+autoencoder applies the restriction operator R and scaling operator S , while after the last convolutional layer, the autoen-
+coder applies the inverse scaling operator S −1 and prolongation operator P . We note that the restriction and prolongation
+operators are (deterministic) operations that simply reshape the state into an appropriate format for the autoencoder, while
+the scaling operator is deﬁned explicitly from the range of the training data; thus, these quantities are not subject to
+training. We consider the combination of convolutional layers (gray boxes) and fully-connected layers (blue rectangles).
+Appendix B provides a description of convolutional layers, including hyperparameters and parameters that are subject to
+optimization. The encoder network is composed of restriction and scaling, followed by a sequence of nconv convolutional
+layers and nfull fully-connected layers. The decoder network is composed of a sequence of nfull fully-connected layers and
+nconv transposed-convolutional layers with no nonlinear activation in the last layer, followed by inverse scaling and prolon-
+                                                                                                  d
+gation. As a result, the dimension of the input to the ﬁrst convolutional layer is p 0 = nchan i =1 ni . The dimension pnconv
+of the output of encoder layer nconv (i.e., the ﬁnal convolutional layer) is determined by the hyperparameters deﬁning the
+kernels used in the convolutional layers (i.e., depth, stride, zero-padding). Similarly, the dimension p̄nfull of the output of
+decoder layer nfull (i.e., the ﬁnal fully connected layer) is determined by the hyperparameters deﬁning the kernels in the
+                                                                                                               d
+subsequent convolutional layers. The dimension of the output of the ﬁnal decoder layer is p̄nL = p 0 = nchan i =1 ni .
+    A particular instance of the network architecture can be deﬁned by specifying the number of convolutional layers nconv ,
+the number of fully-connected layers nfull , the number of units in each layer, and the types of nonlinear activations. Such
+architecture-related parameters are typically considered hyperparameters, as they are not subject to optimization during
+training.
+    We propose to set the decoder for the proposed manifold ROMs to the decoder arising from the deep convolutional
+autoencoder architecture described in Fig. 1, i.e., g = hdec . When the Manifold Galerkin and Manifold LSPG ROMs employ
+this choice of decoder, we refer to them as Deep Galerkin and Deep LSPG ROMs, respectively.
+
+5.3. Initial condition satisfaction
+
+                                                                                       0
+    As discussed in Remark 3.1, the initial generalized coordinates x̂ (μ) can be ensured to satisfy the initial conditions
+by employing a reference state deﬁned by Eq. (3.4); however, this implies that the decoder must be able to accurately
+represent deviations from this reference state. To accomplish this for the proposed autoencoder, we propose (1) to train the
+autoencoder with snapshot data centered on the initial condition along with the zero vector (as described in Section 6.1),
+                                                                                   0
+and (2) to set the initial generalized coordinates to an encoding of zero, i.e., x̂ (μ) = henc (0) for all μ ∈ D . Then, setting the
+reference state according to Eq. (3.4) leads to a reference state of xref (μ) = x (μ) − g (henc (0)). Further, if hdec (henc (0)) ≈ 0,
+                                                                                  0
+
+as is encouraged by including the zero vector in training, then the reference state comprises a perturbation of the initial
+condition, and the decoder hdec must only represent deviations from this perturbation. This is consistent with the training
+of the autoencoder, as the snapshots have been centered on the initial condition.
+
+6. Oﬄine training
+
+   This section describes the oﬄine training process used to train the deep convolutional autoencoder proposed in Sec-
+tion 5.2. The approach employs precisely the same snapshot data used by POD. Section 6.1 describes the (snapshot-based)
+                                                                                                                                                                                                                          16
+                                                                                                                                                                                                                          K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973
+Fig. 1. Network architecture of the deep convolutional autoencoder, which takes a state of dynamical systems as an input and produces an approximated state as an output. The encoder extracts low-dimensional
+code x̂ from the discrete representation of the state x by applying the restriction operator (Eq. (5.1)) and a set of convolutional layers (gray boxes), followed by a set of fully-connected layers (blue rectangles).
+The decoder approximately reconstructs the high-dimensional vector h(x; θ) by performing the inverse operations of the encoder, applying fully-connected layers (blue rectangles), followed by the transposed-
+convolutional layers (gray boxes), then applying the prolongation operator (Eq. (5.2)) to the resulting quantity. (For interpretation of the colors in the ﬁgure(s), the reader is referred to the web version of this
+article.)
+                                                     K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973                    17
+
+
+data collection procedure, which is identical to that employed by POD. Section 6.2 describes how the data are scaled to
+improve numerical stability of autoencoder training. Section 6.3 summarizes the gradient-based-optimization approach em-
+ployed for training the autoencoder (i.e., computing the optimal parameters θ  ) given the scaled training data. Algorithm 1
+provides a summary of oﬄine training.
+
+
+Algorithm 1 Oﬄine training.
+Input: Training-parameter instances Dtrain ; restriction operator R; prolongation operator P ; autoencoder architecture; SGD hyperparameters (adaptive
+learning-rate strategy; initial parameters θ (0) ; number of minibatches nbatch ; maximum number of epochs nepoch ; early-stopping criterion)
+Output: Encoder henc ; decoder g
+1: Solve the FOM OE (2.2) for μ ∈ Dtrain and form the snapshot matrix W (Eq. (6.1)).
+2: Compute the scaling operator S (Eq. (6.4)), which completes the deﬁnition of the autoencoder h(x; θ) = hdec (·; θ dec ) ◦ henc (x; θ enc ).
+3: Train the autoencoder by executing Algorithm 2 in Appendix A with inputs corresponding to the snapshot matrix W ; the autoencoder h(x; θ); and SGD
+   hyperparameters. This returns the encoder henc and decoder g.
+
+
+
+6.1. Snapshot-based data collection
+
+   The ﬁrst step of oﬄine training is snapshot-based data collection. This requires solving the FOM OE (2.2) for training-
+                                          n
+parameter instances μ ∈ Dtrain ≡ {μtrain
+                                    i
+                                         }i =train
+                                               1
+                                                   ⊂ D and assembling the snapshot matrix
+                                                            
+                                          ) ∈ R N ×nsnap
+                                                     n
+       W := W (μ1train ) · · · W (μtrain
+                                    train
+                                                                                                                                                (6.1)
+
+with nsnap := N t ntrain and W (μ) := [x1 (μ) − x0 (μ) · · · x Nt (μ) − x0 (μ)].
+
+
+Remark 6.1 (Proper orthogonal decomposition). POD employs the snapshot matrix W to compute a trial basis matrix  used
+to deﬁne an aﬃne trial subspace xref (μ) + Ran(). To do so, POD computes the singular value decomposition (SVD) and
+sets the trial basis matrix to be equal to the ﬁrst p left singular vectors, i.e.,
+
+       W = U V T ,                   φ i = u i , i = 1, . . . , p .                                                                            (6.2)
+
+The resulting POD trial basis matrix  satisﬁes the minimization problem
+
+                        nsnap
+                         
+       minimize                  w i − T w i 22 ,                                                                                           (6.3)
+        ∈ V k (R N )
+                         i =1
+
+where w i denotes the ith column of W and V k (Rn ) and denotes the set of orthogonal k × n matrices (the compact Stiefel
+manifold). The solution is unique up to a rotation. This technique is equivalent (up to the data-centering process) to principal
+component analysis [40], an unsupervised machine-learning method for linear dimensionality reduction.
+
+6.2. Data standardization
+
+    As described in Section 5.2, the ﬁrst layer of the proposed autoencoder applies a restriction operator R, which reformats
+the input vector into a tensor compatible with convolutional layers, followed by an aﬃne scaling operator S ; the last layer
+applies the inverse of this scaling operator S −1 and subsequently applies the prolongation operator P to reformat the data
+into a vector. We now deﬁne the scaling operator from the training data to ensure that all elements of the training data
+lie between zero and one. This scaling improves numerical stability of the gradient-based optimization for training [41,71],
+which will be described in Section 6.3. We adopt a standard scaling procedure also followed, e.g., by Ref. [31]. Namely,
+deﬁning the restriction of the ith snapshot as W i := R ( w i ) ∈ Rn1 ×···×nd ×nchan , we set the elements of the scaling operator S
+to
+
+                                 x − W min
+                                       j
+       si 1 ···id j : x →                                                                                                                      (6.4)
+                             W max
+                               j
+                                   − W min
+                                       j
+
+with
+
+       W max
+         j   :=                                 max                                Wik1 ···id j ,   and
+                        k∈{1,...,nsnap }, i 1 ∈{1,...,n1 },..., i d ∈{1,...,nd }
+
+        W min
+          j   :=                                min                                Wik1 ···id j .
+                        k∈{1,...,nsnap }, i 1 ∈{1,...,n1 },..., i d ∈{1,...,nd }
+18                                        K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973
+
+
+                      Table 1
+                      Parameters of the autoencoder architecture described in Fig. 1 applied to both benchmark problems. The
+                      encoder consists of nL = 5 layers with nconv = 4 convolutional layers, followed by nfull = 1 fully-connected
+                      layers. The decoder consists of nfull = 1 fully-connected layers, followed by nconv = 4 transposed-convolution
+                      layers. For the parameterized 1D Burgers’ equation, we employ 1D convolutional kernel ﬁlters with the
+                      kernel length 25 at every convolutional layer and transposed-convolutional layer, and apply length-2 stride
+                      (s = 2) encoder layer 1 and the decoder layer 5, and length-4 stride (s = 4) for other convolutional layers
+                      and transposed-convolutional layers. For the chemically reacting ﬂow, we employ 5 × 5 convolutional kernel
+                      ﬁlters at every convolutional layer and transposed-convolutional layer, and apply length-2 stride (s = 2).
+                      For the deﬁnition of stride, we refer to Appendix B. For zero-padding, we use half padding [28,32]. With
+                      these settings, pnconv = p̄nfull = 128 for the 1D Burgers’ equation and pnconv = p̄nfull = 512 for the chemically
+                      reacting ﬂow.
+                                        Encoder network                                            Decoder network
+                                       Convolution layers                                       Fully-connected layers
+                        Layer                    Number of ﬁlters                  Layer     Input dimension       Output dimension
+                          1                            8                             1               p                   p̄nfull
+                          2                            16                                  Transposed-convolutional layers
+                          3                            32
+                                                                                   Layer                 Number of ﬁlters
+                          4                            64
+                                                                                     2                          64
+                                     Fully-connected layers
+                                                                                     3                          32
+                        Layer     Input dimension         Output dimension           4                          16
+                          5             pnconv                      p                5                          1
+
+
+
+6.3. Autoencoder training
+
+   Once the autoencoder architecture has been deﬁned (including the restriction, prolongation and scaling operators), it
+takes the form h(x; θ ) = hdec (; θ dec ) ◦ henc (x; θ enc ), where the undeﬁned parameters θ correspond to convolutional-ﬁlter
+weights and weights and biases for the fully connected layers. We compute optimal values of these parameters θ  us-
+ing a standard approach from deep learning: stochastic gradient descent (SGD) with minibatching and early stopping [9].
+Appendix A provides additional details, where Algorithm 2 provides the training algorithm.
+
+7. Numerical experiments
+
+    This section assesses the performance of the proposed Deep Galerkin and Deep LSPG ROMs, which employ nonlinear
+trial manifolds, compared to POD–Galerkin and POD–LSPG ROMs, which employ aﬃne trial subspaces. We consider two
+advection-dominated benchmark problems: 1D Burgers’ equation and a chemically reacting ﬂow. We employ the numerical
+PDE tools and ROM functionality provided by pyMORTestbed [81], and we construct the autoencoder using TensorFlow
+[1].
+    For both benchmark problems, the Deep Galerkin and Deep LSPG ROMs employ a 10-layer convolutional autoencoder
+corresponding to the architecture depicted in Fig. 1. The encoder henc consists of nL = 5 layers with nconv = 4 convolutional
+layers, followed by nfull = 1 fully-connected layer. The decoder h dec consists of nfull = 1 fully-connected layer, followed by
+nconv = 4 transposed-convolution layers. The latent code of the autoencoder is of dimension p (i.e., pnL = p̄ 0 = p), which
+will vary during the experiments to deﬁne different reduced-state dimensions. Table 1 speciﬁes attributes of the kernels
+used in convolutional and transposed-convolutional layers.
+    For the nonlinear activation functions φ i , i = 1, . . . , nL and φ̄ i , i = 1, . . . , n̄L − 1, we use exponential linear units (ELU)
+[20], which is deﬁned as
+                
+                        x      if x ≥ 0
+       φ(x) =                            ,
+                    exp(x) − 1 otherwise
+
+and an identity activation function in the output at layer n̄L in decoder (as is common practice). This choice of activation en-
+sures that the resulting decoder g is continuously differentiable everywhere, and is twice continuously differentiable almost
+everywhere. We employ the 2 -loss function deﬁned in Eq. (A.2) in the minimization problem (A.1), which is equivalent to
+the loss function minimized by POD (see Remark 6.1). We apply the Adam optimizer [44], which is compatible with the
+stochastic gradient descent (SGD) algorithm reported in Algorithm 2; here, the adaptive learning rate strategy computes
+rates for different parameters using estimates of ﬁrst and second moments of the gradients.
+    Using the same snapshots as that to train the autoencoder, we also compute a POD basis  following the steps discussed
+in Remark 6.1.
+    We compare the performance of four ROMs: 1) POD–Galerkin: linear-subspace Galerkin projection (Eq. (4.4)) with the
+POD basis deﬁning , 2) POD-LSPG: linear-subspace LSPG projection (Eq. (4.6)) with the POD basis deﬁning , 3) Deep
+Galerkin: manifold Galerkin projection (Eq. (3.8)) with the deep convolutional decoder deﬁning g , and 4) Deep LSPG: man-
+ifold LSPG projection (Eq. (3.18)) with the deep convolutional decoder deﬁning g. All ROMs enforce the initial condition by
+setting the reference state according to Remark 3.1; this implies xref (μ) = x0 (μ) for the linear-subspace ROMs.
+                                          K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973            19
+
+
+   To solve the OEs arising at each time instance, we apply Newton’s method for POD–Galerkin, the Gauss–Newton
+method for POD–LSPG, and the quasi-Newton methods proposed in Section 3.4 for the Deep Galerkin and Deep LSPG.
+We terminate the (quasi)-Newton iterations when the residual norm drops below 10−6 of its initial guess at that time
+instance; the initial guess corresponds to the solution at the previous time instance.
+   To assess the ROM accuracy, we compute the relative 2 -norm of the state error
+                                             
+                        Nt                     Nt
+                                             
+      relative error =                n
+                            x (μ) − x̃ (μ)
+                              n             2      xn (μ)2 .                                                               (7.1)
+                                                          2                          2
+                             n =1                                    n =1
+
+We also include the projection error of the solution
+                                                             
+                          Nt                                   Nt
+                                                             
+      projection error =     ( I − T )(xn (μ) − x0 (μ))]2     xn (μ)2 ,  2                         2                  (7.2)
+                                  n =1                                                    n =1
+
+onto both (1) the POD basis, in which case  is the POD basis employed by POD–Galerkin and POD–LSPG, and (2) the
+optimal basis, in which case  =  , which consists of the ﬁrst p left singular vectors of the snapshot matrix collected
+at the online-parameter instance W (μ). We refer to the former metric as the POD projection error, as it provides a lower
+bound for the POD–Galerkin and POD–LSPG relative errors; we refer to the latter metric as the optimal projection error, as
+it provides an 2 -norm counterpart to the Kolmogorov p-width. Finally, we compute the projection of the FOM solution on
+the trial manifold
+                                           
+                    arg min xn − w 2
+       n
+      x̃ (μ) =                                                                                                               (7.3)
+                  w ∈xref (μ)+S
+
+                                                         n       n
+and compute its relative error by employing x̃ ← x̃ in Eq. (7.1); we refer to this as the manifold projection error.
+
+7.1. 1D Burgers’ equation
+
+    We ﬁrst consider a parameterized inviscid Burgers’ equation [66], as it comprises a very simple benchmark problem
+for which linear subspaces are ill suited due to its slowly decaying Kolmogorov n-width. The governing system of partial
+differential equations (with initial and boundary conditions) is
+
+       ∂ w (x, t ; μ) ∂ f ( w (x, t ; μ))
+                     +                    = 0.02eμ2 x , ∀x ∈ [0, 100], ∀t ∈ [0, T ]
+            ∂t                ∂x
+                             w (0, t ; μ) = μ1 , ∀t ∈ [0, T ]                                                                 (7.4)
+
+                                      w (x, 0) = 1,     ∀x ∈ [0, 100],
+where the ﬂux is f ( w ) = 0.5w and there are nμ = 2 parameters; thus, the intrinsic solution-manifold dimension is p  = 3
+                                      2
+
+(see Remark 2.1). We set the parameter domain to D = [4.25, 5.5] × [0.015, 0.03] and the ﬁnal time to T = 35. We apply
+Godunov’s scheme with 256 control volumes to spatially discretize Eq. (7.4), which results in a system of parameterized
+ODEs of the form (2.1) with N = 256 spatial degrees of freedom and initial condition x0 (μ) = x0 = 1. For time discretization,
+we use the backward-Euler scheme, which corresponds to a linear multistep scheme with k = 1, α0 = β0 = 1, α1 = −1, and
+β1 = 0 in Eq. (2.3). We consider a uniform time step t = 0.07, resulting in N t = 500 time instances.
+    For oﬄine training, we set the training-parameter instances to Dtrain = {(4.25 + (1.25/9)i , 0.015 +
+(0.015/7) j )}i =0,...,9; j =0,...7 , resulting in ntrain = 80 training-parameter instances. The restriction operator R and prolon-
+gation operator P correspond to reshaping operators (without interpolation); the restriction operator reshapes the state
+vector into a tensor corresponding to the ﬁnite-volume grid such that d = 1, n1 = 256, and nchan = 1 in deﬁnitions (5.1)
+and (5.2). Then, we apply Algorithm 1 with inputs speciﬁed above and the following SGD hyperparameters: the fraction
+of snapshots to use for validation ω = 0.1; Adam optimizer learning-rate strategy with an initial uniform learning rate
+η = 10−4 ; initial parameters θ (0) computed via Xavier initialization [30] for weights and zero for biases; the number of
+minibatches determined by a ﬁxed batch size of mI (i ) = 20, i = 1, . . . , nbatch ; a maximum number of epochs nepoch = 1000;
+and early-stopping enforced if the loss on the validation set fails to decrease over 100 epochs. For the online stage, we
+consider two online-parameter instances μ1test = (4.3, 0.021), and μ2test = (5.15, 0.0285), which are not included in Dtrain .
+    Fig. 2 reports solutions at four different time indices computed by using FOM OE and the four considered ROMs.
+All ROMs employ the same reduced dimension of p = 10 in Fig. 2 (left) and p = 20 in Fig. 2 (right). These results
+demonstrate that nonlinear-manifold ROMs Deep Galerkin and Deep LSPG produce extremely accurate solutions, while the
+linear-subspace ROMs—constructed using the same training data—exhibit signiﬁcant errors. This is due to the fundamental
+ill-suitedness of linear trial subspaces to advection-dominated problems.
+    Fig. 3 reports the convergence of the relative error as a function of reduced dimension p. These results illustrate the
+promise of employing nonlinear trial manifolds. First, we note that employing a linear trial subspace immediately introduces
+20                                         K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973
+
+
+
+
+Fig. 2. 1D Burgers’ equation. Online solutions at four different time instances t = {3.5, 7.0, 10.5, 14} computed by solving the FOM (High-ﬁdelity solution,
+solid blue line), POD–ROMs with Galerkin projection (POD–G ROM, solid red line) and LSPG projection (POD–LSPG ROM, solid green line), and the nonlinear-
+manifold ROMs equipped with the deep convolutional decoder associated with time-continuous residual minimization (Deep G ROM, dotted cyan line) and
+with time-discrete residual minimization (Deep LSPG ROM, dashed magenta line). All ROMs employ a reduced dimension of p = 10 (left) and p = 20 (right).
+
+
+
+signiﬁcant errors: the projection error onto the optimal basis of dimension p = p  = 3 is over 10%; the optimal nonlinear
+trial manifold (corresponding to the solution manifold) of the same dimension yields zero error. Even with a reduced
+dimension p = 50, the relative projection error onto the optimal basis has not yet reached 0.1%. Second, we note that with a
+reduced dimension of only p = 5 = p  + 2, the Deep LSPG ROM realizes relative errors near 0.1%, while linear-subspace ROMs
+(including the projection error with the optimal basis) exhibit relative errors near 10%. Thus, the proposed convolutional
+autoencoder is very close to achieving the optimal performance of any nonlinear trial manifold; the dimension it requires
+to realize sub-0.1% errors is only two larger than the intrinsic solution-manifold dimension p  = 3. We also observe that
+the POD–Galerkin and POD–LSPG ROMs are also nearly able to achieve optimal performance for linear-subspace ROMs, as
+their relative errors are close to the projection error onto the optimal basis; unfortunately, this error remains quite large
+relative to the Deep Galerkin and Deep LSPG ROMs. This highlights that the proposed nonlinear-manifold ROMs are able
+to overcome the fundamental limitations of linear-subspace ROMs on problems exhibiting a slowly decaying Kolmogorov
+n-width. We also observe that the POD basis is very close to the optimal basis, which implies that the training data are
+suﬃcient to accurately represent the online solution.
+    Additionally, we note that Deep LSPG outperforms Deep Galerkin for this problem, likely due to the fact that the residual-
+minimization problem is deﬁned over a ﬁnite time step rather than time-instantaneously; similar results have been shown
+in the case of linear trial subspaces, e.g., in Refs. [13].
+    Finally, to illustrate the dependence of the proposed methods on the amount of training data, we vary the number of
+training-parameter instances in the set ntrain ∈ {5, 10, 20, 40, 80, 120}, and we use the resulting nsnap = N t ntrain snapshots to
+train both the autoencoder for the Deep Galerkin and Deep LSPG ROMs and to compute the POD basis for the POD–Galerkin
+and POD–LSPG ROMs. We ﬁx the reduced dimension to p = 5. For oﬄine training, we deﬁne the maximum number of
+epochs and the early-stopping strategy in a manner that the Adam optimizer employs the same number of gradient compu-
+tations to train each model. Fig. 4 reports the relative error of the four ROMs for the different number of training-parameter
+                                             K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973                                        21
+
+
+
+
+Fig. 3. 1D Burgers’ equation. Relative errors of the ROM solutions (Eq. (7.1)) at online-parameter instances μ1test and μ2test for varying dimensions of the ROMs.
+The ﬁgure shows the relative errors of POD–ROMs with Galerkin projection (POD–G ROM, red circle) and LSPG projection (POD–LSPG ROM, green cross),
+and the nonlinear-manifold ROMs equipped with the decoder with time-continuous optimality (Deep G ROM, cyan square) and time-discrete optimality
+(Deep LSPG ROM, magenta plus sign). The ﬁgure also reports the projection error (Eq. (7.2)) of the solution onto the POD basis (POD proj error, dashed
+blue line) and the optimal basis (Opt proj error, dotted black line), and reports the manifold projection error of the solution (Eq. (7.3), Manifold proj error,
+black asterisk). The vertical dashed line indicates the intrinsic solution-manifold dimension p  (see Remark 2.1).
+
+
+
+
+Fig. 4. 1D Burgers’ equation: varying amount of training data. Relative errors of the ROM solutions (Eq. (7.1)) at online-parameter instances μ1test and μ2test
+for a varying the number training-parameter instances ntrain ∈ {5, 10, 20, 40, 80, 120}. The ﬁgure shows the relative errors of POD–ROMs with Galerkin
+projection (POD–G ROM, red circle) and LSPG projection (POD–LSPG ROM, green cross), and the nonlinear-manifold ROMs equipped with the decoder with
+time-continuous optimality (Deep G ROM, cyan square) and time-discrete optimality (Deep LSPG ROM, magenta plus sign). The ﬁgure also reports the
+projection error (Eq. (7.2)) of the solution onto the POD basis (POD proj error, blue triangle) and the optimal basis (Opt proj error, gray pentagram), and
+reports the manifold projection error of the solution (Eq. (7.3), Manifold proj error, black asterisk).
+
+
+
+
+instances. This ﬁgure demonstrates that the proposed Deep Galerkin and Deep LSPG ROMs yield accurate results—around
+2% relative error for Deep Galerkin and less than 1% relative error for Deep LSPG—with only ntrain = 5 parameter instances.
+These highlights that—for this example—the proposed methods do not require an excessive amount of training data relative
+to standard POD–based ROMs. This lack of demand for a large amount of data is likely due to the use of convolutional layers
+in the autoencoder, which effectively employ parameter sharing to reduce signiﬁcantly the total number of parameters in
+the autoencoder, and thus the amount of data needed for training.
+22                                        K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973
+
+
+
+
+                                         Fig. 5. Chemically reacting ﬂow. The geometry of the spatial domain .
+
+
+7.2. Chemically reacting ﬂow
+
+    We now consider a model of the reaction of a premixed H2 -air ﬂame at constant uniform pressure [10]. The evolution
+of the ﬂame is modeled by the nonlinear convection–diffusion–reaction equation
+
+      ∂ w (x, t ; μ)
+                      = ∇ · (κ ∇ w (x, t ; μ)) − v · ∇ w (x, t ; μ) + q( w (x, t ; μ); μ) in  × D × [0, T ],   (7.5)
+            ∂t
+where ∇ denotes the gradient with respect to physical space, κ denotes the molecular diffusivity, v denotes the velocity
+ﬁeld, and
+
+       w (x, t ; μ) ≡ [ w T (x, t ; μ), w H2 (x, t ; μ), w O2 (x, t ; μ)), w H2 O ((x, t ; μ))] T ∈ R4
+
+denotes the thermo-chemical composition vector consisting of the temperature w T (x, t ; μ) and the mass fractions of chem-
+ical species H2 , O2 , and H2 O, i.e., w i (x, t ; μ) for i ∈ {H2 , O2 , H2 O}. The nonlinear reaction source term q( w (x, t ; μ); μ) ≡
+[q T ( w ; μ), qH2 ( w ; μ), qO2 ( w ; μ), qH2 O ( w ; μ)] T is of Arrhenius type and is deﬁned as
+
+       q T ( w ; μ) = Q qH2 O ( w ; μ)
+                                                   νH2               ν O2
+                               Wi        ρ w H2           ρ w O2                          E
+        qi ( w ; μ) = −νi                                                   A exp −               ,   i ∈ {H2 , O2 , H2 O},
+                                ρ         W H2             W O2                         R wT
+where (νH2 , νO2 , νH2 O ) = (2, 1, −2) denote stoichiometric coeﬃcients, ( W H2 , W O2 , W H2 O ) = (2.016, 31.9, 18) denote molec-
+ular weights with units g·mol−1 , ρ = 1.39 × 10−3 g·cm−3 denotes the density mixture, R = 8.314 J·mol−1 ·K−1 denotes the
+universal gas constant, and Q = 9800 K denotes the heat of the reaction. The nμ = 2 parameters correspond to μ = ( A , E ),
+which are the pre-exponential factor A and the activation energy E; we set the corresponding parameter domain to
+D = [2.3375 × 1012 , 6.5 × 1012 ] × [5.625 × 103 , 9 × 103 ]. Thus, the intrinsic solution-manifold dimension is p  = 3 (see
+Remark 2.1). We set the molecular diffusivity to κ = 2 cm2 ·s−1 , and the velocity ﬁeld set to be constant and divergence-free
+with v = [50 cm · s−1 , 0] T . We set the ﬁnal time to T = 0.06 s.
+   Fig. 5 reports the geometry of the spatial domain. On the inﬂow boundary 2 , we impose Dirichlet boundary conditions
+w H2 = 0.0282, w O2 = 0.2259 and w H2 O = 0 for the chemical-species mass fractions and w T = 950 K for the temperature. On
+boundaries 1 and 3 , we impose homogeneous Dirichlet boundary conditions for the chemical-species mass fractions, and
+we set the temperature w T = 300 K. On 4 , 5 , and 6 , we impose homogeneous Neumann conditions on the temperature
+and mass fractions. We consider a uniform initial condition corresponding to a domain that is empty of chemical species
+such that w H2 = w O2 = w H2 O = 0 and we set the temperature to w T = 300 K.
+   We employ a ﬁnite-difference method with 65 grid points in the horizontal direction and 32 grid points in the vertical
+direction to spatially discretize Eq. (7.5), which results in a system of parameterized ODEs of the form (2.1) with N = 8192
+degrees of freedom.
+   For time discretization, we employ the second order backward difference scheme (BDF2), which corresponds to a linear
+multistep scheme with k = 2, α0 = 1, α1 = − 43 , α2 = 13 , β0 = 23 , and β1 = β2 = 0 in Eq. (2.3). We consider a uniform time
+step t = 10−4 , resulting in N t = 600 time instances.
+   For oﬄine training, we set the training-parameter instances to Dtrain = {(2.3375 × 1012 + (3.2725 × 1012 /7)i , 5.625 ×
+103 + (3.375 × 103 /7) j )}i =0,...,7; j =0,...7 , resulting in ntrain = 64 training-parameter instances. The restriction operator R and
+prolongation operator P correspond to reshaping operators (without interpolation); the restriction operator reshapes the
+state vector into a tensor corresponding to the ﬁnite-difference grid such that d = 2, n1 = 64, n2 = 32, and nchan = 4 in
+deﬁnitions (5.1) and (5.2). We emphasize that each of the 4 unknown variables is considered a different channel for the
+input data. Then, we apply Algorithm 1 with inputs speciﬁed above and the following SGD hyperparameters: the fraction
+of snapshots to use for validation ω = 0.1; Adam optimizer learning-rate strategy with an initial uniform learning rate
+η = 10−4 ; initial parameters θ (0) computed via He initialization [36] for weights and zero for biases; number of mini-
+batches determined by a ﬁxed batch size of mI (i ) = 20, i = 1, . . . , nbatch ; a maximum number of epochs nepoch = 5000; and
+early-stopping enforced if the loss on the validation set fails to decrease over 500 epochs. For the online stage, we consider
+parameter instances μ1test = (2.5 × 1012 , 5.85 × 103 ) and μ2test = (3.2 × 1012 , 7.25 × 103 ) that are not included in Dtrain .
+                                             K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973                                        23
+
+
+
+
+Fig. 6. Chemically reacting ﬂow. FOM solutions of the temperature, mass fractions of H2 , O2 , and H2 O at online-parameter instance μ1test = (2.5 × 1012 , 5.85 ×
+103 ) at t = 0.06.
+
+
+
+
+Fig. 7. Chemically reacting ﬂow. Relative errors of the temperature solution computed using ROMs at online-parameter instance μ1test = (2.5 × 1012 , 5.85 ×
+103 ) at t = 0.06. The dimensions of the generalized coordinates in both linear-subspace ROMs (top row) and nonlinear-manifold ROMs (bottom row) are
+the same p = 3. The colormaps on each row are in the same scale.
+
+
+    Fig. 6 reports the FOM solution for online-parameter instance μ1test and ﬁnal time t = T = 0.06 s. Figs. 7 and 8 report
+relative errors of the temperature solutions and the H2 mass fraction solutions at the ﬁnal time t = T computed using all
+considered ROMs with the same reduced dimension p = 3. Again, we observe that the proposed nonlinear-manifold ROMs
+produce signiﬁcantly lower errors as compared with the linear-subspace ROMs. Fig. 9 reports the convergence of the relative
+error as a function of reduced dimension p along with the projection errors Eq. (7.2) onto the POD basis and the optimal
+basis. This ﬁgure again shows that the proposed manifold ROMs signiﬁcantly outperform the linear-subspace ROMs, as well
+as the projection error onto both the POD and optimal bases. First, we observe that employing a linear trial subspace again
+introduces signiﬁcant errors, as the projection error onto the optimal basis of dimension p = p  = 3 is around 5%; the
+optimal nonlinear trial manifold (corresponding to the solution manifold) of the same dimension yields zero error. Second,
+24                                          K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973
+
+
+
+
+Fig. 8. Chemically reacting ﬂow. Relative errors of the mass fraction of H2 computed using ROMs at online-parameter instance μ1test = (2.5 × 1012 , 5.85 × 103 )
+at t = 0.06. The dimensions of the generalized coordinates in both linear-subspace ROMs (top row) and nonlinear-manifold ROMs (bottom row) are the
+same p = 3. The color maps on each row are in the same scale.
+
+
+
+we note that for a reduced dimension of only p = p  = 3, both the Deep Galerkin and Deep LSPG ROMs yield relative errors
+of less than 0.1%, while the projection errors onto the POD and optimal bases exceed 5%, and the linear-subspace ROMs
+yield relative errors in excess of 40%. Thus, the proposed convolutional autoencoder nearly achieves optimal performance,
+as the dimension it requires to realize sub-0.1% errors is exactly equal to the intrinsic solution-manifold dimension p  = 3.
+     We also observe that there is a signiﬁcant gap between the performance of the linear-subspace ROMs and the POD
+projection error; this gap is attributable to the closure problem. We also observe that—in contrast with the previous
+example—there is a non-trivial gap between the POD projection error and the optimal-basis projection error, which sug-
+gests that the online solution is less well represented by the training data than in the previous case.
+     Additionally, we observe that for a reduced dimension of p = 10, the projection error onto the optimal basis begins
+to become smaller than the relative error of the proposed Deep Galerkin and Deep LSPG ROMs; however this occurs for
+(already small) errors less than 0.1%. The error saturation of the Deep Galerkin and Deep LSPG ROMs is likely due to the
+fact that the online solution cannot be perfectly represented using the training data, as illustrated by the gap between the
+projection errors associated with POD and the optimal basis.
+     We vary the number of training-parameter instances in the set ntrain ∈ {4, 8, 16, 32, 64}, and we use the resulting nsnap =
+N t ntrain snapshots to train both the autoencoder for the Deep Galerkin and Deep LSPG ROMs and to compute the POD basis
+for the POD–Galerkin and POD–LSPG ROMs. We ﬁx the reduced dimension to p = 5. Fig. 10 reports the relative error of the
+four ROMs for these different amounts of training data. This ﬁgure demonstrates that the proposed Deep Galerkin and Deep
+LSPG ROMs yield accurate results—less than 1% relative error for both Deep Galerkin and Deep LSPG—with only ntrain = 4
+parameter instances. These results again show that the proposed methods do not appear to require an excessive amount of
+training data relative to standard POD–based ROMs.
+
+8. Conclusion
+
+   This work has proposed novel manifold Galerkin and manifold LSPG projection techniques, which project dynamical-
+system models onto arbitrary continuously-differentiable nonlinear manifolds. We demonstrated how these methods can
+exactly satisfy the initial condition, and provided quasi-Newton solvers for implicit time integration.
+   We performed analyses that demonstrated that employing an aﬃne trial manifold recovers classical linear-subspace
+Galerkin and LSPG projection. We also derived suﬃcient conditions for commutativity of time discretization and manifold
+Galerkin projection, as well as conditions under which manifold Galerkin and manifold LSPG projection are equivalent. In
+addition, we derived a posteriori time-discrete error bounds for the proposed methods.
+   We also proposed a practical strategy for computing a representative low-dimensional nonlinear trial manifold that
+employs a speciﬁc convolutional autoencoder tailored to spatially distributed dynamical-system states. When the Manifold
+Galerkin and Manifold LSPG ROMs employ this choice of decoder, we refer to them as Deep Galerkin and Deep LSPG ROMs,
+respectively.
+                                             K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973                                        25
+
+
+
+
+                           ﬂow. Relative errors of the ROM solutions (Eq. (7.1)) at online-parameter instances μtest = (2.5 × 10 , 5.85 × 10 ) and μtest =
+                                                                                                                 1               12          3       2
+Fig. 9. Chemically reacting
+  3.2 × 1012 , 7.25 × 103 for varying ROM dimension. The ﬁgure shows the relative errors of POD–ROMs with Galerkin projection (POD–G ROM, red circle)
+and LSPG projection (POD–LSPG ROM, green cross), and the nonlinear-manifold ROMs equipped with the decoder with time-continuous optimality (Deep G
+ROM, cyan square) and time-discrete optimality (Deep LSPG ROM, magenta plus sign). The ﬁgure also reports the projection error (Eq. (7.2)) of the solution
+onto the POD basis (POD proj error, dashed blue line) and the optimal basis (Opt proj error, dotted black line), and reports the manifold projection error of
+the solution (Eq. (7.3), Manifold proj error, black asterisk). The vertical dashed line indicates the intrinsic solution-manifold dimension p  (see Remark 2.1).
+
+
+
+
+Fig. 10. Chemically reacting ﬂow: varying
+                                        amount of training data.
+                                                                   Relative errors of the ROM solutions (Eq. (7.1)) at online-parameter instances μtest = 1
+
+(2.5 × 1012 , 5.85 × 103 ) and μ2test = 3.2 × 1012 , 7.25 × 103 for a varying the number training-parameter instances ntrain ∈ {4, 8, 16, 32, 64}. The ﬁgure
+shows the relative errors of POD–ROMs with Galerkin projection (POD–G ROM, red circle) and LSPG projection (POD–LSPG ROM, green cross), and the
+nonlinear-manifold ROMs equipped with the decoder with time-continuous optimality (Deep G ROM, cyan square) and time-discrete optimality (Deep LSPG
+ROM, magenta plus sign). The ﬁgure also reports the projection error (Eq. (7.2)) of the solution onto the POD basis (POD proj error, blue triangle) and the
+optimal basis (Opt proj error, gray pentagram), and reports the manifold projection error of the solution (Eq. (7.3), Manifold proj error, black asterisk).
+
+
+   Finally, numerical experiments demonstrated the ability of the method to produce substantially lower errors for low-
+dimensional reduced states than even the projection onto the optimal basis. Indeed, the proposed methodology is nearly
+able to achieve optimal performance for a nonlinear-manifold method; in the ﬁrst case, the reduced dimension required to
+achieve sub-0.1% errors is only two larger than the intrinsic solution-manifold dimension; in the second case, the reduced
+dimension required to achieve such errors is exactly equal to the intrinsic solution-manifold dimension.
+   We note that one drawback of the method in its current form (relative to classical linear-subspace methods) is that it
+incurs a costlier training process, as training a deep convolutional autoencoder is signiﬁcantly more computationally expen-
+sive than simply computing the left singular vectors of a snapshot matrix. In addition, the proposed method is characterized
+by signiﬁcantly more hyperparameters—which relate to the autoencoder architecture—than classical methods.
+26                                           K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973
+
+
+   Future work involves integrating the proposed manifold Galerkin and manifold LSPG projection methods within a full
+hyper-reduction framework to realize computational cost savings; this investigation will leverage sparse norms as discussed
+in Remarks 3.4 and 3.6, and will also consider speciﬁc instances of the proposed autoencoder architecture that enable
+computationally eﬃcient hyper-reduction. Additional future works include developing autoencoder architectures that can
+capture solution features across multiple scales (as is relevant for multiscale problems), investigating graph convolutional
+layers for application to problems discretized on nonuniform or irregular grids, and enforcing constraints that ensure the
+resulting solution satisﬁes important physical properties (e.g., conservation [15], monotonicity preservation [2,22]). In addi-
+tion, we aim to implement the proposed techniques in a production-level simulation code and demonstrate the methods on
+truly large-scale dynamical-system models.
+
+Declaration of competing interest
+
+   The authors declare that they have no known competing ﬁnancial interests or personal relationships that could have
+appeared to inﬂuence the work reported in this paper.
+
+Acknowledgements
+
+   The authors gratefully acknowledge Matthew Zahr for graciously providing the pyMORTestbed code that was modiﬁed
+to obtain the numerical results, as well as Jeremy Morton for useful discussions on the application of convolutional neural
+networks to simulation data. The authors also thank Patrick Blonigan and Eric Parish for providing useful feedback. This
+work was sponsored by Sandia’s Advanced Simulation and Computing (ASC) Veriﬁcation and Validation (V&V) Project/Task
+#103723/05.30.02. This paper describes objective technical results and analysis. Any subjective views or opinions that might
+be expressed in the paper do not necessarily represent the views of the U.S. Department of Energy or the United States
+Government. Sandia National Laboratories is a multimission laboratory managed and operated by National Technology &
+Engineering Solutions of Sandia, LLC, a wholly owned subsidiary of Honeywell International Inc., for the U.S. Department of
+Energy’s National Nuclear Security Administration under contract DE-NA0003525.
+
+Appendix A. Stochastic gradient descent for autoencoder training
+
+   This section brieﬂy summarizes stochastic gradient descent (SGD) with minibatching and early stopping, which is used
+to compute the parameters θ  of the autoencoder.
+   We begin by randomly shuﬄing the snapshot matrix W (deﬁned in Eq. (6.1)) into neural-network training snapshots
+W train ∈ R N ×m and validation snapshots W val ∈ R N ×m̄ , i.e.,
+
+        [ W train W val ] = W P
+where P ∈ {0, 1}nsnap ×nsnap denotes a random permutation matrix and m + m̄ = nsnap , typically with m̄ ≈ 0.1m.
+   Given the training data W train , we compute the optimal parameters θ  by (approximately) solving the optimization
+problem
+
+                                                         1 
+                                                             m
+                                                                       i
+        minimize J (θ ) = Ex∼ p̂ data L(x, θ ) =                    L(xtrain , θ ),                                       (A.1)
+                  θ                                      m
+                                                             i =1
+
+which minimizes the empirical risk over the training data. Here, p̂ data denotes the empirical distribution associated with
+the training data W train and the loss function L provides a measure of discrepancy between training snapshot xtrain
+                                                                                                                i
+                                                                                                                     and its
+                  i
+reconstruction h(xtrain ; θ ); for example, the 2 -loss function is often employed such that
+
+        L : (x, θ ) → x − h(x; θ )22 ,                                                                                 (A.2)
+in which case the loss function is equivalent to that employed for POD (compare with Problem (6.3)). Note that autoencoder
+training is categorized as an unsupervised learning (or semi-supervised learning) problem, as there is no target response
+variable other than recovery of the original input data.
+    We apply SGD to (approximately) solve optimization problem (A.1), which leads to parameter updates at the ith iteration
+of the form
+
+                                 J (θ (i ) ).
+        θ ( i +1 ) = θ ( i ) − η ∇
+                                   (i )
+                                                                                                                          (A.3)
+                                                         J (≈ ∇ J ) denotes a gradient approximation at optimization
+Here, η ∈ R denotes the step length or learning rate and ∇
+                                                                                      (i )
+
+iteration i. The gradient approximation corresponds to the sample mean of the gradient over a minibatch W mini,I (i ) ∈
+        I (i )
+RN ×m            , where
+
+        [ W mini,1 · · · W mini,nbatch ] = W train P train ,
+                                                        K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973                          27
+
+
+where I : i → ((i − 1) mod nbatch ) + 1 provides the mapping from optimization iteration i to batch index, and P train ∈
+{0, 1} N ×m denotes a random permutation matrix. That is, the gradient approximation at optimization iteration i is
+                                           I (i )
+                                 1       
+                                         m
+         (i )
+        ∇ J (θ ) =     (i )                                  j
+                                                    ∇θ L(xmini,I (i ) , θ ).                                                                            (A.4)
+                              m I (i )
+                                          j =1
+
+For small batch sizes, this gradient approximation not only signiﬁcantly reduces the per-iteration cost of the optimization
+algorithm, it can also improve generalization performance, and—for early iterations and for minibatch size 1—leads to the
+same sublinear rate of convergence of the expected risk as the empirical risk [9]. In practice, each gradient contribution
+       j
+∇θ L(xmini,I (i ) , θ) is computed from the chain rule via automatic differentiation, which is referred to in deep learning as
+backpropagation [70].
+   Some optimization methods employ adaptive learning rates that are tailored for each parameter, which comprises a
+modiﬁcation of the parameter update (A.3) to
+
+                                         J (i ) (θ (i ) )
+        θ ( i +1 ) = θ ( i ) − η ( i )  ∇                                                                                                              (A.5)
+where η(i ) denotes a vector of learning rates and  denotes the (element-wise) Hadamard product. Examples include
+AdaGrad [27], RMSProp [76], and Adam.
+   Although we have presented the speciﬁc case of non-adaptive minibatches (which we employ in the numerical experi-
+ments), it is also possible to employ adaptive batch sizes; often, the batch size increases with iteration count to produce a
+lower-variance gradient estimate as a local minimum is approached [9].
+   Rather than terminating iterations when a local minimum of the objective function J is reached, we instead employ
+early stopping, which is a widely used form of regularization that has been shown to improve generalization performance in
+many applications [32,9]. Here, we terminate iterations when the loss function on the validation snapshots
+
+         1 
+              m̄
+                        i
+                     L(xval , θ)
+         m̄
+              i =1
+
+does not decrease for a certain number of epochs, where an epoch is equivalent to nbatch iterations, i.e., a single pass through
+the training data. Early stopping effectively treats the number of optimization iterations as a hyperparameter, as allowing a
+large number of iterations can be associated with a higher-capacity model.
+    Algorithm 2 describes autoencoder training using SGD with minibatching and early stopping. Note that the adaptive
+learning rate strategy, initial parameters θ (0) , number of minibatches nbatch , maximum number of epochs nepoch , and early-
+stopping criterion are all SGD hyperparameters that comprise inputs to the algorithm. Line 6 of Algorithm 2 applies the
+adaptive learning rate strategy. For example, AdaGrad scales the learning rate to be inversely proportional to the square
+root of the sum of all the historical squared values of the gradient [27]; Adam updates the learning rate based on estimates
+of the ﬁrst moment (the mean) and the second moment (the uncentered variance) of the gradients [44]. Alternatively, the
+learning rate can be kept to a single constant for all parameters over the entire training procedure, which simpliﬁes the
+parameter update procedure in Line (7) of Algorithm 2 to the typical SGD update (A.3). See Ref. [9] for a review of training
+deep neural networks.
+
+Algorithm 2 Stochastic gradient descent with minibatching and early stopping.
+Require: Snapshot matrix W ; autoencoder h(x; θ) = hdec (·; θ dec ) ◦ henc (x; θ enc ); SGD hyperparameters (fraction of snapshots to employ for validation ω ∈
+[0, 1]; adaptive learning rate strategy; initial parameters θ (0) ; number of minibatches nbatch ; maximum number of epochs nepoch ; early-stopping criterion)
+Ensure: Encoder henc (·) = henc (·; θ enc ); decoder g (·) = hdec (·; θ dec );
+ 1: Randomly shuﬄe the snapshot matrix into neural-network training and validation snapshots [ W train W val ] = W P with W val ∈ R N ×m̄ with m̄ =
+    ωnsnap .
+ 2: Randomly shuﬄe the training snapshots into minibatches [ W mini,1 · · · W mini,nbatch ] = W train P train .
+ 3: Initialize optimization iterations i ← 0
+ 4: for j = 1, . . . , nepoch do
+ 5:     for k = 1, . . . , nbatch do
+ 6:         Update learning rate η(i ) based on adaptive learning rate strategy
+ 7:                                                              J (θ (i ) )
+           Perform parameter update θ (i +1) = θ (i ) − η (i )  ∇
+                                                                            (i )
+
+ 8:        i←i+1
+                                                                            1
+                                                                              m̄             (i )
+                                                                               i =1 L(xval , θ )
+                                                                                       i
+ 9:     Terminate if early-stopping criterion is satisﬁed on the loss m̄
+10: Set θ  ← θ (i )
+
+
+
+Appendix B. Basics of convolutional layers
+
+   This section provides notations and basic operations performed in convolutional layers. See [28] for more details of the
+convolution arithmetic for deep learning.
+28                                           K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973
+
+
+   Units in convolutional layers are organized as feature maps H, where each unit is connected to the local patches of the
+feature maps of the previous layer through a discrete convolution deﬁned by a set of kernels, which is denoted by ﬁlter
+bank W , followed by a nonlinear activation and a pooling opertion. The feature map at layer l can be considered as a
+3-dimensional tensor Hl ∈ Rnchan ×n1 ×n2 with element Hli , j ,k representing a unit within channel i at row j and column k,
+                                        l     l   l
+
+
+                                                                                                                          l −1
+and the ﬁlter banks at layer l can be considered as a 4-dimensional tensor W l ∈ Rnﬁlter ×nchan ×k1 ×k2 with element Wil, j ,m,n
+                                                                                                                  l              l   l
+
+
+connecting between a unit in channel i of the output and a unit in channel j of the input, with an offset of m rows and n
+columns between the output unit and the input unit. The number of ﬁlters in the ﬁlter bank is denoted by nﬁlter , and the
+kernel length is characterized by k1 and k2 . Convolving a feature map Hl−1 with a ﬁlter bank W l can be written as
+                                                                                   
+                            
+      Hli , j ,k = φl            Hlr− 1                     l            l
+                                    ,( j −1)×s+m,(k−1)×s+n Wi ,r ,m,n + Bi , j ,k       ,
+                        r ,m,n
+
+for all valid i, where Bl is a tensor indicating bias. Here, s denote the stride, which determines downsampling rate of each
+convolution; only every s elements is sampled in each direction in the output. By having s > 1, the dimension of the next
+feature map can be reduced by factor of s in each direction. The ﬁlter banks W and the biases B are learnable parameters,
+whereas the kernel length [k1 , k2 ] and the number of ﬁlters nﬁlter , and the stride s are the hyperparameters. After the
+nonlinearity, a pooling function is typically applied to the output, extracting a statistical summary of the neighboring units
+of the output at certain locations.
+
+Appendix C. Additional numerical experiments: extrapolation and interpolation in time
+
+   We now perform additional investigations that assess the ability of the proposed Deep Galerkin and Deep LSPG ROMs to
+both extrapolate (Appendix C.1) and interpolate (Appendix C.2) in time. We also assess the effect of early stopping on the
+performance of these methods (Appendix C.3). All numerical experiments in this section are performed on the 1D Burgers’
+equation described in Section 7.1 with the same setup except when otherwise speciﬁed.
+
+C.1. Time extrapolation
+
+    To assess time extrapolation, we collect snapshots associated with the ﬁrst nt (≤ N t = 500) time instances for each
+training-parameter instance and use the resulting nsnap = nt ntrain snapshots to train the autoencoder for the Deep Galerkin
+and Deep LSPG ROMs and to compute the POD basis for the POD–Galerkin and POD–LSPG ROMs. Fig. C.11 reports the
+relative error for each of these ROMs of dimension p = 5 at the online-parameter instances μ1test and μ2test for the number
+of collected snapshots varying in the set nt ∈ {200, 300, 400, 500}. These results show that the proposed Deep Galerkin and
+Deep LSPG ROMs yield more accurate results than the POD–Galerkin and POD–LSPG ROMs for nt ≥ 300, with Deep LSPG
+yielding relative errors around 0.1% for nt ≥ 400. Thus, we conclude that—for this example—the proposed Deep Galerkin and
+Deep LSPG generally yield superior time-extrapolation results than the POD–Galerkin and POD–LSPG ROMs.
+
+C.2. Time interpolation
+
+    To assess time interpolation, we now consider collecting nt snapshots that are equispaced in the time interval at each
+training-parameter instance, with the ﬁnal snapshot collected at the ﬁnal time instance t Nt . As in the case of time extrap-
+olation, we then use the resulting nsnap = nt ntrain snapshots to train both the autoencoder for the Deep Galerkin and Deep
+LSPG ROMs and to compute the POD basis for the POD–Galerkin and POD–LSPG ROMs. Fig. C.12 reports the relative error for
+each of these ROMs of dimension p = 5 at the online-parameter instances μ1test and μ2test for the number of collected snap-
+shots varying in the set nt ∈ {10, 20, 50, 100, 140, 250, 500}. First, these results show that the POD–Galerkin and POD–LSPG
+ROMs are almost entirely insensitive to the number of snapshots collected within the time interval for nt ≥ 10. Similarly, the
+proposed Deep Galerkin and Deep LSPG ROMs are insensitive to the number of snapshots for nt ≥ 100. For nt ∈ {10, 20, 50},
+the Deep Galerkin and Deep LSPG ROMs yield larger errors than for nt ≥ 100; however, these errors are still smaller than
+the errors produced by the POD–Galerkin and POD–LSPG ROMs. Thus, we conclude that—for this example—the proposed
+methods do not exhibit accuracy degradation when only 20% of the snapshots (collected equally spaced in time) are used
+to train the autoencoder.
+
+C.3. Early-stopping study
+
+    We now assess the effect of early stopping—a common approach in training deep neural networks for improving gener-
+alization performance—on the performance of the proposed Deep Galerkin and Deep LSPG methods. To do so, we set the
+reduced dimension to p = 30 and train the autoencoder both with and without the early stopping strategy. To train without
+early stopping, we set the maximum number of epochs to nepoch = 1000, save the network parameters at each epoch, and
+select the parameters (out of all nepoch = 1000 candidates) that yield the smallest value of the loss function L (deﬁned in
+Eq. (A.2)) on the validation set. Table C.2 reports the relative errors obtained by the proposed ROMs—as well as the optimal
+                                             K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973                                         29
+
+
+
+
+Fig. C.11. 1D Burgers’ equation: time extrapolation. Relative errors of the ROM solutions (Eq. (7.1)) at online-parameter instances μ1test and μ2test for a varying
+number of snapshots nt ∈ {200, 300, 400, 500} collected at each training-parameter instance. In this numerical experiment, these snapshots correspond to
+the state collected at the ﬁrst nt time instances at each training-parameters instance. The ﬁgure shows the relative errors of POD–ROMs with Galerkin
+projection (POD–G ROM, red circle) and LSPG projection (POD–LSPG ROM, green cross), and the nonlinear-manifold ROMs equipped with the decoder with
+time-continuous optimality (Deep G ROM, cyan square) and time-discrete optimality (Deep LSPG ROM, magenta plus sign). The ﬁgure also reports the
+projection error (Eq. (7.2)) of the solution onto the POD basis (POD proj error, blue triangle) and the optimal basis (Opt proj error, gray pentagram), and
+reports the manifold projection error of the solution (Eq. (7.3), Manifold proj error, black asterisk).
+
+
+
+
+Fig. C.12. 1D Burgers’ equation: time interpolation. Relative errors of the ROM solutions (Eq. (7.1)) at online-parameter instances μ1test and μ2test for a varying
+number of snapshots nt ∈ {10, 20, 50, 100, 140, 250, 500} collected at each training-parameter instance. In this numerical experiment, these snapshots
+correspond to the state collected at nt equally-spaced time instances at each training-parameters instance, with the ﬁnal snapshot being collected at the
+ﬁnal time t Nt . The ﬁgure shows the relative errors of POD–ROMs with Galerkin projection (POD–G ROM, red circle) and LSPG projection (POD–LSPG ROM,
+green cross), and the nonlinear-manifold ROMs equipped with the decoder with time-continuous optimality (Deep G ROM, cyan square) and time-discrete
+optimality (Deep LSPG ROM, magenta plus sign). The ﬁgure also reports the projection error (Eq. (7.2)) of the solution onto the POD basis (POD proj error,
+blue triangle) and the optimal basis (Opt proj error, gray pentagram), and reports the manifold projection error of the solution (Eq. (7.3), Manifold proj
+error, black asterisk).
+
+
+
+projection error onto the manifold—at the online-parameter instances. In this case, the early-stopping strategy terminated
+iterations after 506 epochs, while the strategy outlined above selected the network parameters arising at the 944th epoch.
+These results show that adopting the ‘no early stopping’ strategy can slightly improve performance over the early-stopping
+strategy. We hypothesize this to be the case because—for this example—the training data are quite informative of the pre-
+diction task; thus, attempting to prevent overﬁtting essentially amounts to underﬁtting.
+30                                                   K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973
+
+
+                                   Table C.2
+                                   1D Burgers’ equation. Relative errors of the ROM solutions (Eq. (7.1)) at online-parameter in-
+                                   stances μ1test and μ2test . In this experiment, the oﬄine training is performed both with and
+                                   without the early stopping strategy.
+                                                                             μ1test = (4.3, 0.021)            μ2test = (5.15, 0.0285)
+                                                 Early stopping              with           without            with           without
+                                            Manifold LSPG               7.12 × 10−4       6.78 × 10−4      8.05 × 10−4      4.26 × 10−4
+                                           Manifold Galerkin            2.62 × 10−2       1.15 × 10−2      2.77 × 10−2      1.20 × 10−2
+                                        Optimal projection error        4.20 × 10−4       2.87 × 10−4      3.98 × 10−4      2.81 × 10−4
+
+
+
+
+Fig. D.13. 1D Burgers’ equation: estimated computational costs of the decoder. The computational costs required at a fully-connected layer (FC) and transposed-
+convolutional layers (T-conv) of the decoder with the latent code of dimension p = 5 for varying convolution ﬁlter sizes k = {25, 16, 9, 5, 3} with the number
+of convolutional ﬁlters {64, 32, 16, 8, 1} (left) and the total computational costs for varying convolutional ﬁlter sizes k = {25, 16, 9, 5, 3} and varying num-
+bers of convolutional ﬁlters {{64, 32, 16, 8, 1}, {32, 16, 8, 4, 1}, {16, 8, 4, 2, 1}, {8, 4, 2, 1, 1}, {4, 2, 1, 1, 1}, {2, 1, 1, 1, 1}} (right). The gray and blue planes are
+the computational costs for the linear decoder (e.g., POD) with the reduced dimension p = 85 and p = 5, respectively.
+
+
+Appendix D. Computational costs
+
+     Let us consider the ith layer of the autoencoder,
+
+        h i : (x; i ) → φ i (h i (i , x)).
+Fully-connected layers: If the ith layer is a fully-connected layer, then i ∈ R p i ×( p i−1 +1) is a real-valued matrix and the
+operation h i comprises a matrix–vector product h i (i , x) = i [1, x T ] T , followed by an element-wise nonlinear activation
+φ i . Thus, evaluating φ i (hi (i , x)) incurs 2p i ( p i −1 + 1) + c φ p i ﬂoating-point operations (ﬂops), where c φ denotes the number
+of ﬂops incurred by applying the nonlinear activation to a scalar.
+Convolutional layers: If the ith layer is a (transposed-)convolutional layer, the operation h i comprises discrete convolutions,
+followed by an element-wise nonlinear activation φ i . The input and the output of the ith convolutional layer are 3-way
+                          i −1   i −1     i −1
+tensors Hi −1 ∈ Rnchan ×n1 ×n2 , and Hi ∈ Rnchan ×n1 ×n2 (see Appendix B). Each element of the output tensor is computed by
+                                                                  i      i    i
+
+
+applying convolutional ﬁlters to a certain local region at every channel of the input tensor, where a single application of
+                                                                    i −1
+the discrete convolution with ﬁlter size k1i × k2i incurs 2k1i k2i nchan                                  i
+                                                                         ﬂops. That is, computing p i (= nchan n1i n2i ) elements with
+                                                              i −1                                                                i −1
+convolutional ﬁlters of size k1i × k2i requires 2p i k1i k2i nchan ﬂops. Thus, evaluating φ i (h i (i , x)) incurs 2p i k1i k2i nchan + cφ p i
+ﬂops and, again, c φ denotes the number of ﬂops incurred by applying the nonlinear activation to a scalar.
+Restrictor, prolongator, scaling and inverse scaling operator: In this study, the restrictor and the prolongator are restricted to
+only change the shapes of the snapshot matrix into/from a tensor representing spatially distributed data and, thus, they do
+not incur ﬂoating-point operations. The scaling and the inverse scaling operators are applied to each FOM solution snapshot
+and incur 2N ﬂops.
+Fig. D.13 reports the estimated computational costs of the decoder with the latent code of dimension p = 5 for varying
+choices of the hyperparameters. On the left, the ﬁgure shows the computational costs required at each layer of the de-
+coder for varying convolutional ﬁlter sizes k = {25, 16, 9, 5, 3} with the number of the input channels and the number of
+                                             K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973                                       31
+
+
+convolutional ﬁlters speciﬁed as {64, 32, 16, 8, 1}, where the ﬁrst element is the number of the input channels and the
+last four elements are the number of convolutional ﬁlters, and with strides {4, 4, 4, 2}. On the right, the ﬁgure shows the
+total computational costs for varying convolutional ﬁlter sizes k = {25, 16, 9, 5, 3} and different numbers of input channels
+and convolutional ﬁlters {{64, 32, 16, 8, 1}, {32, 16, 8, 4, 1}, {16, 8, 4, 2, 1}, {8, 4, 2, 1, 1}, {4, 2, 1, 1, 1}, {2, 1, 1, 1, 1}} and with
+strides {4, 4, 4, 2}. The gray plane is the computational cost for the linear decoder (e.g., POD) with the reduced dimension
+p = 85, which produces approximated solutions with the accuracy comparable to the accuracy of the manifold ROM solu-
+tions with the autoencoder conﬁgured as described in Table 1 with the reduced dimension p = 5. The ﬁgure also reports
+the computational cost for the linear decoder (e.g., POD) with the latent dimension p = 5 (the blue plane).
+
+References
+
+ [1] M. Abadi, A. Agarwal, P. Barham, E. Brevdo, Z. Chen, C. Citro, G.S. Corrado, A. Davis, J. Dean, M. Devin, S. Ghemawat, I. Goodfellow, A. Harp, G. Irving,
+     M. Isard, Y. Jia, R. Jozefowicz, L. Kaiser, M. Kudlur, J. Levenberg, D. Mané, R. Monga, S. Moore, D. Murray, C. Olah, M. Schuster, J. Shlens, B. Steiner, I.
+     Sutskever, K. Talwar, P. Tucker, V. Vanhoucke, V. Vasudevan, F. Viégas, O. Vinyals, P. Warden, M. Wattenberg, M. Wicke, Y. Yu, X. Zheng, TensorFlow:
+     Large-scale machine learning on heterogeneous systems, 2015, Software available from tensorﬂow.org.
+ [2] R. Abgrall, R. Crisovan, Model reduction using L 1 -norm minimization as an application to nonlinear hyperbolic problems, Int. J. Numer. Methods Fluids
+     87 (2018) 628–651.
+ [3] D. Amsallem, M.J. Zahr, C. Farhat, Nonlinear model order reduction based on local reduced-order bases, Int. J. Numer. Methods Eng. 92 (2012) 891–916.
+ [4] M. Bachmayr, A. Cohen, Kolmogorov widths and low-rank approximations of parametric elliptic PDEs, Math. Comput. 86 (2017) 701–724.
+ [5] U. Baur, C. Beattie, P. Benner, S. Gugercin, Interpolatory projection methods for parameterized model reduction, SIAM J. Sci. Comput. 33 (2011)
+     2489–2518.
+ [6] M. Belkin, P. Niyogi, Laplacian eigenmaps for dimensionality reduction and data representation, Neural Comput. 15 (2003) 1373–1396.
+ [7] P. Binev, A. Cohen, W. Dahmen, R. DeVore, G. Petrova, P. Wojtaszczyk, Convergence rates for greedy algorithms in reduced basis methods, SIAM J. Math.
+     Anal. 43 (2011) 1457–1472.
+ [8] C.M. Bishop, M. Svensén, C.K. Williams, GTM: a principled alternative to the self-organizing map, in: Advances in Neural Information Processing
+     Systems, 1997, pp. 354–360.
+ [9] L. Bottou, F.E. Curtis, J. Nocedal, Optimization methods for large-scale machine learning, SIAM Rev. 60 (2018) 223–311.
+[10] M. Buffoni, K. Willcox, Projection-based model reduction for reacting ﬂows, in: 40th Fluid Dynamics Conference and Exhibit, AIAA Paper, 2010, p. 5008.
+[11] N. Cagniart, Y. Maday, B. Stamm, Model order reduction for problems with large convection effects, in: Contributions to Partial Differential Equations
+     and Applications, Springer, 2019, pp. 131–150.
+[12] K. Carlberg, Adaptive h-reﬁnement for reduced-order models, Int. J. Numer. Methods Eng. 102 (2015) 1192–1210.
+[13] K. Carlberg, M. Barone, H. Antil, Galerkin v. least-squares Petrov–Galerkin projection in nonlinear model reduction, J. Comput. Phys. 330 (2017)
+     693–734.
+[14] K. Carlberg, C. Bou-Mosleh, C. Farhat, Eﬃcient non-linear model reduction via a least-squares Petrov–Galerkin projection and compressive tensor
+     approximations, Int. J. Numer. Methods Eng. 86 (2011) 155–181.
+[15] K. Carlberg, Y. Choi, S. Sargsyan, Conservative model reduction for ﬁnite-volume models, J. Comput. Phys. 371 (2018) 280–314.
+[16] K. Carlberg, C. Farhat, A low-cost, goal-oriented ‘compact proper orthogonal decomposition’ basis for model reduction of static systems, Int. J. Numer.
+     Methods Eng. 86 (2011) 381–402.
+[17] K. Carlberg, C. Farhat, J. Cortial, D. Amsallem, The GNAT method for nonlinear model reduction: effective implementation and application to computa-
+     tional ﬂuid dynamics and turbulent ﬂows, J. Comput. Phys. 242 (2013) 623–647.
+[18] K. Carlberg, A. Jameson, M.J. Kochenderfer, J. Morton, L. Peng, F.D. Witherden, Recovering missing CFD data for high-order discretizations using deep
+     neural networks and dynamics learning, arXiv preprint, arXiv:1812.01177, 2018.
+[19] K. Carlberg, J. Ray, B. van Bloemen, Waanders, decreasing the temporal complexity for nonlinear, implicit reduced-order models by forecasting, Comput.
+     Methods Appl. Mech. Eng. 289 (2015) 79–103.
+[20] D. Clevert, T. Unterthiner, S. Hochreiter, Fast and accurate deep network learning by exponential linear units (ELUs), in: The 4th International Conference
+     on Learning Representations, 2016.
+[21] R. Craig, M. Bampton, Coupling of substructures for dynamic analyses, AIAA J. 6 (1968) 1313–1319.
+[22] R. Crisovan, D. Torlo, R. Abgrall, S. Tokareva, Model order reduction for parametrized nonlinear hyperbolic problems as an application to uncertainty
+     quantiﬁcation, J. Comput. Appl. Math. 348 (2019) 466–489.
+[23] D. DeMers, G.W. Cottrell, Non-linear dimensionality reduction, in: Advances in Neural Information Processing Systems, 1993, pp. 580–587.
+[24] M. Dihlmann, M. Drohmann, B. Haasdonk, Model reduction of parametrized evolution problems using the reduced basis method with adaptive time-
+     partitioning, in: The International Conference on Adaptive Modeling and Simulation, 2011, pp. 156–167.
+[25] D.L. Donoho, C. Grimes, Hessian eigenmaps: locally linear embedding techniques for high-dimensional data, Proc. Natl. Acad. Sci. 100 (2003)
+     5591–5596.
+[26] M. Drohmann, B. Haasdonk, M. Ohlberger, Adaptive reduced basis methods for nonlinear convection–diffusion equations, in: Finite Volumes for Com-
+     plex Applications VI Problems & Perspectives, Springer, 2011, pp. 369–377.
+[27] J. Duchi, E. Hazan, Y. Singer, Adaptive subgradient methods for online learning and stochastic optimization, J. Mach. Learn. Res. 12 (2011) 2121–2159.
+[28] V. Dumoulin, F. Visin, A guide to convolution arithmetic for deep learning, arXiv preprint, arXiv:1603.07285, 2016.
+[29] J.-F. Gerbeau, D. Lombardi, Approximated Lax pairs for the reduced order integration of nonlinear evolution equations, J. Comput. Phys. 265 (2014)
+     246–269.
+[30] X. Glorot, Y. Bengio, Understanding the diﬃculty of training deep feedforward neural networks, in: Proceedings of the Thirteenth International Confer-
+     ence on Artiﬁcial Intelligence and Statistics, 2010, pp. 249–256.
+[31] F.J. Gonzalez, M. Balajewicz, Deep convolutional recurrent autoencoders for learning low-dimensional feature dynamics of ﬂuid systems, arXiv preprint,
+     arXiv:1808.01346, 2018.
+[32] I. Goodfellow, Y. Bengio, A. Courville, Y. Bengio, Deep Learning, vol. 1, MIT Press, Cambridge, 2016.
+[33] C. Gu, Model Order Reduction of Nonlinear Dynamical Systems, PhD thesis, UC Berkeley, 2011.
+[34] S. Gugercin, A.C. Antoulas, C. Beattie, H 2 model reduction for large-scale linear dynamical systems, SIAM J. Matrix Anal. Appl. 30 (2008) 609–638.
+[35] D. Hartman, L.K. Mestha, A deep learning framework for model reduction of dynamical systems, in: Control Technology and Applications (CCTA), 2017
+     IEEE Conference on, IEEE, 2017, pp. 1917–1922.
+[36] K. He, X. Zhang, S. Ren, J. Sun, Delving deep into rectiﬁers: surpassing human-level performance on imagenet classiﬁcation, in: Proceedings of the IEEE
+     International Conference on Computer Vision, 2015, pp. 1026–1034.
+[37] G.E. Hinton, R.R. Salakhutdinov, Reducing the dimensionality of data with neural networks, Science 313 (2006) 504–507.
+32                                          K. Lee, K.T. Carlberg / Journal of Computational Physics 404 (2020) 108973
+
+
+[38] P. Holmes, J. Lumley, G. Berkooz, Turbulence, Coherent Structures, Dynamical Systems and Symmetry, Cambridge University Press, 1996.
+[39] P. Holmes, J.L. Lumley, G. Berkooz, C.W. Rowley, Turbulence, Coherent Structures, Dynamical Systems and Symmetry, Cambridge University Press, 2012.
+[40] H. Hotelling, Analysis of a complex of statistical variables into principal components, J. Educ. Psychol. 24 (1933) 417.
+[41] C.W. Hsu, C.C. Chang, C.J. Lin, A practical guide to support vector classiﬁcation, Available at https://www.csie.ntu.edu.tw/~cjlin/papers/guide/guide.pdf,
+     2003.
+[42] A. Iollo, D. Lombardi, Advection modes by optimal mass transfer, Phys. Rev. E 89 (2014) 022923.
+[43] K. Kashima, Nonlinear model reduction by deep autoencoder of noise response data, in: Decision and Control (CDC), 2016 IEEE 55th Conference on,
+     IEEE, 2016, pp. 5750–5755.
+[44] D.P. Kingma, J. Ba, Adam: a method for stochastic optimization, in: The 3rd International Conference on Learning Representations, 2015.
+[45] T. Kohonen, Self-organized formation of topologically correct feature maps, Biol. Cybern. 43 (1982) 59–69.
+[46] S. Lall, J.E. Marsden, S. Glavaški, A subspace approach to balanced truncation for model reduction of nonlinear control systems, Int. J. Robust Nonlinear
+     Control 12 (2002) 519–535.
+[47] N.D. Lawrence, Gaussian process latent variable models for visualisation of high dimensional data, in: Advances in Neural Information Processing
+     Systems, 2004, pp. 329–336.
+[48] Y. LeCun, Y. Bengio, G. Hinton, Deep learning, Nature 521 (2015) 436.
+[49] Y. LeCun, L. Bottou, Y. Bengio, P. Haffner, Gradient-based learning applied to document recognition, Proc. IEEE 86 (1998) 2278–2324.
+[50] B. Lusch, J.N. Kutz, S.L. Brunton, Deep learning for universal linear embeddings of nonlinear dynamics, arXiv preprint, arXiv:1712.09707, 2017.
+[51] L.v.d. Maaten, G. Hinton, Visualizing data using t-SNE, J. Mach. Learn. Res. 9 (2008) 2579–2605.
+[52] J.M. Martınez, Practical quasi-Newton methods for solving nonlinear systems, J. Comput. Appl. Math. 124 (2000) 97–121.
+[53] J. Masci, U. Meier, D. Cireşan, J. Schmidhuber, Stacked convolutional auto-encoders for hierarchical feature extraction, in: International Conference on
+     Artiﬁcial Neural Networks, Springer, 2011, pp. 52–59.
+[54] M. Milano, P. Koumoutsakos, Neural network modeling for near wall turbulent ﬂow, J. Comput. Phys. 182 (2002) 1–26.
+[55] R. Mojgani, M. Balajewicz, Lagrangian basis method for dimensionality reduction of convection dominated nonlinear ﬂows, arXiv preprint, arXiv:
+     1701.04343, 2017.
+[56] B. Moore, Principal component analysis in linear systems: controllability, observability, and model reduction, IEEE Trans. Autom. Control 26 (1981)
+     17–32.
+[57] J. Morton, F.D. Witherden, A. Jameson, M.J. Kochenderfer, Deep dynamical modeling and control of unsteady ﬂuid ﬂows, arXiv preprint, arXiv:1805.
+     07472, 2018.
+[58] N.J. Nair, M. Balajewicz, Transported snapshot model order reduction approach for parametric, steady-state ﬂuid ﬂows containing parameter dependent
+     shocks, arXiv preprint, arXiv:1712.09144, 2017.
+[59] M. Ohlberger, S. Rave, Nonlinear reduced basis approximation of parameterized evolution equations via the method of freezing, C. R. Math. 351 (2013)
+     901–906.
+[60] M. Ohlberger, S. Rave, Reduced basis methods: success, limitations and future challenges, in: Proceedings of ALGORITMY, Slovak University of Technol-
+     ogy, 2016, pp. 1–12.
+[61] S.E. Otto, C.W. Rowley, Linearly-recurrent autoencoder networks for learning dynamics, arXiv preprint, arXiv:1712.01378, 2017.
+[62] B. Peherstorfer, K. Willcox, Online adaptive model reduction for nonlinear systems via low-rank updates, SIAM J. Sci. Comput. 37 (2015) A2123–A2150.
+[63] A. Pinkus, n-Widths in Approximation Theory, vol. 7, Springer Science & Business Media, 2012.
+[64] C. Prud’Homme, D.V. Rovas, K. Veroy, L. Machiels, Y. Maday, A.T. Patera, G. Turinici, Reliable real-time solution of parametrized partial differential
+     equations: reduced-basis output bound methods, J. Fluids Eng. 124 (2002) 70–80.
+[65] J. Reiss, P. Schulze, J. Sesterhenn, V. Mehrmann, The shifted proper orthogonal decomposition: a mode decomposition for multiple transport phenom-
+     ena, SIAM J. Sci. Comput. 40 (2018) A1322–A1344.
+[66] M.J. Rewieński, A Trajectory Piecewise-Linear Approach to Model Order Reduction of Nonlinear Dynamical Systems, PhD thesis, Massachusetts Institute
+     of Technology, 2003.
+[67] S.T. Roweis, L.K. Saul, Nonlinear dimensionality reduction by locally linear embedding, Science 290 (2000) 2323–2326.
+[68] C. Rowley, Model reduction for ﬂuids, using balanced proper orthogonal decomposition, Int. J. Bifurc. Chaos 15 (2005) 997–1013.
+[69] G. Rozza, D.B.P. Huynh, A.T. Patera, Reduced basis approximation and a posteriori error estimation for aﬃnely parametrized elliptic coercive partial
+     differential equations, Arch. Comput. Methods Eng. 15 (2007) 1.
+[70] D.E. Rumelhart, G.E. Hinton, R.J. Williams, Learning representations by back-propagating errors, Nature 323 (1986) 533–536.
+[71] W.S. Sarle, Neural network FAQ, periodic posting to the usenet newsgroup comp. ai. neural-nets, Available at: ftp://ftp.sas.com/pub/neural/FAQ.html,
+     1997.
+[72] B. Schölkopf, A. Smola, K.-R. Müller, Nonlinear component analysis as a kernel eigenvalue problem, Neural Comput. 10 (1998) 1299–1319.
+[73] T. Taddei, S. Perotto, A. Quarteroni, Reduced basis techniques for nonlinear conservation laws, Modél. Math. Anal. Numér. 49 (2015) 787–814.
+[74] N. Takeishi, Y. Kawahara, T. Yairi, Learning Koopman invariant subspaces for dynamic mode decomposition, in: Advances in Neural Information Pro-
+     cessing Systems, 2017, pp. 1130–1140.
+[75] J.B. Tenenbaum, V. De Silva, J.C. Langford, A global geometric framework for nonlinear dimensionality reduction, Science 290 (2000) 2319–2323.
+[76] T. Tieleman, G. Hinton, Lecture 6.5—RMSProp: Divide the Gradient by a Running Average of Its Recent Magnitude, COURSERA: Neural Networks for
+     Machine Learning, 2012.
+[77] C. Walder, B. Schölkopf, Diffeomorphic dimensionality reduction, in: Advances in Neural Information Processing Systems, 2009, pp. 1713–1720.
+[78] G. Welper, h and hp-adaptive interpolation by transformed snapshots for parametric and stochastic hyperbolic PDEs, arXiv preprint, arXiv:1710.11481,
+     2017.
+[79] G. Welper, Interpolation of functions with parameter dependent jumps by transformed snapshots, SIAM J. Sci. Comput. 39 (2017) A1225–A1250.
+[80] K. Willcox, J. Peraire, Balanced model reduction via the proper orthogonal decomposition, AIAA J. 40 (2002) 2323–2330.
+[81] M.J. Zahr, C. Farhat, Progressive construction of a parametric reduced-order model for PDE-constrained optimization, Int. J. Numer. Methods Eng. 102
+     (2015) 1111–1135.
+

@@ -1,0 +1,637 @@
+                                       Input Convex Neural Networks
+
+
+                                       Brandon Amos 1 Lei Xu 2 * J. Zico Kolter 1
+
+
+                         Abstract                                y) we can globally and efficiently (because the problem is
+                                                                 convex) solve the optimization problem
+     This paper presents the input convex neural net-
+     work architecture. These are scalar-valued (po-                                   argmin f (x, y; θ).                     (1)
+     tentially deep) neural networks with constraints                                      y
+     on the network parameters such that the output
+     of the network is a convex function of (some                Fundamentally, this formalism lets us perform inference
+     of) the inputs. The networks allow for efficient            in the network via optimization. That is, instead of mak-
+     inference via optimization over some inputs to              ing predictions in a neural network via a purely feedfor-
+     the network given others, and can be applied to             ward process, we can make predictions by optimizing a
+     settings including structured prediction, data im-          scalar function (which effectively plays the role of an en-
+     putation, reinforcement learning, and others. In            ergy function) over some inputs to the function given oth-
+     this paper we lay the basic groundwork for these            ers. There are a number of potential use cases for these
+     models, proposing methods for inference, opti-              networks.
+     mization and learning, and analyze their repre-
+     sentational power. We show that many existing               Structured prediction As is perhaps apparent from our
+     neural network architectures can be made input-             notation above, a key application of this work is in struc-
+     convex with a minor modification, and develop               tured prediction. Given (typically high-dimensional) struc-
+     specialized optimization algorithms tailored to             tured input and output spaces X × Y, we can build a net-
+     this setting. Finally, we highlight the perfor-             work over (x, y) pairs that encodes the energy function
+     mance of the methods on multi-label prediction,             for this pair, following typical energy-based learning for-
+     image completion, and reinforcement learning                malisms (LeCun et al., 2006). Prediction involves finding
+     problems, where we show improvement over the                the y ∈ Y that minimizes the energy for a given x, which
+     existing state of the art in many cases.                    is exactly the argmin problem in (1). In our setting, as-
+                                                                 suming that Y is a convex space (a common assumption in
+                                                                 structured prediction), this optimization problem is convex.
+1. Introduction                                                  This is similar in nature to the structured prediction energy
+                                                                 networks (SPENs) (Belanger & McCallum, 2016), which
+In this paper, we propose a new neural network architecture      also use deep networks over the input and output spaces,
+that we call the input convex neural network (ICNN).These        with the difference being that in our setting f is convex in
+are scalar-valued neural networks f (x, y; θ) where x and        y, so the optimization can be performed globally.
+y denotes inputs to the function and θ denotes the param-
+eters, built in such a way that the network is convex in (a      Data imputation Similar to structured prediction but
+subset of) inputs y.3 The fundamental benefit to these IC-       slightly more generic, if we are given some space Y we
+NNs is that we can optimize over the convex inputs to the        can learn a network f (y; θ) (removing the additional x in-
+network given some fixed value for other inputs. That is,        puts, though these can be added as well) that, given an ex-
+given some fixed x (and possibly some fixed elements of          ample with some subset I missing, imputes the likely val-
+   *
+     Work done while author was at Carnegie Mellon Univer-       ues of these variables by solving the optimization problem
+sity. 1 School of Computer Science, Carnegie Mellon Univer-      as above ŷI = argminyI f (yI , yĪ ; θ) This could be used
+sity. Pittsburgh, PA, USA 2 Department of Computer Science and
+                                                                    3
+Technology, Tsinghua University. Beijing, China. Correspon-          We emphasize the term “input convex” since convexity in
+dence to: Brandon Amos <bamos@cs.cmu.edu>, J. Zico Kolter        machine learning typically refers to convexity (of the loss min-
+<zkolter@cs.cmu.edu>.                                            imization learning problem) in the parameters, which is not the
+                                                                 case here. Note that in our notation, f needs only be a convex
+Proceedings of the 34 th International Conference on Machine     function in y, and may still be non-convex in the remaining inputs
+Learning, Sydney, Australia, PMLR 70, 2017. Copyright 2017       x. Training these neural networks remains a nonconvex problem,
+by the author(s).                                                and the convexity is only being exploited at inference time.
+                                               Input Convex Neural Networks
+
+e.g., in image inpainting where the goal is to fill in some     ways, either: 1) the architecture is built in a very particular
+arbitrary set of missing pixels given observed ones.            way such that optimization over the output is guaranteed to
+                                                                be “easy” (e.g. convex, or the result of running some infer-
+Continuous action reinforcement learning Given a re-            ence procedure), usually by introducing a structured linear
+inforcement learning problem with potentially continuous        objective at the last layer of the network; or 2) no attempt is
+state and action spaces S × A, we can model the (neg-           made to make the architecture “easy” to run inference over,
+ative) Q function, −Q(s, a; θ) as an input convex neural        and instead a general model is built over the output space.
+network. In this case the action selection procedure can        In contrast, our approach lies somewhere in between: by
+be formulated as a convex optimization problem a? (s) =         ensuring convexity of the resulting decision space, we are
+argmina −Q(s, a; θ).                                            constraining the inference problem to be easy in some re-
+                                                                spect, but we specify very little about the architecture other
+This paper lays the foundation for optimization, inference,     than the constraints required to make it convex. In particu-
+and learning in these input convex models, and explores         lar, as we will show, the network architecture over the vari-
+their performance in the applications above. Our main con-      ables to be optimized over can be deep and involve multiple
+tributions are: we propose the ICNN architecture and a par-     non-linearities. The goal of the proposed work is to allow
+tially convex variant; we develop efficient optimization and    for complex functions over the output without needing to
+inference procedures that are well-suited to the complexity     specify them manually (exactly analogous to how current
+of these specific models; we propose techniques for train-      deep neural networks treat their input space).
+ing these models, based upon either max-margin structured
+prediction or direct differentiation of the argmin operation;   Structured prediction and MAP inference Our work
+and we evaluate the system on multi-label prediction, im-       also draws some connection to MAP-inference-based
+age completion, and reinforcement learning domains; in          learning and approximate inference. There are two broad
+many of these settings we show performance that improves        classes of learning approaches in structured prediction:
+upon the state of the art.                                      method that use probabilistic inference techniques (typi-
+                                                                cally exploiting the fact that the gradient of log likelihood is
+2. Background and related work                                  given by the actual feature expectations minus their expec-
+                                                                tation under the learned model (Koller & Friedman, 2009,
+Energy-based learning The interplay between infer-              Ch 20)), and methods that rely solely upon MAP inference
+ence, optimization, and structured prediction has a long        (such as max-margin structured prediction (Taskar et al.,
+history in neural networks. Several early incarnations of       2005; Tsochantaridis et al., 2005)). MAP inference in par-
+neural networks were explicitly trained to produce struc-       ticular also has close connections to optimization, as vari-
+tured sequences (e.g. (Simard & LeCun, 1991)), and there        ous convex relaxations of the general MAP inference prob-
+was an early appreciation that structured models like hid-      lem often perform well in theory and practice. The pro-
+den Markov models could be combined with the outputs of         posed methods can be viewed as an extreme case of this
+neural networks (Bengio et al., 1994). Much of this earlier     second class of algorithm, where inference is based solely
+work is surveyed and synthesized by (LeCun et al., 2006),       upon a convex optimization problem that may not have any
+who give a tutorial on these energy based learning meth-        probabilistic semantics at all. Finally, although it is more
+ods. In recent years, there has been a strong push to fur-      abstract, we feel there is a philosophical similarity between
+ther incorporate structured prediction methods like condi-      our proposed approach and sum-product networks (Poon &
+tional random fields as the “last layer” of a deep network      Domingos, 2011); both settings define networks where in-
+architecture (Peng et al., 2009; Zheng et al., 2015; Chen       ference is accomplished “easily” either by a sum-product
+et al., 2015). Several methods have proposed to build gen-      message passing algorithm (by construction) or via convex
+eral neural networks over joint input and output spaces,        optimization.
+and perform inference over outputs using generic optimiza-
+tion techniques such as Generative Adversarial Networks
+                                                                Fitting convex functions Finally, the proposed work re-
+(GANs) (Goodfellow et al., 2014) and Structured Predic-
+                                                                lates to a topic less considered in the machine learning lit-
+tion Energy Networks (SPENs) (Belanger & McCallum,
+                                                                erature, that of fitting convex functions to data (Boyd &
+2016). SPENs provide a deep structure over input and
+                                                                Vandenberghe, 2004, pg. 338). Indeed our learning prob-
+output spaces that performs the inference in (1) as a non-
+                                                                lem can be viewed as parameter estimation under a model
+convex optimization problem.
+                                                                that is guaranteed to be convex by its construction. The
+The current work is highly related to these past approaches,    most similar work of which we are aware specifically fits
+but also differs in a very particular way. To the best of       sums of rectified half-planes to data (Magnani & Boyd,
+our knowledge, each of these structured prediction meth-        2009), which is similar to one layer of our rectified linear
+ods based upon energy-based models operates in one of two       units. However, the actual training scheme is much differ-
+                                                Input Convex Neural Networks
+
+
+
+
+    Figure 1. A fully input convex neural network (FICNN).
+                                                                 Figure 2. A partially input convex neural network (PICNN).
+ent, and our deep network architecture allows for a much
+richer class of representations, while still maintaining con-
+                                                                 deeper layers. Such layers are unnecessary in traditional
+vexity.
+                                                                 feedforward networks because previous hidden units can
+                                                                 always be mapped to subsequent hidden units with the
+3. Convex neural network architectures                           identity mapping; however, for ICNNs, the non-negativity
+                                                                 constraint subsequent W (z) weights restricts the allowable
+Here we more formally present different ICNN architec-
+                                                                 use of hidden units that mirror the identity mapping, and
+tures and prove their convexity properties given certain
+                                                                 so we explicitly include this additional passthrough. Some
+constraints on the parameter space. Our chief claim is that
+                                                                 passthrough layers have been recently explored in the deep
+the class of (full and partial) input convex models is rich
+                                                                 residual networks (He et al., 2015) and densely connected
+and lets us capture complex joint models over the input to
+                                                                 convolutional networks (Huang et al., 2016), though these
+a network.
+                                                                 differ from those of an ICNN as they pass through hidden
+                                                                 layers deeper in the network, whereas to maintain convex-
+3.1. Fully input convex neural networks                          ity our passthrough layers can only apply to the input di-
+To begin, we consider a fully convex, k-layer, fully con-        rectly.
+nected ICNN that we call a FICNN and is shown in Figure          Other linear operators like convolutions can be included
+1. This model defines a neural network over the input y          in ICNNs without changing the convexity properties. In-
+(i.e., omitting any x term in this function) using the archi-    deed, modern feedforward architectures such as AlexNet
+tecture for i = 0, . . . , k − 1                                 (Krizhevsky et al., 2012), VGG (Simonyan & Zisserman,
+                                     
+                  (z)           (y)
+   zi+1 = gi Wi zi + Wi y + bi , f (y; θ) = zk (2)               2014), and GoogLeNet (Szegedy et al., 2015) with Re-
+                                                                 LUs (Nair & Hinton, 2010) can be made input convex with
+                                                    (z)          Proposition 1. In the experiment that follow, we will ex-
+where zi denotes the layer activations (with z0 , W0 ≡ 0),
+          (y)     (z)                                            plore ICNNs with both fully connected and convolutional
+θ = {W0:k−1 , W1:k−1 , b0:k−1 } are the parameters, and gi       layers, and we provide more detail about these additional
+are non-linear activation functions. The central result on       architectures in Section A of the supplement.
+convexity of the network is the following:
+Proposition 1. The function f is convex in y provided that       3.2. Partially input convex architectures
+      (z)
+all W1:k−1 are non-negative, and all functions gi are con-
+vex and non-decreasing.                                          The FICNN provides joint convexity over the entire input
+                                                                 to the function, which indeed may be a restriction on the
+The proof is simple and follows from the fact that non-          allowable class of models. Furthermore, this full joint con-
+negative sums of convex functions are also convex and that       vexity is unnecessary in settings like structured prediction
+the composition of a convex and convex non-decreasing            where the neural network is used to build a joint model over
+function is also convex (see e.g. Boyd & Vandenberghe            an input and output example space and only convexity over
+(2004, 3.2.4)). The constraint that the gi be convex non-        the outputs is necessary.
+decreasing is not particularly restrictive, as current non-
+                                                                 In this section we propose an extension to the pure FICNN,
+linear activation units like the rectified linear unit or max-
+                                                                 the partially input convex neural network (PICNN), that is
+pooling unit already satisfy this constraint. The constraint
+                                                                 convex over only some inputs to the network (in general
+that the W (z) terms be non-negative is somewhat restric-
+                                                                 ICNNs will refer to this new class). As we will show, these
+tive, but because the bias terms and W (y) terms can be neg-
+                                                                 networks generalize both traditional feedforward networks
+ative, the network still has substantial representation power,
+                                                                 and FICNNs, and thus provide substantial representational
+as we will shortly demonstrate empirically.
+                                                                 benefits. We define a PICNN to be a network over (x, y)
+One notable addition in the ICNN are the “passthrough”           pairs f (x, y; θ) where f is convex in y but not convex in x.
+layers that directly connect the input y to hidden units in      Figure 2 illustrates one potential k-layer PICNN architec-
+                                               Input Convex Neural Networks
+
+ture defined by the recurrences                                 Exact inference in ICNNs Although it is not a practical
+                                                                approach for solving the optimization tasks, the inference
+     ui+1 = g̃i (W̃i ui + b̃i )                                 problem for the networks presented above (where the non-
+                
+                     (z)
+                         
+                                  (zu)      (z)
+                                                               linear are either ReLU or linear units) can be posed as as
+     zi+1 = gi Wi          zi ◦ [Wi ui + bi ]+ +                linear program. We show how to do this in Section B.
+                                                  
+            (y)             (yu)      (y)       (u)
+          Wi       y ◦ (Wi ui + bi ) + Wi ui + bi
+                                                                4.1. Approximate inference in ICNNs
+f (x, y; θ) = zk , u0 = x
+                                                                Because of the impracticality of exact inference, we focus
+                                                         (3)
+                                                                on approximate approaches to optimizing over the inputs to
+where ui ∈ Rni and zi ∈ Rmi denote the hidden units             these networks, but ideally ones that still exploit the con-
+for the “x-path” and “y-path”, where y ∈ Rp , and where         vexity of the resulting problem. We specifically focus on
+◦ denotes the Hadamard product, the elementwise product         gradient-based approaches, which use the fact that we can
+between two vectors. The crucial element here is that un-       easily compute the gradient of an ICNN with respect to its
+like the FICNN, we only need the W (z) terms to be non-         inputs, ∇y f (x, y; θ), using backpropagation.
+negative, and we can introduce arbitrary products between       Gradient descent. The simplest gradient-based methods
+the ui hidden units and the zi hidden units. The follow-        for solving (4) is just (projected sub-) gradient descent,
+ing proposition highlights the representational power of the    or modifications such as those that use a momentum term
+PICNN.                                                          (Polyak, 1964; Rumelhart et al., 1988), or spectral step
+Proposition 2. A PICNN network with k layers can repre-         size modifications (Barzilai & Borwein, 1988; Birgin et al.,
+sent any FICNN with k layers and any purely feedforward         2000). That is, we start with some initial ŷ and repeat the
+network with k layers.                                          update
+                                                                               ŷ ← PY (ŷ − α∇y f (x, ŷ; θ))           (5)
+
+Proof. To recover a FICNN we simply set the weights over        This method is appealing in its simplicity, but suffers from
+the entire x path to be zero and set b(z) = b(y) = 1. We        the typical problems of gradient descent on non-smooth ob-
+can recover a feedforward network by noting that a tradi-       jectives: we need to pick a step size and possibly use a
+tional feedforward network fˆ(x; θ) where f : X → Y, can        sequence of decreasing step sizes, and don’t have an ob-
+be viewed as a network with an inner product f (x; θ)T y in     vious method to assess how accurate of a current solution
+its last layer (see e.g. (LeCun et al., 2006) for more de-      we have obtained (since an ICNN with ReLUs is piece-
+tails). Thus, a feedforward network can be represented as       wise linear, it will not have zero gradient at the solution).
+a PICNN by setting the x path to be exactly the feedfor-        The method is also more challenging to integrate with
+ward component, then having the y path be all zero except       some learning procedures, as we often need to differentiate
+   (yu)             (y)
+Wk−1 = I and Wk−1 = 1T .                                        through an entire chain of the gradient descent algorithm
+                                                                (Domke, 2012). Thus, while the method can sometimes
+                                                                work in practice, we have found that other approaches typ-
+4. Inference in ICNNs                                           ically far outperform this method, and we will focus on al-
+Prediction in ICNNs (which we also refer to as inference),      ternative approximate approaches for the remainder of this
+requires solving the convex optimization problem                section.
+
+                    minimize f (x, y; θ)                 (4)    4.2. Approximate inference via the bundle entropy
+                       y∈Y                                           method
+While the resulting tasks are convex optimization problems      An alternative approach to gradient descent is the bundle
+(and thus “easy” to solve in some sense), in practice this      method (Smola et al., 2008), also known as the epigraph
+still involves the solution of a potentially very complex op-   cutting plane approach, which iteratively optimizes a piece-
+timization problem. We discuss here several approaches for      wise lower bound on the function given by the maximum
+approximately solving these optimization problems. We           over a set of first-order approximations. However, as, the
+can usually obtain reasonably accurate solutions in many        traditional bundle method is not well suited to our setting
+settings using a procedure that only involves a small num-      (we need to evaluate a number of gradients equal to the di-
+ber of forward and backward passes through the network,         mension of x, and solve a complex optimization problem at
+and which thus has a complexity that is at most a constant      each step) we have developed a new optimization algorithm
+factor worse than that for feedforward networks. The same       for this domain that we term the bundle entropy method.
+consideration will apply to training such networks, which       This algorithm specifically applies to the (common) case
+we will discuss in Section 5.                                   where Y is bounded, which we assume to be Y = [0, 1]n
+                                                      Input Convex Neural Networks
+
+(other upper or lower bounds can be attained through scal-            and differentiating with respect to y and t gives the opti-
+ing). The method is also easily extensible to the setting             mality conditions
+where elements of Y belong to a higher-dimensional prob-
+                                                                                                                1
+ability simplex as well.                                                   ∇y L(y, t, λ) = 0 =⇒ y =
+                                                                                                          1 + exp(GT λ)       (12)
+For this approach, we consider adding an additional “bar-                                             T
+                                                                           ∇t L(y, t, λ) = 0 =⇒ 1 λ = 1
+rier” function to the optimization in the form of the negative
+entropy −H(y), where                                                  which in turn leads to the dual problem
+               n
+               X                                                        maximize (G1 + h)T λ − 1T log(1 + exp(GT λ))
+   H(y) = −           (yi log yi + (1 − yi ) log(1 − yi )).    (6)          λ
+                                                                                                                              (13)
+                i=1                                                    subject to λ ≥ 0, 1T λ = 1.
+In other words, we instead want to solve the optimization
+                                                                      This is a smooth optimization problem over the unit sim-
+problem argminy f (x, y; θ)−H(y) (with a possible addi-
+                                                                      plex, and can be solved using a method like the Projected
+tional scaling term). The negative entropy is a convex func-
+                                                                      Newton method of (Bertsekas, 1982, pg. 241, eq. 97). A
+tion, with the limits of limy→0 H(y) = limy→1 H(y) = 0,
+                                                                      complete description of the bundle entropy method is given
+and negative values in the interior of this range. The func-
+                                                                      in Section D. For lower dimensional problems, the bundle
+tion acts as a barrier because, although it does not approach
+                                                                      entropy method often attains an exact solution after a rela-
+infinity as it reaches the barrier of the feasible set, its gra-
+                                                                      tively small number of iterations. And even for larger prob-
+dient does approach infinity as it reaches the barrier, and
+                                                                      lems, we find that the approximate solutions generated by
+thus the optimal solution will always lie in the interior of
+                                                                      a very small number of iterations (we typically use 5 iter-
+the unit hypercube Y.
+                                                                      ations), still substantially outperform gradient descent ap-
+An appealing feature of the entropy regularization comes              proaches. Further, because we maintain an explicit lower
+from its close connection with sigmoid units in typical neu-          bound on the function, we can compute an optimality gap
+ral networks. It follows easily from first-order optimality           of our solution, though in practice just using a fixed number
+conditions that the optimization problem                              of iterations performs well.
+
+                   minimize cT y − H(y)                        (7)
+                             y                                        5. Learning ICNNs
+is given by y ? = 1/(1 + exp(c)). Thus if we con-                     Generally speaking, ICNN learning shapes the objective’s
+sider the “trivial” PICNN mentioned in Section 3.2, which             energy function to produce the desired values when opti-
+simply consists of the function f (x, y; θ) = y T f˜(x; θ)            mizing over the relevant inputs. That is, for a given input
+for some purely feedforward network f˜(x; θ), then the                output pair (x, y ? ), our goal is to find ICNN parameters θ
+entropy-regularized minimization problem gives a solution             such that
+that is equivalent to simply taking the sigmoid of the neural                            y ? ≈ argmin f˜(x, y; θ)             (14)
+                                                                                                  y
+network outputs. Thus, the move to ICNNs can be inter-
+preted as providing a more structured joint energy func-              where for the entirely of this section, we use the notation
+tional over the linear function implicitly used by sigmoid            f˜ to denote the combination of the neural network func-
+layers.                                                               tion plus the regularization term such as −H(y), if it is
+                                                                      included, i.e.
+At each iteration of the bundle entropy method, we solve
+the optimization problem                                                             f˜(x, y; θ) = f (x, y; θ) − H(y).        (15)
+  y k+1 , tk+1 := argmin {t − H(y) | Gy + h ≤ t1} (8)                 Although we only discuss the entropy regularization in this
+                       y,t
+                                                                      work, we emphasize that other regularizers are also possi-
+where G ∈ Rk×n has rows equal to                                      ble. Depending on the setting, there are several different
+                                                                      approaches we can use to ensure that the ICNN achieves
+                      giT = ∇y f (x, y i ; θ)T                 (9)    the desired targets, and we consider three approaches be-
+                                                                      low: direct functional fitting, max-margin structured pre-
+and h ∈ Rk has entries equal to                                       diction, and argmin differentiation.
+           hi = f (x, y i ; θ) − ∇y f (x, y i ; θ)T y i .     (10)
+                                                                      Direct functional fitting. We first note that in some do-
+The Lagrangian of the optimization problem is                         mains, we do not need a specialized procedure for fitting
+                                                                      ICNNs, but can use existing approaches that directly fit the
+      L(y, t, λ) = t − H(y) + λT (Gy + h − t1)                (11)    ICNN. An example of this is the Q-learning setting. Given
+                                                 Input Convex Neural Networks
+
+some observed tuple (s, a, r, s0 ), Q learning updates the pa-    complished via implicit differentiation of the KKT opti-
+rameters θ with the gradient                                      mality conditions. Although the derivation is somewhat in-
+                                                                volved, the final result is fairly compact, and is given by the
+                                   0 0
+      Q(s, a) − r − γ max0
+                             Q(s    , a )   ∇θ Q(s, a),   (16)    following proposition (for simplicity, we will write ŷ below
+                           a
+                                                                  instead of ŷ(x; θ) when the notation should be clear):
+where the maximization step is carried out with gradient
+descent or the bundle entropy method. These updates can           Proposition 3. The gradient of the neural network loss for
+be applied to ICNNs with the only additional requirement          predictions generated through the minimization process is
+that we project the weights onto their feasible sets after this
+update (i.e., clip or project any W terms that are required                                 k
+                                                                                            X
+to be positive). Section E gives a complete description of         ∇θ `(ŷ(x; θ), y ? ) =     (cλi ∇θ f (x, y i ; θ)+
+deep Q-learning with ICNNs.                                                                 i=1
+                                                                                                                                               (18)
+                                                                                    i       T         y
+                                                                                                          + cλi                  i
+                                                                                                                                     
+                                                                     ∇θ ∇y f (x, y ; θ)        λi c               ŷ(x; θ) − y             )
+Max-margin structured prediction. Although max-
+margin structured prediction is a simple and well-studied
+approach (Tsochantaridis et al., 2005; Taskar et al., 2005),      where y i denotes the solution returned by the ith iteration
+in our experiences using these methods within an ICNN,            of the entropy bundle method, λ denotes the dual variable
+we had substantial difficulty choosing the proper mar-            solution of the entropy bundle method, and where the c
+gin scaling term (especially for domains with continuous-         variables are determined by the solution to the linear sys-
+valued outputs), or allowing for losses other than the hinge      tem
+loss. For this reason, Section F discusses max-margin
+structured prediction in more detail, but the majority of our
+                                                                                      y  
+                                                                             GT                  −∇ŷ `(ŷ, y ? )
+                                                                                                                 
+                                                                       H          0       c
+experiments here focus on the next approach, which more               G      0  −1   cλ  =        0          .
+directly encodes the loss suffered by the full structured-             0     −1T  0       ct           0
+prediction pipeline.                                                                                             (19)
+                                                                                  1    1
+                                                                  where H = diag ŷ + 1−ŷ .
+5.1. Argmin differentiation
+In our final proposed approach, that of argmin differentia-       The proof of this proposition is given in Section G, but we
+tion, we propose to directly minimize a loss function be-         highlight a few key points here. The complexity of com-
+tween true outputs and the outputs predicted by our model,        puting this gradient will be linear in k, which is the number
+where these predictions themselves are the result of an op-       of active constraints at the solution of the bundle entropy
+timization problem. We explicitly consider the case where         method. The inverse of this matrix can also be computed
+the approximate solution to the inference problem is at-          efficiently by just inverting the k × k matrix GH −1 GT via
+tained via the previously-described bundle entropy method,        a variable elimination procedure, instead of by inverting
+typically run for some fixed (usually small) number of iter-      the full matrix. The gradients ∇θ f (x, yi ; θ) are standard
+ations. To simplify notation, in the following we will let        neural network gradients, and further, can be computed in
+                                                                  the same forward/backward pass as we use to compute the
+ ŷ(x; θ) = argmin min {t − H(y) | Gy + h ≤ t1}                   gradients for the bundle entropy method. The main chal-
+                y      t
+                                                          (17)    lenge of the method is to compute the terms of the form
+          ≈ argmin f˜(x, y; θ)                                    ∇θ (∇y f (x, yi ; θ)T v) for some vector v. This quantity can
+                y
+                                                                  be computed by most autodifferentiation tools (the gradient
+refer to the approximate minimization over y that results         inner product ∇y f (x, yi ; θ)T v itself just becomes a graph
+from running the bundle entropy method, specifically at the       computation than can be differentiated itself), or it can be
+last iteration of the method.                                     computed by a finite difference approximation. The com-
+                                                                  plexity of computing this entire gradient is a small constant
+Given some example (x, y ? ), our goal is to compute the
+                                                                  multiple of computing k gradients with respect to θ.
+gradient, with respect to the ICNN parameters, of the loss
+between y ? and ŷ(x; θ): `(ŷ(x; θ), y ? ). This is in some      Given this ability to compute gradients with respect to an
+sense the most direct analogue to traditional neural net-         arbitrary loss function, we can fit the parameter using tra-
+work learning, since we typically optimize networks by            ditional stochastic gradient methods examples. Specifi-
+minimizing some loss between the network’s (feedforward)          cally, given an example (or a minibatch of examples) xi , yi ,
+predictions and the true desired labels. Doing this in the        we compute gradients ∇θ `(ŷ(xi ; θ), yi ) and update the pa-
+predictions-via-optimization setting requires that we differ-     rameters using e.g. the ADAM optimizer (Kingma & Ba,
+entiate “through” the argmin operator, which can be ac-           2014).
+                                                 Input Convex Neural Networks
+
+ Method                                      Test Macro-F1
+ Feedforward net                             0.396
+ ICNN                                        0.415
+ SPEN (Belanger & McCallum, 2016)            0.422
+
+Table 1. Comparison of approaches on BibTeX multi-label classi-
+fication task. (Higher is better.)
+
+
+
+6. Experiments
+Our experiments study the representational power of IC-
+NNs to better understand the interplay between the model’s
+restrictiveness and accuracy. Specifically, we evaluate           Figure 3. Example test set image completions of the ICNN with
+the method on multi-label classification on the BibTeX            bundle entropy.
+dataset (Katakis et al., 2008), image completion using
+the Olivetti face dataset (Samaria & Harter, 1994), and
+continuous action reinforcement learning in the OpenAI
+Gym (Brockman et al., 2016). We show that the meth-               forms our baseline feedforward network’s score of 0.396,
+ods compare favorably to the state of the art in many situa-      which indicates PICNNs have the power to learn a robust
+tions. The full source code for all experiments is available      structure over the output space. SPENs obtain a macro-F1
+in the icml2017 branch at https://github.com/                     score of 0.422 on this task (Belanger & McCallum, 2016)
+locuslab/icnn and our implementation is built using               and pose an interesting comparison point to ICNNs as they
+Python (Van Rossum & Drake Jr, 1995) with the numpy               have a similar (but not identical) deep structure that is non-
+(Oliphant, 2006) and TensorFlow (Abadi et al., 2016) pack-        convex over the input space. The difference of 0.007 be-
+ages.                                                             tween ICNNs and SPENs could be due to differences in
+                                                                  our experimental setups, architectures, and random experi-
+                                                                  mental noise. More details are included in Section J.
+6.1. Synthetic 2D example
+Though we do not discuss it here, Section I presents a sim-       6.3. Image completion on the Olivetti faces
+ple synthetic classification experiment comparing FICNN
+and PICNN decision boundaries.                                    As a test of the system on a structured prediction task over
+                                                                  a much more complex output space Y, we apply a convo-
+                                                                  lutional PICNN to face completion on the sklearn version
+6.2. Multi-Label Classification
+                                                                  (Pedregosa et al., 2011) of the Olivetti data set (Samaria &
+We first study how ICNNs perform on multi-label classifi-         Harter, 1994), which contains 400 64x64 grayscale images.
+cation with the BibTeX dataset and benchmark presented in         ICNNs for face completion should be invariant to trans-
+(Katakis et al., 2008). This benchmark maps text classifica-      lations and other transformations in the input space. To
+tion from an input space X of 1836 bag-of-works indicator         achieve this invariance, our PICNN is inspired by the DQN
+(binary) features to an output space Y of 159 binary labels.      architecture in Mnih et al. (2015), which preserves this in-
+We use the train/test split of 4880/2515 from (Katakis et al.,    variance in the different context of reinforcement learn-
+2008) and evaluate with the macro-F1 score (higher is bet-        ing. Specifically, our network is over (x, y) pairs where
+ter). We use the ARFF version of this dataset from Mu-            x (32x64) is the left half and y (32x64) is the right half of
+lan (Tsoumakas et al., 2011). Our PICNN architecture for          the image. The input and output paths are: 32x8x8 conv
+multi-label classification uses fully-connected layers with       (stride 4x2), 64x4x4 conv (stride 2x2), 64x3x3 conv, 512
+ReLU activation functions and batch normalization (Ioffe          fully connected.
+& Szegedy, 2015) along the input path. As a baseline, we
+                                                                  This experiment uses the same training/test splits and min-
+use a fully-connected neural network with batch normal-
+                                                                  imizes the mean squared error (MSE) as in Poon & Domin-
+ization and ReLU activation functions. Both architectures
+                                                                  gos (2011) so that our results can be directly compared to
+have the same structure (600 fully connected, 159 (#labels)
+                                                                  (a non-exhaustive list of) other techniques. We also explore
+fully connected). We optimize our PICNN with 30 itera-
+                                                                  the tradeoffs between the bundle entropy method and gra-
+tions of gradient descent with a learning rate of 0.1 and a
+                                                                  dient descent and use a non-convex baseline to better un-
+momentum of 0.3.
+                                                                  derstand the impacts of convexity. We use a learning rate
+Table 1 compares several different methods for this prob-         of 0.01 and momentum of 0.9 with gradient descent for the
+lem. Our PICNN’s final macro-F1 score of 0.415 outper-            inner optimization in the ICNN.
+                                                 Input Convex Neural Networks
+
+    Method                                         MSE            Task                  DDPG          NAF           ICNN
+    ICNN - Bundle Entropy                          833.0          Ant                   1000.00       999.03        1056.29
+    ICNN - Gradient Decent                         872.0          HalfCheetah           2909.77       2575.16       3822.99
+    ICNN - Nonconvex                               850.9          Hopper                1501.33       1100.43       831.00
+    Sum-product (Poon & Domingos, 2011)            942            Humanoid              524.09        5000.68       433.38
+                                                                  HumanoidStandup       134265.96     116399.05     141217.38
+Table 2. Comparisons of reconstruction error on image comple-     InvDoubPend           9358.81       9359.59       9359.41
+tion.
+                                                                  InvPend               1000.00       1000.00       1000.00
+                                                                  Reacher               -6.10         -6.31         -5.08
+                                                                  Swimmer               49.79         69.71         64.89
+Table 2 shows the test MSEs for the different approaches.         Walker2d              1604.18       1007.25       298.21
+Example image completions are shown in Figure 3. These
+results show that the bundle entropy method can leverage          Table 3. Maximum test reward for ICNN algorithm versus alter-
+more information from these five iterations than gradient         natives on several OpenAI Gym tasks. (All tasks are v1.)
+descent, even when the convexity constraint is relaxed.
+The PICNN trained with back-optimization with the re-
+laxed convexity constraint slightly outperforms the network       Q-learning, these results are overall positive. NAF poses
+with the convexity constraint, but not the network trained        a particularly interesting comparison point to ICNNs. In
+with the bundle-entropy method. This shows that for im-           particular, NAF decomposes the Q function in terms of
+age completion with PICNNs, convexity does not seem to            the value function an an advantage function Q(s, a) =
+inhibit the representational power. Furthermore, this exper-      V (s) + A(s, a) where the advantage function is restricted
+iment suggests that a small number of inner optimization          to be concave quadratic in the actions, and thus always
+iterations (five in this case) is sufficient for good perfor-     has a closed-form solution. In a sense, this closely mir-
+mance.                                                            rors the setup of the PICNN architecture: like NAF, we
+                                                                  have a separate non-convex path for the s variables, and an
+6.4. Continuous Action Reinforcement Learning                     overall function that is convex in a; however, the distinc-
+                                                                  tion is that while NAF requires that the convex portion be
+Finally, we present standard benchmarks in continuous ac-         quadratic, the ICNN architecture allows any convex func-
+tion reinforcement learning from the OpenAI Gym (Brock-           tional form. As our experiments show, this representational
+man et al., 2016) that use the MuJoCo physics simulator           power does allow for better performance of the resulting
+(Todorov et al., 2012). We model the (negative) Q function,       system, though the trade-off, of course, is that determining
+−Q(s, a; θ) as an ICNN and select actions with the convex         the optimal action in an ICNN is substantially more com-
+optimization problem a? (s) = argmina −Q(s, a; θ). We             putationally complex than for a quadratic.
+use Q-learning to optimize the ICNN as described in Sec-
+tion 5 and Section E. At test time, the policy is selected by
+optimizing Q(s, a; θ). All of our experiments use a PICNN         7. Conclusion and future work
+with two fully-connected layers that each have 200 hidden         This paper laid the groundwork for the input convex neural
+units. We compare to Deep Deterministic Policy Gradient           network model. By incorporating relatively simple con-
+(DDPG) (Lillicrap et al., 2015) and Normalized Advantage          straints into existing network architectures, we can fit very
+Functions (NAF) (Gu et al., 2016) as state-of-the-art off-        general convex functions and the apply optimization as an
+policy learning baselines.4                                       inference procedure. Since many existing models already
+Table 3 shows the maximum test reward achieved by the             fit into this overall framework (e.g., CRF models perform
+different algorithms on these tasks. Although no method           an optimization over an output space where parameters are
+strictly dominates the others, the ICNN approach has some         given by the output of a neural network), the proposed
+clear advantages on tasks like HalfCheetah, Reacher, and          method presents an extension where the entire inference
+HumanoidStandup, and performs comparably on many                  procedure is “learned” along with the network itself, with-
+other tasks, though with also a few notable poor perfor-          out the need for explicitly building typical structured pre-
+mances in Hopper and Walker2D. Nonetheless, given the             diction architectures. This work explored only a small sub-
+strong baseline, and the fact that the method is literally        set of the possible applications of these network, and the
+just a drop-in replacement for a function approximator in         networks offer promising directions for many additional
+                                                                  domains.
+    4
+      Because there are not official DDPG or NAF implementa-
+tions or results on the OpenAI gym tasks, we use the Simon Ram-
+stedt’s DDPG implementation from https://github.com/
+SimonRamstedt/ddpg and have re-implemented NAF.
+                                              Input Convex Neural Networks
+
+Acknowledgments                                                Domke, Justin. Generic methods for optimization-based
+                                                                 modeling. In Proceedings of the Conference on AI and
+BA is supported by the National Science Foundation               Statistics, pp. 318–326, 2012.
+Graduate Research Fellowship Program under Grant No.
+DGE1252522. We also thank David Belanger for helpful           Duchi, John, Hazan, Elad, and Singer, Yoram. Adaptive
+discussions.                                                     subgradient methods for online learning and stochastic
+                                                                 optimization. The Journal of Machine Learning Re-
+References                                                       search, 12:2121–2159, 2011.
+
+Abadi, Martın, Agarwal, Ashish, Barham, Paul, Brevdo,          Goodfellow, Ian, Pouget-Abadie, Jean, Mirza, Mehdi, Xu,
+  Eugene, Chen, Zhifeng, Citro, Craig, Corrado, Greg S,          Bing, Warde-Farley, David, Ozair, Sherjil, Courville,
+  Davis, Andy, Dean, Jeffrey, Devin, Matthieu, et al. Ten-       Aaron, and Bengio, Yoshua. Generative adversarial nets.
+  sorflow: Large-scale machine learning on heterogeneous         In Advances in Neural Information Processing Systems,
+  distributed systems. arXiv preprint arXiv:1603.04467,          pp. 2672–2680, 2014.
+  2016.                                                        Gu, Shixiang, Lillicrap, Timothy, Sutskever, Ilya, and
+                                                                 Levine, Sergey. Continuous deep q-learning with model-
+Barzilai, Jonathan and Borwein, Jonathan M. Two-point
+                                                                 based acceleration. In Proceedings of the International
+  step size gradient methods. IMA Journal of Numerical
+                                                                 Conference on Machine Learning, 2016.
+  Analysis, 8(1):141–148, 1988.
+                                                               He, Kaiming, Zhang, Xiangyu, Ren, Shaoqing, and Sun,
+Belanger, David and McCallum, Andrew. Structured pre-
+                                                                 Jian. Deep residual learning for image recognition. arXiv
+  diction energy networks. In Proceedings of the Interna-
+                                                                 preprint arXiv:1512.03385, 2015.
+  tional Conference on Machine Learning, 2016.
+                                                               Huang, Gao, Liu, Zhuang, and Weinberger, Kilian Q.
+Bengio, Yoshua, LeCun, Yann, and Henderson, Donnie.              Densely connected convolutional networks.  arXiv
+  Globally trained handwritten word recognizer using spa-        preprint arXiv:1608.06993, 2016.
+  tial representation, convolutional neural networks, and
+  hidden markov models. Advances in neural information         Ioffe, Sergey and Szegedy, Christian. Batch normalization:
+  processing systems, pp. 937–937, 1994.                          Accelerating deep network training by reducing internal
+                                                                  covariate shift. In Proceedings of The 32nd International
+Bertsekas, Dimitri P. Projected newton methods for opti-          Conference on Machine Learning, pp. 448–456, 2015.
+  mization problems with simple constraints. SIAM Jour-
+  nal on control and Optimization, 20(2):221–246, 1982.        Katakis, Ioannis, Tsoumakas, Grigorios, and Vlahavas,
+                                                                 Ioannis. Multilabel text classification for automated
+Birgin, Ernesto G, Martı́nez, José Mario, and Raydan, Mar-      tag suggestion. ECML PKDD discovery challenge, 75,
+  cos. Nonmonotone spectral projected gradient methods           2008.
+  on convex sets. SIAM Journal on Optimization, 10(4):
+  1196–1211, 2000.                                             Kingma, Diederik and Ba, Jimmy.               Adam: A
+                                                                 method for stochastic optimization.       arXiv preprint
+Boyd, Stephen and Vandenberghe, Lieven. Convex opti-             arXiv:1412.6980, 2014.
+  mization. Cambridge university press, 2004.
+                                                               Koller, Daphne and Friedman, Nir. Probabilistic graphical
+Boyd, Stephen, Parikh, Neal, Chu, Eric, Peleato, Borja, and      models: principles and techniques. MIT press, 2009.
+  Eckstein, Jonathan. Distributed optimization and statisti-   Krizhevsky, Alex, Sutskever, Ilya, and Hinton, Geoffrey E.
+  cal learning via the alternating direction method of mul-      Imagenet classification with deep convolutional neural
+  tipliers. Foundations and Trends R in Machine Learn-           networks. In Advances in neural information processing
+  ing, 3(1):1–122, 2011.                                         systems, pp. 1097–1105, 2012.
+Brockman, Greg, Cheung, Vicki, Pettersson, Ludwig,             LeCun, Yann, Chopra, Sumit, Hadsell, Raia, Ranzato, M,
+  Schneider, Jonas, Schulman, John, Tang, Jie, and               and Huang, F. A tutorial on energy-based learning. Pre-
+  Zaremba, Wojciech. Openai gym. arXiv preprint                  dicting structured data, 1:0, 2006.
+  arXiv:1606.01540, 2016.
+                                                               Lillicrap, Timothy P, Hunt, Jonathan J, Pritzel, Alexander,
+Chen, Liang-Chieh, Schwing, Alexander G, Yuille, Alan L,         Heess, Nicolas, Erez, Tom, Tassa, Yuval, Silver, David,
+  and Urtasun, Raquel. Learning deep structured models.          and Wierstra, Daan. Continuous control with deep re-
+  In Proceedings of the International Conference on Ma-          inforcement learning. arXiv preprint arXiv:1509.02971,
+  chine Learning, 2015.                                          2015.
+                                              Input Convex Neural Networks
+
+Magnani, Alessandro and Boyd, Stephen P. Convex               Simonyan, Karen and Zisserman, Andrew. Very deep con-
+ piecewise-linear fitting. Optimization and Engineering,        volutional networks for large-scale image recognition.
+ 10(1):1–17, 2009.                                              arXiv preprint arXiv:1409.1556, 2014.
+Mnih, Volodymyr, Kavukcuoglu, Koray, Silver, David,           Smola, Alex J., Vishwanathan, S.v.n., and Le, Quoc V.
+ Rusu, Andrei A, Veness, Joel, Bellemare, Marc G,               Bundle methods for machine learning. In Platt, J. C.,
+ Graves, Alex, Riedmiller, Martin, Fidjeland, Andreas K,        Koller, D., Singer, Y., and Roweis, S. T. (eds.), Advances
+ Ostrovski, Georg, et al. Human-level control through           in Neural Information Processing Systems 20, pp. 1377–
+ deep reinforcement learning. Nature, 518(7540):529–            1384. Curran Associates, Inc., 2008.
+ 533, 2015.
+                                                              Szegedy, Christian, Liu, Wei, Jia, Yangqing, Sermanet,
+Nair, Vinod and Hinton, Geoffrey E. Rectified linear units      Pierre, Reed, Scott, Anguelov, Dragomir, Erhan, Du-
+  improve restricted boltzmann machines. In Proceedings         mitru, Vanhoucke, Vincent, and Rabinovich, Andrew.
+  of the 27th International Conference on Machine Learn-        Going deeper with convolutions. In Proceedings of
+  ing (ICML-10), pp. 807–814, 2010.                             the IEEE Conference on Computer Vision and Pattern
+Oliphant, Travis E. A guide to NumPy, volume 1. Trelgol         Recognition, pp. 1–9, 2015.
+  Publishing USA, 2006.                                       Taskar, Ben, Chatalbashev, Vassil, Koller, Daphne, and
+Pedregosa, Fabian, Varoquaux, Gaël, Gramfort, Alexan-          Guestrin, Carlos. Learning structured prediction models:
+  dre, Michel, Vincent, Thirion, Bertrand, Grisel, Olivier,     A large margin approach. In Proceedings of the 22nd In-
+  Blondel, Mathieu, Prettenhofer, Peter, Weiss, Ron,            ternational Conference on Machine Learning, pp. 896–
+  Dubourg, Vincent, et al. Scikit-learn: Machine learning       903. ACM, 2005.
+  in python. The Journal of Machine Learning Research,        Todorov, Emanuel, Erez, Tom, and Tassa, Yuval. Mu-
+  12:2825–2830, 2011.                                           joco: A physics engine for model-based control. In
+Peng, Jian, Bo, Liefeng, and Xu, Jinbo. Conditional neu-        2012 IEEE/RSJ International Conference on Intelligent
+  ral fields. In Advances in neural information processing      Robots and Systems, pp. 5026–5033. IEEE, 2012.
+  systems, pp. 1419–1427, 2009.
+                                                              Tsochantaridis, Ioannis, Joachims, Thorsten, Hofmann,
+Polyak, Boris T. Some methods of speeding up the conver-        Thomas, and Altun, Yasemin. Large margin methods for
+  gence of iteration methods. USSR Computational Math-          structured and interdependent output variables. Journal
+  ematics and Mathematical Physics, 4(5):1–17, 1964.            of Machine Learning Research, 6:1453–1484, 2005.
+
+Poon, Hoifung and Domingos, Pedro. Sum-product net-           Tsoumakas, Grigorios, Spyromitros-Xioufis, Eleftherios,
+  works: A new deep architecture. In UAI 2011, Proceed-         Vilcek, Jozef, and Vlahavas, Ioannis. Mulan: A java
+  ings of the Twenty-Seventh Conference on Uncertainty          library for multi-label learning. Journal of Machine
+  in Artificial Intelligence, Barcelona, Spain, July 14-17,     Learning Research, 12(Jul):2411–2414, 2011.
+  2011, pp. 337–346, 2011.
+                                                              Van Rossum, Guido and Drake Jr, Fred L. Python refer-
+Ratliff, Nathan D, Bagnell, J Andrew, and Zinkevich, Mar-       ence manual. Centrum voor Wiskunde en Informatica
+  tin. (Approximate) subgradient methods for structured         Amsterdam, 1995.
+  prediction. In International Conference on Artificial In-
+  telligence and Statistics, pp. 380–387, 2007.               Wright, Stephen J. Primal-dual interior-point methods.
+                                                               Siam, 1997.
+Rumelhart, David E, Hinton, Geoffrey E, and Williams,
+  Ronald J. Learning representations by back-propagating      Zheng, Shuai, Jayasumana, Sadeep, Romera-Paredes,
+  errors. Cognitive modeling, 5(3):1, 1988.                     Bernardino, Vineet, Vibhav, Su, Zhizhong, Du, Dalong,
+                                                                Huang, Chang, and Torr, Philip HS. Conditional random
+Samaria, Ferdinando S and Harter, Andy C. Parameterisa-         fields as recurrent neural networks. In Proceedings of
+  tion of a stochastic model for human face identification.     the IEEE International Conference on Computer Vision,
+  In Applications of Computer Vision, 1994., Proceedings        pp. 1529–1537, 2015.
+  of the Second IEEE Workshop on, pp. 138–142. IEEE,
+  1994.
+Simard, Patrice and LeCun, Yann. Reverse tdnn: an archi-
+  tecture for trajectory generation. In Advances in Neural
+  Information Processing Systems, pp. 579–588. Citeseer,
+  1991.
+

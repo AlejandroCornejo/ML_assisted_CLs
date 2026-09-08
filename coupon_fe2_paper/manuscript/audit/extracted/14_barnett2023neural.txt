@@ -1,0 +1,1281 @@
+                                                       Journal of Computational Physics 492 (2023) 112420
+
+
+
+                                                        Contents lists available at ScienceDirect
+
+
+                                              Journal of Computational Physics
+                                                   journal homepage: www.elsevier.com/locate/jcp
+
+
+
+
+Neural-network-augmented projection-based model order
+reduction for mitigating the Kolmogorov barrier to reducibility
+Joshua Barnett a,∗ , Charbel Farhat a,b,c , Yvon Maday d
+a
+  Department of Mechanical Engineering, Stanford University, Stanford, CA 94305, United States of America
+b
+  Department of Aeronautics and Astronautics, Stanford University, Stanford, CA 94305, United States of America
+c
+  Institute for Computational and Mathematical Engineering, Stanford University, Stanford, CA 94305, United States of America
+d
+  Laboratoire Jacques-Louis Lions (LJLL), Sorbonne Université and Université de Paris Cité, CNRS, F-75005 Paris, France
+
+
+
+a r t i c l e            i n f o                        a b s t r a c t
+
+Article history:                                        Inspired by our previous work on a quadratic approximation manifold [1], we propose
+Received 30 December 2022                               in this paper a computationally tractable approach for combining a projection-based
+Received in revised form 16 July 2023                   reduced-order model (PROM) and an artiﬁcial neural network (ANN) to mitigate the
+Accepted 5 August 2023
+                                                        Kolmogorov barrier to reducibility of parametric and/or highly nonlinear, high-dimensional,
+Available online 10 August 2023
+                                                        physics-based models. The main objective of our PROM-ANN concept is to reduce the
+Keywords:                                               dimensionality of the online approximation of the solution beyond what is achievable using
+Artiﬁcial neural network                                aﬃne and quadratic approximation manifolds, while maintaining accuracy. In contrast to
+Burgers                                                 previous approaches that exploited one form or another of an ANN, the training of the
+Kolmogorov n-width                                      ANN part of our PROM-ANN does not involve data whose dimension scales with that of
+Machine learning                                        the high-dimensional model; and the resulting PROM-ANN can be eﬃciently hyperreduced
+Model reduction                                         using any well-established hyperreduction method. Hence, unlike many other ANN-based
+Petrov-Galerkin
+                                                        model order reduction approaches, the PROM-ANN concept we propose in this paper
+                                                        should be practical for large-scale and industry-relevant computational problems. We
+                                                        demonstrate the computational tractability of its oﬄine stage and the superior wall clock
+                                                        time performance of its online stage for a large-scale, parametric, two-dimensional, model
+                                                        problem that is representative of shock-dominated unsteady ﬂow problems.
+                                                                                                           © 2023 Elsevier Inc. All rights reserved.
+
+
+
+
+1. Introduction
+
+   Projection-based model order reduction (PMOR) allows for the parsimonious representation of a parametric, semi-
+discrete or discrete high-dimensional model (HDM), through the construction of an associated, lower-dimensional,
+projection-based reduced-order model (PROM). A second-level approximation known as hyperreduction transforms a PROM
+into a hyperreduced counterpart (HPROM) capable of operating in real-time, while preserving the desired level of accu-
+racy. As such, a HPROM is essential for many time-critical applications such as simulation-driven design and optimization,
+optimal control, uncertainty quantiﬁcation, and digital twinning, to name only a few.
+   Traditionally, PMOR has been performed using best-approximations on aﬃne subspaces of dimension n  N, where
+n and N denote the dimensions of the PROM/HPROM and underlying HDM, respectively. It has demonstrated signiﬁcant
+success for a large number of parametric applications grounded in elliptic, parabolic, and second-order hyperbolic partial
+
+
+
+    * Corresponding author.
+      E-mail address: jb0@stanford.edu (J. Barnett).
+
+https://doi.org/10.1016/j.jcp.2023.112420
+0021-9991/© 2023 Elsevier Inc. All rights reserved.
+J. Barnett, C. Farhat and Y. Maday                                                    Journal of Computational Physics 492 (2023) 112420
+
+
+differential equations (PDEs) – for example, problems in solid mechanics [2,3], heat conduction (or diffusion) [4], structural
+dynamics [5], and wave propagation [6,7]. It has also demonstrated success for parametric, linearized computational ﬂuid
+dynamic (CFD) and coupled aeroelastic computations [8,9]. For nonparametric RANS [10] and LES [11] CFD computations,
+PMOR has delivered impressive speedup factors including for compressible ﬂow problems past complex three-dimensional
+geometries [10]; and in the presence of shocks [12]. For parametric counterpart ﬂow computations – and for that matter,
+for most ﬁrst-order hyperbolic PDEs describing transport (or advection) problems – traditional PMOR suffers from the slow
+decay of the Kolmogorov n-width (for example, see [13]).
+    The Kolmogorov n-width dn (M) describes the worst-case error with respect to a subset M of a normed space S arising
+from a projection onto the best-possible linear subspace of S of dimension n [14], represented here by a right reduced-order
+basis (ROB) V ∈ R N ×n . Hence, it sets a limit to any PROM-based approximation; for this reason, it is often referred to as a
+“barrier” to reducibility. In particular, the Kolmogorov n-width affects most convection-dominated (ﬂow) models; it implies
+a dimension n that is suﬃciently large to challenge the construction of a traditional PROM, or simply defeat the purpose of
+PMOR.
+    A variety of approaches has been formulated so far to attempt to mitigate the Kolmogorov barrier to PMOR. Typically,
+these approaches involve altering the traditional aﬃne subspace approximation to incorporate some nonlinearity. The sim-
+plest of them substitutes the aﬃne subspace approximation with a piecewise counterpart [15] constructed by partitioning
+of the nonlinear high-dimensional solution manifold into regions and computing in each region a local right ROB associated
+with a local aﬃne subspace approximation. This approach was shown in 2016 to perform in real-time on a laptop, for
+steady-state RANS computations associated with the NASA Common Research Model [16] and a parametric HDM of dimen-
+sion greater than N = 68 × 106 , in the transonic regime characterized by shocks, at a high Reynolds number (Re = 5 × 106 ),
+and in a shape parameter domain D of dimension N D = 4 [17]. Nevertheless, due to the Kolmogorov barrier, one can rea-
+sonably expect such a PMOR method to face increasing diﬃculties at delivering a similar performance for increasing values
+of N D .
+    Registration methods have also been proposed for addressing the Kolmogorov n-width issue, including in the context of
+transport problems. From a mathematical viewpoint, these methods transform the traditional aﬃne subspace approximation
+into a nonlinear approximation by applying a nonlinear parametrization to the aﬃne subspace [18–24] – usually, through
+a transformation of the given spatial domain. As such, these methods involve the motion and/or deformation of the mesh
+underlying the semi-discrete or discrete HDM. For this reason, they have been limited so far to simple geometries; or are
+applicable to complex ones but are in this case vulnerable to mesh entanglements – particularly for large-scale meshes such
+as those associated, for example, with high Reynolds number ﬂows. From an intuitive viewpoint, registration methods aim
+at determining domain mappings that cause parametric features of the solution to align in a reference domain for a set
+of training points sampled in the parameter domain D , which removes the convective nature of the solution, lowers the
+Kolmogorov n-width, and improves the usefulness of the sampled solution snapshots when an unsampled parameter point
+is queried in D .
+    Quadratic approximation manifolds have also been proposed, in two different forms, to mitigate the Kolmogorov barrier:
+a simulation-free form for structural dynamic applications [25]; and a more general data-driven form that was demonstrated
+for convection-dominated turbulent ﬂow problems as well as other transport problems [1]. They have also been proposed
+for performing nonintrusive PMOR using an operator inference method [26].
+    Most relevant to this paper are approaches that have been proposed for constructing arbitrarily nonlinear approximation
+manifolds for model order reduction (MOR) using some form of artiﬁcial neural network (ANN) representations of the
+solution or some residual, without necessarily incorporating any projection. One such approach was introduced in [27],
+in the context of structured meshes, and based on convolutional autoencoders. During training, such methods map the
+high-dimensional solution to a latent space whose dimension approaches that of the intrinsic solution manifold. Extensions
+to unstructured meshes were performed in [28], then in [29], using various means, including replacing the convolutional
+autoencoder with a graph convolutional ANN [29]. The success of all these approaches however comes at a hefty price,
+as convolutional networks are computationally expensive to train and evaluate, especially for large-dimensional problems
+whose solutions act as input and output of an autoencoder. Alternative techniques based on conventional deep ANNs (simply
+referred to in the remainder of this paper as ANNs) have been more recently proposed for mitigating the Kolmogorov
+barrier. These include the techniques described in [30,31], which use ANNs to learn transformation maps such as those
+used by registration methods that eliminate the convection nature of the solution, without deforming the underlying mesh
+however. Another approach that is equally relevant to this paper is the uplifted reduced-order modeling (UROM) method
+introduced in [32]. This method combines a standard PROM, a memory embedded long short-term memory (LSTM) closure
+model, and a LSTM-based super-resolution model. Hence, it is a complex approximation method with three modeling layers:
+a ﬁrst layer in which a standard, intrusive, PMOR approach is adopted to model the dynamics represented by the largest
+modes of the system of interest; a closure layer where an LSTM model is introduced to account for the residuals beyond
+the usual truncation; and a third, uplifting (or super-resolution) layer, which expands the span of the approximation in a
+post-processing step using a second LSTM.
+    All ANN-based MOR methods outlined above suffer from either or both of the following issues:
+
+  • First, except for the UROM method [32], which qualiﬁes as a PMOR method as it incorporates a projection, the size
+     of their network scales with the large dimension N of the HDM. Hence, for large-scale computational models such as
+
+                                                              2
+J. Barnett, C. Farhat and Y. Maday                                                               Journal of Computational Physics 492 (2023) 112420
+
+
+    those associated with ﬂows at high Reynolds numbers and past complex geometries, the training of such networks is
+    computationally intractable. This explains why in most if not all cases, the aforementioned ANN-based MOR methods
+    have been demonstrated on simple one-dimensional applications, occasionally on two-dimensional (2D) ones, in both
+    cases on problems with N ≤ 9 000; and usually without emphasizing oﬄine (training) and/or online (execution) wall
+    clock time. We also note that in the context of nonintrusive ANN-based MOR methods however,1 an approach was
+    most recently presented in [33] for training such methods using projected quantities and therefore a computational
+    complexity that scales with the reduced dimension n of the approximation. This training approach was demonstrated
+    for an application associated with N = 257 528, in which case it required 50 mins on a Tesla V100 32 GB GPU. Methods
+    where ANNs are introduced in the context of Galerkin PMOR to mimic the concept of closure modeling [34,35] also rely
+    on the aforementioned concept of training with projected quantities to achieve computational tractability.
+  • Second, the hyperreduction of nonlinear reduced-order models (ROMs) constructed using the aforementioned ANN-
+    based MOR methods remains a challenge, although some progress in this area was recently reported in [36] for the
+    case of sparse shallow auto-encoders. As for the case of UROM, which is a PMOR method with two different ANNs, how
+    to incorporate in it a computationally eﬃcient hyperreduction process remains at best unclear.
+
+    The present work is inspired by our previous work on mitigating the Kolmogorov barrier, which focused for this purpose
+on a data-driven approach for constructing a quadratic approximation manifold [1]. It proposes a general, intrusive, ANN-
+augmented PROM that we refer to here and throughout the remainder of this paper as a PROM-ANN. The main objective of
+the PROM-ANN is, for a ﬁxed level of accuracy, to reduce the dimensionality of the online approximation of the solution
+beyond what is possible using the quadratic approximation, and dramatically beyond what is achievable using the traditional
+aﬃne subspace approximation. In contrast to the alternative intrusive and projection-free approaches outlined above for
+constructing arbitrarily nonlinear approximation manifolds for MOR using some form of ANN, the training of the ANN
+part of the PROM-ANN we propose in this paper does not involve data whose dimension scales with that of the HDM. In
+contrast to a UROM [32], our PROM-ANN is simpler to construct, relies on a single ANN, and couples it strongly with the
+aﬃne approximation; therefore, our PROM-ANN is deemed to be more practical and performant than a UROM. And unlike
+all ROMs resulting from all aforementioned dimensionality reduction approaches, our PROM-ANN is eﬃciently hyperreducible
+using any well-established hyperreduction method. Consequently, unlike most if not all of the aforementioned ANN-based
+approaches, the PROM-ANN concept we propose in this paper should be practical for large-scale and industry-relevant
+problems which, in the context of CFD for example, tend to have hundreds of millions of degrees of freedom (dofs).
+    While the scope of the PROM-ANN concept we propose here is equally applicable to HDMs arising from the semi-
+discretization or discretization of elliptic, parabolic, and both types of hyperbolic PDEs, we focus in this paper on the case
+of ﬁrst-order hyperbolic PDEs, as the PMOR of the corresponding HDMs is most vulnerable to the Kolmogorov barrier.
+Consequently, we ground our work in the nonlinear least-squares Petrov-Galerkin (LSPG) PMOR method [37,38] which
+represents the state of the art of PMOR for convection-dominated turbulent ﬂow problems. However, we note that the
+approach we propose in Section 3 for constructing an arbitrarily nonlinear approximation manifold using a right ROB and
+an ANN is equally applicable to Galerkin PMOR methods.
+    To achieve computational eﬃciency, we choose to hyperreduce our PROM-ANN using the energy-conserving sampling
+and weighting (ECSW) [5] method. Although originally designed in the context of ﬁnite element (FE) approximations, solid
+mechanics, and Galerkin PROMs, this hyperreduction method was recently extended in [10] to that of ﬁnite volume (FV) ap-
+proximations, CFD, and LSPG PMOR [10]; and was shown to deliver impressive speedup factors while preserving a desirable
+level of accuracy. Nevertheless, we note that any other hyperreduction method such as the empirical interpolation method
+(EIM) [39] and its discrete version (DEIM) [40] can be considered to hyperreduce a PROM-ANN.
+    The remainder of this paper is organized as follows. In Section 2, we set the scope of this work and overview the LSPG
+and ECSW methods. In Section 3, we present the main underpinning of the PROM-ANN concept – namely, a computationally
+tractable approach for constructing an arbitrarily nonlinear approximation manifold using a right ROB and an ANN. In Sec-
+tion 4, we adapt LSPG and ECSW to this concept and comment on the additional computational complexity and additional
+storage requirement entailed by the adaptations. In Section 5, we apply our proposed PMOR technology to two instances
+of dimension 125 000 and 1 125 000 of a popular, parametric, shock-dominated benchmark problem that exhibits the Kol-
+mogorov n-width issue. We contrast the performance of our computational technology with that of the traditional PMOR
+method. We highlight the computational tractability of its oﬄine stage and the superior performance of its online stage.
+Speciﬁcally, for the same level of desirable accuracy, we report impressive wall clock time speedup factors with respect to
+both the considered HDMs and their traditional HPROMs. In Section 6, we offer concluding remarks.
+
+
+
+
+  1
+    A nonintrusive ANN-based MOR method is a low-dimensional approximation method where the ANN-based representation is constructed oﬄine from
+solution snapshots of a discretized PDE of interest, but is not otherwise informed online by the discretized PDE.
+
+
+                                                                      3
+J. Barnett, C. Farhat and Y. Maday                                                                      Journal of Computational Physics 492 (2023) 112420
+
+
+2. Background
+
+    Throughout this paper, we consider the following parametric, nonlinear, semi-discrete, ﬁrst-order initial value problem
+
+        M(μ)u̇ (t ; μ) + f (u (t ; μ) ; μ) − g (t ; μ) = 0
+                                                                                                                                                      (1)
+                                                      u (0; μ) = u0 (μ)
+
+where t ∈]0, T f ] denotes time and ]0, T f ] denotes the time-interval of interest; μ ∈ D ⊂ R N D denotes a vector-valued
+parameter of dimension N D and is often referred to as a “point” in the parameter domain D ; a dot denotes a time-
+derivative; u ∈ R N denotes the semi-discrete solution vector; M ∈ R N × N is a mass-like matrix; f ∈ R N is a nonlinear vector
+function representing a semi-discrete ﬂux or an internal force vector; g ∈ R N is a nonlinear vector function representing a
+semi-discrete external force vector, source term, or the effect of some time-dependent boundary conditions; and u0 ∈ R N
+denotes an initial condition for the semi-discrete solution vector. We refer to this problem as the HDM problem (or simply
+HDM) and consider its solution using an implicit time-integration scheme. We refer to the computed solution as the high-
+dimensional solution (or simply HDM solution). We note that this HDM encompasses counterparts associated with nonlinear,
+semi-discrete, second-order dynamical systems characterized by arbitrarily complex dissipative (damping) forces, as such
+problems can be rewritten in the ﬁrst-order form (1) using a change of variables and some mathematical transformations
+[5].
+
+2.1. The LSPG method for the dimensionality reduction of a HDM
+
+    The traditional aﬃne subspace approximation associated with traditional PMOR can be expressed as
+
+        u(t ; μ) ≈ ũ(t ; μ) = uref + Vq(t ; μ)                                                                                                       (2)
+
+where uref is a reference solution; and the right ROB V is constructed as usual – that is, by adaptively sampling D ×]0, T f ]
+                                                                                    i      i =Nt ; j =N μ
+using a greedy procedure, solving the HDM problem at the samples                     t ;μj     i =1; j =1
+                                                                                                                , collecting the N s = N t × N μ com-
+                                                                          N ×N s
+puted solution snapshots in the snapshot matrix S ∈ R                   ; compressing this matrix using the thin SVD S = US S YST ,
+                   N ×k
+where US ∈ R               is the matrix of left singular vectors, S ∈ Rk×k is the diagonal matrix of nonzero singular val-
+ues σS,i , i ∈ {1, . . . , k}, stored in the order σS,1 ≥ σS,2 ≥ . . . σS,k > 0, YS ∈ R N s ×k is the matrix of right singular vectors,
+k ≤ min ( N , N s ) denotes the rank of S, and the superscript T designates the transpose; and identifying V ∈ R N ×n as the ﬁrst
+n  N columns of US , where the dimension n is typically determined such that
+
+               
+               n
+                      σS2,i
+               i =1
+        1−                     ≤ εS2                                                                                                                  (3)
+               
+               k
+                        2
+                      σ S, j
+               j =1
+
+where εS > 0 is a user-deﬁned tolerance.
+   Substituting (2) in (1) leads to the nonlinear, semi-discrete, time-dependent residual equation and its associated initial
+condition
+                                  
+        r ũ(t ; μ), t ; μ = r (uref + Vq(t ; μ), t ; μ) = M(μ)Vq̇(t ; μ) + f (uref + Vq(t ; μ); μ) − g (t ; μ)
+                                       ũ0 (μ) = uref + Vq(0; μ) ≈ u0 (μ)
+The time-discretization of the ﬁrst of the above equations by a preferred implicit scheme leads at each time-step m + 1 to
+a nonlinear system of algebraic equations of the form
+                                                            
+        rm+1 (μ) = r uref + Vqm+1 (μ), t m+1 ; μ = 0                                                                                                  (4)
+
+where rm+1 ∈ R N and the superscript m + 1 (or m) designates here and throughout the remainder of this paper a discrete
+quantity evaluated at time t m+1 (or t m ). The N-dimensional system (4) is overdetermined as it governs n  N unknowns
+– namely, the generalized coordinates of the subspace approximation (2) stored in qm+1 . Thus, the unknowns represented
+by the reduced-order vector qm+1 are constrained by enforcing the orthogonality of the discrete residual rm+1 to a left ROB
+W ∈ R N ×n , which leads to the PROM counterpart of the HDM (1)
+                                                                    
+        W T rm+1 (μ) = W T r uref + Vqm+1 (μ), t m+1 ; μ = 0                                                                                          (5)
+                                                                                                                                                     m+1
+   In the case of the LSPG PMOR method, the overdetermined system of equations (4) is solved at each time-step for q
+using the Gauss-Newton method. In this case, the left ROB is constructed at each Gauss-Newton iteration  + 1 of each
+time-step t m+1 as follows [37,38]
+
+                                                                               4
+J. Barnett, C. Farhat and Y. Maday                                                                  Journal of Computational Physics 492 (2023) 112420
+
+
+                                                  ∂ ũ  m+1,    
+        Wm+1,+1 (μ) = Jm+1, (μ)                       q      (μ) = Jm+1, (μ) V                                                                 (6)
+                                                  ∂q
+where the second equality in (6) results from the approximation (2) and
+                                                        ∂ r  m+1,        ∂r                        
+        Jm+1, (μ) = J ũm+1, (μ); μ =                        ũ     (μ); μ =      uref + Vqm+1, (μ); μ ,      Jm+1, (μ) ∈ R N × N             (7)
+                                                          ∂ ũ                 ∂ ũ
+
+Remark 1. From (6) and (7), it follows that Wm+1,+1 is independent of qm+1,+1 – and therefore independent of ũm+1,+1 =
+uref + Vqm+1,+1 ; this justiﬁes in (6) the notation Wm+1,+1 (μ), which highlights the dependence of Wm+1,+1 on μ only.
+For the sake of simplicity however, the superscript +1 designating the ( + 1)-th iteration of the Gauss-Newton method is
+dropped from any double superscript m+1,+1 throughout the remainder of this paper, except when otherwise noted.
+
+
+   Now, using the left ROB Wm+1 deﬁned in (6) and (7), solving the discrete, nonlinear PROM problem (5) becomes equiv-
+alent to solving the optimization problem
+                                                                    2
+        qm+1 (μ) = arg min r uref + Vx, t m+1 ; μ                     2
+                                  x∈Rn
+
+(see [11] for a mathematical proof).
+
+2.2. The ECSW method for the hyperreduction of a LSPG-based PROM
+
+    For many nonlinear problems of practical interest, the complexity of the solution of problem (5) – and for this matter,
+that of the processing of any nonlinear PROM – scales not only with the small dimension n of the PROM, but also with the
+large dimension N of the HDM. Hyperreduction [41] is one approach for eliminating this computational bottleneck. In this
+work, we choose ECSW [5,42] for hyperreducing any constructed nonlinear PROM, because of its track record established in
+[5,42,10] for many different large-scale applications; and summarize it below.
+    Let E = {ei } , i ∈ {1, . . . , N e } denote the set of N e = |E | mesh entities deﬁning the discretization of the computational
+domain underlying the semi-discrete HDM (1). For example, these entities may be elements in the case of FE modeling, or
+computational (primal or dual) cells in the case of FV modeling. In all cases, the discrete, nonlinear PROM (5) of dimension
+n can be rewritten in the case of the LSPG PMOR method as
+
+           +1
+                                        T                                    
+        rm
+         n    (μ) = Wm+1 (μ)                 r uref + Vqm+1 (μ), t m+1 ; μ
+                                                   T                                         
+                     =             Le i Wm+1 (μ)         re i Le i + uref + Vqm+1 (μ) , t m+1 ; μ                                                 (8)
+                         e i ∈E
+
+where:
+
+  • The notation † [•] is used here and throughout the remainder of this paper to indicate that the quantity † is to be
+    multiplied by the quantity • and not that † is a function of •.
+  • rei ∈ Rdei represents the contribution of the individual mesh entity e i to the discrete residual r and dei denotes the
+     number of dofs attached to e i .
+  • Lei ∈ {0, 1}dei × N is a Boolean matrix selecting the mesh entity e i to which dei dofs are attached.
+                  d     ×N
+  • Lei + ∈ {0, 1} ei +    is a Boolean matrix selecting the union of the mesh entity e i and its neighbors participating in the
+     same stencil of the chosen semi-discretization scheme, to which de i + dofs are attached.
+  • The left ROB Wm+1 is given by (6) and (7).
+
+  The main idea underlying ECSW is to approximate a projected quantity such as (8) using a cubature approach whose
+complexity is independent of N, as follows
+
+           +1
+                                        T                                    
+        rm
+         n    (μ) = Wm+1 (μ)                 r uref + Vqm+1 (μ), t m+1 ; μ
+                           +1
+                                                                 T                                     
+                     ≈ r̃m
+                         n    (μ) =               ξei Lei Wm+1 (μ) rei Lei + uref + Vqm+1 (μ) , t m+1 ; μ                                         (9)
+                                         e i ∈E
+                                                                                         
+where E is a subset of E deﬁning a “reduced mesh” – that is, ne = E   N e = |E | – and interpretable as the set of points
+                                      
+of the cubature; and ξe1 , . . . , ξene is the set of positive, real-valued weights of the cubature approximation.
+    For implicit time-discretizations, it follows from Remark 1 that the Jacobian with respect to ũm+1 of a discrete, nonlinear,
+LSPG-based PROM of dimension n and the form given in (5) can be written as
+
+                                                                                 5
+J. Barnett, C. Farhat and Y. Maday                                                                               Journal of Computational Physics 492 (2023) 112420
+
+                                                                                           
+           +1
+                                T m +1
+                                m +1
+                                               m +1      T ∂ r uref + Vqm+1 (μ), t m+1 ; μ
+        Jm
+         n    (   μ) = W (μ) J (μ) = W (μ)
+                                                                         ∂ ũm + 1
+                                        T                              
+                     =   Le i Wm+1 (μ) Je i Le i + uref + Vqm+1 (μ) ; μ
+                           e i ∈E
+
+where Je i ∈ Rdei ×dei represents the contribution of the individual mesh entity e i to theJacobian J and de i denotes as before
+                                                                  T                                   T
+the number of dofs attached to e i . Since                 Wm+1         ∂ rm+1 /∂ ũm+1 = ∂       Wm+1        rm+1 /∂ ũm+1 , it follows that Jm
+                                                                                                                                               n
+                                                                                                                                                 +1 is the
+
+
+Jacobian of the projected residual (8). Therefore, Jm +1 can be approximated using the same cubature rule as in (9), as follows
+                                                    n
+                                                                                                    
+           +1
+                                            T m +1              T ∂ r uref + Vqm+1 (μ), t m+1 ; μ
+        Jm    (μ) = Wm+1 (μ)                    J (μ) = Wm+1 (μ)
+         n
+                                                                                  ∂ ũm+1
+                                                    T                              
+                       ≈            ξei Lei Wm+1 (μ) Jei Lei + uref + Vqm+1 (μ) ; μ                                                                          (10)
+                           e i ∈E
+                                                                                                                                  
+   Speciﬁcally, ECSW computes the reduced mesh E and its associated set of weights ξe1 , . . . , ξene using a machine learn-
+ing approach. Essentially, it trains the approximation (9) – from which the counterpart approximation (10) can be derived
+– on a subset of the solution snapshots already collected in the snapshot matrix S, as described below.
+   Let C = [cle ] ∈ R N h × N e and d = [dl ] ∈ R N h be the matrix and vector deﬁned as follows
+                               T                                                 
+        cle = Le Wm+1                 re Le+ VV T ul − uref + uref , (t ; μ)l ,             l = 1, . . . , N h
+                                                                                                                                                             (11)
+         dl =          cle ,                                                                l = 1, . . . , N h
+                e ∈E
+                                                                                   
+where (t ; μ)l is a generic notation for a sampled pair t i , μ j of a time-step and a parameter point, and N h ≤ N s denotes
+the size of the subset of the solution snapshots collected in S chosen for training the cubature approximation (9). Note that
+in (11) above:
+                 
+  • VV T ul − uref is the orthogonal projection of the collected solution snapshot ul onto the subspace represented by V.
+    This emphasizes that the ECSW training is performed for PROM predictions and not HDM predictions, consistently with
+    (9).
+  • C and d verify
+
+              C [ξ = 1] = d                                                                                                                                  (12)
+     where ξ ∈ R is the vector of weights of the cubature assuming that E = E and 1 ∈ R
+                         Ne                                                                                                 Ne
+                                                                                                                                 is the N e -long vector with
+     each entry equal to 1. This identity is a rewriting of (8) in matrix form.
+
+Then, ECSW can be simply described as relaxing (12) and deﬁning instead E and ξ as the solution of the optimization
+problem
+
+         min        ξ 0 s.t .           Cξ − d 2 ≤ εECSW d 2                                                                                                 (13)
+            Ne
+        ξ ∈R≥ 0
+
+where • 0 designates the 0 -norm of • – that is, the total number of nonzero entries of the vector • – and 0 < εECSW < 1
+is a speciﬁed training tolerance. Unfortunately, the above minimization problem is combinatorially hard. For this reason,
+several alternative formulations of (13) were considered in [43] and the following nonnegative least squares approach
+
+        ξ = arg min                 Cζ − d 22
+                        Ne                                                                                                                                   (14)
+                    ζ ∈R≥ 0
+
+equipped with the early termination criterion
+
+          Cξ − d 2 ≤ εECSW d 2                                                                                                                               (15)
+was found to be most practical and computationally eﬃcient. Due to (15), the solution of the optimization problem (14) is
+a sparse vector ξ characterized by a relatively small number of nonzero entries corresponding to the mesh entities deﬁning
+the reduced mesh E .
+    After ECSW has computed the reduced mesh E ⊂ E , the augmented counterpart E + is obtained by simply adding to E
+the neighbors to its mesh entities that participate in the same stencil of the chosen semi-discretization scheme and have
+not already been sampled in E ; and the LSPG-based HPROM associated with a LSPG-based PROM of the form given in (5)
+is constructed as
+
+                                                                                    6
+J. Barnett, C. Farhat and Y. Maday                                                                Journal of Computational Physics 492 (2023) 112420
+
+
+            +1
+        r̃m
+          n    (μ) = 0
+where r̃m +1 is the approximation of rm+1 (8) given in (9).
+        n                             n
+
+3. Construction of a nonlinear approximation manifold using a ROB and an ANN
+
+    We propose here a concept of an ANN-augmented PROM – or a PROM-ANN – that is grounded in that of an ANN-
+augmented aﬃne approximation, which itself is inspired from our previous work on the development of a quadratic
+approximation manifold [1]. We start from the same snapshot matrix S ∈ R N × N s used to construct a traditional PROM
+based on the traditional aﬃne subspace approximation. However, we aim at building a right ROB V whose dimension n not
+only veriﬁes n  N, but is also much smaller than the dimension ntra of a traditional PROM. In practice, this means that
+we build V by using a much looser tolerance εS in the singular value energy truncation criterion (3) than traditionally. To
+remedy the inaccuracy that can be expected from such a decision, we augment the corresponding aﬃne subspace approx-
+imation with an arbitrarily nonlinear ANN approximation. Furthermore, we design the ANN approximation such that the
+size of the corresponding network does not scale with the large dimension N of the parametric HDM of interest, but with
+a much smaller dimension.
+    Speciﬁcally, we construct an arbitrarily nonlinear approximation manifold by approximating the solution u ∈ R N ×n as
+follows
+
+        u(t ; μ) ≈ ũ(t ; μ) = uref + Vq(t ; μ) + VN (q(t ; μ))                                                                               (16)
+where:
+
+  • We construct V ∈ R N ×n as usual, using the ﬁrst n  N columns of US – the matrix of left singular vectors of the
+    snapshot matrix S (see Section 2.1) which spans the range of S – with n also much smaller than for a traditional PROM
+    – that is, n  ntra .
+  • We construct V ∈ R N ×n̄ using a subset of the next n̄  N columns of US , and therefore n̄ ≤ k − n, where k ≤ min ( N , N s )
+    is the rank of S (see Section 2.1).
+  • Typically, we set n̄ ≈ ntra − n so that n + n̄ ≈ ntra .
+  • V and V satisfy the orthogonality properties
+                                         T
+              V T V = In ,           V V = In̄ ,                VT V = 0                                                                      (17)
+     where In and In̄ denote the identity matrices of dimension n and n̄, respectively.
+  • N : Rn → Rn̄ is a map represented by an ANN whose size scales with max(n, n̄)  N.
+
+    In practice, we emphasize in (16) the contribution of the ANN and therefore choose n and n̄ such that n  n̄  N. This
+is because only the contribution of VN to the overall approximation (16) can effectively mitigate the Kolmogorov barrier to
+reducibility. The contribution of the aﬃne subspace approximation is to provide “completeness” to the overall approximation
+(16).
+    To characterize further the ANN representation N , we consider the projection of all solution snapshots computed and
+collected in the snapshot matrix S (or a subset of them) onto the subspaces represented by V and V. They can be written
+as
+                                                                    
+                                                       T
+        ql = V T ul − uref ,                 q̄l = V           ul − uref ,   l = 1, . . . , N s                                               (18)
+
+Next, we apply (16) to approximate ultimately perfectly all computed solution snapshots, which yields
+                                                  
+        ul (μ) − uref = Vql + VN ql                                                                                                           (19)
+                                     T
+We premultiply (19) by V , which in view of the orthogonality properties (17) leads to
+            T
+                                      
+        V         ul − uref = N ql
+
+and in view of (18) gives
+                     
+        q̄l = N ql ,           l = 1, . . . , N s                                                                                             (20)
+                                                                         N s                                                      N s
+   Hence, our ANN takes as input the data set ql l=1 (or a subset of it); and produces the output data set q̄l l=1 (or a
+subset of it). We determine its vector-valued hyperparameter η by minimizing the loss function implied by (21) – that is,
+                                     N train                       2
+                               1
+        η = arg min                              q̄l − N ql , η                                                                               (21)
+                      η   N train
+                                         l
+where N train ≤ N s denotes the number of solution snapshots allocated to training.
+
+                                                                                        7
+J. Barnett, C. Farhat and Y. Maday                                                                        Journal of Computational Physics 492 (2023) 112420
+
+
+4. Adaptation of LSPG and ECSW to the construction of a HPROM-ANN
+
+4.1. Adaptation of LSPG
+
+   Given a solution approximation such as (2) or (16), LSPG is fully speciﬁed once its left ROB W is speciﬁed. Hence, we
+adapt here LSPG to the proposed concept of an ANN-augmented PROM by fully specifying the left ROB W associated with
+the approximation (16).
+   To this end, we ﬁrst substitute in (4) the ANN-augmented aﬃne approximation (16) for the traditional aﬃne subspace
+approximation, which yields
+          ⎛                                                             ⎞
+          ⎜                                                           ⎟
+        r⎜
+         ⎝uref + Vq
+                   m +1
+                        (μ) + VN qm+1 (μ) , t m+1 ; μ⎟
+                                                     ⎠=0                                                                                              (22)
+                                                       
+                                          
+                              ũ qm+1 (μ);μ
+
+
+                     Gauss-Newton method to solve the above overdetermined system of N equations with n  N un-
+   Next, we apply the
+knowns qm+1 ∈ Rn , which can be summarized as follows:
+
+  • Build the sequence of iterations
+
+              qm+1,+1 (μ) = qm+1, (μ) + qm+1,+1 (μ)                                                                                               (23)
+    where qm+1, denotes the -th iterate generalized coordinate solution.
+  • Substitute (23) into (22) and perform the ﬁrst-order Taylor series approximation of the result around qm+1, – which
+     can be written as
+                                                                                                                    
+              r ũm+1 qm+1, (μ) + qm+1,+1 (μ); μ , t m+1 ; μ ≈ r ũ qm+1, (μ); μ , t m+1 ; μ
+
+                                     ∂ ũ  m+1,    
+                   + Jm+1, (μ)            q      (μ) qm+1,+1 (μ) = 0                                                                               (24)
+                                     ∂q
+     where
+                                                       
+              Jm+1, (μ) = J ũ qm+1, (μ); μ
+
+     and
+
+                  ∂ ũ  m+1,     ∂ Vqm+1, (μ) + VN qm+1, (μ)      ∂ N  m+1,    
+                        q      (μ) =                                  =V+V      q      (μ)                                                            (25)
+                  ∂q                                ∂q                     ∂q
+  • Recall the approximation deﬁned in (16), consider it at time t m+1 – as highlighted in (22) – then rearrange (24) as
+     follows
+                                                                                      
+              Wm+1,+1 (μ) qm+1,+1 = −r ũ qm+1, (μ) , t m+1 ; μ                                                                                   (26)
+
+                                                                                        ∂ ũ  m+1,    
+     where, as in the ﬁrst equality in (6), Wm+1,+1 (μ) = Jm+1, (μ)                         q      (μ) . Then, from (25), it follows that
+                                                                                        ∂q
+                                                                             
+                                                               ∂ N  m+1,
+              Wm+1,+1 (μ) = Jm+1, (μ) V + V                       q      (μ)                                                                        (27)
+                                                               ∂q
+
+   The expression of the left ROB given in (27) speciﬁes the left ROB associated with the ANN-augmented aﬃne approxi-
+mation (16) and therefore completes the description of the LSPG method for the proposed concept of an ANN-augmented
+PROM.
+   From (6) and (27), it follows that in the case of the ANN-augmented aﬃne approximation, the left ROB of LSPG is simply
+obtained by adding
+
+           m+1,+1                                 ∂ N  m+1,    
+        WN             (μ) = Jm+1, (μ)V                q      (μ)
+                                                   ∂q
+to the left ROB
+
+           m+1,+1
+        Wtra           (μ) = Jm+1, (μ)V
+
+                                                                                8
+J. Barnett, C. Farhat and Y. Maday                                                                Journal of Computational Physics 492 (2023) 112420
+
+
+computed in the case of the traditional aﬃne subspace approximation. This incurs at each Gauss-Newton iteration primarily
+two additional computational costs: that associated with the evaluation of the gradient ∂ N /∂ q (C 1 ); and that associated
+with the left multiplication of this gradient by the auxiliary right ROB V (C 2 ). It also entails an additional storage require-
+ment.
+    Regarding the additional cost C 1 , we reemphasize that the map N : Rn → Rn̄ is represented by an ANN whose size
+scales with max(n, n̄)  N. Hence, the computational cost incurred by the online evaluation of the gradient of this map is
+                                                                       m+1,+1
+negligible compared to that incurred by building the left ROB Wtra             , which grows as O ( N 2 n). Furthermore, because by
+design, the proposed ANN has more outputs than inputs (N               n̄   n), we mitigate this cost by using the forward rather
+than backward differentiation mode adopted during training – that is, by evaluating this gradient with respect to the inputs
+instead of the outputs.
+    Regarding the additional cost C 2 , it is associated with O ( Nnn̄) additional operations. In the absence of hyperreduction, it
+                                                      m+1,+1
+is negligible compared to the cost of building Wtra           , which, as mentioned above, is of the order of O ( N 2 n) operations.
+In the presence of hyperreduction, both costs are relatively irrelevant, particularly when the size of the reduced mesh is a
+tiny fraction of that of the original mesh – say, less than 1% (see Section 5.5 for further  details).
+    As for the additional storage requirement, it is associated with storing the matrix V∂ N /∂ q ∈ R N ×n . Hence, it is negli-
+                                                                                                               m+1,+1
+gible compared to the storage requirements associated with the construction of the left ROB Wtra   , because n  N.
+   Finally, we note that the standard Gauss-Newton method solves the overdetermined problem (26) by transforming it into
+the square problem
+                                  T                                                T                        
+             Wm+1,+1 (μ)                Wm+1.+1 (μ)         qm+1,+1 = − Wm+1,+1 (μ) r ũ qm+1, (μ) , t m+1 ; μ                          (28)
+
+and solving this problem instead. This requires however guaranteeing that problem (28) above is nonsingular – that is,
+ensuring that the matrix Wm+1,+1 has full column rank. From (27), it follows that this requirement imposes a counterpart
+requirement on the ANN designed for computing the map N whose satisfaction may not be an easy task. For this reason,
+problem (26) is solved instead in this work by applying the truncated SVD method to the factorization of the matrix
+Wm+1,+1 , where truncation amounts in this case to regularization (for example, see [1] for more details).
+
+4.2. Adaptation of ECSW
+
+    Next, we adapt ECSW to the concept of an ANN-augmented PROM. For this purpose, we ﬁrst point the attention of the
+reader to (8) and the ﬁrst bullet below that equation, which emphasize that for a given PROM characterized by a ROB
+V, ECSW trains the cubature approximation for PROM predictions deﬁned by generalized coordinates and not for HDM
+counterparts. This means that in principle, one should exercise the constructed PROM to compute and collect generalized
+coordinates solution snapshots, which unfortunately defeats the purpose of hyperreduction. In the case of the traditional
+aﬃne subspace approximation, this issue can be elegantly resolved by simply projecting the high-dimensional solution
+snapshots collected in the matrix S, or a subset of them, onto the right ROB V. This is highlighted in (11), which describes
+the construction of the matrix C and vector d deﬁning the least squares problem (14) and its early termination criterion
+(15).
+    In the case of the proposed mixed ANN-augmented aﬃne approximation (16) however, the identiﬁcation of the vector of
+generalized coordinates ql associated with a collected high-dimensional solution snapshot ul can no longer be obtained via
+projection onto either of the right ROB V or auxiliary right ROB V. Instead, it requires the solution of a nonlinear problem
+of the form
+                      
+        δl (ql ) = VN ql + Vql + uref − ul = 0
+
+using, for example, yet another Gauss-Newton procedure that can be summarized as follows
+
+            ql,0 = V T ul
+                                                 +
+          l,+1       l,           ∂δl  l,            
+        q         =q        −            q             δl ql,
+                                    ∂q
+where the superscript  designates here too the -th Gauss-Newton iteration and the superscript + designates the Moore-
+Penrose inverse. It follows that for the same number N h of training solution snapshots, the computational cost associated
+with the setup of ECSW in the case of our proposed ANN-augmented aﬃne approximation is higher than in the case of
+the traditional aﬃne subspace approximation. Nevertheless, we can justify this potential cost increase and anticipate a
+signiﬁcant return on our investment using the following observation (also, see [1]).
+   Given a nonlinear problem whose PMOR is vulnerable to the Kolmogorov barrier to reducibility, we can expect the
+ANN-augmented aﬃne approximation to deliver a similar level of accuracy as a traditional PROM, using however a much
+smaller dimension n. Considering this and the fact that the number of cubature points required for approximating a d-
+dimensional integral function with p cubature points along each dimension grows as pd , we can reasonably expect ECSW to
+
+                                                                             9
+J. Barnett, C. Farhat and Y. Maday                                                      Journal of Computational Physics 492 (2023) 112420
+
+
+deliver in the case of the ANN-augmented aﬃne approximation a much smaller reduced mesh than in that of the traditional
+aﬃne subspace approximation. Hence, we can expect ECSW to deliver an even better computational eﬃciency when it is
+applied to hyperreduce a PROM-ANN; and hence we can expect an ECSW-based HPROM-ANN to deliver an even better
+computational eﬃciency than a traditional HPROM. The numerical results we report in Section 5 for a popular, parametric
+benchmark problem support these expectations.
+
+5. Application and performance assessment
+
+    Here, we illustrate the concept of an ANN-augmented PROM proposed in this paper using a parametric, 2D, inviscid Burg-
+ers’ problem deﬁned in a bounded computational domain  and a time-interval ]0, T f ]. We also contrast the performance
+of this concept for this problem, after hyperreduction, with that of a traditional HPROM, for a ﬁxed level of accuracy.
+    The inviscid Burgers’ equation is a popular benchmark for PMOR whose semi-discretization can be written in the form
+given in (1). It is convection-dominated and well known for exhibiting the Kolmogorov n-width issue. Depending on the
+speciﬁed initial condition, boundary condition, or source term, its solution may develop propagating shocks. We focus
+exclusively on such conditions and source terms and consider two discrete HDMs for this equation of dimensions 125 000
+and 1 125 000 that resolve the propagating shocks.
+    In all cases, we set uref = 0. We assess the accuracy of each computed HPROM and HPROM-ANN solution time-history
+relative to the HDM counterpart, using the following measure of the relative error
+
+                           N t 
+                                                
+                               um (μ) − ũm (μ)
+                                                        2
+                       m =0
+        RE(μ) =                                                                                                                     (29)
+                                
+                                Nt
+                                      ||um (
+                                           μ)||2
+                               m =0
+
+where μ and N t denote, as before, the queried parameter point and the total number of computational time-steps (excluding
+the initial time-step), respectively; and ũm can be the HPROM or HPROM-ANN solution computed at time-step t m .
+   We perform all computations that we report on in this section in double precision arithmetic, on a single core – except
+when otherwise speciﬁed – of a single node of a Linux cluster, where each node is conﬁgured with two Intel Xeon Gold
+5118 processors clocked at 2.3 GHz and 192 GB of memory. Hence, all training and solution times we report are wall clock
+times.
+
+5.1. Two-dimensional parametric inviscid Burgers’ problem and discretization
+
+   Speciﬁcally, we consider the following parametric, 2D, inviscid Burgers’ initial boundary value problem (IBVP) deﬁned in
+a square and a 2D parameter domain D ⊂ R2 (N D = 2)
+                                              
+          ∂ ux 1           ∂ ux2 ∂ uxu y
+              +                 +                  = 0.02 exp(μ2 x)
+           ∂t   2           ∂x     ∂y
+                                              
+         ∂u y   1          ∂ u y 2 ∂ uxu y
+              +                   +                =0                                                                               (30)
+          ∂t    2           ∂y       ∂x
+                               u x (0, y , t ; μ) = μ1
+               u x (x, y , 0) = u y (x, y , 0) = 1
+
+where x ∈ [0, 100], y ∈ [0, 100], t ∈]0, T f ], T f = 25, and μ = (μ1 , μ2 ) ∈ [4.25, 5.50] × [0.015, 0.03]. We note that as spec-
+iﬁed here, D is identical to the parameter domain chosen in [27]. However, whereas the authors of [27] considered a 1D
+inviscid Burgers’ problem, we consider here a 2D counterpart problem.
+   We discretize the 2D computational domain  = [0, 100] × [0, 100] using two uniform, structured meshes:
+
+  • Mesh M1. This mesh corresponds to a discretization of  by 250 × 250 equally sized “elements” (or primal computa-
+    tional cells). It leads to N e = 62 500 – and N = 125 000.
+  • Mesh M2. This mesh corresponds to a discretization of  by 750 × 750 equally sized elements. It leads to N e = 562 500
+    – and the one order of magnitude larger dimension N = 1 125 000.
+
+   On each mesh, we semi-discretize the parametric IBVP using a cell-centered Godunov’s method. The resulting semi-
+discrete HDM can be written in the form given in (1), where
+                      
+                  ux
+        u=
+                  uy
+
+                                                                      10
+J. Barnett, C. Farhat and Y. Maday                                                                            Journal of Computational Physics 492 (2023) 112420
+
+
+
+
+Fig. 1. Snapshots of the component u x of the HDM solution computed at μ = (4.75, 0.02). (For interpretation of the colors in the ﬁgure(s), the reader is
+referred to the web version of this article.)
+
+
+
+
+                         Fig. 2. Decay of the singular value energy fraction of the largest 1 000 singular values of the snapshot matrix.
+
+
+
+    We discretize each resulting ordinary differential equation using the trapezoidal rule and the ﬁxed time-step size
+t = 0.05, and therefore discretize the time-interval ]0, 25] in 500 equally spaced time-steps. At each time-step, we solve
+the resulting system of nonlinear equations using Newton’s method and at each Newton iteration, we solve the resulting
+algebraic system of equations using a direct sparse solver.
+    On the single core described above, the time-to-solution of a single instance of the parametric HDM is: 718 seconds, for
+N = 125 000 (mesh M1); and 24 448 seconds – or 6.79 hours – for N = 1 125 000 (mesh M2).
+    Fig. 1 shows that the solution of the parametric IBVP (30) generally produces a shock that propagates from the far left to
+the far right of ; and that the mesh M1 is underresolved compared to the mesh M2. In both cases however, the convecting
+structure of the captured solution leads to the Kolmogorov barrier, which manifests itself in Fig. 2 through the slow decay
+of the singular values of the snapshot matrix S. In particular, the reader can observe that, at least for the IBVP considered
+here, the n-width issue is signiﬁcantly aggravated when the mesh is reﬁned.
+
+
+5.2. Training the ROB
+
+
+   For the purpose of training the ROB V in both cases of a PROM and a PROM-ANN and both cases of the mesh M1 and
+the mesh M2, we uniformly sample the parameter domain D = [4.25, 5.50] × [0.015, 0.03] by a 3 × 3 grid – and therefore
+9 parameter points – using the constant increments μ1 = 0.625 and μ2 = 0.0075. This sampling leads to N s = 4 501
+solution snapshots, including the initial condition which is nonparametric and therefore shared by all sampled parameter
+points (see (30)).
+
+                                                                               11
+J. Barnett, C. Farhat and Y. Maday                                                                     Journal of Computational Physics 492 (2023) 112420
+
+
+
+
+                                 Fig. 3. ECSW-generated reduced mesh for the traditional LSPG-based PROM and the mesh M1.
+
+
+5.3. Parametric nonlinear LSPG- and ECSW-based HPROM – case of the mesh M1
+
+    For the case of the mesh M1, we set εS2 (3) to 5% and construct a right ROB V of dimension ntra = 95, as described
+in Section 5.2. Using this right ROB and the corresponding left ROB W, we train ECSW utilizing: only one of the sampled
+parameter points – namely, the point (4.25, 0.0225); every 10-th solution snapshot in time; and therefore a subset of
+N h = 50 (1 × 50) of the collected 4 501 solution snapshots. In this case, executing ECSW on the same aforementioned single
+core with εECSW = 10−14 (see (15)) delivers in 8.31 hours a reduced mesh with ne = 5 746 elements. Hence, this reduced
+mesh retains 9.19% of the N e = 62 500 elements of the original mesh (see Fig. 3), which explains the relatively high run
+time of ECSW. Indeed, for the typical, industrial-grade, RANS CFD problem, ECSW retains only 0.0029% [10] to 0.26% [1] of
+the total number of elements of the mesh underlying the HDM and runs much faster than reported here, even on a single
+core [5]. The relatively high percentage of retained elements and relatively high run time of ECSW are due in this case to
+the nature of the considered problem, whose solution contains a feature – namely, a shock – that travels throughout the
+computational domain , and therefore throughout the original mesh M1.
+    Next, we query three different unsampled parameter points μ1 = (5.19, 0.026), μ2 = (4.56, 0.019), and μ3 =
+(4.75, 0.02); and apply the HDM and the constructed LSPG- and ECSW-based HPROM to predict the solution of the IBVP
+(30) at these points, using the same ﬁxed time-step size t = 0.05. We compute the maximum relative error REmax
+deﬁned as follows
+
+        REmax =          max         RE(μ)                                                                                                         (31)
+                      μ1 , μ2 , μ3
+
+where the deﬁnition of RE is given in (29). We ﬁnd that in the case of the mesh M1, REmax is obtained at the parameter
+point μ1 = (5.19, 0.026). We report in Fig. 4 samples of the solution time-histories computed at this parameter point using
+the HDM and HPROM, in two near-mid-plane slices of . The reader can observe that except for some occasional and small
+spurious oscillations, the results delivered by the HPROM are in good agreement with their counterparts delivered by the
+HDM. This conclusion is conﬁrmed by the relative errors of the order of 1% reported in Table 1.
+
+5.4. Parametric nonlinear LSPG- and ECSW-based HPROM-ANN – case of the mesh M1
+
+   Here, we ﬁrst set n = 10 ( 95), n̄ = 140, and construct for the case of the mesh M1 a right ROB V and an auxiliary
+right ROB V, using the training brieﬂy described in Section 5.2. We choose these values of n and n̄ because for the HDM
+associated with the mesh M1, they turn out to lead to a HPROM-ANN that delivers an accuracy comparable to that achieved
+by the traditional HPROM of dimension ntra = 95.
+   Next, we use the python software package PyTorch to build for the map N the ANN graphically depicted below
+
+        (n, 32) → (32, 64) → (64, 128) → (128, 256) → (256, 256) → (256, n)                                                                        (32)
+                   ELU               ELU            ELU               ELU              ELU
+
+This ANN has 6 linear layers of dimensions (input, output) and exponential linear unit (ELU) activation functions. We split
+all N s = 4 501 solution snapshots between training and testing. Speciﬁcally, we randomly shuﬄe the set of generalized
+coordinates associated with these snapshots and split the data 90%-10% for training-testing. On a single core of the Linux
+cluster that is not a GPU, building this ANN requires 19.3 minutes.
+
+                                                                            12
+J. Barnett, C. Farhat and Y. Maday                                                                    Journal of Computational Physics 492 (2023) 112420
+
+
+
+
+Fig. 4. Samples of the solution time-histories computed on the mesh M1 at μ1 = (5.19, 0.026), using the HDM and the LSPG- and ECSW-based HPROM
+(t = 0, 5, 10, 15, 20, and 25): y = 50.2 (top); and x = 50.2 (bottom).
+
+
+
+
+                                     Fig. 5. ECSW-generated reduced mesh for the LSPG-based PROM-ANN and the mesh M1.
+
+
+
+Remark 2. We also use PyTorch to compute online the gradient ∂ N /∂ q (forward mode automatic differentiation) when-
+ever this gradient is needed.
+   Then, we use the constructed right ROB, auxiliary right ROB, and ANN to build a PROM-ANN; apply ECSW to hyperre-
+duce it using the same approach described in Section 5.3; and transform the PROM-ANN into a HPROM-ANN. In this case,
+executing ECSW on the same aforementioned single core with εECSW = 10−14 (see (15)) delivers in 107 seconds only a re-
+duced mesh with ne = 1 496 elements (see Fig. 5). Hence, in this case, ECSW delivers 280 times faster than in the case of a
+traditional HPROM a reduced a mesh that furthermore retains only 2.39% of the N e = 62 500 elements of the mesh M1; and
+this reduced mesh contains 3.84 times fewer elements than that delivered by ECSW for constructing the traditional HPROM
+(see Section 5.3). These results are consistent with the cubature interpretation of ECSW; and with the fact that the total
+number of cubature points required for approximating an n-dimensional integral function using ne cubature points along
+each dimension grows as nne .
+   Next, we apply the constructed LSPG- and ECSW-based HPROM-ANN at the same three unsampled parameter points as
+in Section 5.3 to predict the solution of the IBVP (30); and compute REmax using the same ﬁxed time-step size t = 0.05.
+We ﬁnd that in this case, REmax is obtained at the parameter point μ2 = (4.56, 0.019). We report in Fig. 6 samples of the
+solution time-histories computed at this parameter point using the HDM and HPROM, in two same near-mid-plane slices
+of  as in Fig. 4. The reader can observe a good agreement between the results obtained using the HPROM-ANN and their
+HDM counterparts, which is again conﬁrmed by the relative errors of 1% reported in Table 1. More importantly however,
+the comparison of the results displayed in Fig. 6 and Fig. 4 highlights the superior performance of the HPROM-ANN at
+minimizing spurious oscillations around the traveling shock and attenuating their amplitudes.
+
+                                                                           13
+J. Barnett, C. Farhat and Y. Maday                                                                       Journal of Computational Physics 492 (2023) 112420
+
+
+
+
+Fig. 6. Samples of the solution time-histories computed on the mesh M1 at μ2 = (4.56, 0.019) using the HDM and the LSPG- and ECSW-based HPROM-ANN
+(t = 0, 5, 10, 15, 20, and 25): y = 50.2 (top); and x = 50.2 (bottom).
+
+
+
+                          Table 1
+                          Model parameters and oﬄine/online performance results on a single core for the case of the mesh M1.
+
+                            Computational model               n               ne               REmax      Time          Speedup
+                                                              (N for HDM)     (N e for HDM)               (minutes)     factor
+                            HDM (t = 0.05)                   125 000         62 500           −          11.97         −
+
+                            HPROM (ECSW, oﬄine)               95              5 746            −          499           −
+                            HPROM (online, t = 0.05)         95              5 746            1.50%      1.57          7.62
+
+                            HPROM-ANN (ANN, oﬄine)            10              −                −          19.30         −
+                            HPROM-ANN (ECSW, oﬄine)           10              1 496            −          1.79          −
+                            HPROM-ANN (online, t = 0.05)     10              1 496            1.51%      0.23          52.04
+
+
+
+
+5.5. Performance comparisons for the case of the mesh M1
+
+   Table 1 summarizes the various models and model parameters considered for the solution of problem (30) on the mesh
+M1; and the oﬄine as well as online performances of these models on the single core described at the beginning of
+Section 5. The results reported in this table suggest that, given a set of pre-computed solution snapshots, the construction
+oﬄine of the HPROM-ANN is computationally tractable. They also demonstrate that the online performance of the HPROM-
+ANN is superior to that of the traditional HPROM. Speciﬁcally, these results show that for the case of the HDM of dimension
+N = 125 000:
+
+  • The training of the ANN part of the HPROM-ANN on a single core that is not a GPU requires only 19.30 minutes.
+  • For ﬁxed model order reduction and hyperreduction precisions, ECSW computes a reduced mesh for constructing the
+    HPROM-ANN 280 times faster than it computes a counterpart reduced mesh for constructing the traditional HPROM;
+    and this mesh contains 3.84 times fewer elements than its counterpart associated with the traditional HPROM.
+  • The HPROM-ANN can deliver the same desirable level of accuracy as the traditional HPROM, using however an order of
+    magnitude smaller dimension and almost seven times faster.
+  • The HPROM-ANN can reproduce a convection-and-shock-dominated HDM solution time-history with 98.49% accuracy,
+    using however a four orders of magnitude smaller dimension and 52 times faster.
+
+Remark 3. The following remark concerns the relationship between the mesh reduction factor N e /ne delivered by ECSW
+and the factor by which a HPROM accelerates a PROM.
+   The run time of a nonlinear, implicit, HDM is typically dominated by the computational cost associated with the solution
+at each Newton iteration, within each time-step, of a sparse system of linear
+                                                                             equations
+                                                                                      of size N. If this system is solved
+using a direct sparse solver, the aforementioned cost has the complexity O N nz(J)β , where nz(J) denotes the number of
+nonzero coeﬃcients of the Jacobian of the residual r with respect to the solution u and β is some positive constant. If this
+system is solved however using a Krylov-based iterative method such as a preconditioned GMRES method, the corresponding
+cost has a complexity that depends on many factors, including the chosen preconditioner and the allowed maximum number
+of iterations. For simplicity, we assume here that in both cases, the complexity of the solution of the linear system of
+
+                                                                            14
+J. Barnett, C. Farhat and Y. Maday                                                        Journal of Computational Physics 492 (2023) 112420
+
+
+equations can be approximated as C sol   HDM
+                                              = O(c sol N ), where c sol is some positive constant that depends on the chosen
+algebraic solver. For realistic systems, one can also reasonably assume that N ≈ γ1 γ2 N e , where γ2 is the ratio of the number
+of nodes and number of elements of the given mesh; and γ1 denotes the number of unknowns deﬁned at each node,
+which, for the application considered herein, is constant. In this case, the aforementioned solution cost can be estimated as
+  HDM
+C sol = O (c sol N e ).
+
+   On the other hand, the run time of a nonlinear, implicit, LSPG-based HPROM or HPROM-ANN is dominated by the
+computational costs associated with forming and solving at each Gauss-Newton iteration, within each time-step, the system
+of equations (28). For realistic systems (see above), these costs can be characterized as follows:
+
+  • From the complexity analysis outlined in Section 4.1, it follows that for a HPROM, the cost C for associated with forming
+    the system of equations (28) has the complexity C for = O (ne3 n); and for a HPROM-ANN, it has the complexity C for =
+    O(ne3 n) + O(ne nn̄).
+  • Assuming that ne n and ne n̄, which is reasonable for realistic problems, the cost C sol associated with solving the
+    system of equations (28) using the truncated SVD method has the complexity C sol = O (ne n3 ).
+
+   From the above simpliﬁed complexity analysis, it follows that when using the HPROM or the HPROM-ANN to predict the
+solution of a realistic problem of interest, the following speedup factors can be expected
+                                O(c sol N e )         O(c sol N e )
+        SF HPROM =                                ≈                                                                                   (33)
+                          O(ne3 n) + O(ne n3 )          O(ne3 n)
+and
+                                            O(c sol N e )                 O(c sol N e )
+        SF HPROM-ANN =                                                ≈                                                               (34)
+                                O(ne3 n) + O(ne nn̄) + O(ne n3 )           O(ne3 n)
+Hence, in both cases, the estimation of the expected speedup factor is the same, but neither n nor ne is the same. In
+particular, (34) shows that for realistic problems, the speedup factor that can be expected from the HPROM-ANN is asymp-
+totically independent from√ the parameter n̄ of this computational model. Furthermore, both (33) and (34) reveal that
+SF ≥ O( N e /ne ), if ne ≤ c sol /n – that is, if for the speciﬁed tolerance εECSW (see (15)), ECSW suﬃciently reduces the
+      √ the original mesh underlying the HDM; and SF ≤ O( N e /ne ) otherwise – that is, if for the same tolerance εECSW ,
+size of
+ne ≥ c sol /n, and thus ECSW does not suﬃciently reduce the size of the original mesh. These results explain the following
+additional noteworthy observation in Table 1. Indeed, the reader can note in this table that the HPROM accelerates the
+online run time of the HDM by a factor of 7.62, which is lesser than the mesh reduction factor ( N e /ne )HPROM = 10.88; but
+the HPROM-ANN, which compresses further the size of the reduced mesh by a factor equal to 3.84, accelerates the online
+run time of the HDM by a factor of 52.04, which is greater than the mesh reduction factor ( N e /ne )HPROM-ANN = 41.78.
+
+5.6. Performance comparisons for the case of the mesh M2
+
+    In Section 5.5, we have considered the HDM associated with the mesh M1 and reported performance results for a cor-
+responding HPROM-ANN that demonstrate the superior online performance of the latter computational model over that of
+a traditional HPROM; and suggest the computational tractability of its oﬄine stage – and thus, of its ANN component –
+given a set of pre-computed solution snapshots. Here, we consider the HDM associated with the mesh M2, whose dimen-
+sion N = 1 125 000 is an order of magnitude larger than that of its counterpart associated with the mesh M1, and focus
+on demonstrating the suggested computational tractability of the oﬄine stage of our HPROM-ANN concept. Furthermore,
+we demonstrate the signiﬁcance of hyperreduction even when the PROM of interest is enriched by the ANN component
+that we propose. For these reasons, we consider here, for the HDM associated with the mesh M2, a PROM-ANN and two
+corresponding HPROM-ANNs characterized by two different conﬁgurations (n, n̄).
+    First, we consider the same conﬁguration (n, n̄) = (10, 140) as in the case of the mesh M1 and build the corresponding
+ANN (32) using PyTorch. We refer to this conﬁguration as Option 1. As before, we split all N s = 4 501 pre-computed
+solution snapshots between training and testing; randomly shuﬄe the set of generalized coordinates associated with these
+snapshots; and split them 90%-10% for training-testing.
+    Next, we consider the alternative conﬁguration (n, n̄) = (20, 280), which we refer to as Option 2. For the sake of ex-
+perimentation, we build for this conﬁguration an ANN with a single hidden layer of size n × n̄. We train this ANN using
+otherwise the same settings and amounts of data as in the case of the mesh M1 and the previous ANN built for mesh M2,
+which takes 20.80 minutes of wall clock time.
+    Then, we hyperreduce both resulting PROM-ANNs corresponding to Option 1 and Option 2 using ECSW; and 1 core and
+24 cores of the same Linux cluster, respectively. For this purpose, we set εECSW = 10−14 (see (15)) and train ECSW as in
+Section 5.3 and Section 5.4 – that is, using only the sampled parameter point (4.25, 0.0225); every 10-th solution snapshot
+in time; and therefore a subset of N h = 50 (1 × 50) of the collected 4 501 solution snapshots.
+    We report in Table 2 the performance results obtained for both oﬄine and online stages of all considered computational
+models and compare them to their counterparts for a traditional HPROM of dimension ntra = 95.
+
+                                                                              15
+J. Barnett, C. Farhat and Y. Maday                                                                      Journal of Computational Physics 492 (2023) 112420
+
+
+                      Table 2
+                      Model parameters and oﬄine/online performance results on a single core (except when otherwise speciﬁed) for
+                      the case of the mesh M2.
+
+                         Computational model                   n                ne              REmax       Time          Speedup
+                                                               (N for HDM)      (N e for HDM)               (minutes)     factor
+                         HDM (t = 0.05)                       1 125 000        562 500         −           407.47        −
+
+                         HPROM (ECSW, oﬄine, 24 cores)         95               63 106          −           45.25         −
+                         HPROM (online, t = 0.05)             95               63 106          8.05%       35.08         11.61
+
+                         PROM-ANN (ANN, oﬄine)                 10               −               −           23.40         −
+                         PROM-ANN (online, t = 0.05)          10               −               5.50%       23.90         17.05
+
+                         HPROM-ANN (ANN, oﬄine)                10               −               −           23.40         −
+                         HPROM-ANN (ECSW, oﬄine)               10               3 496           −           26.40         −
+                         HPROM-ANN (online, t = 0.05)         10               3 496           3.43%       0.500         814.94
+
+                         PROM-ANN (ANN, oﬄine)                 20               −               −           20.80         −
+                         PROM-ANN (online, t = 0.05)          20               −               4.60%       65.13         6.26
+
+                         HPROM-ANN (ANN, oﬄine)                20               −               −           20.80         −
+                         HPROM-ANN (ECSW, oﬄine, 24 cores)     20               22 984          −           5.21          −
+                         HPROM-ANN (online, t = 0.05)         20               22 984          4.72%       8.74          46.62
+
+
+
+
+    Based on the results reported in Table 2, we make the following noteworthy observations:
+
+  • For both Option 1 and Option 2, the training times of the ANN part of the HPROM-ANN – namely, 23.40 minutes for
+    Option 1 and 20.80 minutes for Option 2 – are close to the training time of the ANN built in the case of the much
+    coarser mesh M1 (19.30 minutes, see Section 5.4). This demonstrates the computational tractability of the ANN part
+    of our PROM-ANN concept for large-dimensional problems (recall that here, N = 1 125 000). We note that this is not
+    surprising, considering that the complexity of the training of the ANN component of a PROM-ANN is independent of
+    the large dimension N of the HDM: it depends only on the much lower dimensions n and n̄.
+  • For both Option 1 and Option 2, the training times of ECSW – namely, 26.40 minutes for Option 1 and 5.21 minutes
+    for Option 2 – demonstrate the computational tractability of the hyperreduction part of our HPROM-ANN concept for
+    large-scale meshes. In particular, the training of ECSW for Option 2 is 8.69 times faster than that for the traditional
+    HPROM.
+  • From both observations above, it follows that the oﬄine stage of our HPROM-ANN concept is computationally tractable
+    (given a set of pre-computed solution snapshots).
+  • For each of Option 1 and Option 2, the corresponding HPROM-ANN achieves a good accuracy as measured by REmax
+    (31), especially considering the important contributions of relatively small shock location errors to this two-norm-based
+    measure of the relative error. These contributions explain why REmax is slightly larger for the larger conﬁguration
+    (n, n) = (20, 280); however, close inspections of Fig. 7 and Fig. 8 reveal that the solution predicted by the HPROM-ANN
+    characterized by the larger conﬁguration (n, n) = (20, 280) (Option 2) is marred by fewer spurious oscillations of smaller
+    amplitudes than the counterpart solution predicted by the HPROM-ANN characterized by the smaller conﬁguration
+    (n, n) = (10, 140) (Option 1).
+  • The HPROM-ANN characterized by the smaller conﬁguration (n, n) = (10, 140) delivers an impressive wall clock time
+    speedup factor of roughly 815 with respect to the HDM; and a wall clock time speedup factor of 47.80 with respect to
+    the corresponding PROM-ANN.
+  • The HPROM-ANN characterized by the larger conﬁguration (n, n) = (20, 280) delivers a wall clock time speedup factor
+    of 46.62 with respect to the HDM; and a wall clock time speedup factor of 7.45 with respect to the corresponding
+    PROM-ANN.
+  • From both observations above, it follows that hyperreduction is essential even for a PROM-ANN.
+  • The HPROM-ANNs characterized by the smaller and larger conﬁgurations (n, n) = (10, 140) and (n, n) = (20, 280), re-
+    spectively, deliver wall clock time speedup factors of roughly 70 and 4 with respect to the considered traditional
+    HPROM, respectively, while delivering a better level of accuracy.
+
+5.7. Effects of variations in n and n̄ on the performance of a HPROM-ANN
+
+   The automation of the selection of n and n̄ for the eﬃcient PMOR of a HDM known to exhibit the n-width issue is a
+research topic that we are currently pursuing: hence, it is beyond the scope of this paper. Nevertheless, to pave the way for
+this development, we perform here a parametric study aimed at delivering insight into the effects of variations in n and n̄
+on the accuracy and performance of a HPROM-ANN constructed for the same HDM described above for the IBVP (30). To
+this end, we parameterize the variations of n and n̄ using two parameters, ntra and α , and the following governing relations
+
+                                                                           16
+J. Barnett, C. Farhat and Y. Maday                                                                 Journal of Computational Physics 492 (2023) 112420
+
+
+
+
+Fig. 7. Samples of the solution time-histories computed on the mesh M2 at μ2 = (4.56, 0.019), using the HDM and the LSPG- and ECSW-based HPROM-ANN
+characterized by (n, n) = (10, 140) (t = 0, 5, 10, 15, 20, and 25): y = 50.1 (top); and x = 50.1 (bottom).
+
+
+
+
+Fig. 8. Samples of the solution time-histories computed on the mesh M2 at μ2 = (4.75, 0.02), using the HDM and the LSPG- and ECSW-based HPROM-ANN
+characterized by (n, n) = (20, 280) (t = 0, 5, 10, 15, 20, and 25): y = 50.1 (top); and x = 50.1 (bottom).
+
+
+        n + n̄ = ntra , where ntra ∈ [nlow , nupp ] ⊂ N          and        n = α n̄, where α ∈ [0, 1] ⊂ R                                     (35)
+
+In (35), the ﬁrst parameterization guideline is consistent with the third bullet in Section 3. In this guideline, ntra denotes
+the minimum between the dimension required for a PROM or HPROM to mitigate the Kolmogorov n-width issue – that
+is, to achieve a desired level of approximation accuracy – and the maximum dimension of a PROM or HPROM that is
+computationally affordable. In the second guideline within (35), the range of the real-valued scalar α is chosen such that
+the corresponding range of n includes the choice n  n̄  N made in Section 3; and goes beyond it, for the purpose of error
+trend analysis.
+    For simplicity, but without any loss of generality, we focus on the HDM associated with mesh M1. Hence, we set nlow
+to nlow = 95, in which case (n, n̄) = (95, 0) corresponds to the traditional HPROM considered in Section 5.3 and shown to
+deliver an accuracy level of 98.50%; and set nupp to nupp = 150.
+    We consider the same parameter domain D , the same spatial and temporal discretizations, and the same ﬁxed time-
+step as those considered in the previous subsections of Section 5. We train the ROB V as before – that is, as described in
+Section 5.2; and build the ANN component of each PROM-ANN we construct, and hyperreduce the resulting PROM-ANN,
+using the same approaches and tools as before – that is, as described in Section 5.4.
+    We sample the ranges of ntra and α given in (35) to generate several (n, n̄) conﬁgurations. For each such conﬁguration,
+we construct a HPROM-ANN (n, n̄); apply it to predict the solution of the IBVP (30) at the same 3 unsampled parameter
+points as in Section 5.3; and compute the maximum relative error REmax (31).
+
+                                                                       17
+J. Barnett, C. Farhat and Y. Maday                                                                    Journal of Computational Physics 492 (2023) 112420
+
+
+
+
+                                     Fig. 9. Variations of the maximum relative error with ntra , n, and n̄.
+
+
+
+
+                                          Fig. 10. Variations of the maximum relative error with α .
+
+
+
+    We report in Fig. 9 the variations of REmax with n, n̄, and n + n̄ = ntra . These variations are displayed using two
+different graphical means: shades of blue, with lighter and darker shades corresponding to smaller and larger relative
+errors, respectively; and disks of different sizes, with smaller and larger radii corresponding to smaller and larger relative
+errors, respectively. In this ﬁgure, each red dashed line corresponds to a straight line n + n̄ = ntra and therefore to a different
+value of the parameter ntra ; and the black circles associated with the aforementioned disks and the horizontal black line in
+the color bar mark the maximum relative error of 1.50% obtained for the nominal HPROM discussed in Section 5.3.
+    Focusing in Fig. 9 on the straight lines, the reader can observe that:
+
+  • For n = 5, increasing the value of n̄ by increasing the value of ntra does not reduce the maximum relative error signiﬁ-
+    cantly. For n ≥ 8 however, increasing the value of n̄ by increasing the value of ntra reduces the maximum relative error.
+    While these results highlight the beneﬁt of n̄ and increasing its value, they also suggest the existence of a minimum
+    value of n below which reducing the error of the HPROM using an ANN component is diﬃcult. There are a few conﬁg-
+    urations (n, n̄) that do not follow this trend however: we believe the reason to be an imperfect training of the ANN at
+    these conﬁgurations.
+  • When n is increased, the maximum relative error is typically decreased.
+  • The smallest maximum relative error REmax = 1.10% is achieved for (n, n̄) = (20, 120). In this conﬁguration however,
+    the HPROM-ANN delivers the solution of the IBVP (30) in 0.30 minute, while for (n, n̄) = (10, 140), it delivers in 0.23
+    minutes a solution with REmax = 1.51%. These results highlight the accuracy versus speed trade-off governed by the
+    choice of the conﬁguration (n, n̄) of a HPROM-ANN.
+
+    The reader can also observe that in all cases however, the maximum relative error varies between 1.10% and 4.82%.
+For n ≥ 8 however, REmax varies between 1.10% and 2.55%. These observations suggest that an automated method for
+selecting the optimal values of n and n̄ from the accuracy viewpoint can afford a reasonable error margin without affecting
+engineering accuracy.
+    We report in Fig. 10 the variations of REmax with the parameter α , when ntra is varied in [95, 150], using the same
+graphical means as in Fig. 9. Here, the red dashed line is a least squares regression line that approximates the relationship
+between REmax and α in the scatterplot. As expected, the maximum relative error is decreased when α is increased – that
+is, when n is increased.
+
+                                                                       18
+J. Barnett, C. Farhat and Y. Maday                                                                     Journal of Computational Physics 492 (2023) 112420
+
+
+6. Conclusions
+
+    The concept of a projection-based reduced-order model (PROM) augmented by an artiﬁcial neural network (ANN) – or
+a PROM-ANN – we propose in this paper distinguishes itself from many previous attempts at exploiting ANNs in model
+order reduction in two major aspects: 1) the size of its neural network does not scale with the large dimension N of the
+underlying high-dimensional model (HDM), but with a much lower dimension n̄  N related to the dimension n  N of the
+PROM part of this concept; and 2) it is hyperreducible to a HPROM-ANN using readily available hyperreduction methods.
+Consequently, our concept is computationally tractable oﬄine, including for very-large scale computational models. While it
+is inspired from our previous work on polynomial approximation manifolds [1], it also distinguishes itself from that work
+in two other aspects: a) it enriches the traditional aﬃne subspace approximation a priori rather than a posteriori; and
+b) it explicitly computes the enrichment using n̄ left singular vectors truncated during the construction of the traditional
+reduced-order basis via the singular value decomposition of the snapshot matrix.
+    For a parametric, shock-dominated benchmark problem that exhibits the Kolmogorov n-width issue and characterized
+by N = 1 125 000, and for the settings n = 10 and n̄ = 140, the oﬄine training of the ANN part of our PROM-ANN concept
+requires 23.40 minutes wall clock time on a single core of a Linux cluster that is not a GPU. The oﬄine construction on the
+same single core of a reduced mesh for the HPROM-ANN counterpart requires 26.40 minutes wall clock time.
+    For the same benchmark problem, the constructed HPROM-ANN delivers a better level of accuracy than that delivered
+by a traditional HPROM of dimension ntra = 95 – using an almost order of magnitude smaller dimension. Consequently, this
+HPROM-ANN executes roughly 70 times faster online than its counterpart traditional HPROM.
+    When compared to the HDM, the aforementioned HPROM-ANN, whose dimension n = 10 is ﬁve orders of magnitude
+smaller than the dimension N = 1 125 000 of the HDM, reproduces the HDM solution almost 815 times faster and with
+almost 3% accuracy.
+    In summary, our proposed concept of a HPROM-ANN has the potential for mitigating the Kolmogorov reducibility barrier.
+We are currently working on automating the setting of its parameters n and n̄, and on conﬁrming as well as quantifying its
+potential for industry-relevant, parametric, convection-dominated, turbulent ﬂow problems and highly nonlinear structural
+dynamics problems.
+
+CRediT authorship contribution statement
+
+   Joshua Barnett: Conceptualization, Formal analysis, Investigation, Methodology, Software, Validation, Visualization, Writ-
+ing – original draft. Charbel Farhat: Conceptualization, Formal analysis, Funding acquisition, Resources, Supervision, Writing
+– review & editing. Yvon Maday: Conceptualization, Formal analysis, Writing – review & editing.
+
+Declaration of competing interest
+
+   The authors declare that they have no known competing ﬁnancial interests or personal relationships that could have
+appeared to inﬂuence the work reported in this paper.
+
+Data availability
+
+    Data will be made available on request.
+
+Acknowledgements
+
+   The authors acknowledge the support by the Air Force Oﬃce of Scientiﬁc Research under Grant FA9550-20-1-0358 and
+Grant FA9550-22-1-0004.
+
+References
+
+ [1] Joshua Barnett, Charbel Farhat, Quadratic approximation manifold for mitigating the Kolmogorov barrier in nonlinear projection-based model order
+     reduction, J. Comput. Phys. 464 (2022) 111348.
+ [2] Matthew J. Zahr, Philip Avery, Charbel Farhat, A multilevel projection-based model order reduction framework for nonlinear dynamic multiscale prob-
+     lems in structural and solid mechanics, Int. J. Numer. Methods Eng. 112 (8) (2017) 855–881.
+ [3] Wanli He, Philip Avery, Charbel Farhat, In situ adaptive reduction of nonlinear multiscale structural dynamics models, Int. J. Numer. Methods Eng.
+     121 (22) (2020) 4971–4988.
+ [4] Gianluigi Rozza, Dinh Bao Phuong Huynh, Anthony T. Patera, Reduced basis approximation and a posteriori error estimation for aﬃnely parametrized
+     elliptic coercive partial differential equations, Arch. Comput. Methods Eng. 15 (3) (2008) 229–275.
+ [5] Charbel Farhat, Philip Avery, Todd Chapman, Julien Cortial, Dimensional reduction of nonlinear ﬁnite element dynamic models with ﬁnite rotations
+     and energy-based mesh sampling and weighting for computational eﬃciency, Int. J. Numer. Methods Eng. 98 (9) (2014) 625–662.
+ [6] Herbert Egger, Thomas Kugler, Björn Liljegren-Sailer, Nicole Marheineke, Volker Mehrmann, On structure-preserving model reduction for damped wave
+     propagation in transport networks, SIAM J. Sci. Comput. 40 (1) (2018) A331–A365.
+ [7] Charbel Farhat, Sebastian Grimberg, Andrea Manzoni, Alﬁo Quarteroni, Computational Bottlenecks for Proms: Precomputation and Hyperreduction.
+     Model Order Reduction, De Gruyter, Berlin, 2020, pp. 181–244.
+
+
+                                                                          19
+J. Barnett, C. Farhat and Y. Maday                                                                        Journal of Computational Physics 492 (2023) 112420
+
+
+ [8] Jeffrey P. Thomas, Earl H. Dowell, Kenneth C. Hall, Three-dimensional transonic aeroelasticity using proper orthogonal decomposition-based reduced-
+     order models, J. Aircr. 40 (3) (2003) 544–551.
+ [9] David Amsallem, Charbel Farhat, Interpolation method for adapting reduced-order models and application to aeroelasticity, AIAA J. 46 (7) (2008)
+     1803–1813.
+[10] Sebastian Grimberg, Charbel Farhat, Radek Tezaur, Charbel Bou-Mosleh, Mesh sampling and weighting for the hyperreduction of nonlinear Petrov–
+     Galerkin reduced-order models with local reduced-order bases, Int. J. Numer. Methods Eng. 122 (7) (2021) 1846–1874.
+[11] Sebastian Grimberg, Charbel Farhat, Noah Youkilis, On the stability of projection-based model order reduction for convection-dominated laminar and
+     turbulent ﬂows, J. Comput. Phys. 419 (2020) 109681.
+[12] Radek Tezaur, Faisal As’ad, Charbel Farhat, Robust and globally eﬃcient reduction of parametric, highly nonlinear computational models and real time
+     online performance, Comput. Methods Appl. Mech. Eng. 399 (2022) 115392.
+[13] Lambert Fick, Yvon Maday, Anthony T. Patera, Tommaso Taddei, A stabilized pod model for turbulent ﬂows over a range of Reynolds numbers: optimal
+     parameter sampling and constrained projection, J. Comput. Phys. 371 (2018) 214–243.
+[14] Constantin Greif, Karsten Urban, Decay of the Kolmogorov n-width for wave problems, Appl. Math. Lett. 96 (2019) 216–222.
+[15] David Amsallem, Matthew J. Zahr, Charbel Farhat, Nonlinear model order reduction based on local reduced-order bases, Int. J. Numer. Methods Eng.
+     92 (10) (2012) 891–916.
+[16] Melissa B. Rivers, Ashley Dittberner, Experimental investigations of the NASA common research model, J. Aircr. 51 (4) (2014) 1183–1193.
+[17] K.M. Washabaugh, M.J. Zahr, C. Farhat, On the use of discrete nonlinear reduced-order models for the prediction of steady-state ﬂows past parametri-
+     cally deformed complex geometries, in: 54th AIAA Aerosp. Sci. Meet, San Diego, California, 2016.
+[18] Gerrit Welper, Interpolation of functions with parameter dependent jumps by transformed snapshots, SIAM J. Sci. Comput. 39 (4) (2017) A1225–A1250.
+[19] Nicolas Cagniart, Yvon Maday, Benjamin Stamm, Model order reduction for problems with large convection effects, in: Contributions to Partial Differ-
+     ential Equations and Applications, Springer, 2019, pp. 131–150.
+[20] Felix Black, Philipp Schulze, Benjamin Unger, Projection-based model reduction with dynamically transformed modes, ESAIM: Math. Model. Numer.
+     Anal. 54 (6) (2020) 2011–2043.
+[21] Rambod Mojgani, Maciej Balajewicz, Physics-aware registration based auto-encoder for convection dominated PDEs, arXiv preprint, arXiv:2006.15655,
+     2020.
+[22] Julius Reiss, Optimization-based modal decomposition for systems with multiple transports, SIAM J. Sci. Comput. 43 (3) (2021) A2079–A2101.
+[23] Andrea Ferrero, Tommaso Taddei, Lei Zhang, Registration-based model reduction of parameterized two-dimensional conservation laws, J. Comput. Phys.
+     457 (2022) 111068.
+[24] Marzieh Alireza Mirhoseini, Matthew J. Zahr, Model reduction of convection-dominated partial differential equations via optimization-based implicit
+     feature tracking, J. Comput. Phys. (2022) 111739.
+[25] Shobhit Jain, Paolo Tiso, Johannes B. Rutzmoser, Daniel J. Rixen, A quadratic manifold for model order reduction of nonlinear structural dynamics,
+     Comput. Struct. 188 (2017) 80–94.
+[26] Rudy Geelen, Stephen Wright, Karen Willcox, Operator inference for non-intrusive model reduction with quadratic manifolds, Comput. Methods Appl.
+     Mech. Eng. 403 (2023) 115717.
+[27] Kookjin Lee, Kevin T. Carlberg, Model reduction of dynamical systems on nonlinear manifolds using deep convolutional autoencoders, J. Comput. Phys.
+     404 (2020) 108973.
+[28] Stefania Fresca, Luca Dede, Andrea Manzoni, A comprehensive deep learning-based approach to reduced order modeling of nonlinear time-dependent
+     parametrized PDEs, J. Sci. Comput. 87 (2) (2021) 1–36.
+[29] Anthony Gruber, Max Gunzburger, Lili Ju, Zhu Wang, A comparison of neural network architectures for data-driven reduced-order modeling, Comput.
+     Methods Appl. Mech. Eng. 393 (2022) 114764.
+[30] Davide Papapicco, Nicola Demo, Michele Girfoglio, Giovanni Stabile, Gianluigi Rozza, The neural network shifted-proper orthogonal decomposition:
+     a machine learning approach for non-linear reduction of hyperbolic equations, Comput. Methods Appl. Mech. Eng. 392 (2022) 114687.
+[31] Zhichao Peng, Min Wang, Fengyan Li, A learning-based projection method for model order reduction of transport problems, J. Comput. Appl. Math. 418
+     (2023) 114560.
+[32] Shady E. Ahmed, Omer San, Adil Rasheed, Traian Iliescu, A long short-term memory embedding for hybrid uplifted reduced order models, Phys. D:
+     Nonlinear Phenom. 409 (2020) 132471.
+[33] Stefania Fresca, Andrea Manzoni, POD-DL-ROM: enhancing deep learning-based reduced order models for nonlinear parametrized PDEs by proper
+     orthogonal decomposition, Comput. Methods Appl. Mech. Eng. 388 (2022) 114181.
+[34] Omer San, Romit Maulik, Neural network closures for nonlinear model order reduction, Adv. Comput. Math. 44 (6) (2018) 1717–1750.
+[35] Qian Wang, Nicolò Ripamonti, Jan S. Hesthaven, Recurrent neural network closure of parametric POD-Galerkin reduced-order models based on the
+     Mori-Zwanzig formalism, J. Comput. Phys. 410 (2020) 109402.
+[36] Youngkyu Kim, Youngsoo Choi, David Widemann, Tarek Zohdi, A fast and accurate physics-informed neural network reduced order model with shallow
+     masked autoencoder, J. Comput. Phys. 451 (2022) 110841.
+[37] Kevin Carlberg, Charbel Bou-Mosleh, Charbel Farhat, Eﬃcient non-linear model reduction via a least-squares Petrov–Galerkin projection and compres-
+     sive tensor approximations, Int. J. Numer. Methods Eng. 86 (2) (2011) 155–181.
+[38] Kevin Carlberg, Charbel Farhat, Julien Cortial, David Amsallem, The GNAT method for nonlinear model reduction: effective implementation and appli-
+     cation to computational ﬂuid dynamics and turbulent ﬂows, J. Comput. Phys. 242 (2013) 623–647.
+[39] Maxime Barrault, Yvon Maday, Ngoc Cuong Nguyen, Anthony T. Patera, An ‘empirical interpolation’ method: application to eﬃcient reduced-basis
+     discretization of partial differential equations, C. R. Math. 339 (9) (2004) 667–672.
+[40] Saifon Chaturantabut, Danny C. Sorensen, Nonlinear model reduction via discrete empirical interpolation, SIAM J. Sci. Comput. 32 (5) (2010) 2737–2764.
+[41] David Ryckelynck, A priori hyperreduction method: an adaptive approach, J. Comput. Phys. 202 (1) (2005) 346–366.
+[42] Charbel Farhat, Todd Chapman, Philip Avery, Structure-preserving, stability, and accuracy properties of the energy-conserving sampling and weighting
+     method for the hyper reduction of nonlinear ﬁnite element dynamic models, Int. J. Numer. Methods Eng. 102 (5) (2015) 1077–1110.
+[43] Todd Chapman, Philip Avery, Pat Collins, Charbel Farhat, Accelerated mesh sampling for the hyper reduction of nonlinear computational models, Int. J.
+     Numer. Methods Eng. 109 (12) (2017) 1623–1654.
+
+
+
+
+                                                                            20
+

@@ -1,0 +1,1913 @@
+Received: 6 August 2020    Revised: 5 December 2020   Accepted: 6 December 2020
+
+DOI: 10.1002/nme.6603
+
+
+RESEARCH ARTICLE
+
+
+
+
+Mesh sampling and weighting for the hyperreduction of
+nonlinear Petrov–Galerkin reduced-order models with local
+reduced-order bases
+
+Sebastian Grimberg1                       Charbel Farhat1,2,3                     Radek Tezaur1            Charbel Bou-Mosleh4
+
+1
+  Department of Aeronautics and
+Astronautics, Stanford University,                Abstract
+Stanford, California, USA                         The energy-conserving sampling and weighting (ECSW) method is a
+2
+  Department of Mechanical Engineering,           hyper-reduction method originally developed for accelerating the performance
+Stanford University, Stanford, California,
+                                                  of Galerkin projection-based reduced-order models (PROMs) associated with
+USA
+3
+ Institute for Computational and
+                                                  large-scale finite element models, when the underlying projected operators need
+Mathematical Engineering, Stanford                to be frequently recomputed as in parametric and/or nonlinear problems. In
+University, Stanford, California, USA             this paper, this hyper-reduction method is extended to Petrov–Galerkin PROMs
+4
+ Department of Mechanical Engineering,
+                                                  where the underlying high-dimensional models can be associated with arbitrary
+Notre Dame University-Louaize, Zouk
+Mosbeh, Lebanon                                   finite element, finite volume, and finite difference semi-discretization meth-
+                                                  ods. Its scope is also extended to cover local PROMs based on piecewise-affine
+Correspondence
+                                                  approximation subspaces, such as those designed for mitigating the Kolmogorov
+Sebastian Grimberg, Department of
+Aeronautics and Astronautics, Stanford            n-width barrier issue associated with convection-dominated flow problems.
+University, Durand Building, 496 Lomita           The resulting ECSW method is shown in this paper to be robust and accurate.
+Mall, Stanford, CA 94305-4035.
+Email: sjg@stanford.edu
+                                                  In particular, its offline phase is shown to be fast and parallelizable, and the
+                                                  potential of its online phase for large-scale applications of industrial relevance
+Funding information                               is demonstrated for turbulent flow problems with O(107 ) and O(108 ) degrees
+Air Force Office of Scientific Research,
+Grant/Award Number: FA9550-17-1-0182;             of freedom. For such problems, the online part of the ECSW method proposed
+Boeing, Grant/Award Number: 45047;                in this paper for Petrov–Galerkin PROMs is shown to enable wall-clock time
+King Abdulaziz City for Science and
+                                                  and CPU time speedup factors of several orders of magnitude while delivering
+Technology (KACST); Office of Naval
+Research, Grant/Award Number:                     exceptional accuracy.
+N00014-17-1-2749
+                                                  KEYWORDS
+                                                  hyper-reduction, local basis, machine learning, nonlinear model reduction, Petrov–Galerkin,
+                                                  reduced mesh
+
+
+
+
+1         I N T RO DU CT ION
+
+Projection-based model order reduction (PMOR) is an enabling computational technology for dramatically reducing
+the solution time and storage requirements associated with the analysis of high-fidelity, high-dimensional (large-scale),
+differential-equation-based computational models in various parametric settings. Time-critical applications requiring
+real-time, near real-time, or simply faster than ever performance such as computational-based design and optimization,
+statistical analysis, and optimal control stand to benefit from the reduced computational complexity of the outcome of
+PMOR—that is, from projection-based reduced-order models (PROMs). Unfortunately, the computational cost associated
+
+1846     © 2020 John Wiley & Sons, Ltd.                          wileyonlinelibrary.com/journal/nme         Int J Numer Methods Eng. 2021;122:1846–1874.
+GRIMBERG et al.                                                                                                        1847
+
+
+
+
+                                                                                                                              10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+with the construction of a PROM of dimension n—and more specifically, the underlying projected vectors and matri-
+ces (a.k.a. the reduced-order vectors and matrices)—typically scales with both n and the dimension of the underlying
+high-dimensional computational model (HDM) N ≫ n. Thus, unless this issue is mitigated, a typical PMOR method does
+not necessarily deliver the expected speedup factor.
+    A popular approach for addressing the aforementioned scaling issue is to decompose the computation of projected
+vectors and matrices in two parts: one whose computational complexity scales with the dimension of the HDM but can be
+executed offline to precompute once-for-all some numerical quantities—that is, before the parametric or repetitive PROM
+computations are performed; and another part which exploits the aforementioned precomputed quantities to perform all
+online computations with a complexity that is independent of the large dimension of the HDM. This offline–online decom-
+position has been extensively demonstrated for parametric, linear problems,1,2 and for nonlinear problems exhibiting a
+low-order polynomial dependence on the chosen degrees of freedom (DOFs).3-5 For some HDMs with nonpolynomial
+nonlinearities, lifting transformations have been advocated to enable the offline–online decomposition approach asso-
+ciated with low-order polynomial nonlinearities.6 However, for highly nonlinear HDMs, such transformations are in
+general computationally intractable, in which case the aforementioned offline–online decomposition is simply not an
+option.
+    Alternatively, a computational approach known as hyper-reduction has gained wide acceptance for eliminating
+the computational bottlenecks associated with the repeated re-evaluations of parametric reduced-order vectors and
+matrices. A comprehensive review of this approach, which is equally applicable to linear and arbitrarily nonlin-
+ear parametric PROMs, can be found in Reference 7. Generally speaking, hyper-reduction introduces in the con-
+struction of a PROM an additional approximation layer that enables the efficient computation of the projected,
+low-dimensional vectors and matrices defining a PROM without sacrificing the desired level of accuracy. Specifically,
+the computational complexity of the processing of a PROM after it is hyper-reduced is independent of the size of the
+underlying HDM.
+    Hyper-reduction methods can be classified in two types:7 approximate-then-project methods, which were developed
+first and have a longer record of successful applications; and project-then-approximate methods, which have been pro-
+posed more recently and are more robust. The origins of approximate-then-project hyper-reduction methods can be traced
+back to the gappy proper orthogonal decomposition (POD) method8 developed in the context of image reconstruction. As
+their label implies, such methods approximate first a nonlinear high-dimensional quantity—for example, by interpolat-
+ing information at a carefully selected subset of the nodes of a computational mesh using a small number of empirically
+derived basis functions—then compute the exact projection of the approximation onto the left reduced-order basis (ROB)
+underlying the PROM of interest. The first examples of this type of hyper-reduction methods include the empirical inter-
+polation method (EIM)9,10 and the related best points interpolation method,11 which are derived at the continuous level
+and enjoy some level of theoretical support for elliptic problems. Variant approaches based on function sampling have
+also been proposed, including the missing point estimation method12 and the collocation method.13,14 In this first type
+of hyper-reduction methods, however, the discrete empirical interpolation method (DEIM),15 which can be viewed as a
+variant of the discrete form of the aforementioned EIM, is certainly the most popular method: it has seen widespread
+adoption along with subsequent adaptations.16,17
+    Hyper-reduction methods of the project-then-approximate type differ from their predecessors by directly approxi-
+mating the reduced-order vectors and matrices associated with the projection of HDM quantities onto the left ROB
+associated with the PROM of interest. As such, they seek to achieve a better approximation of the PROM than
+approximate-then-project hyper-reduction methods. They can be interpreted as generalized quadrature rules in which
+the set of quadrature “points” and associated weights are learned in a supervised procedure on an empirical set of training
+data, which illustrates one of the many connections between PMOR and machine learning. The earliest hyper-reduction
+methods of this type include the cubature-based approach of Reference 18 and the energy-conserving sampling and
+weighting (ECSW) method.19 More recent examples include the empirical cubature method (ECM)20 and the linear
+program-based empirical quadrature method.21 All such methods compute a reduced mesh—that is, a subset of the
+elements or other entities of the computational mesh underlying the given HDM—whose entities define the quadra-
+ture points. In this sense, all hyper-reduction methods of the project-then-approximate type perform mesh sampling.
+Among such methods, ECSW distinguishes itself from alternatives in that for second-order hyperbolic problems such as
+structural dynamics and wave propagation problems, it preserves the Lagrangian structure associated with Hamilton’s
+principle.22 As such, if a time-integrator applied to a second-order hyperbolic PROM is provably unconditionally sta-
+ble, it is guaranteed that this time-integrator will remain numerically stable on the hyper-reduced counterpart PROM
+(HPROM) produced by ECSW. In particular, it has been shown that ECSW leads to numerically stable and accurate
+1848                                                                                                         GRIMBERG et al.
+
+
+
+
+                                                                                                                               10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+HPROMs when applied to realistic structural dynamics problems for which state-of-the-art hyper-reduction methods of
+the approximate-then-project type fail to do so.22
+    All hyper-reduction methods of both types outlined above have been developed in the context of Galerkin PMOR
+methods—that is, PMOR methods where the left and right ROBs are identical, or equivalently, the subspaces of the test
+and approximation functions are the same. Only two of them have been explored for the acceleration of Petrov–Galerkin
+(PG) PMOR methods—that is, PMOR methods where the left and right ROBs differ. Both of these methods are of the
+approximate-then-project type: a gappy-POD-like method that is similar to DEIM, was developed for the Gauss–Newton
+with approximated tensors (GNAT) PMOR method,23,24 and is referred to in the remainder of this paper as the the
+gappy-POD-based GNAT method; and a least-squares variant of the collocation approach13 that was first explored
+in Reference 25; then tailored in References 26,27 for PG PROMs in computational fluid dynamics (CFD). Further-
+more, hyper-reduction methods of the project-than-approximate type have been developed so far only for second-order
+hyperbolic problems semi-discretized by a finite element (FE) method.
+    Yet, the PMOR of many parametric, nonlinear HDMs including those for which the tangent matrices are nonsym-
+metric calls for PG-based reduction methods. For example, it was recently shown in Reference 28 that the real culprit
+behind most if not all numerical instabilities reported in the literature for PROMs of convection-dominated laminar and
+turbulent flows is the Galerkin framework used for constructing such PROMs; and that alternatively, numerically stable
+and accurate PROMs for such laminar and turbulent flows can be constructed using a PG framework without resorting
+to additional closure models or tailoring of the subspace of approximation. However, it was also shown in Reference 27
+that PG HPROMs of convection-dominated flows constructed using the two aforementioned hyper-reduction methods of
+the approximate-than-project type at best deliver a problem-dependent performance and at worst perform poorly when
+applied outside of their training data. Furthermore, the mesh reduction algorithms underlying all hyper-reduction meth-
+ods of the approximate-then-project type are based on suboptimal greedy sampling procedures that require as input the
+size of the reduced mesh—which is unknown a priori—thereby hindering practicality for many applications.
+    For all reasons summarized above, it remains to develop for nonlinear PG PROMs a reliable and practical
+hyper-reduction method of the project-then-approximate type that is applicable to first-order hyperbolic problems
+semi-discretized by any preferred technique. This paper focuses on filling this gap. Specifically, it presents an ECSW-type
+method for the hyper-reduction of PG PROMs where the underlying HDMs arise from the semi-discretization
+of first-order hyperbolic problems by any preferred scheme. It emphasizes CFD applications associated with
+convection-dominated viscous flows for the following reasons:
+
+• They are prime candidates for PG-based PMOR.
+• At high Reynolds numbers, they entail very large-scale meshes that are occasionally perceived to challenge the com-
+  putational tractability of hyper-reduction methods or their fidelity6 and therefore are excellent candidates for assessing
+  their sheer wall-clock time performance and accuracy.
+• Due to the large Kolmogorov n-width29 of the solution manifold associated with their HDMs, the PMOR of such appli-
+  cations typically requires the construction of multiple local, piecewise-affine subspace approximations instead of a
+  single global approximation,17,30 which raises the issue of how to perform hyper-reduction in this case.
+
+    To this end, the remainder of this paper is organized as follows. In Section 2, the context is set to the PG-based
+PMOR of nonlinear, first-order dynamical systems using local subspace approximations. The computational bottlenecks
+are overviewed in order to motivate the concept of hyper-reduction. In Section 3, the ECSW hyper-reduction method
+previously developed for Galerkin PROMs of HDMs associated with FE-based approximations of second-order dynam-
+ical systems is generalized to PG PROMs of HDMs constructed using any preferred semi-discretizations of first-order
+dynamical systems. In Section 4, first the ECSW mesh sampling procedure is reviewed along with the parallel computa-
+tional kernels required for minimizing the offline wall-clock time for very large-scale problems. Next, a comprehensive
+approach for constructing the reduced mesh resulting from the aforementioned sampling procedure is described. This
+approach covers many popular spatial discretization methods. In Section 5, the generalized ECSW method is applied
+to the hyper-reduction of three PG PROMs associated with convection-dominated, viscous flow problems: an academic,
+unsteady, laminar flow problem that is easy to reproduce by the interested reader; an unsteady wake flow problem asso-
+ciated with the geometry of the so-called Ahmed body;31 and a very large-scale turbulent flow problem with O(108 )
+unknowns associated with an F-16C/D Block 40 aircraft configuration with external stores at a high angle of attack. The
+latter application is chosen to demonstrate both the computational tractability of the proposed ECSW hyper-reduction
+GRIMBERG et al.                                                                                                         1849
+
+
+
+
+                                                                                                                               10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+method and its accuracy for a challenging, very large-scale application. Performance comparisons between the proposed
+hyper-reduction method, the gappy-POD-based GNAT alternative,23,24 and the least-squares collocation hyper-reduction
+method25 equipped with the mesh sampling algorithm of the GNAT method are also presented for the first application.
+Finally, conclusions are offered in Section 6.
+
+
+2     NONLINEAR PET ROV–GA LERKIN PROJECTION-BASED MODEL
+O R D E R R E DU CT ION BASE D O N LOCAL REDUC ED- ORDER BASES
+
+2.1        Local subspace approximation and Petrov–Galerkin projection
+
+Here, the focus is set on the first-order, 𝝁-parametric, N-dimensional, highly nonlinear, semi-discrete problem
+
+                                                   ̇ 𝝁) + f(u(t; 𝝁); 𝝁) = g(t; 𝝁)
+                                               M(𝝁)u(t;
+                                                                    u(0; 𝝁) = u0 (𝝁),                                    (1)
+
+where t ∈ [0, T f ] denotes time, the dot denotes the derivative with respect to time, 𝝁 ∈  ⊂ Rp is a p-dimensional vector
+of parameters,  denotes the bounded parameter space of interest, u(t; 𝝁) ∈ RN is the time-dependent solution vector,
+and u0 (𝝁) ∈ RN is its initial condition. Throughout this paper, M(𝝁) ∈ RN×N is a parametric mass matrix and is rea-
+sonably assumed to be symmetric positive definite (SPD), f(u(t; 𝝁); 𝝁) ∈ RN is a nonlinear function resulting from the
+semi-discretization of the partial differential equation (PDE) of interest and referred to as the nonlinear flux vector, and
+g(t; 𝝁) ∈ RN is a time-dependent, parametric, source term vector that may or may not be zero depending on the appli-
+cation. The HDM problem (1) can represent the semi-discretization by any preferred approximation technique of a PDE
+with arbitrary order temporal derivatives—given that higher-order ordinary differential equations can be rewritten in
+first-order form by expanding the vector of DOFs u(t; 𝝁). However, all numerical examples discussed in this paper pertain
+to first-order systems of conservation laws.
+    Following Reference 32, the solution manifold associated with the above HDM-based problem—which is assumed
+to be highly nonlinear—is approximated here in the time and parameters domain of interest by a collection of
+N c piecewise-affine subspaces of RN . The dimension of each kth affine subspace is denoted by nk , with nk ≪ N
+∀k ∈ {1, … , N c }. The local approximation based on the kth approximation subspace is written as
+
+                                        u(t; 𝝁) ≈ uo,k + Vk yk (t; 𝝁) ∀(t, 𝝁) ∈ [0, Tf ] × ,                            (2)
+
+where uo,k ∈ RN is a fixed vector defining an affine offset of the kth local subspace represented by the right ROB Vk ∈
+RN×nk and yk (t; 𝝁) ∈ Rnk is the vector of reduced (or generalized) coordinates of the representation of the solution in
+the kth local approximation subspace. Throughout the remainder of this paper, each right ROB Vk is assumed to be
+orthonormal—that is, ∀k, VTk Vk = I, where the superscript T denotes the transpose operation.
+    For the sake of completeness and in order to keep this paper as self-contained as possible, the construction of the N c
+local subspaces and the online selection for a queried (time, parameter) instance (t, 𝝁) of the local approximation subspace
+are discussed in Sections 2.2 and 2.3, respectively. The concept of approximating the HDM-based solution manifold using
+a collection of local affine subspaces is illustrated in Figure 1.
+
+
+
+
+FIGURE 1          Approximation of the high-dimensional computational
+model-based solution manifold, , in the time and parameter domain of
+interest by piecewise-affine subspaces with N c = 3
+1850                                                                                                                    GRIMBERG et al.
+
+
+
+
+                                                                                                                                          10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+       The HDM-based problem (1) can be rewritten in residual form as follows
+
+                                          ̇ 𝝁), t; 𝝁) = M(𝝁)u(t;
+                               r(u(t; 𝝁), u(t;              ̇ 𝝁) + f(u(t; 𝝁); 𝝁) − g(t; 𝝁) = 0.                                    (3)
+
+Substituting (2) into (3) and projecting the resulting overdetermined nonlinear system of equations onto the left subspace
+defined by the left ROB Wk ∈ RN×nk , k = 1, … , N c , yields an implicit database of N c local nonlinear PG PROMs asso-
+ciated with the underlying HDM (3). Here, the word implicit is used to specify that the N c local nonlinear PG PROMs
+are not precomputed and stored in the database; they are constructed online using the underlying local ROBs which are
+precomputed and stored in the database. Each local, nonlinear PG PROM-based problem can be written as
+
+                            rk (yk (t; 𝝁), ẏ k (t; 𝝁), t; 𝝁) = WTk r(uo,k + Vk yk (t; 𝝁), Vk ẏ k (t; 𝝁), t; 𝝁) = 0,              (4)
+
+where rk (yk (t; 𝝁), ẏ k (t; 𝝁), t; 𝝁) ∈ Rnk .
+    For many applications, it has been shown that using a PG projection instead of a Galerkin one, where Wk = Vk ∀k, to
+construct a PROM of the form given in (4) endows the PROM with superior numerical stability and accuracy properties.
+For example for steady-state linear problems, PG projection has been advocated to guarantee the asymptotic stability of
+the resulting PROM by bounding the approximation error.33 For time-dependent linear problems, PG projection has been
+proposed to guarantee that the resulting linear PROM satisfies the Lyapunov stability criterion.30 For nonlinear problems,
+it was shown that a for a specific class of PG projections associated with a specific method for constructing a left ROB
+Wk , the resulting PROMs produce solutions that minimize the time-discrete nonlinear HDM-based residual over the
+affine approximation subspace, even when the HDM is characterized by non-SPD tangent matrices28 —a condition which
+typically destroys the optimal properties of a Galerkin projection.
+
+
+2.2          Construction of a piecewise-affine local subspace of approximation
+
+Several methods have been proposed for constructing the local approximation subspace (2). All of them rely on partition-
+                                                           Ns
+ing the collected set of N s training snapshots  = {u(s) }s=1 , where u(s) = um (𝝁q ) is a discrete approximation of u(tm ; 𝜇q ),
+t ∈ [0, T f ], and 𝝁 ∈ . However, these methods differ by how they specifically partition  into subsets of solution snap-
+ m                  q
+
+shots. For example, snapshot partitioning has been performed by simply partitioning the time34 or parameter35,36 domain.
+Alternatively, state space (or HDM-based solution manifold) partitioning has been advocated and realized by clustering
+and compressing the solution snapshots:32 this enables the construction of local, nonlinear PROMs capable of capturing
+the different regimes and features (e.g., discontinuities and fronts) that may be experienced by the solution of an HDM
+such as (1),32 as well as capturing the effects on this solution of variations in the parameters of such an HDM.37 All of
+these approaches accommodate the hyperreduction process.
+    In this work, all local subspace approximations of the form (2) are performed by partitioning the state space (or solu-
+tion manifold) as first proposed in Reference 32. For this purpose, the collected solution snapshots are first divided into
+                                                       ⋃Nc                    ⋂
+N c nonoverlapping clusters k , k = 1, … , N c , where k=1   k =  and k l = ∅ ∀k ≠ l, using the k-means algorithm38
+equipped with the standard Euclidean distance in the state space. Then, the postprocessing procedure summarized in
+Algorithm 137 is applied to introduce some amount of overlap between the generated clusters to promote the continuity
+                                                                                                             Nc
+of the approximation in the transitional regions. The modified snapshot clusters are denoted by {k+ }k=1       . Next, for each
+affine subspace approximation, the affine offset uo,k is specified—for example, as the problem initial condition u0 (𝝁) or
+the cluster centroid uc,k defined here as follows
+
+                                                             Ns,k
+                                                       1 ∑ (s,k)
+                                               uc,k =          u ,             k = 1, … , Nc ,
+                                                      Ns,k s=1
+
+where u(s,k) denotes a generic training snapshot u(s) assigned to the kth cluster and N s, k denotes the total number of
+training snapshots assigned to this cluster. Finally, each right ROB Vk appearing in (2) is constructed by shifting the
+snapshots collected in k by uo,k , then compressing them using the singular value decomposition (SVD) method.
+Remark 1. In Algorithm 1, 𝜙 ∈ [0, 1] is a user-specified tolerance for controlling the amount of overlap between the
+generated clusters. Alternatively, a different clustering algorithm such as fuzzy c-means39 may be used to generate in one
+GRIMBERG et al.                                                                                                               1851
+
+
+
+
+                                                                                                                                     10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+shot a set of overlapping clusters, albeit at an increased computational cost due to an increase in the number of distances
+to be computed at each iteration of the algorithm.
+
+
+
+Algorithm 1. Introduction of overlapping into a set of initially disjoint snapshot clusters (based on 37)
+Input: k , k = 1, … , Nc , 𝜙 ∈ [0, 1]
+Output: k+ , k = 1, … , Nc
+ 1:    ← k , neik ← ∅, for k = 1, … , Nc
+      +
+     k
+ 2: for u(s) ∈  do                                                                              ⊳ build intercluster connectivity
+ 3:     (k, l) ← closest two cluster centers to u (s)
+
+ 4:     neik ← neik ∪ l
+ 5:     neil ← neil ∪ k
+ 6: end for
+ 7: for k ∈ {1, … , Nc } do                                                                     ⊳ augment clusters to add overlap
+ 8:     for l ∈ neik do
+ 9:           ← closest 𝜙 × |l | snapshots to cluster k in l
+10:          k+ ← k+ ∪ 
+11:     end for
+12: end for
+
+
+
+
+2.3        Online selection of the most-appropriate local subspace of approximation
+
+At any given time t, the most-appropriate local affine subspace in which to approximate the HDM-based solution—or
+equivalently, which ROB Vk and affine offset uo,k , k = 1, … , N c , to select for constructing and solving the most-appropriate
+PROM-based problem rk = 0 (see (4)) in order to approximate the HDM-based solution—can be determined online as
+described below, based on the distances between the PROM-based solution at a sufficiently close previous time t− and the
+cluster centroids uc,k .
+    At time t = 0, the closest cluster to the initial condition and the corresponding most-appropriate initial PROM-based
+solution are given by
+
+                                                  k0 = arg min d(u0 (𝝁), uc,l ),
+                                                         l∈{1, … ,Nc }
+
+
+where d(v, w) = ||v − w||2 , and
+
+                                                 yk0 (0; 𝝁) = VTk0 (u0 (𝝁) − uo,k0 ).
+
+Hence, if at any time t > 0 the PROM-based solution yk− (t; 𝝁) is governed by the subspace approximation
+(2) indexed by k− , the closest cluster to the corresponding approximate HDM-based solution is defined
+as
+
+                                          k+ = arg min d(uo,k− + Vk− yk− (t; 𝝁), uc,l ).                                       (5)
+                                                l∈{1, … ,Nc }
+
+
+When k+ ≠ k− , the approximate solution uo,k− + Vk− yk− (t; 𝝁) is projected onto the k+ th local affine subspace in order to
+maintain consistency in the approximation, which leads to
+
+                                         yk+ (t; 𝝁) = VTk+ (uo,k− + Vk− yk− (t; 𝝁) − uo,k+ ).                                  (6)
+
+   Most importantly, it is noted here that for any pair of indices (k, l) ∈ {1, … , N c } × {1, … , N}, the square of the distance
+between the approximate solution uo,k + Vk yk (t; 𝝁) and the centroid of the lth cluster of solution snapshots uc,l can be
+written as
+1852                                                                                                                          GRIMBERG et al.
+
+
+
+
+                                                                                                                                                10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+             d(uo,k + Vk yk (t; 𝝁), uc,l )2 = (uo,k + Vk yk (t; 𝝁) − uc,l )T (uo,k + Vk yk (t; 𝝁) − uc,l )
+                                           = ||yk (t; 𝝁)||22 + 2(uo,k − uc,l )T Vk yk (t; 𝝁) + ||uo,k − uc,l ||22 .
+                                                               ⏟⏞⏞⏞⏞⏞⏞⏞⏞⏟⏞⏞⏞⏞⏞⏞⏞⏞⏟             ⏟⏞⏞⏞⏞⏞⏟⏞⏞⏞⏞⏞⏟
+                                                                pre-computable ∈ R1×nk                pre-computable ∈ R
+
+
+Hence, by precomputing once for all (offline) the O(Nc2 ) fixed, cluster-related reduced-order quantities (uo,k − uc,l )T Vk and
+distances ||uo,k − uc,l ||22 , the closest cluster of solution snapshots to the approximate solution uo,k + Vk yk (t; 𝝁), in the sense
+defined in (5), can be identified online, in O(N c nk ) operations. Furthermore, for any pair of indices (k, l), the projection
+(6) can be expressed as
+
+                          VTl (uo,k + Vk yk (t; 𝝁) − uo,l ) =           VTl Vk             yk (t; 𝝁) + VTl (uo,k − uo,l ),
+                                                                       ⏟⏟⏟                             ⏟⏞⏞⏞⏞⏞⏞⏞⏟⏞⏞⏞⏞⏞⏞⏞⏟
+                                                                pre-computable ∈ Rnl ×nk               pre-computable ∈ Rnl
+
+
+which shows that by precomputing the additional O(Nc2 ) reduced-order matrices VTl Vk and reduced-order vectors
+VTl (uo,k − uo,l ), the projection (6) can also be computed online, in O(nk nl ) operations.
+     In summary, all computations associated with the online selection of a most-appropriate local subspace of approx-
+imation can be performed in real-time during the online solution of a PROM-based problem of the form given
+in (4).
+
+
+2.4        Computational bottlenecks
+
+Nevertheless, although the dimension of the PROM-based problem (4) is nk ≪ N, the cost of solving this problem scales
+with both dimensions nk and N ≫ nk , which typically prevents the PROM from achieving real-time or near real-time
+performance. To see this, consider first the case where (4) is discretized using an explicit time-integration scheme. The
+evaluation of the PROM-based solution at the mth computational time-step for a queried parameter point 𝝁⋆ ∈  requires
+in this case the assembly of the following reduced-order quantities:
+
+• Mk (𝝁⋆ ) = WTk M(𝝁⋆ )Vk ∈ Rnk ×nk , which is time-independent and therefore must be performed only once for a queried
+  parameter point 𝝁⋆ , and requires O(N 2 nk ) operations (though exploiting sparsity can reduce this computational
+  complexity to O(Nnk )).
+        m ⋆          ⋆                     m ⋆      ⋆     m ⋆
+• bmk (yk (𝝁 ), t ; 𝝁 ) = Wk (f(uo,k + Vk yk (𝝁 ); 𝝁 ) − g (𝝁 )) ∈ R ,
+                 m         T                                        nk
+                                                                       which is time-dependent, must be per-
+  formed at each computational time-step, and requires O(Nnk ) operations. Note that here and throughout
+  the remainder of this paper, the superscript m designates as earlier a fully discrete quantity evaluated at
+  time tm .
+
+    For an implicit time-integration scheme, the solution by Newton’s method—or any similar method—of the
+nk -dimensional nonlinear system of algebraic equations arising at each computational time-step requires, in addition to
+the assembly of the reduced-order quantities mentioned above, the construction at each Newton iteration of the following
+reduced-order quantities:
+
+• Jm
+   k
+     (ym
+       k
+         (𝝁⋆ ); 𝝁⋆ ) = WTk Jm (uo,k + Vk ym
+                                          k
+                                            (𝝁⋆ ); 𝝁⋆ )Vk ∈ Rnk ×nk , where Jm (um (𝝁); 𝝁) ∈ RN×N is the Jacobian matrix of the
+  discrete counterpart of the HDM-based residual (3) with respect to u – that is,
+
+                                                                       𝜕 û̇ m        𝜕f m
+                                           Jm (um (𝝁); 𝝁) = M(𝝁)            (u (𝝁)) +    (u (𝝁); 𝝁),                                     (7)
+                                                                       𝜕u             𝜕u
+
+          ̂̇ m (𝝁)) is the fully discrete approximation of the time-derivative u̇ m (𝝁) at time-instance tm . For most
+   where u(u
+   time-integration schemes—including linear multistep and diagonally implicit Runge–Kutta (DIRK) schemes—
+   ̂̇ m (𝝁); 𝝁) can be written as
+   u(u
+
+                               ̂̇ m (𝝁)) = p(um (𝝁), um−1 (𝝁), … , um−s (𝝁), Δtm , Δtm−1 , … , Δtm−s ),
+                               u(u
+GRIMBERG et al.                                                                                                                1853
+
+
+
+
+                                                                                                                                      10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+    where p is the function characterizing the time-discretization scheme, s is its stencil width, and Δt is the time-step size.
+    Hence, the computation of the above reduced-order Jacobian matrix requires in general O(N 2 nk ) operations – or O(Nnk )
+    operations when sparsity patterns can be exploited, as is the case for most semi-discretization schemes of interest here.
+
+    From the above discussion, it follows that even for a single parameter 𝝁⋆ , the processing of the the time-dependent
+PROM-based problem (4) suffers a computational bottleneck due to a computational complexity that scales not only with
+the smaller dimension nk of this PROM, but also with the much larger dimension N of the HDM.
+    As explained in Section 1, it is sometimes possible to mitigate the aforementioned computational bottleneck using a
+divide and conquer strategy. For many applications however—for example, for compressible flow problems formulated in
+terms of conservation state variables—this is simply not possible, particularly when the left ROB Wk , which may depend
+on the vector of generalized coordinates,23,24 introduces complex nonlinearities in the PROM. For such applications,
+achieving computational efficiency in the solution of the PROM-based problem (4) requires in general the hyper-reduction
+of the underlying PROM and more specifically, the hyper-reduction at each computational time-step of the projected
+or reduced-order quantities WTk (f(uo,k + Vk ym
+                                              k
+                                                (𝝁⋆ ); 𝝁⋆ ) − gm (𝝁⋆ )) ∈ Rnk and WTk Jm (uo,k + Vk ym
+                                                                                                     k
+                                                                                                       (𝝁⋆ ); 𝝁⋆ )Vk ∈ Rnk ×nk dis-
+cussed above.
+
+
+3        HYPER-REDUCTION VIA MESH SAMPLING AND WEIGHTING
+
+3.1        Hyper-reduction of a reduced-order nonlinear residual vector
+
+In this section, an ECSW-type hyper-reduction method is developed for nonlinear, PG PROMs to enable their processing
+in a computational complexity that scales only with the small dimension nk ≪ N of the local PROM, k ∈ {1, … , N c }.
+Specifically, the hyper-reduction method described herein is independent of the semi-discretization scheme underlying
+the 𝝁-parametric, HDM (1) or its residual form (3).
+    Let  = {e1 , … , eNe }, with Ne = ||, denote the set of mesh entities describing the discretization of the computational
+domain of interest. These entities may be: finite elements in the case of a FE semi-discretization of the PDE underlying
+(1) and (3); primal cells in the case of a cell-centered finite volume (FV) semi-discretization; dual cells in the case of a
+vertex-based FV semi-discretization; or simply vertices corresponding to collocation points in the case of a finite difference
+(FD) semi-discretization of the aforementioned PDE. In all cases, the computation of the reduced-order residual (4) can
+be written as
+
+               rk (yk (t; 𝝁), ẏ k (t; 𝝁), t; 𝝁) = WTk r(uo,k + Vk yk (t; 𝝁), Vk ẏ k (t; 𝝁), t; 𝝁)
+                                                   ∑
+                                                 =      WTk LTe re (Le+ (uo,k + Vk yk (t; 𝝁)), Le+ Vk ẏ k (t; 𝝁), t; 𝝁),      (8)
+                                                 e ∈ 
+
+
+where:
+
+• Le ∈ {0, 1}de ×N is the Boolean matrix that localizes a high-dimensional global vector (dimension N) to the de DOFs
+  attached to the mesh entity e.
+• Le+ ∈ {0, 1}de+ ×N is the Boolean matrix that localizes a high-dimensional global vector (dimension N) to the de+ ≥ de
+  DOFs attached to the mesh entity e and a set of neighboring mesh entities determined by the stencil of the cho-
+  sen semi-discretization method: for example, de+ = de for a FE semi-discretization, de+ > de for a cell-centered or
+  vertex-based FV semi-discretization, and de+ > de for an FD semi-discretization.
+• re (Le+ (uo,k + Vk yk (t; 𝝁)), Le+ Vk ẏ k (t; 𝝁), t; 𝝁) ∈ Rde is the contribution of the mesh entity e to the global, HDM-based
+  residual r ∈ RN .
+
+    The fully discrete counterpart of the reduced-order, semi-discrete residual (8) is
+                                                               ∑
+                                     rm
+                                      k
+                                        (ym
+                                          k
+                                            (𝝁), tm ; 𝝁) =                     e (Le+ (uo,k + Vk yk (𝝁)), t ; 𝝁).
+                                                                      WTk LTe rm                  m        m
+                                                                                                                               (9)
+                                                              e ∈ 
+
+
+   Now, let ̃ ⊂  denote an optimally sampled subset of the set of mesh entities , with Ñe = ||
+                                                                                                ̃ ≪ Ne (see Section 4).
+A natural approach for approximating the PROM-based residual (9) can be written as
+1854                                                                                                           GRIMBERG et al.
+
+
+
+
+                                                                                                                                 10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                     ( m            )       ( m            )  ∑               (  (                ) m )
+                  rm
+                   k
+                      yk (𝝁), tm ; 𝝁 ≈ r̃ m
+                                          k
+                                             yk (𝝁), tm ; 𝝁 =   𝜉e WTk LTe rm
+                                                                            e Le+ uo,k + Vk yk (𝝁) , t ; 𝝁 ,
+                                                                                             m
+                                                                                                                         (10)
+                                                            e ∈ ̃
+
+
+where r̃ m is referred to as the hyper-reduced fully discrete residual vector and the set of weights {𝜉e |e ∈ }̃ associated
+         k
+                                        ̃
+with the set of sampled mesh entities  leads to interpreting the approximation scheme (10) as a generalized quadrature
+rule. Since Ñe ≪ Ne , it follows from (10) that the hyper- reduced fully discrete vector r̃ m
+                                                                                            k
+                                                                                              can be efficiently evaluated at
+any time-instance and/or queried parameter point in a number of operations that is independent of the dimension N of
+the HDM.
+Remark 2. It is noted that unlike hyper-reduction methods of the approximate-then-project type, the hyper-reduction
+approximation (10) does not attempt to accurately represent the high-dimensional residual rm , but only of its projection
+onto the left subspace spanned by the columns of the left ROB Wk .
+
+
+3.2       Hyper-reduction of a reduced-order Jacobian matrix
+
+In the event where Newton’s method or a variant is chosen for solving a steady-state counterpart of the
+nonlinear, PROM-based equation (4), or for solving the nonlinear system of equations arising at each
+time-step of the implicit time-discretization of this PROM-based equation, the resulting reduced-order Jaco-
+bian matrix may need to be reconstructed at each Newton iteration and at least at each time-step in the
+latter case. In such circumstances, computational efficiency calls for hyper-reducing this PROM matrix when it
+arises.
+    Here, attention is focused on the time-dependent case and an implicit time-discretization, as the explicit scenario
+is a sub-case of this case and the steady-state scenario is a particular instance of this case. At each time-step tm , the
+reduced-order counterpart of the Jacobian matrix (7) can be written as
+                                 ( m       )  ∑            (  (                ) )
+                              Jm
+                               k
+                                  yk (𝝁); 𝝁 =            e Le+ uo,k + Vk yk (𝝁) ; 𝝁 Le+ Vk .
+                                                WTk LTe Jm                m
+                                                                                                                         (11)
+                                               e ∈ 
+
+
+As in Section 3.1, Le and Le+ denote here the de × N and d+e × N Boolean matrices that localize a high-dimensional
+vector (dimension N) to the de and d+e DOFs associated with the same mesh entity e, respectively, and
+   (                        )
+ e Le+ (uo,k + Vk yk (𝝁)); 𝝁 ∈ R
+                                 de ×d+e
+Jm                 m
+                                         is the Jacobian matrix of re with respect to yk .
+   Since the reduced-order matrix Jm      k
+                                            (ym
+                                              k
+                                                (𝝁); 𝝁) (11) is the Jacobian matrix of the fully discrete PROM-based resid-
+     m
+ual rk (9) with respect to yk , it is proposed here to perform its hyper-reduction by computing the Jacobian of the
+hyper-reduced semi-discrete residual r̃ m   k
+                                               (10) with respect to yk . This leads to the consistent hyper-reduced Jacobian
+matrix
+
+                    m(          ) 𝜕̃rm (              )  ∑                (  (                ) )
+                 J̃ k ym (𝝁); 𝝁  = k ym    (𝝁), tm ; 𝝁 =    𝜉e WTk LTe Jm
+                                                                        e Le+ uo,k + Vk yk (𝝁) ; 𝝁 Le+ Vk ,
+                                                                                         m
+                                                                                                                         (12)
+                       k          𝜕yk    k
+                                                          ̃
+                                                          e ∈ 
+
+
+and therefore guarantees in principle a good performance of the application of Newton’s method or a variant to the
+solution of the fully-discrete, PROM-based nonlinear problem at hand.
+    In many applications and PMOR methods, including PG-based methods such as the residual-minimizing least-squares
+                                                                                        ( m       )
+PG (LSPG) projection method,23,24 each of the reduced-order Jacobian matrix Jm           yk (𝝁); 𝝁 and mesh-entity-level
+                                          (   (                )   )                  k
+reduced-order Jacobian matrix WTk LTe Je Le+ uo,k + Vk ym k
+                                                            (𝝁) ; 𝝁 Le+ Vk appearing in (11) is SPD. In order to guarantee
+that the above hyper-reduction approximation preserves this property, both hyper-reduction approximations (10) and (12)
+are equipped here with the constraint 𝜉e > 0, ∀e ∈ . ̃ When this constraint is not needed, it can be removed, or simply
+enforced to enable the use of a unified computational approach for sampling a set of mesh entities ̃ and computing the
+                                         ̃ (see Section 4).
+associated set of weights Ξ̃ = {𝜉e |e ∈ }
+
+
+3.3       Grouped versus individual hyper-reduction approximations
+
+From (3), it follows that the fully discrete residual (9) can also be written as
+GRIMBERG et al.                                                                                                                 1855
+
+
+
+
+                                                                                                                                       10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                      ( m            ) (             )                 (                          )
+                   rm
+                    k
+                       yk (𝝁), tm ; 𝝁 = WTk M(𝝁)Vk ẏ m (𝝁) + WTk fm uo,k + Vk ym     k
+                                                                                         (𝝁); 𝝁 − WTk gm (tm ; 𝝁),             (13)
+                                       ⏟⏞⏞⏞⏞⏞⏞⏟⏞⏞⏞⏞⏞⏞⏟        ⏟⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏟⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏞⏟ ⏟⏞⏞⏞⏞⏞⏟⏞⏞⏞⏞⏞⏟
+                                               Mk                                       fm
+                                                                                         k
+                                                                                                         gm
+                                                                                                          k
+
+
+
+where
+                                                        ∑
+                                           Mk (𝝁) =             WTk LTe Me (𝝁)Le Vk .                                          (14)
+                                                        e ∈ 
+
+                                     ( m      )  ∑            (  (                ) )
+                                   k yk (𝝁); 𝝁 =
+                                  fm                        e Le+ uo,k + Vk yk (𝝁) ; 𝝁 .
+                                                   WTk LTe fm                m
+                                                                                                                               (15)
+                                                      e ∈ 
+                                                         ∑
+                                        gm
+                                         k
+                                           (tm ; 𝝁) =                    e (t ; 𝝁).
+                                                                WTk LTe gm   m
+                                                                                                                               (16)
+                                                        e ∈ 
+
+
+At this point, the reader may ask why in Section 3.1 hyper-reduction was applied in (10) to the above reduced-order terms
+                                                                         ( m            )
+as a group, specifically, collectively as the fully discrete residual rm
+                                                                       k
+                                                                          yk (𝝁), tm ; 𝝁 , rather than to each of them individually.
+Before answering this question, a noteworthy observation that differentiates between the hyper-reduction of a Galerkin
+PROM and that of a PG PROM is discussed below.
+    Consider first the case of a Galerkin PROM (Wk = Vk ) and an HDM where only the nonlinear flux vector is paramet-
+ric – that is, where f depends on the vector of parameters 𝝁 and on the solution u, but the mass matrix M is constant
+and the source term g depends only on time t. In this case, both Mk = VTk MVk and gm               (tm ) = VTk gm are precomputable
+                                                       ( m       )                               k
+and therefore only the reduced-order vector fk yk (𝝁); 𝝁 needs be considered for hyper-reduction. For many highly
+                                                     m
+
+nonlinear applications (e.g., high-speed compressible fluid flow and solid mechanics with finite-strain viscoelasticity),
+                               ( m       )
+the reduced-order term fm    k yk (𝝁); 𝝁 can be expected to exhibit nonpolynomial nonlinearities at least with respect to
+                 (                 )
+u (specifically, uo,k + Vk ym   (𝝁) ) and hence to benefit from hyper-reduction. Hence, in this scenario where only the
+                          ( mk      )
+reduced-order term fm  k   yk
+                              (𝝁); 𝝁 (15) needs to be hyper-reduced at each time-step tm , the set of mesh entities ̃ ⊂  and
+the associated set of weights Ξ̃ = {𝜉e |e ∈ } ̃ should be determined so that the application to (15) of the approximation
+defined in (10) is sufficiently accurate.
+    Consider next the case of a PG PROM (Wk ≠ Vk ) and a parametric or nonparametric HDM. In this case, the ability
+to pre-compute any of the terms (14), (15), and (16) also depends on whether the left ROB Wk is fixed in the parameter
+and time spaces and is independent of the solution uk (t; 𝝁) (or its subspace approximation uo,k + Vk ym            k
+                                                                                                                      (𝝁)). For many
+PG-based PMOR methods—for example, for the residual-minimizing LSPG projection method23,24 —the left ROB evolves
+together with the reduced-order vector of generalized coordinates ym         k
+                                                                               . For such a method, none of the reduced-order
+terms (14,15,16) can be precomputed and therefore all of them must be hyper-reduced in the presence of nonpolynomial
+nonlinearities with respect to any of their variables. Hence, in this case—which can be expected to be typical in the
+context of PG PROMs—and in other cases where at least two of the reduced-order terms defining the PG PROM are
+to be hyper-reduced, the question becomes whether these reduced-order terms should be hyper-reduced as a group, or
+individually.
+    Hyper-reducing multiple reduced-order terms as a group as in the hyperreduction of the parametric, nonlinear,
+fully discrete residual (10) is most cost effective. It requires training a single set of mesh entities ̃ ⊂  and associated
+weights Ξ̃ = {𝜉e |e ∈ }̃ as described in the next section. On the other hand, hyper-reducing multiple reduced-order
+terms individually can be performed in two different ways:
+
+• 1: By sampling multiple sets of mesh entities and computing for each an associated set of weights.
+• 2: By computing a single set of mesh entities ̃ and its associated set of weights Ξ̃ so that the application
+  of the generalized quadrature rule to the approximation of each reduced-order term individually is sufficiently
+  accurate.
+
+   The approach 1 is clearly less computationally efficient than hyper-reducing multiple reduced-order terms as a
+group. The approach 2 is less cumbersome than its counterpart 1 as it does not involve manipulating multiple sets
+of mesh entities and associated sets of weights. Nevertheless, the approach 2 is less computationally efficient than
+hyper-reducing multiple reduced-order terms as a group as it entails training ̃ and Ξ̃ to be accurate for many more
+approximations. However, it can be expected to be more accurate for the same computational cost.
+1856                                                                                                             GRIMBERG et al.
+
+
+
+
+                                                                                                                                   10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+    There are a few applications for which achieving a desired level of accuracy requires performing necessary
+hyper-reductions at the individual level. An example is the fast solution of parametric generalized eigenvalue problems by
+HPROMs,40 where two sets of unknowns—namely, the eigenvalues and the corresponding eigenvectors—are governed
+by a single algebraic equation that can be written in residual form. In this case, accuracy dictates hyper-reducing the gen-
+eralized mass and stiffness matrices individually; and for this purpose, computational efficiency as well as practicality call
+for adopting the approach labeled above as 2. For the class of problems considered in this paper however, which is rep-
+resented by the HDM (1) and involves for each k ∈ {1, … , N c } a single set of unknowns ym  k
+                                                                                               , performing hyper-reduction
+at the group level as in (10)—which is most computationally efficient—can deliver the desired level of accuracy, as show
+in Section 5 for several challenging problems. Hence for this class of problems, necessary hyper-reduction is performed
+here at the group level as in (10).
+
+
+4        IMPLEMENTAT ION
+
+4.1        Mesh sampling and weighting
+
+Given a set of mesh entities  = {e1 , … , eNe } describing the discretization of the computational domain of interest, the
+mesh sampling and weighting problem is defined here as that of finding the smallest subset of mesh entities ̃ ⊂  and
+                                             ̃ for which the hyper-reduction approximations (10) and (12) are sufficiently
+the associated set of weights Ξ̃ = {𝜉e |e ∈ }
+accurate (in the sense specified below). As shown in References 19,22 for the case of a nonlinear Galerkin PROM based
+on a single global ROB, this can can be achieved using what is known nowadays as a supervised training or machine
+learning approach. Furthermore, since (12) is nothing but the Jacobian of (10) with respect to yk , it suffices to train the
+            (      )
+              ̃ Ξ̃ only for the hyper-reduction approximation (10).
+pair of sets ,
+    In the context of local subspace approximations, two different mesh sampling and weighting approaches can be
+considered:
+
+• An approach where a single set of mesh entities ̃ and an associated set of weights Ξ̃ is constructed by training both
+  sets for all local approximations k = 1, … , N c , simultaneously.
+                                                     (      )
+• An alternative approach where N c pairs of sets ̃ k , Ξ̃ , k = 1, … , N c , are constructed and each is trained for a single
+                                                            k
+    instance of the local approximation defined in (2).
+
+    For a fixed level of accuracy, the first approach can be expected to lead to a set of mesh entities ̃ that is larger than
+any of the counterpart sets ̃ k delivered by the second approach and therefore to deliver a lesser online performance
+from the wall-clock time viewpoint. Nevertheless, this approach is simpler than the second one which would require an
+elaborate computer implementation and a considerable amount of bookkeeping to handle multiple reduced meshes (see
+Section 4.2). For this reason, only the first approach is considered here. It is noted, however, that the implementation of
+the second approach can be built around that of the first one in a rather straightforward manner.
+                                                                                          (      )
+    For both convenience and computational efficiency, the training of the pair of sets ,  ̃ Ξ̃ is not performed directly on
+generalized coordinates snapshots yk(s) , k ∈ {1, … , N c }, because this would be computationally inefficient for the following
+reasons:
+
+• Such a training would require two different series of offline simulations, namely:
+  − A series of HDM-based simulations designed to generate a first set of solution snapshots k (see Section 2.2) for
+    constructing the right and left local ROBs Vk and Wk , respectively, k ∈ {1, … , N c }, as well as the associated nonlinear
+    PG PROMs.
+  − Another series of nonlinear simulations based on these non hyper-reduced PG PROMs to generate N c additional sets
+    of solution snapshots of the form k = {ym k
+                                                 (𝝁q )}, k ∈ {1, … , N c }, for hyper-reducing the constructed PG PROMs.
+• The second series of PROM-based computations would be very compute intensive due to the absence of
+  hyper-reduction.
+                                 (      )
+     Instead, the pair of sets ,  ̃ Ξ̃ is efficiently trained here using a subset H of the same set of solution snapshots 
+used for constructing the local subspace approximations (see Section 2.1)—that is, H ⊆  – as follows. For any snapshot
+                                                                                                     (          )
+u(s) ∈ H , let ks ∈ {1, … , N c } denote the index of the unique cluster k containing this snapshot k ∋ u(s) . This solution
+GRIMBERG et al.                                                                                                         1857
+
+
+
+
+                                                                                                                               10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+snapshot can be converted on the fly into its approximation uo,ks + Vks yks using the orthogonal projector
+
+                                                           Π⟂V = Vks VTk ,
+                                                              ks          s
+
+
+
+—that is, the orthogonal projector onto the subspace spanned by the columns of the local right ROB Vks .
+Hence, each solution snapshot u(s) ∈ H is transformed here on the fly into the following vector of generalized
+coordinates yks
+                                                               (            )
+                                                      yks = VTk u(s) − uo,ks .
+                                                                   s
+
+                                            (                                    )                                 (      )
+                                                                                                                     ̃ Ξ̃ .
+Next, the corresponding discrete residual rm uo,ks + Π⟂V (u(s) − uo,ks ), tm ; 𝝁q is computed and used for training ,
+                                                        ks
+   Now, let
+                                   (      (                 ( (s)         )) m q )
+                                                        ⟂
+                  cse = WTk LTe rm
+                                 e   L e+   u  o,k  +  ΠVks  u    − uo,k    , t ; 𝝁 ∈ Rnks ,      s = 1, … , NH
+                        ∑s
+                                                  s                     s
+                                         (              )
+                  ds =      ckse = rmk
+                                           yks , tm ; 𝝁q ∈ Rnks ,                                s = 1, … , NH ,
+                                      s
+                        e ∈ 
+
+
+where NH = |H |. Using the above notation, the exact assembly of the training data on the original mesh (associated with
+the HDM) can be written as
+
+                                                              C1 = d,
+
+where
+
+                                                     ⎛∑NH      ⎞
+                                                     ⎜         ⎟                                ∑NH
+                            ⎡ c11         …  c1Ne ⎤  ⎜    n ks ⎟×Ne
+                                                                                       ⎡ d1 ⎤
+                            ⎢                      ⎥ ⎜ s=1 ⎟                           ⎢    ⎥
+                          C=⎢ ⋮           ⋱   ⋮ ⎥ ∈ R⎝         ⎠                   d = ⎢ ⋮ ⎥ ∈ R s=1 nks               (17)
+                            ⎢                      ⎥                                   ⎢    ⎥
+                            ⎣cNH 1        … cNH Ne ⎦                                   ⎣dNH ⎦
+
+and 1 is the N e -dimensional vector of ones. Then, the hyper-reduction approximation (10) can be written in matrix form
+as
+
+                                                            C𝝃 − d ≈ 0,
+
+                                                                                                                 ̃ This
+where 𝝃 ∈ RNe is the vector of element weights with a zero in each entry corresponding to a mesh entity e ∈  ⧵ .
+suggests formulating the problem of mesh sampling and weighting as finding a minimal subset of mesh entities ̃ and the
+corresponding set of weights Ξ̃ for which the hyper-reduction approximation (10) retains a specified level of accuracy
+when applied to the training dataset—that is,
+
+                                           (    )
+                                            ̃ Ξ = arg min||𝜻||0
+                                            ,
+                                                       subject to ||C𝜻 − d||2 ≤ 𝜀||d||2                                (18)
+                                                                              𝜻 ≥ 0.
+
+In (18) above , ||⬦||0 denotes the 𝓁 0 -“norm” which counts the number of nonzero entries in ⬦ and 𝜀 ∈ [0, 1] is a small,
+user specified, relative error tolerance for controlling the accuracy of the hyper-reduction approximation.
+    Unfortunately, the optimization problem underlying (18) is well known to be NP-hard and thus is computationally
+intractable, even for mesh sizes that are small by computational mechanics standards. For this reason, it was proposed
+in Reference 41 to solve instead a convex approximation of this problem that promotes sparsity in the solution. For this
+purpose, several choices were identified and discussed in Reference 41, including the following nonnegative least-squares
+(NNLS) formulation
+1858                                                                                                           GRIMBERG et al.
+
+
+
+
+                                                                                                                                 10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                                                  minimize      ||C𝜻 − d||22
+                                                                                                                         (19)
+                                                  subject to    𝜻 ≥ 0,
+
+equipped with the threshold-based early termination criterion
+
+                                                    ||C𝜻 − d||2 ≤ 𝜀||d||2 .                                              (20)
+
+This criterion replaces the Karush–Kuhn–Tucker optimality conditions and is necessary for promoting sparsity in the
+solution. Here, the convex optimization problem (19) is chosen as the alternative for the NP-hard problem (18) and solved
+using a distributed implementation of the active set algorithm proposed in Reference 42. This implementation, which was
+developed in Reference 41, features a parallel, updatable, QR factorization kernel for efficiently solving at each iteration
+the over-determined system of equations.
+    In summary, mesh sampling and weighting is performed here by solving offline the optimization problem (19), as in
+the original ECSW hyper-reduction method for Galerkin PROMs.19,22 The solution of this problem delivers simultane-
+ously the subset of mesh entities ̃ and the associated set of weights Ξ̃ . The resulting ECSW hyper-reduction method for
+PG PROMs differentiates itself from alternatives such as EIM,9 DEIM,15 GNAT,23,24 and other hyper-reduction methods
+of the approximate-then-project type in at least two major ways:
+                                                               (      )
+                                                                 ̃ Ξ̃ by efficiently solving a rigorous, convex approx-
+• From an algorithmic viewpoint, it determines the pair of sets ,
+  imation of the true sampling problem (18). The aforementioned alternatives rely on a heuristic, suboptimal greedy
+  procedure to sample the original mesh (associated with the HDM).
+• From a practical viewpoint, it has only one tuning parameter—that is, the tolerance 𝜀 whose value can be chosen to
+  trade the sparsity of ̃ for the accuracy of the resulting hyper-reduction approximation. In general, the aforementioned
+  alternatives depend on multiple tunable parameters. In their simplest form, many of them require specifying a priori the
+                                                                            ̃
+  size of the sampled set of mesh entities–that is, their own equivalent of —which  is impractical as it typically requires a
+  less intuitive trial and error approach for determining a mesh sample that delivers the desired level of hyper-reduction
+  accuracy.
+
+    As stated in the introduction of this paper, a general concern for hyper-reduction is the computational cost of its
+offline phase. For the hyper-reduction method presented so far, this cost is dominated by the computational cost of solv-
+ing problem (19), which itself is determined by the size of the matrix C characterizing this problem. The size of C is
+                 ∑NH
+determined by s=1     nks , which depends on the number of training solution snapshots and the average dimension of the
+local subspace approximation, and by the number of elements N e of the original mesh (associated with the HDM). For
+structural dynamics applications, FE models with N e = O(105 ), a number of training solution snapshots N H = O(102 ), a
+global ROB with nk = n = 100, and nonlinear Galerkin PROMs, it was shown in Reference 41 that the parallel imple-
+mentation of the NNLS solver developed in that reference is scalable on up to 64 cores of a Linux cluster and solves
+problem (19) on such a computing system in roughly 2-min wall-clock time. Another significant contribution of this
+paper is to show that even for CFD problems with N e = O(108 ), which is typical for industrial-scale applications, and a
+number of training solution snapshots N H = O(10), the matrix C can be built offline on a computing system with 3584
+cores in less than 15 min and the aforementioned NNLS solver can compute on this system in roughly 16-min wall-clock
+                     (       )
+time a pair of sets , ̃ Ξ̃ for which the hyper-reduction approximation performed on nonlinear PG PROMs is very
+accurate.
+Remark 3. When hyper-reducing a fully discrete residual as in (10), the training solution snapshots chosen to
+construct offline
+           (      the training matrix C and
+                                        )   training vector d (17) should be collected such that each training
+residual rm uo,ks + Π⟂V (u(s) − uo,ks ), tm ; 𝝁q is sufficiently large in magnitude. Hence, a recommended strategy is
+                        ks
+to collect a solution snapshot for H at the beginning of a time-step tm , where the Newton iteration is typi-
+cally initialized using the converged solution at the previous time-step, um−1 – and therefore where ||rm ||2 is the
+largest during that time-step. Collecting instead a training solution snapshot at the end of a time-step, after the
+Newton iterations during that time-step have converged, would lead to near-zero training residuals. This in turn
+                                                  (      )
+would lead to a poor training of the pair ,        ̃ Ξ̃ due to very small amplitude and therefore nearly redundant
+data.
+GRIMBERG et al.                                                                                                       1859
+
+
+
+
+                                                                                                                             10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+4.2        Construction of a reduced mesh
+
+From (10) and (12), it follows that as far as mesh entities are concerned, evaluating the hyperreduced residual vectors
+and Jacobian matrices associated with PG PROMs using the ECSW method described above requires access only to ̃ and
+to the neighbors of each mesh entity e ∈ ̃ defining at e the spatial discretization stencil underlying the HDM. Hence,
+it is convenient to support such evaluations with a “reduced mesh” defined by the augmented set ̃ ⊂  consisting of
+                                                                                                       +
+
+the mesh entities underlying the nonzero entries of the Boolean localization matrix Le+ (hence, ̃ ⊂ ̃ ). This is because
+                                                                                                        +
+
+just like the HDM-based residuals and Jacobians can be conveniently computed on the mesh associated with the HDM,
+their hyper-reduced counterparts (10) and (12) can be conveniently computed on the reduced mesh. Due to the locality
+                                                    ̃ ≪ Ne ⇒ |̃ + | ≪ Ne , which means that the online evaluations of the
+properties of most spatial discretization schemes, ||
+hyper-reduction approximations (10) and (12) can be efficiently performed on the reduced mesh.
+
+
+5       APPLICAT IONS
+
+Here, the proposed adaptation to PG PROMs of the ECSW hyper-reduction method and its performance are illustrated
+and assessed, respectively, for three CFD applications:
+
+• An academic problem of laminar flow over a circular cylinder that has the added benefit of being easily reproducible
+  by the reader. For this problem, the performance of the proposed hyper-reduction method is compared to that of two
+  alternative hyper-reduction methods for PG PROMs: the GNAT method;23,24 and the least-squares collocation method25
+  equipped with the same reduced mesh produced by the gappy-POD-based GNAT method.
+• An unsteady wake flow problem associated with the Ahmed body geometry—which is considered by the automotive
+  industry to be a benchmark problem for CFD.
+• A very large-scale, turbulent CFD problem of industrial relevance—specifically, the prediction of the turbulent flow
+  past an F-16C/D Block 40 aircraft configuration with external stores at a high angle of attack.
+
+     In particular, the second and third applications outlined above demonstrate the combination of local subspace approx-
+imations for mitigating the well-known Kolmogorov n-width barrier for the PMOR of first-order nonlinear hyperbolic
+problems such as those associated with convection-dominated CFD problems43 and the proposed ECSW hyper-reduction
+method for achieving computational efficiency.
+     In each application introduced above, the HDM-based problem (1) is constructed by semi-discretizing the nondimen-
+sional form of the three-dimensional, compressible, Navier–Stokes equations by a mixed FV/FE method. In this method,
+the spatial approximation of the convective fluxes is performed using an asymptotically third-order, upwind, vertex-based
+FV scheme based on the MUSCL-type approach and Roe’s approximate Riemann solver,44,45 while the diffusive term and
+all source terms are treated by a piecewise-linear, Galerkin FE scheme. In the second and third applications, turbulence
+modeling is performed using the detached-eddy simulation (DES) approach based on the Spalart–Allmaras one-equation
+model.46 The resulting nonlinear flux vector f (u(t; 𝝁); 𝝁) (see (3)) is not characterized by a polynomial dependence on
+the high-dimensional solution vector u(t; 𝝁): for this reason, hyper-reduction is required to reduce the computational
+complexity of each constructed PROM.
+     It is noted that for each application highlighted above, the PROM and HPROM are constructed for a single parameter
+instance 𝝁⋆ of the HDM, for two different reasons: (1) the highly nonlinear, time-dependent nature of the flow problem
+already necessitates hyper-reduction due to the computational bottlenecks discussed in Section 2.4; and (2) the sheer
+size of the HDM—of the order of 107 to 108 DOFs—is such that considering instead a parametric instance of the flow
+problem would lead to an unnecessary consumption of precious CPU resources without adding significant value to the
+performance assessment intended here.
+     In each application:
+
+• Time-discretization of the HDM is performed using an implicit scheme and the nonlinear system of equations aris-
+  ing at each computational time-step is solved by a Newton–Krylov method equipped with an additive Schwarz
+  preconditioned GMRES47 algorithm as the linear equation solver.
+• The PG PROM is constructed using the LSPG method.23,24 Hence, Wk is defined at each time-instance tm by
+1860                                                                                                         GRIMBERG et al.
+
+
+
+
+                                                                                                                               10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                                        ( m       )    (                   )
+                                Wk = Wm
+                                      k
+                                         yk (𝝁); 𝝁 = Jm uo,k + Vk ym
+                                                                   k
+                                                                     (𝝁); 𝝁 Vk ∈ RN×nk ,
+                                         (                   )
+   where the HDM-based Jacobian matrix Jm uo,k + Vk ym
+                                                     k
+                                                       (𝝁); 𝝁 is given in (7).
+• The parallel variant of the Lawson and Hanson NNLS algorithm based on an updatable QR factorization developed in
+  Reference 41 is used to solve the convex optimization problem (19) equipped with (20) and 𝜀 = 1 × 10−2 , and produce
+  the reduced mesh ̃ and associated set of weights Ξ̃ .
+• The accuracy of the constructed LSPG HPROM is assessed for a selection of quantities of interest (QoIs) using in
+  each case the relative error with respect to the counterpart value obtained from the solution of the HDM-based
+  problem
+                                                 √            (        )
+                                                  ∑            ̃ − Q(t) 2
+                                                      t ∈     Q(t)
+                                         REQ =        √∑                     × 100 (%),
+                                                                         2
+                                                              t ∈  Q(t)
+
+
+          ̃ is the approximation of the QoI Q(t) obtained by reconstructing the solution of the PROM-based problem
+   where Q(t)
+   (4) equipped with the hyper-reductions (10) and (12) and employing the same postprocessing procedures as for the
+   HDM-based solution,  is the set of time-stamps used for evaluating REQ —that is,
+                                            {                                 }
+                                          = t ∈ {0, ΔsRE , 2ΔsRE … } ∶ t ≤ Tf ,
+
+   and ΔsRE denotes the sampling time-interval for the computation of REQ .
+• The performance of the LSPG HPROM is assessed by computing the speedup factors it delivers with respect
+  to both the CPU time and wall-clock time elapsed in the solution of the HDM-based problem. For this pur-
+  pose, each speedup factor is defined here as the ratio of the CPU (wall-clock) time elapsed in the solution of
+  the LSPG HPROM-based problem and the CPU (wall-clock) time elapsed in the solution of the underlying HDM
+  problem.
+
+    Finally, it is specified that all numerical simulations reported herein are performed in double precision
+arithmetic.
+
+
+5.1       Laminar flow over a circular cylinder
+
+5.1.1       High-dimensional model
+
+The first application considered here focuses on the computation of a two-dimensional, laminar flow over a right circular
+cylinder at the Reynolds number Re = 100 and the free-stream Mach number M ∞ = 0.2. At this Reynolds number, the
+flow exhibits periodic vortex shedding after a transient startup phase: it demonstrates well the von Kármán vortex street.
+This problem is a commonly studied academic problem and therefore has the added benefit of being easily reproducible
+by the reader.
+    For this application, the computational domain is chosen as the disk of diameter 40D, where D denotes the cylin-
+der diameter. This domain is discretized using a one-element-thick, unstructured, three-dimensional mesh with 98,140
+vertices and 284,700 tetrahedral elements. Figure 2(A) shows the computational mesh. Symmetry boundary conditions
+are applied on its spanwise faces to ensure that the resulting flow is two-dimensional. A no-slip adiabatic wall bound-
+ary condition is applied on the cylinder surface. The dimension of the resulting semi-discrete HDM is N = 490, 700. This
+HDM is time-discretized using a second-order DIRK scheme and a fixed nondimensional time-step Δt = 1 × 10−1 , which,
+for the aforementioned CFD mesh, corresponds to a CFL number based on the smallest mesh cell of approximately
+7,600. The initial condition for the HDM-based simulation is computed by impulsively starting the flow from a uniform
+state and time-integrating the semi-discrete HDM until the onset of vortex shedding. Then, the semi-discrete HDM is
+time-integrated from this initial condition until the end of the nondimensional time-interval [0, 200]. At roughly t = 100,
+the flow becomes periodic. The computed flow solution using the discrete HDM is in good agreement with the results of
+experimental and other numerical studies of this problem.48,49
+GRIMBERG et al.                                                                                                                 1861
+
+
+
+
+                                                                                                                                       10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                            (A)                                 (B)                                 (C)
+
+F I G U R E 2 Two-dimensional flow problem over a right circular cylinder: discretized computational domain (A); reduced mesh
+constructed using the proposed energy-conserving sampling and weighting method (B); and reduced mesh constructed using the
+gappy-proper orthogonal decomposition-based Gauss–Newton with approximated tensors method (C)
+
+
+
+T A B L E 1 Two-dimensional flow problem over a right circular cylinder: number of mesh cells
+                                                                                                    n        Ñe       Ñe ∕Ne (%)
+sampled by energy-conserving sampling and weighting for each constructed global subspace
+approximation (ε = 1 × 10−2 )                                                                        9        75      0.076
+                                                                                                    35       321      0.327
+
+
+
+
+5.1.2        Hyperreduced LSPG projection-based reduced-order models
+
+In the first nondimensional time subinterval [0, 150], the HDM-based solution is sampled at the nondimensional rate
+defined by Δs = 2 × 10−1 (recall that after t = 150, the solution remains periodic). Two different global (N c = 1) affine
+subspace approximations are constructed by compressing the N s = 751 solution snapshots collected in [0, 150] using SVD
+and building two right ROBs of dimension n = 9 and n = 35. These two right ROBs correspond to the singular value energy
+truncation tolerances of 99% and 99.99%, respectively. In both cases, the affine offset uo is set to the initial condition of
+the problem. Then, the ECSW method described in this paper is applied to construct for each aforementioned subspace
+approximation an associated reduced mesh using N H = 376 training residual snapshots and the corresponding LSPG
+HPROM. The training residual snapshots are computed from the sampling of the HDM-based solution in [0, 150] at the
+nondimensional rate ΔsH = 4 × 10−1 . The size Ñe of each constructed reduced mesh is given in Table 1. The reader can
+observe that this size is a tiny fraction of the size N e of the CFD mesh outlined above.
+    Next, for each size Ñe reported in Table 1, an additional reduced mesh is constructed using the gappy-POD-based
+GNAT method.23,24 This additional reduced mesh is to be used in both the GNAT hyper-reduction method and the
+least-squares collocation method (which in principle can be equipped with any reduced mesh). Figure 2(B) shows the
+reduced mesh delivered by ECSW for n = 35 and Figure 2(C) shows the alternative reduced mesh of the same size con-
+structed using the alternative gappy-POD-based GNAT method. Using these reduced meshes, each constructed LSPG
+HPROM is discretized using the same second-order DIRK scheme applied to discretize the underlying HDM and the
+same nondimensional time-step Δt = 1 × 10−1 , and time-integrated on a single core of the same Linux cluster on which
+the HDM-based simulation is performed.
+
+
+5.1.3        Performance of various hyper-reduction methods
+
+For the case n = 9, the time-histories of the lift coefficient, drag coefficient, and velocity components at a probe located
+5D downstream from the cylinder’s trailing edge computed using the following computational models are reported in
+Figure 3:
+
+• The HDM.
+• The LSPG HPROM constructed using the ECSW hyper-reduction method.
+1862                                                                                                                      GRIMBERG et al.
+
+
+
+
+                                                                                                                                            10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                    0.8                                                     1.5
+
+
+                                                                            1.4
+                    0.4
+
+                                                                            1.3
+
+
+
+
+                                                                      cD
+          cL
+
+                      0
+                                                                            1.2
+
+                -0.4                          HDM                                                         HDM
+                                              GNAT HPROM                    1.1                           GNAT HPROM
+                                              Collocation HPROM                                           Collocation HPROM
+                                              ECSW HPROM                                                  ECSW HPROM
+                -0.8                                                             1
+                          0    50      100          150        200                   0     50      100         150         200
+                                       Time                                                        Time
+                                        (A)                                                         (B)
+                      1                                                         1.5
+
+
+                    0.8                                                           1
+
+
+                    0.6                                                         0.5
+           vx / v
+
+
+
+
+                                                                       vy / v
+                    0.4                                                           0
+
+
+                    0.2                                                         -0.5
+                                              HDM                                                         HDM
+                                              GNAT HPROM                                                  GNAT HPROM
+                      0                       Collocation HPROM                  -1                       Collocation HPROM
+                                              ECSW HPROM                                                  ECSW HPROM
+                    -0.2                                                        -1.5
+                           0   50      100          150        200                     0   50      100          150           200
+                                       Time                                                        Time
+                                        (C)                                                         (D)
+
+F I G U R E 3 Two-dimensional flow problem over a right circular cylinder—time-histories computed using the high-dimensional
+computational model and various least-squares PG hyper-reduced counterpart PROMs of dimension n = 9 of: the lift coefficient (A); drag
+coefficient (B); streamwise velocity component at a probe (C); and the normal velocity component at the same probe (D)
+
+
+
+
+• The LSPG HPROM constructed using the GNAT hyper-reduction method.
+• The LSPG HPROM constructed using the least-squares collocation hyperreduction method equipped with the reduced
+  mesh generated by the gappy-POD-based GNAT method.
+
+    Figure 4 reports the counterpart results for the case n = 35. The reader can observe that in both cases, the LSPG
+HPROM built using the GNAT method is numerically unstable and fails to complete the simulation in the specified
+time-interval. In both cases, the counterpart LSPG HPROM built using the least-squares collocation method is numeri-
+cally stable, but fails to deliver an acceptable accuracy. On the other hand, the ECSW-based LSPG HPROM is numerically
+stable in both cases and delivers exceptional accuracy.
+    Table 2 quantifies for this problem the relative errors incurred for the chosen QoIs using ΔsRE = Δt = 1 × 10−1 . The
+relative errors for the GNAT-based LSPG HPROM are not included due to the numerical instability exhibited by this
+HPROM in the time-interval of interest. These errors demonstrate further the superior accuracy of the ECSW-based LSPG
+HPROM.
+    Figure 5 compares a snapshot of the solution vorticity computed at t = 50 using the HDM with coun-
+terparts computed using the various LSPG HPROMs of dimension n = 35 described above. Note that t = 50
+is the time-instance just before that at which the simulation performed using the GNAT hyper-reduction
+method terminates prematurely. Again, the reader can observe that for the same PROM—namely, the
+LSPG PROM—the ECSW-based LSPG HPROM delivers the best reconstruction of the solution at this
+time-instance.
+GRIMBERG et al.                                                                                                                                   1863
+
+
+
+
+                                                                                                                                                         10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                       0.8                                                    1.5
+
+
+                                                                              1.4
+                       0.4
+
+                                                                              1.3
+
+
+
+
+                                                                         cD
+             cL
+                         0
+                                                                              1.2
+
+                   -0.4                            HDM                                                           HDM
+                                                   GNAT HPROM                 1.1                                GNAT HPROM
+                                                   Collocation HPROM                                             Collocation HPROM
+                                                   ECSW HPROM                                                    ECSW HPROM
+                   -0.8                                                            1
+                             0    50        100         150        200                 0      50          100         150        200
+                                            Time                                                          Time
+                                            (A)                                                           (B)
+                         1                                                        1.5
+
+
+                       0.8                                                          1
+
+
+                       0.6                                                        0.5
+              vx / v
+
+
+
+
+                                                                         vy / v
+                       0.4                                                          0
+
+
+                       0.2                                                        -0.5
+                                                   HDM                                                           HDM
+                                                   GNAT HPROM                                                    GNAT HPROM
+                         0                         Collocation HPROM               -1                            Collocation HPROM
+                                                   ECSW HPROM                                                    ECSW HPROM
+                       -0.2                                                       -1.5
+                              0   50        100          150       200                   0    50          100          150           200
+                                            Time                                                          Time
+                                            (C)                                                           (D)
+
+F I G U R E 4 Two-dimensional flow problem over a right circular cylinder—time-histories computed using the high-dimensional
+computational model and various least-squares PG hyper-reduced counterpart PROMs of dimension n = 35 of: the lift coefficient (A); drag
+coefficient (B); streamwise velocity component at a probe (C); and the normal velocity component at the same probe (D)
+
+
+
+
+T A B L E 2 Two-dimensional
+                                        n           Model                          REcD (%)        REcL (%)          REvx (%)              REvy (%)
+flow problem over a right circular
+cylinder: computational accuracy        9           GNAT HPROM                     —               —                 —                     —
+of the various constructed                          Collocation HPROM              113             125               94.4                  103
+least-squares PG-hyper-reduced
+                                                    ECSW HPROM                     0.891           2.45              16.2                  22.3
+counterpart PROM
+(LSPG-HPROMs)                           35          GNAT HPROM                     —               —                 —                     —
+                                                    Collocation HPROM              6.94            125                5.84                 130.
+                                                    ECSW HPROM                     0.130           2.86               1.65                 13.7
+
+                                       Abbreviations: ECSW, energy-conserving sampling and weighting; GNAT, Gauss–Newton with approximated
+                                       tensors; HPROM, hyper-reduced counterpart PROM.
+
+
+
+
+    Using a single core of an Intel Xeon Gold 6128 processor running at 3.40 GHz on a machine equipped with 192 GB
+of memory, the HDM-based simulation takes 65.4-h wall-clock time to complete. For n = 9 (n = 35), the construction on
+the same processor of the ECSW reduced mesh is performed in 27.1 (78) min: 26.1 (67.8) min for forming the convex
+optimization problem defined by (19) and (20), and 1.0 (10.2) min for solving it using the parallel NNLS algorithm.41 As
+for the computational performance of each constructed ECSW-based HPROM, it is summarized in Table 3 below. For
+n = 9, the reported wall-clock time speedup factors exceed four orders of magnitude; for n = 35, they exceed three orders
+of magnitude.
+1864                                                                                                                   GRIMBERG et al.
+
+
+
+
+                                                                                                                                          10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                                 (A)                                                                 (B)
+
+
+
+
+                                 (C)                                                                (D)
+
+F I G U R E 5 Two-dimensional flow problem over a right circular cylinder—snapshots of the solution vorticity computed at t = 50 using:
+the high-dimensional computational model (A); least-squares PG (LSPG)-Gauss–Newton with approximated tensors (GNAT) hyper-reduced
+counterpart PROM (HPROM) (B); LSPG-least-squares collocation HPROM (c); and the LSPG-ECSW HPROM
+
+
+                                                            T A B L E 3 Two-dimensional flow problem over a right circular cylinder:
+ n        Wall-clock time (s)          Speedup factor
+                                                            computational performance of the ECSW-based LSPG HPROMs
+ 9         23.5                        1.00 × 104
+ 35       140.0                        1.68 × 103
+
+Abbreviations: ECSW, energy-conserving sampling and
+weighting; HPROM, hyper-reduced counterpart PROM; LSPG,
+least-squares PG.
+
+
+
+
+5.2        Turbulent flow in the wake of Ahmed body
+
+5.2.1         High-dimensional model
+
+The second application presented here concerns the DES-based numerical simulation of a turbulent flow past the Ahmed
+body geometry—a popular benchmark CFD problem in the automotive industry.31 The considered flow problem is
+for the slant angle of 20◦ , the free-stream velocity v∞ = 60 m/s, and the Reynolds number (based on the body length)
+Re = 4.29 × 106 . For this problem, which has a symmetry plane, the computational domain associated with one half of the
+model is shown in Figure 6. It is discretized by an unstructured CFD mesh with 2,890,434 vertices and 17,017,090 tetra-
+hedral elements. Adiabatic boundary conditions are applied on all wall boundary surfaces of the computational domain
+using Reichardt’s law of the wall. As previously mentioned, the DES approach is based here on the Spalart–Allmaras
+one-equation model:46 therefore, the computational model has de = 6 DOFs per vertex, leading to a semi-discrete HDM
+of dimension N = 17, 342, 604.
+     The semi-discrete HDM is time-integrated using the implicit, second-order, three-point backward difference scheme
+and the fixed computational time-step Δt = 8 × 10−5 s. The unsteady, HDM-based simulation is initialized using a
+quasi-steady flow around the geometry at the same flow conditions outlined above in the time-interval [0, 2 × 10−1 ] s. It
+is performed on 240 cores of a Linux cluster where each compute node is equipped with two 6-core Intel Xeon Gold 6128
+processors running at 3.40 GHz and 192 GB of memory. Using this parallel computational platform, the HDM-based sim-
+ulation takes 12.1-h wall-clock time to complete—which corresponds to an aggregate CPU time of 2.91 × 103 h. It predicts
+the time-averaged drag coefficient cD = 0.263 – with time-averaging performed in the time-interval [5 × 10−2 , 2 × 10−1 ]
+s, after the startup transients have vanished. This value of cD differs by just 3.1% from its experimental value
+  exp
+cD = 0.255.31
+GRIMBERG et al.                                                                                                         1865
+
+
+
+
+                                                                                                                               10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+FIGURE 6           Ahmed body wake flow problem: computational domain
+
+
+
+
+            750                                                      2500
+                                                    meank nk                  sumk nk
+                                                    maxk nk
+                                                    mink nk          2000
+            500
+
+                                                                     1500
+
+            250
+                                                                     1000
+
+
+
+                  0                                                   500
+                  100          101           102               103      100             101         102      103
+                                       Nc                                                     Nc
+
+                                      (A)                                                     (B)
+
+
+F I G U R E 7 Ahmed body wake flow problem—variations with the number of clusters of: the mean, maximum, and minimum
+reduced-order basis (ROB) dimensions (A); and the total number of ROB modes across all clusters (B)
+
+
+
+5.2.2        Local ECSW-based hyper-reduced LSPG projection-based reduced-order models
+
+For this problem, N s = 1251 HDM-based solution snapshots are collected in the time-interval [0, 2 × 10−1 ] s using
+the sampling rate defined by Δs = 1.6 × 10−4 s. The k-means clustering algorithm is applied, along with the POD
+method of snapshots, to construct piecewise-affine local approximation subspaces. To this end, various values of N c
+in the range of 2–100 are considered (see below) and the overlapping factor in Algorithm 1 is set to 𝜙 = 0.1. For
+the fixed singular value energy threshold of 99.99%, Figure 7 reports the variation with N c of the mean, maximum,
+and minimum dimensions of the right ROBs defining the local approximation subspaces as well as the growth of
+                                            ∑Nc
+the total number of retained POD modes k=1       nk with the number of clusters N c . In general, choosing an appropri-
+ate value for N c amounts to trading the part of the online cost associated with the assembly of the hyper-reduced
+residual vector and Jacobian matrix, which scales linearly with nk , and the solution at each time-step of an implicit
+time-integration scheme of the dense systems of algebraic equations incurred by Newton’s method, which scales as
+O(n3k ), with the remaining part of the online cost, which scales as O(Nc2 ). More importantly, as N c is an input to
+many standard clustering algorithms including the k-means algorithm considered here, it is desirable for the accu-
+racy of the resulting local PROM to be largely insensitive to this parameter, in order to avoid as much as possible
+its tuning. Therefore to verify this behavior, three different values of N c are considered here: N c = 10, N c = 50, and
+N c = 100.
+    To accelerate the processing of each constructed local LSPG PROM, the proposed ECSW framework is applied for
+transforming such a PROM into an LSPG HPROM that employs the same time-discretization scheme as the HDM. Mesh
+sampling is performed in this case using N H = 17 training residuals sampled in the same time-interval [0, 2 × 10−1 ] s with
+ΔsH = 1.2 × 10−2 s. Table 4 reports for each considered value of N c , the mean, maximum, and minimum dimension of
+each local ROB and the size Ñe of the reduced mesh defining the constructed ECSW-based LSPG HPROM. Note that when
+N c > N H , the offline ECSW training procedure exploits data from only a subset of the N c clusters and therefore bets on
+1866                                                                                                                      GRIMBERG et al.
+
+
+
+
+                                                                                                                                            10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                                                                                        T A B L E 4 Ahmed body wake flow
+ Nc        meank nk        maxk nk        mink nk        Ñe          Ñe ∕Ne (%)
+                                                                                        problem—variations with the number of clusters
+  10       85.3            229            44             1,620       0.056              of: the mean, maximum, and minimum ROB
+  50       28.8              79           10               347       0.012              dimensions; and the size of the ECSW reduced
+                                                                                        mesh
+ 100       10.8              19            5               137       0.0047
+
+
+
+
+                                  (A)                                                                 (B)
+
+
+
+
+                                  (C)                                                                 (D)
+
+F I G U R E 8 Ahmed body wake flow problem—isosurfaces of the vorticity magnitude colored by the Mach number computed at
+t = T f = 2 × 10−1 s using: the high-dimensional computational model (A); and the energy-conserving sampling and weighting-based local
+least-squares PG hyper-reduced counterpart PROMs with N c = 10 (B), N c = 50 (C), and N c = 100 (D)
+
+
+
+the fact that the reduced mesh constructed using this data will perform well for the local subspace approximations whose
+data was not accounted for in the training process.
+
+
+5.2.3         Performance of the ECSW hyperreduction method
+
+Figure 8 displays snapshots of isosurfaces of the flow solution vorticity magnitude computed at the end of the simulation
+time-interval t = T f = 2 × 10−1 s using the HDM and local ECSW-based LSPG HPROMs, and colored by the local Mach
+number. The reader can observe that the local-HPROM-based solutions do not exhibit any major discrepancy with their
+HDM-based counterparts: for each considered value of N c , they capture well the highly turbulent structures present in
+the wake of the body.
+    Figure 9 compares the time-histories computed using the HDM and local ECSW-based LSPG HPROMs of the lift
+coefficient, drag coefficient, and streamwise and vertical velocity components at a probe located one half body length
+downstream at half of the body height and along the body centerline. Again, the reader can observe that all constructed
+local ECSW-based HPROMs perfectly reproduce the time-history of each considered QoI over the entire simulation
+time-interval. These results suggest that the accuracy of the local ECSW-based HPROMs is largely insensitive to the choice
+of N c > 1. For each QoI predicted using a local ECSW-based HPROM, the relative error computed using ΔsRE = Δt =
+8 × 10−5 s is reported in Table 5. The reported errors demonstrate a high level of achieved accuracy and an insensitivity
+with respect to the choice of N c . For the specified singular value energy threshold, a global ROB (N c = 1) would include
+over 600 POD modes (see Figure 7); on the other hand, local subspace approximations enable the same level of accuracy
+using a database of ROBs of much lower dimensions.
+    For this application, all ECSW reduced meshes are constructed on 240 cores of the aforementioned Linux cluster:
+
+• For N c = 10, the mesh sampling is performed in 34.8 min: 11.7 min for forming the convex optimization problem
+  defined by (19) and (20), and 23.1 min for solving it using the parallel NNLS algorithm.41
+GRIMBERG et al.                                                                                                                                                 1867
+
+
+
+
+                                                                                                                                                                       10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                  0.45                                                                    0.3
+                                                        HDM
+                                                        HPROM, Nc = 10
+                                                                                      0.28
+                                                        HPROM, Nc = 50
+                  0.35                                  HPROM, Nc = 100
+                                                                                      0.26
+
+
+
+
+                                                                                 cD
+             cL
+
+                                                                                      0.24
+                  0.25                                                                                                           HDM
+                                                                                                                                 HPROM, Nc = 10
+                                                                                      0.22                                       HPROM, Nc = 50
+                                                                                                                                 HPROM, Nc = 100
+                  0.15                                                                    0.2
+                            0       0.05       0.1          0.15          0.2                    0      0.05            0.1          0.15          0.2
+                                             Time (s)                                                                 Time (s)
+                                                 (A)                                                                   (B)
+                      1.2                                                                   1
+                                                                                                     HDM
+                                                                                                     HPROM, Nc = 10
+                       1
+                                                                                                     HPROM, Nc = 50
+                                                                                          0.5        HPROM, Nc = 100
+                      0.8
+             vx / v
+
+
+
+
+                                                                                 vz / v
+                      0.6
+                                HDM                                                         0
+                                HPROM, Nc = 10
+                      0.4       HPROM, Nc = 50
+                                HPROM, Nc = 100
+                      0.2                                                                 -0.5
+                            0      0.05        0.1          0.15          0.2                    0      0.05            0.1          0.15          0.2
+                                             Time (s)                                                                 Time (s)
+
+                                                 (C)                                                                   (D)
+
+F I G U R E 9 Ahmed body wake flow problem—time-histories computed using the high-dimensional computational model and various
+constructed local energy-conserving sampling and weighting-based local least-squares PG hyper-reduced counterpart PROMs of: the lift
+coefficient (A); drag coefficient (B); streamwise velocity component at a probe (C); and the normal velocity component at the same probe (D)
+
+
+
+
+T A B L E 5 Ahmed body wake flow
+                                                                           Nc              REcD (%)            REcL (%)            REvx (%)              REvy (%)
+problem—computational accuracy of the various
+constructed local least-squares PG hyper-reduced                            10             0.262               1.58                1.06                  5.33
+counterpart PROMs                                                           50             0.419               2.18                1.17                  6.12
+                                                                           100             0.212               1.35                0.839                 4.07
+
+
+
+
+• For N c = 50, the mesh sampling is performed in 2.92 min: 0.95 min for forming the aforementioned convex optimization
+  problem and 1.97 min for solving it using the parallel NNLS algorithm.
+• For N c = 100, the mesh sampling is performed in 2.76 min: 2.06 min for forming the convex optimization problem and
+  0.70 min for solving it using the same parallel algorithm.
+
+    These performance results demonstrate that the proposed hyperreduction procedure is computationally tractable even
+for a large-scale HDM.
+    All HPROM-based simulations are performed on N cpu = 1, 2, 4, and 8 cores of a single node of the aforementioned
+Linux cluster. Figure 10, which reports for each considered value of N c the obtained wall-clock time speedup factor,
+demonstrates the scalability of the constructed ECSW-based LSPG HPROMs on up to 8 cores—despite the small sizes of
+the considered HPROMs (see Table 4) leading to a slight flattening of the speedup curves at larger core counts. Table 6
+focuses on the case N cpu = 8. It reports for this case the wall-clock execution time and both wall-clock time and CPU time
+speedup factors delivered by all constructed ECSW-based LSPG HPROMs. The results show that all ECSW-based LSPG
+1868                                                                                                                                                   GRIMBERG et al.
+
+
+
+
+                                                                                                                                                                          10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                                 104                                                    F I G U R E 10 Ahmed body wake flow problem – parallel scalability of the
+                                                                                        constructed energy-conserving sampling and weighting-based energy-conserving
+Wall-clock time speedup factor
+
+                                                                                        sampling and weighting hyper-reduced counterpart PROMs and delivered
+                                 103                                                    speedup factors with respect to the high-dimensional computational model (black
+                                                                                        dashed lines represent the ideal speedup factors)
+
+                                 102
+
+
+                                                                       Nc = 10
+                                 101
+                                                                       Nc = 50
+                                                                       Nc = 100
+                                      0
+                                 10
+                                          1       2             4                 8
+                                                         Ncpu
+
+
+
+
+          T A B L E 6 Ahmed body wake flow problem – computational performance of the energy-conserving sampling and weighting-based
+          least-squares PG hyper-reduced counterpart PROMs on N cpu = 8 cores: wall-clock execution time; and wall-clock time and CPU time
+          speedup factors
+
+                                 Nc              Wall-clock time (s)                  Wall-clock time speedup factor                CPU time speedup factor
+
+                                  10             626.6                                6.97 × 101                                    2.09 × 103
+                                  50              76.3                                5.72 × 102                                    1.72 × 104
+                                 100              36.8                                1.19 × 103                                    3.56 × 104
+
+
+
+
+HPROMs deliver excellent speedup factors – up to three orders of magnitude for the wall-clock time and exceeding four
+orders of magnitude for the CPU time.
+
+
+5.3    Turbulent flow past an F-16C/D Block 40 aircraft configuration at a high angle of
+attack
+
+5.3.1                                         High-dimensional model
+
+The final application considered here focuses on the prediction of the turbulent flow past a configuration of the F-16C/D
+Block 40 Fighting Falcon with external stores (see Figure 11) at the free-stream Mach number M ∞ = 0.3, 30◦ angle of
+attack, and 10,000 ft altitude. For this geometry and flight conditions, the resulting Reynolds number based on the mean
+aerodynamic chord of 11.32 ft is Re = 1.82 × 107 . Specifically, this aircraft configuration includes wing-tip launch rails
+and four occupied under-wing stations, which adds to the complexity of the geometry, resulting unsteady flow field, and
+resulting wake dynamics.
+    As in the previous example, the flow is modeled here using a DES approach and only half of the geometry is considered
+for the purpose of computational efficiency. Hence, a symmetry plane along the fuselage midsection is incorporated in the
+computational model. Reichardt’s law of the wall is again employed for enforcing the adiabatic wall boundary conditions
+on the aircraft surface to further limit the dimensionality of the HDM. The half-aircraft model surface is discretized using
+575,951 vertices and 1,148,092 triangular elements. The computational domain around the aircraft is discretized by a CFD
+mesh with 26,919,879 vertices and 158,954,429 tetrahedral elements, leading to an HDM of dimension N = 161, 519, 274.
+    Time-discretization of the HDM is performed in the time-interval [0, 5 × 103 ] using a second-order DIRK scheme and
+the fixed, nondimensional time-step Δt = 5 × 10−2 (note that T f = 5 × 103 corresponds in this case to the dimensional
+value of 1.29 s). The initial condition is set to a computed quasi-steady flow around the aircraft geometry.
+    Due to its very large scale, the HDM-based simulation is performed on 3,584 cores of the Frontera supercomputer at
+The University of Texas at Austin. Each compute node of this supercomputed is equipped with two 26-core Intel Xeon
+Platinum 8280 processors with a 2.70 GHz nominal clock speed and 192 GB of memory. The interconnect is based on
+Mellanox HDR InfiniBand. Using this computing platform, the HDM-based simulation completes in 100.3-h wall-clock
+time—or equivalently, 3.60 × 105 h CPU time.
+GRIMBERG et al.                                                                                                                   1869
+
+
+
+
+                                                                                                                                         10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                                      (A)                                                     (B)
+
+
+F I G U R E 11    Turbulent flow past an F-16C/D aircraft – model geometry: top view (A); and underside view (B)
+
+
+
+T A B L E 7 Turbulent flow past an F-16C/D
+                                                         Nc       meank nk         maxk nk          mink nk        Ñe    Ñe ∕Ne (%)
+aircraft: mean, maximum, and minimum ROB
+dimensions of the constructed local approximation        50       53.7             115              26             787   0.0029
+subspaces; and size of the energy-conserving
+sampling and weighting reduced mesh
+
+
+
+    In summary, this application is representative of industrial-scale CFD applications. The underlying CFD problem is
+a showcase problem for demonstrating the feasibility of the offline part of the proposed hyperreduction method as well
+as the potential of its online part for drastically accelerating DES simulations using LSPG HPROMs.
+
+
+5.3.2        Local ECSW-based hyper-reduced LSPG projection-based reduced-order models
+
+First, an LSPG PROM is constructed for this problem. For this purpose, HDM-based solution snapshots are collected in
+the nondimensional time-interval [0, 5 × 103 ] using the nondimensional sampling rate defined by Δs = 1, resulting in the
+storage of a total of N s = 5000 snapshots. Using the same procedure based on POD and the k-means clustering algorithm as
+in the previous application (see Section 5.2), a piecewise-affine local subspace approximation with N c = 50 is constructed.
+For the fixed singular value energy threshold of 99.99% and the overlapping factor 𝜙 = 0.1 in Algorithm 1, the resulting
+mean, maximum, and minimum right ROB dimensions are reported in Table 7.
+    Next, hyper-reduction is performed using the proposed ECSW method with N H = 21 training snapshots collected
+for t ∈ [0, 5 × 103 ] using ΔsH = 250. The characteristics of the generated reduced mesh are summarized in Table 7. The
+resulting ECSW-based LSPG HPROM is discretized using the same second-order DIRK time-integration scheme used for
+discretizing the HDM. For this problem, the computational time-step of the HDM is not limited by the solution accuracy
+but by its numerical stability. Since the ECSW-based LSPG HPROM is less stiff than its underlying HDM, its numerical
+stability can sustain in this case a larger computational time-step. Consequently, the HPROM-based simulation is per-
+formed using the nondimensional time-step Δt = 5 × 10−1 – that is, 10 times larger than its counterpart employed in the
+HDM-based simulation.
+
+
+5.3.3        Performance of the ECSW hyper-reduction method
+
+Figures 12 and 13 compare isosurfaces of vorticity magnitude and visualizations of the flow Mach number in the wake of
+the aircraft, respectively, computed at t = T f = 1.29 s using the results of the HDM-based and ECSW-based LSPG HPROM
+simulations. They suggest that the ECSW-based LSPG HPROM is capable of reproducing the flow features captured by the
+HDM. Figure 14, which contrasts the time-histories of the lift and drag coefficients computed using the HDM with their
+counterparts computed using the ECSW-based LSPG HPROM, and Table 8, which reports the relative errors computed
+using ΔsRE = 5 × 10−1 of the HPROM-based predictions of the lift and drag coefficients support this suggestion.
+1870                                                                                                                      GRIMBERG et al.
+
+
+
+
+                                                                                                                                             10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                                (A)                                                                   (B)
+
+F I G U R E 12      Turbulent flow past an F-16C/D aircraft – isosurfaces of the solution vorticity magnitude colored by Mach number
+computed at t = T f = 1.29 s using: the high-dimensional computational model (A); and the energy-conserving sampling and weighting-based
+least-squares PG hyper-reduced ROM (B)
+
+
+
+
+                                (A)                                                                   (B)
+
+F I G U R E 13        Turbulent flow past an F-16C/D aircraft – snapshots of the solution Mach number in the aircraft wake computed at
+t = T f = 1.29 s using: the high-dimensional computational model (A); and the energy-conserving sampling and weighting-based least-squares
+PG hyper-reduced ROM (B)
+
+
+
+    For this problem, which features a CFD mesh with more than 25 million vertices (and thus more than 25 million FV
+dual cells), ECSW generates the reduced mesh in 30.6 min on 3548 cores of the Frontera supercomputer: 14.6 min of these
+are elapsed in forming the convex optimization problem defined by (19) and (20), and the other 16 min are consumed
+by the parallel NNLS algorithm41 for solving this problem. In order to highlight the fact that even very-low-dimensional
+computations can be parallelized to some degree, the HPROM-based simulation is repeated on N cpu = 1, 2, 4, 8, 16, and 32
+cores of a single node of the Frontera supercomputer. The obtained performance results are reported in Figure 15, which
+highlights the parallel scalability of the ECSW-based LSPG HPROM – due to the concept of a reduced mesh described in
+GRIMBERG et al.                                                                                                                                                                  1871
+
+
+
+
+                                                                                                                                                                                         10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                   1.8                                                         1
+
+
+
+                                                                             0.96
+                   1.7
+
+
+
+
+                                                                        cD
+              cL
+                                                                             0.92
+
+
+                   1.6
+                                                                             0.88
+                                                               HDM                                                                                           HDM
+                                                               HPROM                                                                                         HPROM
+                   1.5                                                       0.84
+                         0     0.2   0.4    0.6     0.8    1      1.2               0   0.2                                    0.4    0.6     0.8        1         1.2
+                                           Time (s)                                                                                  Time (s)
+
+                                               (A)                                                                                    (B)
+
+
+F I G U R E 14    Turbulent flow past an F-16C/D aircraft: time-histories of the lift and drag coefficients computed using the
+high-dimensional computational model and energy-conserving sampling and weighting-based least-squares PG hyper-reduced ROM
+
+
+
+T A B L E 8 Turbulent flow past an F-16C/D aircraft: computational accuracy of the
+                                                                                                                                      Nc            REcD (%)             REcL (%)
+energy-conserving sampling and weighting-based least-squares PG hyper-reduced counterpart
+PROM                                                                                                                                  50            0.489                0.459
+
+
+
+F I G U R E 15    Turbulent flow past an F-16C/D aircraft: parallel scalability of                                       104
+the energy-conserving sampling and weighting-based least-squares PG
+hyper-reduced counterpart PROM and delivered wall-clock time speedup factors            Wall-clock time speedup factor
+
+                                                                                                                         103
+
+
+
+
+                                                                                                                         102
+
+
+
+
+                                                                                                                         101
+                                                                                                                               1       2            4          8          16        32
+                                                                                                                                                        Ncpu
+
+
+
+
+    T A B L E 9 Turbulent flow past an F-16C/D aircraft – computational performance of the ECSW-based LSPG HPROM on N cpu = 32
+    cores: wall-clock execution time; and wall-clock time and CPU time speedup factors
+
+     Nc                  Wall-clock time (s)              Wall-clock time speedup factor                                                   CPU time speedup factor
+                                                                  3
+     50                  346                              1.04 × 10                                                                        1.17 × 105
+
+
+
+
+Section 4—and Table 9, which reports for N cpu = 32 cores a wall-clock time speedup factor of three orders of magnitude
+and a CPU time speedup factor of five orders of magnitude.
+
+
+6         CO N C LUSION S
+
+In this paper, the ECSW hyper-reduction method—one of the most popular hyper-reduction methods of the
+project-then-approximate type developed for accelerating Galerkin PMOR methods—is extended to PG PMOR meth-
+ods. Its computational framework is also generalized to cover not only FE spatial discretizations, but also FV
+and FD semi-discretization methods. Its scope is extended to PMOR methods based on local, piecewise-affine
+1872                                                                                                                        GRIMBERG et al.
+
+
+
+
+                                                                                                                                               10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+approximation subspaces designed for addressing the Kolmogorov n-width barrier issue associated with many
+highly nonlinear problems such as high-speed, convection-dominated flow problems. For large-scale turbulent flow
+problems with O(107 ) and O(108 ) DOFs, the offline part of the resulting ECSW method is shown to be not
+only computationally tractable, but also computationally fast. For such large-scale applications, the online part
+of the resulting ECSW method for PG PMOR methods is also demonstrated to be robust, accurate, and most
+importantly, to enable wall-clock time and CPU time speedup factors of several orders of magnitude. In future
+work, evaluating the performance of the proposed framework for parametric, time-dependent applications will be
+addressed.
+
+ACKNOWLEDGEMENTS
+Sebastian Grimberg, Radek Tezaur, and Charbel Farhat acknowledge partial support by the Air Force Office of
+Scientific Research under grant FA9550-17-1-0182, partial support by the Office of Naval Research under Grant
+N00014-17-1-2749, partial support by a research grant from the King Abdulaziz City for Science and Technology
+(KACST), and partial support by The Boeing Company under Contract Sponsor Ref. 45047. All authors acknowl-
+edge the Texas Advanced Computing Center (TACC) at The University of Texas at Austin for providing computing
+resources that have contributed to producing the numerical results reported in this paper. This document however
+does not necessarily reflect the position of any of these institutions and therefore no official endorsement should be
+inferred.
+
+DATA AVAILABILITY STATEMENT
+The data that support the findings of this study are available from the corresponding author upon reasonable request.
+
+ORCID
+Sebastian Grimberg https://orcid.org/0000-0002-9188-0562
+Charbel Farhat https://orcid.org/0000-0003-2563-8820
+
+REFERENCES
+ 1. Antoulas AC. Approximation of Large-Scale Dynamical Systems. SIAM Advances in Design and Control. Vol 6. Philadelphia, PA: SIAM;
+    2005.
+ 2. Benner P, Gugercin S, Willcox KE. A survey of projection-based model reduction methods for parametric dynamical systems. SIAM Rev.
+    2015;57(4):483-531.
+ 3. Rowley CW, Colonius T, Murray RM. Model reduction for compressible flows using POD and Galerkin projection. Phys D Nonlinear
+    Phenomena. 2004;189:115-129.
+ 4. Barbič J, James DL. Real-time subspace integration for St. Venant-Kirchoff deformable models. ACM Trans Graph. 2005;24(3):
+    982-990.
+ 5. Nguyen NC, Veroy K, Patera AT. Certified real-time solution of parametrized partial differential equations. In: Yip S, ed. Handbook of
+    Materials Modeling. Dordrecht, Netherlands: Springer; 2005:1529-1564.
+ 6. Kramer B, Willcox KE. Nonlinear model order reduction via lifting transformations and proper orthogonal decomposition. AIAA J.
+    2019;57(6):2297-2307.
+ 7. Farhat C, Grimberg S, Manzoni A, Quateroni A. Computational bottlenecks for PROMs: pre-computation and hyperreduction. In: Ben-
+    ner P, Grivet-Talocia S, Quateroni A, Rozza G, Schilders W, Silveira LM, eds. Model Order Reduction: Snapshot-Based Methods and
+    Algorithms. Vol 2. Berlin, Germany: De Gruyter; 2020.
+ 8. Everson R, Sirovich L. Karhunen-Loève procedure for gappy data. J Opt Soc Am A. 1995;12(8):1657-1664.
+ 9. Barrault M, Maday Y, Nguyen NC, Patera AT. An ’empirical interpolation’ method: application to efficient reduced-basis discretization of
+    partial differential equations. Comptes Rendus Mathematique. 2004;339(9):667-672.
+10. Grepl MA, Maday Y, Nguyen NC, Patera AT. Efficient reduced-basis treatment of nonaffine and nonlinear partial differential equations.
+    ESIAM Math Model Numer Anal. 2007;41(3):575-605.
+11. Nguyen NC, Patera AT, Peraire J. A ‘best points’ interpolation method for efficient approximation of parametrized functions. Int J Numer
+    Methods Eng. 2008;73(4):521-543.
+12. Astrid P, Weiland S, Willcox KE, Backx T. Missing point estimation in models described by proper orthogonal decomposition. IEEE Trans
+    Autom Control. 2008;53(10):2237-2251.
+13. Ryckelynck D. A priori hyperreduction method: an adaptive approach. J Comput Phys. 2005;202(1):346-366.
+14. Ryckelynck D. Hyper-reduction of mechanical models involving internal variables. Int J Numer Methods Eng. 2009;77(1):75-89.
+15. Chaturantabut S, Sorensen DC. Nonlinear model reduction via discrete empirical interpolation. SIAM J Sci Comput. 2010;32(5):
+    2737-2764.
+GRIMBERG et al.                                                                                                                                1873
+
+
+
+
+                                                                                                                                                       10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+16. Tiso P, Rixen DJ. Discrete empirical interpolation method for finite element structural dynamics. In: Kerschen G, Adams D, Carrella A,
+    eds. Topics in Nonlinear Dynamics. New York, NY: Springer; 2013:203-212.
+17. Peherstorfer B, Butnaru D, Willcox KE, Bungartz H-J. Localized discrete empirical interpolation method. SIAM J Sci Comput.
+    2014;36(1):A168-A192.
+18. An SS, Kim T, James DL. Optimizing cubature for the efficient integration of subspace deformations. ACM Trans Graph.
+    2008;27(5):165.1-165.10.
+19. Farhat C, Avery P, Chapman T, Cortial J. Dimensional reduction of nonlinear finite element dynamic models with finite rotations and
+    energy-based mesh sampling and weighting for computational efficiency. Int J Numer Methods Eng. 2014;98(9):625-662.
+20. Hernández JA, Ciacedo MA, Ferrer A. Dimensional hyper-reduction of nonlinear finite element models via empirical cubature. Comput
+    Methods Appl Mech Eng. 2017;313:687-722.
+21. Yano M, Patera AT. An LP empirical cubature procedure for reduced basis treatment of parametrized nonlinear PDEs. Comput Methods
+    Appl Mech Eng. 2019;344:1104-1123.
+22. Farhat C, Chapman T, Avery P. Structure-preserving, stability, and accuracy properties of the energy-conserving sampling and weighting
+    method for the hyper reduction of nonlinear finite element dynamic models. Int J Numer Methods Eng. 2015;102(5):1077-1110.
+23. Carlberg K, Bou-Mosleh C, Farhat C. Efficient non-linear model reduction via a least-squares Petrov-Galerkin projection and compressive
+    tensor approximations. Int J Numer Methods Eng. 2011;86(2):155-181.
+24. Carlberg K, Farhat C, Cortial J, Amsallem D. The GNAT method for nonlinear model reduction: effective implementation and application
+    to computational fluid dynamics and turbulent flows. J Comput Phys. 2013;242:623-647.
+25. LeGresley PA. Application of Proper Orthogonal Decomposition (POD) to Design Decomposition Methods [PhD thesis]. Stanford, CA:
+    Stanford University; 2006.
+26. Washabaugh K, Zahr MJ, Farhat C. On the use of discrete nonlinear reduced-order models for the prediction of steady-state flows past
+    parametrically deformed complex geometries. Paper presented at: Proceedings of the 54th AIAA Aerospace Sciences Meeting; 2016; San
+    Diego, CA.
+27. Zahr MJ. Adaptive Model Reduction to Accelerate Optimization Problems Governed by Partial Differential Equations [PhD thesis].
+    Stanford, CA: Stanford University; 2016.
+28. Grimberg S, Farhat C, Youkilis N. On the stability of projection-based model order reduction for convection-dominated laminar and
+    turbulent flows. J Comput Phys. 2020;419:109681.
+29. Pinkus A. n-Widths in Approximation Theory. A Series of Modern Surveys in Mathematics. Vol 7. Berlin: Springer; 1985.
+30. Amsallem D, Farhat C. Stabilization of projection-based reduced-order models. Int J Numer Methods Eng. 2012;91(4):358-377.
+31. Ahmed SR, Ramm G, Faitin G. Some Salient Features of the Time-averaged Ground Vehicle Wake. SAE Technical Paper 840300; 1984.
+32. Amsallem D, Zahr MJ, Farhat C. Nonlinear model order reduction based on local reduced-order bases. Int J Numer Methods Eng.
+    2012;92(10):891-916.
+33. Bui-Thanh T, Willcox KE, Ghattas O. Model reduction for large-scale systems with high-dimensional parametric input space. SIAM J Sci
+    Comput. 2008;30(6):3270-3288.
+34. Drohmann M, Haasdonk B, Ohlberger M. Adaptive reduced basis methods for nonlinear convection-diffusion equations empirical inter-
+    polation method for finite element structural dynamics. In: Fǒrt J, Fürst J, Halama J, Herbin R, Hubert F, eds. Finite Volumes for Complex
+    Applications VI Problems & Perspectives. Springer Proceedings in Mathematics. Vol 4. Berlin, Germany: Springer; 2011:369-377.
+35. Haasdonk B, Dihlmann M, Ohlberger M. A training set and multiple bases generation approach for parameterized model reduction based
+    on adaptive grids in parameter space. Math Comput Model Dyn Syst. 2011;17(4):423-442.
+36. He W, Avery P, Farhat C. In-situ adaptive reduction of nonlinear multiscale structural dynamics models; 2020. arXiv:2004.00153.
+37. Washabaugh K, Zahr MJ, Farhat C. Nonlinear model reduction for CFD problems using local reduced order bases. Paper presented at:
+    Proceedings of the 42nd AIAA Fluid Dynamics Conference and Exhibit; 2012; New Orleans, LA.
+38. Hastie T, Tibshirani R, Friedman J. The Elements of Statistical Learning: Data Mining, Inference, and Prediction. Springer Series in Statistics.
+    New York, NY: Springer; 2009.
+39. Bezdek J, Ehrlich R, Full W. FCM: the fuzzy c-means clustering algorithm. Comput Geosci. 1984;10(2–3):191-203.
+40. Farhat C, Tezaur R, Chapman T, Avery P, Soize C. Feasible probabilistic learning method for model-form uncertainty quantification in
+    vibration analysis. AIAA J. 2019;57(11):4978-4991.
+41. Chapman C, Avery P, Collins P, Farhat C. Accelerated mesh sampling for the hyper reduction of nonlinear computational models. Int
+    J Numer Methods Eng. 2017;109(12):1623-1654.
+42. Lawson CL, Hanson RJ. Solving Least Squares Problems. Classics in Applied Mathematics. Vol 15. Philadelphia, PA: SIAM; 1995.
+43. Ohlberger M, Rave S. Reduced basis methods: success, limitations and future challenges. In: Handlovičová A, Ševčovič D, eds. Proceedings
+    of ALGORITMY . Vol 2016. Bratislava: Publishing House of Slovak University of Technology; 2016:1-12.
+44. Anderson WK, Thomas JL, Leer B. Comparison of finite volume flux vector splittings for the Euler equations. AIAA J.
+    1986;24(9):1453-1460.
+45. Farhat C, Fezoui L, Lanteri S. Two-dimensional viscous flow computations on the connection machine: unstructured meshes, upwind
+    schemes and massively parallel computations. Comput Methods Appl Mech Eng. 1993;102(1):61-88.
+46. Strelets M. Detached eddy simulation of massively separated flows. Paper presented at: Proceedings of the 39th AIAA Aerospace Sciences
+    Meeting and Exhibit; 2001; Reno, NV.
+47. Cai X-C, Farhat C, Sarkis M. A minimum overlap restricted additive Schwarz preconditioner and applications in 3D flow simulations.
+    Contemp Math. 1998;218:479-485.
+1874                                                                                                               GRIMBERG et al.
+
+
+
+
+                                                                                                                                     10970207, 2021, 7, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6603 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+48. Wieselsberger C. New data on the laws of fluid resistance. NACA TN 84; 1922.
+49. Henderson RD. Details of the drag curve near the onset of vortex shedding. Phys Fluids. 1995;7(9):2102-2104.
+
+
+
+
+   How to cite this article: Grimberg S, Farhat C, Tezaur R, Bou-Mosleh C. Mesh sampling and weighting for the
+   hyperreduction of nonlinear Petrov–Galerkin reduced-order models with local reduced-order bases. Int J Numer
+   Methods Eng. 2021;122:1846–1874. https://doi.org/10.1002/nme.6603
+

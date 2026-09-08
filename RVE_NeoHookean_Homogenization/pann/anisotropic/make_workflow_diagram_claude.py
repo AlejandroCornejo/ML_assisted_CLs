@@ -147,10 +147,13 @@ def main() -> None:
     # --- Box 5: hyper-reduced homogenization ---
     title_text(ax, c5, w5, h5, "hyper-reduced\nhomogenization")
     eq_text(ax, c5[0], c5[1] + 0.95,
-            r"$\displaystyle\bm S_{\rm macro}(\bm\varepsilon)\approx\frac{1}{|\Omega_0|}\!\!\sum_{g\in\mathcal Z_\sigma}\!\!\bm S_g(\bm u_f;\bm\varepsilon)\,\omega_{\sigma,g}$",
+            r"$\displaystyle\bm S_{\rm macro}(\bm\varepsilon)\approx\!\!\sum_{g\in\mathcal Z_\sigma}\!\!\bm c_g(\bm u_f;\bm\varepsilon)\,\omega_{\sigma,g}$",
             fontsize=8.6)
+    eq_text(ax, c5[0], c5[1] + 0.62,
+            r"($\bm c_g$: reaction-force stress contribution)",
+            fontsize=7.6, style="italic")
     sig_thumb = SCRATCH_ECM_SIG_THUMB if SCRATCH_ECM_SIG_THUMB.exists() else HERE / "ecm_stress_support_claude.png"
-    embed_image(ax, (c5[0], c5[1] - 1.05), sig_thumb, zoom=0.0497)
+    embed_image(ax, (c5[0], c5[1] - 1.05), sig_thumb, zoom=0.085)
 
     # --- arrows ---
     arrow(ax, (c1[0] + w1 / 2, c1[1]), (c2[0] - w2 / 2, c2[1]))

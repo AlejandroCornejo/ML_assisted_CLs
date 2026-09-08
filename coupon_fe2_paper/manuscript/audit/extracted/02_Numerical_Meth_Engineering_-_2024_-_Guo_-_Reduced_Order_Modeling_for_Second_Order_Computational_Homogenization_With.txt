@@ -1,0 +1,1408 @@
+International Journal for Numerical Methods in Engineering
+
+
+
+
+    RESEARCH ARTICLE                                 OPEN ACCESS
+
+
+
+
+Reduced-Order Modeling for Second-Order Computational
+Homogenization With Applications to Geometrically
+Parameterized Elastomeric Metamaterials
+T. Guo1, 2            | V. G. Kouznetsova3                       | M. G. D. Geers3 | K. Veroy1, 2 | O. Rokoš2, 3
+
+1 Centre for Analysis, Scientific Computing and Applications, Eindhoven University of Technology, Eindhoven, The Netherlands | 2 Institute for Complex
+
+Molecular Systems, Eindhoven University of Technology, Eindhoven, The Netherlands | 3 Mechanics of Materials, Eindhoven University of Technology,
+Eindhoven, The Netherlands
+
+Correspondence: T. Guo (t.guo@tue.nl)
+
+Received: 24 April 2024 | Revised: 30 August 2024 | Accepted: 16 September 2024
+
+Funding: This result is part of a project that has received funding from the European Research Council (ERC) under the European Union’s Horizon 2020
+Research and Innovation Programme (Grant Agreement No. 818473).
+
+Keywords: empirical cubature method | geometrical transformation | hyperreduction | proper orthogonal decomposition | reduced-order
+modeling | second-order computational homogenization
+
+
+
+   ABSTRACT
+   The structural properties of mechanical metamaterials are typically studied with two-scale methods based on computational
+   homogenization. Because such materials have a complex microstructure, enriched schemes such as second-order computational
+   homogenization are required to fully capture their nonlinear behavior, which arises from nonlocal interactions due to the buck-
+   ling or patterning of the microstructure. In the two-scale formulation, the effective behavior of the microstructure is captured with
+   a representative volume element (RVE), and a homogenized effective continuum is considered on the macroscale. Although an
+   effective continuum formulation is introduced, solving such two-scale models concurrently is still computationally demanding
+   due to the many repeated solutions for each RVE at the microscale level. In this work, we propose a reduced-order model for the
+   microscopic problem arising in second-order computational homogenization, using proper orthogonal decomposition and a novel
+   hyperreduction method that is specifically tailored for this problem and inspired by the empirical cubature method. Two numerical
+   examples are considered, in which the performance of the reduced-order model is carefully assessed by comparing its solutions
+   with direct numerical simulations (entirely resolving the underlying microstructure) and the full second-order computational
+   homogenization model. The reduced-order model is able to approximate the result of the full computational homogenization
+   well, provided that the training data is representative for the problem at hand. Any remaining errors, when compared with the
+   direct numerical simulation, can be attributed to the inherent approximation errors in the computational homogenization scheme.
+   Regarding run times for one thread, speed-ups on the order of 100 are achieved with the reduced-order model as compared to direct
+   numerical simulations.
+
+
+1 |         Introduction                                                                                            for specific applications. By a careful microstructural design,
+                                                                                                                    properties such as negative Poisson’s ratio [1], negative compress-
+With the recent advances in additive manufacturing, there has                                                       ibility [2], or negative refractive index [3] can be achieved. They
+been a growing interest in designing and modeling metamaterials                                                     can also act as filters that absorb certain bandwidths of frequen-
+which exhibit emerging exotic properties that can be fine-tuned                                                     cies [4], or act as acoustic cloaks [5]. Additionally, such materials
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+This is an open access article under the terms of the Creative Commons Attribution License, which permits use, distribution and reproduction in any medium, provided the original work is properly
+cited.
+© 2024 The Author(s). International Journal for Numerical Methods in Engineering published by John Wiley & Sons Ltd.
+
+
+International Journal for Numerical Methods in Engineering, 2025; 126:e7604                                                                                                                                           1 of 20
+https://doi.org/10.1002/nme.7604
+                                                                                                                                                           10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+have been applied in impact mitigation [6] or biomedical applica-         computationally expensive, as the microscopic problem needs
+tions [7, 8]. A broad overview on their engineering applications          to be solved repeatedly. Compared to the DNS, the two-scale
+can be found in [9].                                                      model has much fewer degrees of freedom and elements on the
+                                                                          macroscale. However, the evaluation of the constitutive model,
+Studying properties of mechanical metamaterials through direct            that is, solving the microscopic problem, is much more expensive.
+numerical simulations (DNS) is often challenging since com-               As a matter of fact, it might take longer to compute the multiscale
+plex microstructural geometries need to be resolved, requiring            model as compared to the DNS for small to intermediate scale
+very fine meshes. In particular, in multi-query contexts such as          ratios. To overcome this problem, a reduced-order model (ROM)
+the design of materials, numerous simulations are required and            for the microscopic problem that is accurate and fast to evaluate
+the computational costs become infeasible. To address this issue,         is necessary. For first-order CH, numerous methods have been
+multiscale methods based on computational homogenization                  proposed in the literature. These methods can be split into two
+(CH) [10, 11] are usually employed. These methods involve the             main classes: (1) data-driven methods that learn a constitutive
+separate modeling, discretization, and coupling of a microstruc-          model (i.e., stress–strain relation) from large datasets obtained
+ture defined on a representative volume element (RVE) and an              by solving the microscopic problem for many different inputs,
+effective homogenized macrostructure. The effective continuum             and (2) projection-based methods that accelerate the microscopic
+does not resolve the complex microstructure on the macroscale             problem by projecting it onto a reduced space. Notable methods
+but captures the underlying microscale physics. At every inte-            for the first class include, for example, the data-driven framework
+gration point of the macrostructure, the macroscopic kinematic            introduced in Kirchdoerfer and Ortiz [23] or constitutive artificial
+quantities are used to specify the microscopic problem on the             neural networks in Linka et al. [24], which were applied to learn
+RVE which, after solution, returns effective quantities (e.g., stress     effective elastic material models and later extended for other
+and stiffness) back to the macroscopic solver. If scale separa-           material models (see, e.g., [25–27]). Other authors generated
+tion can be assumed, that is, the microstructural features are            large datasets and utilized recurrent neural networks to learn
+much smaller than the size of the macrostructure, the effec-              history-dependent plasticity material models in, for example, [28,
+tive behavior of the microstructure can be adequately predicted           29]. Even though highly accurate and efficient ROMs can be
+using first-order CH [12, 13]. However, for metamaterials the             obtained with these methods, there are three concerns: (1) rather
+microstructure can be of comparable size with the macrostruc-             large datasets are usually needed that ideally cover all possi-
+ture and nonlocal effects (due to, e.g., buckling; see, e.g., [14, 15])   ble inputs, (2) dealing with history-dependent behaviors such
+may emerge at the microscale, both violating the scale separation         as plasticity is often challenging, and (3) extrapolation is unre-
+assumptions of the first-order scheme.                                    liable. For the second class, methods based on proper orthogo-
+                                                                          nal decomposition (POD) and hyperreduction have been quite
+Enriched CH methods, such as second-order CH [16] or micro-               successful. Using POD, the solution space of the microscopic
+morphic CH [17], extend the first-order formulation by introduc-          problem is reduced to a fraction of the original problem; with
+ing additional field variables and equations. For micromorphic            hyperreduction [30, 31], and more specifically, the empirical
+CH, additional fields that describe the governing behavior of the         cubature method (ECM) proposed by Hernández, Caicedo, and
+underlying microstructure are introduced at the macroscale and            Ferrer [32] and later refined in [33], the assembly of the global
+communicated between both scales. To determine the evolution              stiffness matrix and internal force vector can be performed much
+of these quantities, additional equations need to be included and         more efficiently. Since the microscopic problem is still being
+a coupled system is solved at the macroscale. As an example, the          solved (in a reduced form), smaller datasets are typically suffi-
+average strain of the inclusions inside a composite RVE was intro-        cient for good results and dealing with history-dependent behav-
+duced as an additional quantity in Biswas and Poh [18]. In Jänicke        ior is not an issue. In Caicedo et al. [34] and Raschi et al. [35],
+et al. [19], micro-rotations were considered as additional field          two-scale simulations involving highly nonlinear RVEs were suc-
+variables for cellular materials. For buckling elastomeric meta-          cessfully accelerated. In our previous work [36], we constructed
+materials, prior knowledge on the buckling modes was embedded             an efficient ROM by combining POD and ECM with geomet-
+into the micromorphic framework presented in Rokoš et al. [15].           rical transformations that can be applied for two-scale shape
+For second-order CH, a strain gradient formulation is considered          optimization problems involving elasto-plastic RVEs under large
+at the macroscale, that is, the gradient of the strain (or deforma-       deformations.
+tion gradient) is required, giving rise to a length-scale associated
+with the size of the underlying RVE, thus making it possible to           While there is a wide range of works on accelerating the
+capture size and nonlocal effects. To ensure a proper scale tran-         first-order CH model, to the best of our knowledge there have
+sition of the kinematical quantities, additional constraints were         been no attempts towards the reduced-order modeling of any
+derived in Kouznetsova, Geers, and Brekelmans [16]. However,              enriched formulations. Inspired by the literature on first-order
+this model leads to artificial stress concentrations at the corners       CH, in this contribution we propose a ROM for second-order CH,
+of the RVE for which subsequent formulations attempted to cor-            utilizing POD and a novel hyperreduction method that is inspired
+rect [20–22]. In Luscher, McDowell, and Bronkhorst [20], addi-            by ECM [32]. The main reasons for opting for a projection-based
+tional constraints were derived from orthogonality conditions on          ROM over a data-driven one are two-fold: (1) estimation of
+the different components of the displacement field on the RVE,            parameter bounds for strain gradients is generally difficult a pri-
+and in Wu et al. [21] and Yvonnet, Auffray, and Monchiet [22]             ori, and (2) the number of input parameters is large, in 2D cor-
+body forces were included to account for additional effects.              responding to four components of the deformation gradient and
+                                                                          another six of the gradient of the deformation gradient (nine
+In spite of the simplified formulation in terms of an effective           and eighteen in 3D). This parameter space does not yet account
+nonlocal continuum, the multiscale problem based on CH is still           for any other additional design variables, which would further
+
+2 of 20                                                                                 International Journal for Numerical Methods in Engineering, 2025
+                                                                                                                                                   10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+increase the number of parameters. The main innovative contri-                                                           𝜕𝑎𝑗
+butions of this manuscript are:                                     • gradient operator with respect to 𝒙, 𝛁𝒙 𝒂 =               𝒆𝑖 𝒆𝑗 , 𝛁𝒙 𝑨 =
+                                                                                                                          𝜕𝑥𝑖
+                                                                       𝜕𝐴𝑗𝑘
+                                                                              𝒆𝑖 𝒆𝑗 𝒆𝑘 ,
+  • design of a novel hyperreduction algorithm tailored to              𝜕𝑥𝑖
+    second-order CH,                                                • gradient operator with respect to second-order tensor 𝑩,
+                                                                             𝜕𝐴𝑘𝑙                 𝜕𝑘𝑙𝑚
+  • development of a hyperreduced POD model for a family of           𝛁𝑩 𝑨 =      𝒆𝒆 𝒆 𝒆,𝛁 =            𝒆𝒆 𝒆 𝒆𝒆 ,
+                                                                              𝜕𝐵𝑖𝑗 𝑖 𝑗 𝑘 𝑙 𝑩       𝜕𝐵𝑖𝑗 𝑖 𝑗 𝑘 𝑙 𝑚
+    geometrically parameterized microstructures,
+                                                                    • gradient operator with respect to third-order tensor ,
+  • derivation of effective quantities arising in reduced                     𝜕𝐴𝑙𝑚                   𝜕𝑙𝑚𝑛
+                                                                      𝛁 𝑨 =       𝒆𝒆 𝒆 𝒆𝒆 ,𝛁 =            𝒆𝒆 𝒆 𝒆𝒆 𝒆 ,
+    second-order CH, and                                                      𝜕𝑖𝑗𝑘 𝑖 𝑗 𝑘 𝑙 𝑚        𝜕𝑖𝑗𝑘 𝑖 𝑗 𝑘 𝑙 𝑚 𝑛
+  • an empirical analysis of the hyperreduced model for geo-                                                                    𝜕𝐴𝑖𝑗
+    metrically parameterized two-scale simulations under large      • divergence operator with respect to 𝒙, 𝛁𝒙 ⋅ 𝑨 =                  𝒆𝑗 , 𝛁𝒙 ⋅
+                                                                                                                                𝜕𝑥𝑖
+    deformations and multiscale buckling.                                     𝜕𝐴𝑖𝑗𝑘
+                                                                       =             𝒆𝑗 𝒆𝑘 ,
+                                                                               𝜕𝑥𝑖
+After reviewing the theory on second-order CH and specify-
+                                                                    • linearization of functional Π around state 𝒂 in direction
+ing the employed formulation used in Section 2, the proposed                              𝑑             |
+                                                                      Δ𝒂, 𝐷Π|𝒂 ⋅ (Δ𝒂) =      Π(𝒂 + 𝜏Δ𝒂)|| ,
+ROM, including the novel hyperreduction algorithm, is presented                           𝑑𝜏            |𝜏=0
+in Section 3. To validate the ROM, numerical examples are dis-
+cussed in Section 4 and obtained results are compared with ref-   where the Einstein summation convention is assumed on
+                                                                  repeated indices 𝑖, 𝑗, 𝑘, 𝑙, 𝑚, 𝑛 and 𝒆𝑖 , 𝑖 = 1, ... , 𝑑 denote the basis
+erence solutions in terms of accuracy and efficiency. A summary
+                                                                  vectors of a 𝑑-dimensional Cartesian coordinate frame. Over-
+on the findings with final remarks is provided in Section 5.
+                                                                  lines are used to distinguish macroscopic from microscopic
+                                                                  quantities.
+Throughout the article, the following notation conventions are
+used:
+                                                                  2 | Second-Order Computational
+  • scalars 𝑎,                                                    Homogenization
+  • vectors 𝒂 = 𝑎𝑖 𝒆𝑖 ,
+                                                                  The second-order computational homogenization (CH2) formu-
+  • position vector 𝒙 = 𝑥𝑖 𝒆𝑖 ,                                   lation contains the second gradient of the displacement field,
+                                                                  thus introducing a length-scale associated with the length-scale
+  • second-order tensors 𝑨 = 𝐴𝑖𝑗 𝒆𝑖 𝒆𝑗 ,                          of the underlying unit cell, making it possible to capture
+  • third-order tensors  = 𝑖𝑗𝑘 𝒆𝑖 𝒆𝑗 𝒆𝑘 ,                       size and nonlocal effects [37, 38]. The formulation of the
+                                                                  micro- and macroscopic problem as well as their scale cou-
+  • fourth-order tensors 𝔄 = 𝔄𝑖𝑗𝑘𝑙 𝒆𝑖 𝒆𝑗 𝒆𝑘 𝒆𝑙 ,                  pling employed in this work is discussed in the subsections
+                                                                  below. A schematic sketch of the two-scale problem is depicted
+  • matrices A and column matrices a,
+                                                                  in Figure 1.
+  • 𝒂 ⋅ 𝒃 = 𝑎𝑖 𝑏𝑖 ,
+
+  • 𝒂 ⊗ 𝒃 = 𝑎𝑖 𝑏𝑗 𝒆𝑖 𝒆𝑗 ,                                         2.1 |       Macroscopic Problem
+  • 𝑨 ⋅ 𝒃 = 𝐴𝑖𝑗 𝑏𝑗 𝒆𝑖 ,
+                                                                  In CH2, the macroscopic problem is based on a strain gradient
+  • 𝑨 ⋅ 𝑩 = 𝐴𝑖𝑘 𝐵𝑘𝑗 𝒆𝑖 𝒆𝑗 ,                                       formulation [37, 38] to model nonlocal effects of the microstruc-
+                                                                  ture. Consider a body Ω ⊂ ℝ𝑑 with outer boundaries 𝜕Ω, 𝑑 = 2, 3
+  • 𝑨 ∶ 𝑩 = 𝐴𝑖𝑗 𝐵𝑗𝑖 ,                                             the space dimension, and a position vector 𝒙 ∈ Ω. The governing
+  • 𝑨 ⊗ 𝒃 = 𝐴𝑖𝑗 𝑏𝑘 𝒆𝑖 𝒆𝑗 𝒆𝑘 ,                                     partial differential equation (PDE) has the form (with body forces
+                                                                  neglected for brevity) [16],
+  • 𝒃 ⊗ 𝑨 = 𝑏𝑖 𝐴𝑗𝑘 𝒆𝑖 𝒆𝑗 𝒆𝑘 ,
+                                                                               𝛁𝒙 ⋅ (𝑷(𝑭, , 𝝁)𝑇 − (𝛁𝒙 ⋅ (𝑭, , 𝝁))𝑇 ) = 𝟎                 (1)
+  • 𝑨 ⊗ 𝑩 = 𝐴𝑖𝑗 𝐵𝑘𝑙 𝒆𝑖 𝒆𝑗 𝒆𝑘 𝒆𝑙 ,
+
+  • 𝒂 ⋅  = 𝑎𝑖 𝑖𝑗𝑘 𝒆𝑖 𝒆𝑗 ,                                       where 𝑭 ∶= 𝑰 + (𝛁𝒙 𝒖)𝑇 is the macroscopic deformation gradi-
+                                                                  ent with 𝒖(𝒙) being the macroscopic displacement field and
+  •  ⋮  = 𝑖𝑗𝑘 𝑘𝑗𝑖 ,                                           𝑰 the second-order identity tensor,  ∶= 𝛁𝒙 𝑭 is the gradi-
+  • 𝔄 ∶ 𝑩 = 𝔄𝑖𝑗𝑘𝑙 𝐵𝑙𝑘 𝒆𝑖 𝒆𝑗 ,                                     ent of the deformation gradient, that is, a third-order tensor
+                                                                  with symmetry 𝑖𝑗𝑘 = 𝑘𝑗𝑖 , and 𝝁 contains additional param-
+  • 𝑨 ∶ 𝔅 = 𝐴𝑙𝑘 𝔅𝑘𝑙𝑖𝑗 𝒆𝑖 𝒆𝑗 ,                                     eters; 𝑷 denotes the second-order first Piola–Kirchhoff (1PK)
+                                                                  stress tensor, and  is a third-order tensor often referred to
+  • transpose 𝑨𝑇 , 𝐴𝑖𝑗
+                    𝑇
+                       = 𝐴𝑗𝑖 , 𝑇 , 𝑇𝑖𝑗𝑘 = 𝑘𝑗𝑖 ,
+                                                                  as the higher-order or double stress tensor [37, 38]. By mul-
+  • tr𝑨 = 𝐴𝑖𝑖 ,                                                   tiplying Equation (1) with a test function 𝛿𝒖 and utilizing
+
+                                                                                                                                       3 of 20
+                                                                                                                                                                  10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+FIGURE 1 | Two-scale formulation in second-order computational homogenization. At every macroscopic point, the deformation gradient 𝑭 and
+its gradient  are used to prescribe boundary conditions for the microscopic problem which, after solving, returns an effective stress 𝑷 and higher-order
+stress 𝑸. The parameter 𝝁 describes the geometry of the RVE. More information on 𝝁 are provided in Section 2.2.
+
+
+
+the divergence theorem, the following weak form can be                                                               ̂ its gradient ̂ ∶= 𝛁 𝑭,
+                                                                                                                                             ̂
+                                                                               through Lagrange multipliers 𝑳. With 𝑭,                     𝒙
+derived [39],
+                                                                               and 𝑳, the problem in Equation (3) can be rewritten as
+               (                  𝑇
+                                                    )
+                   𝑷(𝑭, , 𝝁) ∶ 𝛿𝑭 + (𝑭, , 𝝁) ⋮ 𝛿 𝑑𝒙                                                       (
+          ∫Ω                                                                                 ̂ 𝑳) ∶=                   ̂         𝑇       ̂
+                          (                                       )     (2)             Π(𝒖, 𝑭,                   𝑷(𝑭, , 𝝁) ∶ 𝛿𝑭 + (𝑭, , 𝝁)
+                                                                𝑇                                        ∫Ω
+           =               𝛿𝒖 ⋅ (𝑷 − 𝛁𝒙 ⋅ ) ⋅ 𝒏 + 𝒏 ⋅  ∶ 𝛿𝑭      𝑑𝒙                                                             )                        (4)
+                   ∫𝜕ΩN                                                                                     ̂                  𝑇
+                                                                                                        ⋮ 𝛿  + 𝛿(𝑳 ∶ (𝑭̂ 𝑇 − 𝑭 )) 𝑑𝒙 = 0
+                                                                                                                                      !
+
+
+
+where 𝛿𝑭 ∶= (𝛁𝒙 𝛿𝒖)𝑇 and 𝛿 ∶= 𝛁𝒙 𝛿𝑭 are introduced, 𝜕ΩN
+denotes the boundaries with prescribed Neumann boundary con-                   which should hold for all test functions 𝛿𝒖, 𝛿𝑭̂ and 𝛿𝑳. Inserting
+ditions, and 𝒏 is the outward unit normal vector. In addition,                                   ̂       ̂
+                                                                               𝛿𝑭 = (𝛁𝒙 𝛿𝒖)𝑇 , 𝛿  = 𝛁𝒙 𝛿𝑭 and
+there are Dirichlet boundaries 𝜕ΩD , with 𝜕ΩD ∩ 𝜕ΩN = ∅ and
+𝜕ΩD ∪ 𝜕ΩN = 𝜕Ω, where values of the displacement 𝒖 and its gra-                                                             (              )
+                                                                                                𝑇              𝑇
+dient 𝛁𝒙 𝒖 are prescribed. In this work, we consider only Dirichlet              𝛿(𝑳 ∶ (𝑭̂ 𝑇 − 𝑭 )) = (𝑭̂ 𝑇 − 𝑭 ) ∶ 𝛿𝑳 + 𝑳 ∶ 𝛿𝑭̂ 𝑇 − 𝛁𝒙 𝛿𝒖
+boundary conditions, so that the terms on the right hand side van-                                                                                         (5)
+ish and Equation (2) becomes                                                   into Equation (4) yields
+               (                  𝑇
+                                                    )   !
+                   𝑷(𝑭, , 𝝁) ∶ 𝛿𝑭 + (𝑭, , 𝝁) ⋮ 𝛿 𝑑𝒙 = 0             (3)
+          ∫Ω                                                                                  ̂ 𝑳)
+                                                                                         Π(𝒖, 𝑭,
+                                                                                               (                                   𝑇
+The macroscopic problem can then be stated as follows: find                              =       𝑷 ∶ 𝛁𝒙 𝛿𝒖 +  ⋮ 𝛁𝒙 𝛿𝑭̂ + (𝑭̂ 𝑇 − 𝑭 )
+𝒖 that fulfills Equation (3) for all test functions 𝛿𝒖. The rela-                          ∫Ω
+                                                                                                       (            ))
+tion between (𝑷, ) and (𝑭, , 𝝁) is established by solving the
+                                                                                           ∶ 𝛿𝑳 + 𝑳 ∶ 𝛿𝑭̂ 𝑇 − 𝛁𝒙 𝛿𝒖 𝑑𝒙                                     (6)
+microscopic boundary value problem, which is defined on a RVE
+and discussed in more detail in Section 2.2. In particular, we                                     (
+                                                                                                                           ̂
+                                                                                          =         (𝑷 − 𝑳) ∶ 𝛁𝒙 𝛿𝒖 + 𝑳 ∶ 𝛿𝑭 𝑇 +  𝑑𝒙
+assume that 𝝁 contains parameters that describe the geometry of                               ∫Ω
+the RVE.                                                                                                           𝑇
+                                                                                                                          )
+                                                                                              ⋮ 𝛁𝒙 𝛿 𝑭̂ + (𝑭̂ 𝑇 − 𝑭 ) ∶ 𝛿𝑳 𝑑𝒙
+In order to solve the problem in Equation (3), the second gra-
+dient of 𝒖 is required. To this end, Lesičar, Tonković, and
+Sorić [40] employed 36 degrees of freedom (DOF) 𝐶 1 -triangular               where arguments of 𝑷 and  have been omitted for brevity. Lin-
+elements. Wu et al. [21] utilized an enriched discontinuous                    earization of Equation (6), required by the macroscopic iterative
+                                                                               Newton solver, around a state (𝒖, 𝑭,̂ 𝑳) in directions (Δ𝒖, 𝟎, 𝟎),
+Galerkin method combined with a penalty method to enforce
+                                                                                    ̂
+𝐶 1 -continuity weakly. Other works reformulate the problem                    (𝟎, Δ𝑭, 𝟎) and (𝟎, 𝟎, Δ𝑳), yields
+in Equation (3) with a mixed formulation instead [16, 20, 41],
+which results in a saddle point problem and is used also in                                                        (
+this work. The idea of the mixed formulation is to introduce an                       ̂ ⋅ (Δ𝒖, 𝟎, 𝟎) =
+                                                                                 𝐷Π|𝒖,𝑭,𝑳                           𝛁𝒙 Δ𝒖 ∶ 𝛁𝑭 𝑷 ∶ 𝛁𝒙 𝛿𝒖 + 𝛁𝒙 Δ𝒖
+                                                                                                             ∫Ω
+independent deformation gradient field 𝑭̂ which is coupled with                                                                          )                 (7)
+the deformation gradient computed from the displacement field                                               ∶ 𝛁𝑭  ⋮ 𝛁𝒙 𝛿 𝑭̂ − 𝛁𝒙 Δ𝒖 ∶ 𝛿𝑳 𝑑𝒙
+
+4 of 20                                                                                        International Journal for Numerical Methods in Engineering, 2025
+                                                                                                                                                  10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                                (                                        manuscript, the superscript p will be used to denote quantities
+                 ̂                     ̂                       ̂
+        ̂ ⋅ (𝟎, Δ𝑭, 𝟎) =
+   𝐷Π|𝒖,𝑭,𝑳                        𝛁𝒙 Δ𝑭 ⋮ 𝛁 ̂ 𝑷 ∶ 𝛁𝒙 𝛿𝒖 + 𝛁𝒙 Δ𝑭
+                           ∫Ω                                           related to the parent domain.
+                                                      )
+                                         ̂    ̂
+                           ⋮ 𝛁 ̂  ⋮ 𝛁𝒙 𝛿𝑭 + Δ𝑭 𝑇 ∶ 𝛿𝑳 𝑑𝒙                To obtain such transformation maps 𝚽𝝁 , we solve the auxiliary
+                                   
+                                                                   (8)   problem as proposed in [43]. The key idea of the method is to pose
+                               (                        )                an auxiliary linear elasticity problem on the parent domain that
+       ̂ ⋅ (𝟎, 𝟎, Δ𝑳) =
+  𝐷Π|𝒖,𝑭,𝑳                      −Δ𝑳 ∶ 𝛁𝒙 𝛿𝒖 + Δ𝑳 ∶ 𝛿𝑭̂ 𝑇 𝑑𝒙              can be solved for the transformation displacement 𝒅, which can
+                          ∫Ω
+                                                                   (9)   then be utilized to compute the transformation 𝚽𝝁 with 𝚽𝝁 (𝒙p ) =
+                                                                         𝑰 + 𝒅(𝒙p ). The displacement 𝒅 is fixed on the outer boundaries
+where 𝛁𝑭 𝑷, 𝛁𝑭 , 𝛁 ̂ 𝑷, and 𝛁 ̂  are the macroscopic tangents          with zero Dirichlet boundary conditions and prescribed on parts
+                              
+                    ̂ ̂                                                  of the domain that are known from the parameterization (as an
+evaluated at (𝑭(𝒖), (𝑭), 𝝁). Given a suitable discretization for
+                                                                         example, the circular interface of Ωp in Figure 2 is deformed into
+𝒖, 𝑭̂ and 𝑳, the system of Equations (6–9) can be solved with            the elliptical interfaces in Ω𝝁1 and Ω𝝁2 ). Subsequently, the aux-
+the finite element method, when a constitutive relation between          iliary problem can be solved to find the entire field 𝒅(𝒙p ). To
+                ̂
+(𝑷, ) and (𝑭, , 𝝁) is established. Different combinations of dis-      fully specify the auxiliary problem, a Young’s modulus 𝐸 aux and
+placement, deformation gradient and Lagrange multiplier shape            Poisson’s ratio 𝜉 aux need to be selected, see [43]. For all RVEs con-
+functions were considered and tested in Kouznetsova, Geers,              sidered in this work, the auxiliary problem is solved with 𝐸 aux =
+and Brekelmans [16]. For the numerical examples in this work,            1 MPa and 𝜉 aux = 0.25. More details on the auxiliary problem can
+quadrilateral elements with eight displacement nodes, four defor-        be found in [43].
+mation gradient nodes and one Lagrange multiplier node per ele-
+ment are chosen.                                                         The microscopic displacement field 𝒖(𝒙𝝁 ) is assumed to consist of
+                                                                         a mean field 𝒖(𝒙𝝁 ) and a fluctuation field 𝒘(𝒙𝝁 ), that is, 𝒖(𝒙𝝁 ) =
+                                                                         𝒖(𝒙𝝁 ) + 𝒘(𝒙𝝁 ). The mean field 𝒖 is fully prescribed through the
+2.2 |    Parameterized Microscopic Problem                                                            ̂
+                                                                         macroscopic quantities (𝑭, ) with
+
+To evaluate 𝑷 and  and their derivatives in Equations (6–9),                                                  1      ̂
+the microscopic problem needs to be solved at every macroscopic                        𝒖(𝒙𝝁 ) ∶= (𝑭 − 𝑰) ⋅ 𝒙𝝁 + (𝒙𝝁 ⋅ ) ⋅ 𝒙𝝁             (10)
+                                                                                                               2
+integration point. Here, we follow the formulation as presented in
+Kouznetsova, Geers, and Brekelmans [42], where the microscopic           Subsequently, the microscopic deformation gradient can be
+problem is modeled as a standard Cauchy continuum. For brevity,          defined as
+a fixed macroscopic material point is assumed, and the depen-                                                    ̂
+                                                                                    𝑭 ∶= 𝑰 + (𝛁𝒙𝝁 𝒖)𝑇 = 𝑭 + 𝒙𝝁 ⋅  + (𝛁𝒙𝝁 𝒘)𝑇  (11)
+dence on the macroscopic coordinates is omitted in the definition
+of the microscopic problem provided below.                               The governing microscopic PDE is given by,
+
+Consider a family of domains Ω𝝁 ⊂ ℝ𝑑 , parameterized by param-                                     𝛁𝒙𝝁 ⋅ 𝑷𝑇 (𝑭) = 𝟎                       (12)
+eters 𝝁 ∈ ℙ with parameter space ℙ and spanned by position
+vectors 𝒙𝝁 ∈ Ω𝝁 , see Figure 2. For all 𝝁, the outer boundaries          which can be written into its weak form by multiplying with a
+and topology of Ω𝝁 are assumed to remain fixed. As a conse-              test function 𝛿𝒘 and applying the divergence theorem,
+quence, the volume ||Ω𝝁 || remains constant for all 𝝁. Addition-
+ally, it is assumed that there exists a parent domain Ωp ∶= Ω𝝁
+                                                                 p
+                                                                                                     (                     )
+                                                                                                               ̂                !
+                                                                            Π(𝒘) =         𝛁𝒙𝝁 𝛿𝒘 ∶ 𝑷 𝑭 + 𝒙𝝁 ⋅  + (𝛁𝒙𝝁 𝒘)𝑇 𝑑𝒙𝝁 = 0
+with 𝝁p ∈ ℙ, which can be transformed into any Ω𝝁 with a trans-                      ∫Ω𝝁
+formation map 𝚽𝝁 ∶ Ωp → Ω𝝁 , 𝒙p ↦ 𝒙𝝁 , transformation gradient                                                                            (13)
+                               |      |
+𝑭 𝝁 ∶= (𝛁𝒙p 𝚽𝝁 )𝑇 and 𝑑𝒙𝝁 = |det𝑭 𝝁 |𝑑𝒙p . Note that the transfor-
+                               |      |                                  where 𝑷 is the microscopic second-order 1PK stress tensor, and
+mation map 𝚽𝝁 must be one-to-one and thus the absolute value                                                ̂
+   |        |                                                            the macroscopic quantities (𝑭, ) act as external forcing terms.
+in |det𝑭 𝝁 | is not strictly necessary, but kept for completeness.
+   |        |                                                            For now, no constitutive model at the microscale level is speci-
+For a fixed domain, that is, Ωp = Ω𝝁 , the transformations 𝚽𝝁            fied, but it is assumed that 𝑷 is a nonlinear function of the defor-
+                                      |      |
+are identity maps, with 𝑭 𝝁 = 𝑰 and |det𝑭 𝝁 | = 1. Throughout this       mation gradient 𝑭. The microscopic problem can thus be stated
+                                      |      |
+
+
+
+
+FIGURE 2 | Family of RVE domains Ω𝝁 parameterized through parameters 𝝁. A parent domain Ωp can be defined which can be transformed
+through transformations 𝚽𝝁 into any of the RVE domains Ω𝝁 .
+
+
+                                                                                                                                       5 of 20
+                                                                                                                                                               10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                      ̂
+as follows: given (𝑭, , 𝝁), find 𝒘 that fulfills Equation (13) for                                     𝒘p (𝒙p ) ≈ N(𝒙p )w                            (20)
+all 𝛿𝒘. To remove the dependence of the integral on parameters
+𝝁, Equation (13) can be transformed to the parent domain with                 where N(𝒙p ) ∈ ℝ𝑑× denotes the FE shape functions, w ∈ ℝ
+the transformation map 𝚽𝝁 , that is,                                          the coefficients of the discretized displacement fluctuation field,
+                    (                  )                                      and  the total number of DOFs. Note that lowercase non-italic
+                                                    |       |    !
+                                                                              symbols, for example, w, are used for column matrices, while
+  Π(𝒘p ) =           𝑭 −𝑇 ⋅ (𝛁      p
+                                p 𝛿𝒘 )   ∶ 𝑷p (𝑭 p )|det𝑭 𝝁 |𝑑𝒙p = 0
+              ∫Ωp      𝝁      𝒙                     |       |                 uppercase non-italic symbols, for example, N, are used for matri-
+                                                                       (14)
+                                                                              ces. Subsequently, the weak form in Equation (14), together with
+where 𝒘p (𝒙p ) ∶= (𝒘∘𝚽𝝁 )(𝒙p ) = 𝒘(𝒙𝝁 ), 𝛿𝒘p (𝒙p ) ∶= 𝛿𝒘(𝒙𝝁 ),                the constraints, can be written as
+𝑷p (𝒙p ) ∶= 𝑷(𝒙𝝁 ), and
+                                                                                                     f(w) + C𝑇 m        =𝟎
+                                ̂                                                                                                                     (21)
+              𝑭 = 𝑭 + 𝚽𝝁 (𝒙 ) ⋅  + (𝛁𝒙p 𝒘p )𝑇 ⋅ 𝑭 −1
+                p                          p
+                                                   𝝁
+                                                                       (15)                          Cw                 =𝟎
+
+Hereafter, we write 𝒙𝝁 (𝒙p ) instead of 𝚽𝝁 (𝒙p ) for brevity. To find         where f ∈ ℝ is the global internal force column matrix, the
+the 𝒘p that fulfills Equation (14) for all 𝛿𝒘p , the linearization            constraint matrix C ∈ ℝ𝑁𝑐 × is derived from the constraints
+of Equation (14) around a state 𝒘p in direction Δ𝒘p is required,              in Equations (17–19) and PBC, with 𝑁𝑐 the number of con-
+                                 (                      )                     straint equations, and m ∈ ℝ𝑁𝑐 are the corresponding Lagrange
+   𝐷Π|𝒘p ⋅ (Δ𝒘p ) =                 𝝁 ⋅ (𝛁𝒙p Δ𝒘 )
+                                  𝑭 −𝑇         p
+                                                                              multipliers. Note that the constraint matrix C depends on the
+                        ∫Ωp
+                                     (                 )                      parameter 𝝁 because of Equation (19). This dependency has been
+                                                     p |        | p
+                        ∶ 𝔄p (𝑭 p ) ∶ 𝑭 −𝑇 ⋅ (𝛁  p 𝛿𝒘 ) |det𝑭 𝝁 |𝑑𝒙           dropped for brevity. Using Newton’s method, the nonlinear sys-
+                                        𝝁      𝒙        |       |
+                                                                   (16)       tem of equations in Equation (21) can be solved for w and m,
+                                                                                            [                 ][   ]       [         ]
+where 𝔄p ∶= 𝛁𝑭 𝑷p is the fourth-order stiffness tensor on the par-                            K(w𝑘 ) C𝑇         Δw          − f(w𝑘 )
+ent domain.                                                                                                            =
+                                                                                                 C        𝟎     m               𝟎                     (22)
+To ensure a proper scale transition of the kinematic quan-                                                      w𝑘+1 = w𝑘 + Δw
+tities, different authors derived and proposed additional con-
+straints on the fluctuation field 𝒘p . In Kouznetsova, Geers, and             where K ∈ ℝ × is the global stiffness matrix computed
+Brekelmans [16], periodic boundary conditions (PBC) for 𝒘p are                from Equation (16), 𝑘 ≥ 0 is the Newton iteration number, and
+assumed and the following constraints are derived for a rectan-               w0 = 𝟎 is the starting value. Equation (22) is repeated until
+gular RVE                                                                     ‖f(w𝑘 ) + C𝑇 m‖ ≤ 𝜀newton with 𝜀newton a user-defined tolerance.
+                                                                              ‖             ‖2
+                                           𝒘p 𝑑𝒙p = 𝟎                  (17)   For more information on the FE method and discretization of
+                            ∫𝜕Ωp                                              weak forms, we refer to [45].
+                                     top
+
+
+                                           𝒘p 𝑑𝒙p = 𝟎                  (18)
+                            ∫𝜕Ωp
+                                 right
+                                                                              2.3 | Effective Quantities
+          p             p
+where 𝜕Ωtop and 𝜕Ωright denote the top and right edge of the RVE
+Ωp , see Figure 2. Due to PBC, the same conditions hold for the               After the microscopic problem has been solved and a solution 𝒘∗p
+bottom and left edge. In addition, the fluctuation field is set to            obtained, the effective stress 𝑷, higher-order stress  and their
+                                                                                                                                ̂
+zero on all four corners of the RVE, that is, 𝒘p = 𝟎. Since it is             corresponding derivatives with respect to 𝑭 and  must be com-
+assumed that Ω𝝁 has fixed outer boundaries for all 𝝁, constraints             puted. For conciseness, the following microscopic quantities are
+in Equations (17) and (18) are independent of 𝝁. In subsequent                introduced:
+works, other authors developed slightly different formulations
+                                                                                                            ̂
+(see, e.g., [20–22, 41, 44]). In [41], the authors compared differ-                        𝑭 ∗p ∶= 𝑭 + 𝒙𝝁 ⋅  + (𝛁𝒙p 𝒘∗p )𝑇 ⋅ 𝑭 −1
+                                                                                                                                𝝁
+                                                                                                                                                      (23)
+ent formulations and pointed out that fixing the corners in the
+formulation in Kouznetsova, Geers, and Brekelmans [16] leads to                                         𝑷∗p ∶= 𝑷p (𝑭 ∗p )                             (24)
+stress concentrations and artificial effects at the corners. Instead
+of fixing the corners, other formulations introduce an additional                                      𝔄∗p ∶= 𝔄p (𝑭 ∗p )                              (25)
+equation that constrains the rigid body motion with
+                                                                              which correspond to the microstructural deformation gradient,
+                                        |      p|                             1PK stress, and related stiffness tensors all evaluated at the solu-
+                    𝒘𝑑𝒙 =    𝝁
+                              𝒘 |det𝑭 𝝁 |𝑑𝒙p = 𝟎                       (19)
+                ∫Ω𝝁       ∫Ωp   |       |                                     tion 𝒘∗p on the parent domain, as indicated by the asterisk *.
+The complete microscopic model employed in this work consists                 Expressions for the effective stress 𝑷 and higher-order stress 
+of Equations (14–19) together with PBC for 𝒘p . Lagrange mul-                 were derived in [42] which, after transformation to the parent
+tipliers are used to enforce the constraints in Equations (17–19)             domain, yield
+and PBC, resulting in a saddle point problem.                                                           1            |       |
+                                                                                                𝑷 ∶=             𝑷∗p |det𝑭 𝝁 |𝑑𝒙p                     (26)
+                                                                                                       |Ωp | ∫Ωp     |       |
+To solve the microscopic problem, the fluctuation displace-                                            | |
+ment is typically discretized with finite elements (FE). We thus                        1        1 ( ∗p 𝑇                )|       |
+                                                                                 ∶=                𝑷     ⊗ 𝒙𝝁 + 𝒙𝝁 ⊗ 𝑷∗p |det𝑭 𝝁 |𝑑𝒙p                (27)
+approximate                                                                            |Ωp | ∫Ωp 2                        |       |
+                                                                                       | |
+
+6 of 20                                                                                     International Journal for Numerical Methods in Engineering, 2025
+                                                                                                                                                                            10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+The effective stiffness components, derived by differentiating the                               the 𝑘𝑙th entry which is 1. The linear problem of Equation (35)
+above stress and higher-order stress quantities then yield (in                                   is solved for all combinations 𝑘, 𝑙 = 1, ... , 𝑑 to obtain 𝒒𝑘𝑙 for
+                                                                                                                                                                     ̂
+index notation)                                                                                  each component of 𝑭. The same procedure is followed for .
+                                                                                                                                        𝜕𝒘∗p
+                                                         ∗p                                      With an auxiliary vector field 𝒒𝑚𝑛𝑜 ∶=          , the differentiation
+                        𝜕𝑃𝑖𝑗                    𝜕𝑃𝑖𝑗 |        |                                                                           ̂
+                                  =
+                                       1
+                                                      |det𝑭 𝝁 |𝑑𝒙p                        (28)                                          𝜕 𝑚𝑛𝑜
+                                      |Ωp | ∫Ωp 𝜕𝐹 |          |                                                                                      ̂
+                        𝜕𝐹 𝑘𝑙         | |          𝑘𝑙                                            of Equation (14) for one particular component 𝑚𝑛𝑜 (where the
+                                                                                                 indices 𝑚, 𝑛 and 𝑜 are assumed to be temporarily fixed) yields,
+                                                         ∗p
+                     𝜕𝑃𝑖𝑗                       𝜕𝑃𝑖𝑗 |                                           together with Equation (33),
+                                       1                     |
+                                  =                  |det𝑭 𝝁 |𝑑𝒙p                         (29)
+                      ̂               |Ωp | ∫Ωp ̂    |       |                                           (                 )        (
+                    𝜕 𝑚𝑛𝑜            | |      𝜕        𝑚𝑛𝑜                                                                                 (       ))|      |
+                                                                                                        𝑭 −𝑇  ⋅ (𝛁𝒙p 𝒒𝑚𝑛𝑜 ) ∶ 𝔄∗p ∶ 𝑭 −𝑇   ⋅ 𝛁𝒙p 𝛿𝒘p |det𝑭 𝝁 |𝑑𝒙p
+                                                                                                    ∫Ωp    𝝁                            𝝁               |     |
+                                       (       ∗p                     ∗p )                                       (                                               )
+      𝜕𝑖𝑗𝑘                                 𝜕𝑃𝑗𝑖                 𝜕𝑃𝑗𝑘                                                             (        (       ) )
+              1       1                              𝝁    𝝁                |       |                = − 𝑇𝑚𝑛𝑜 ⋮        𝒙𝝁 ⊗ 𝔄∗p ∶ 𝑭 −𝑇
+                                                                                                                                                      |     |
+                                                                                                                                          ⋅ 𝛁𝒙p 𝛿𝒘p |det𝑭 𝝁 |𝑑𝒙p
+            = p                                     𝑥𝑘 + 𝑥𝑖                |det𝑭 𝝁 |𝑑𝒙p                           ∫Ωp                                 |     |
+             |Ω | ∫Ωp 2                                                    |       |                                                  𝝁
+      𝜕𝐹 𝑚𝑛  | |                            𝜕𝐹 𝑚𝑛               𝜕𝐹 𝑚𝑛
+                                                                                                                                                                     (36)
+                                                                                          (30)
+                                                                                                 where  𝑚𝑛𝑜 ∈ ℝ𝑑×𝑑×𝑑 is a third-order tensor with all entries
+                        ⎛     ∗p
+                                          𝜕𝑃𝑗𝑘 ⎞
+                                             ∗p
+      𝜕𝑖𝑗𝑘   1       1 ⎜ 𝜕𝑃𝑗𝑖 𝝁       𝝁        ⎟||det𝑭 ||𝑑𝒙p                                    zero except for the 𝑚𝑛𝑜th entry which is 1. The linear problem
+            = p                  𝑥𝑘 + 𝑥𝑖
+       ̂     |Ω | ∫Ωp 2 ⎜ ̂                ̂    ⎟|     𝝁|                                        of Equation (36) is then solved for all combinations 𝑚, 𝑛, 𝑜 =
+     𝜕 𝑚𝑛𝑜  | |        ⎝ 𝜕 𝑚𝑛𝑜         𝜕 𝑚𝑛𝑜 ⎠                                                                                                ̂
+                                                                                          (31)   1, ... , 𝑑 to obtain 𝒒𝑚𝑛𝑜 for each component of .
+In the above,
+               ∗p                 (                         (     ∗p )
+                                                                                )
+         𝜕𝑃𝑖𝑗          ∗p                            𝜕          𝜕𝑤𝑚                              3 |     Reduced-Order Modeling
+                    = 𝔄𝑖𝑗𝑚𝑛           𝛿𝑚𝑘 𝛿𝑛𝑙 +                   p
+                                                                         −1
+                                                                        𝐹𝝁,𝑟𝑛             (32)
+         𝜕𝐹 𝑘𝑙                                      𝜕𝐹 𝑘𝑙       𝜕𝑥𝑟
+                                                                                                 Since the microscopic problem is solved at every macroscopic
+an                                                                                               integration point, its solution must be efficient. Due to the often
+                                                                                                 complicated RVE geometries, a fine discretization (using, e.g.,
+                        (        )
+                     ⎛     𝝁̂                   ( ∗p )          ⎞                                finite elements) is required, resulting in a large number of DOFs
+      𝜕𝑃𝑖𝑗
+          ∗p
+                     ⎜ 𝜕 𝑥𝑟 𝑟𝑘𝑙
+                                                            −1 ⎟
+                                            𝜕     𝜕𝑤𝑘
+                ∗p
+             = 𝔄𝑖𝑗𝑘𝑙 ⎜              +                     𝐹𝝁,𝑠𝑙 ⎟                                and integration points, which entail a costly solution. Further-
+                                                     p
+        ̂            ⎜ 𝜕 ̂ 𝑚𝑛𝑜           ̂
+      𝜕 𝑚𝑛𝑜                           𝜕 𝑚𝑛𝑜 𝜕𝑥𝑠               ⎟                                more, computing the effective quantities for a fine RVE mesh
+                     ⎝                                          ⎠                                presents another computationally expensive operation. To con-
+                                                 ( ∗p )
+                     ⎛                             𝜕𝑤𝑘            ⎞                              struct a ROM for a more efficient solution, we employ two
+                                              𝜕
+             = 𝔄𝑖𝑗𝑘𝑙 ⎜𝑥𝑟 𝛿𝑟𝑚 𝛿𝑘𝑛 𝛿𝑙𝑜 +                         −1 ⎟                       (33)
+                ∗p      𝝁
+                                                           𝐹𝝁,𝑠𝑙                                 reduction techniques: (1) we utilize POD to reduce the number
+                     ⎜                      ̂          p          ⎟
+                     ⎝                   𝜕 𝑚𝑛𝑜 𝜕𝑥𝑠               ⎠                              of DOFs in Section 3.1; and (2) to establish a more efficient inte-
+                                               ( ∗p )                                            gration scheme, we propose in Section 3.2 a novel hyperreduction
+                     ⎛                          𝜕𝑤𝑘           ⎞
+                                        𝜕                                                        algorithm that uses ideas of the ECM [32], which is specifically
+             = 𝔄𝑖𝑗𝑘𝑙 ⎜𝑥𝑚 𝛿𝑘𝑛 𝛿𝑙𝑜 +                       −1 ⎟
+                ∗p      𝝁
+                                                        𝐹𝝁,𝑠𝑙
+                     ⎜                ̂            p          ⎟                                  suited for the second-order CH formulation.
+                     ⎝              𝜕 𝑚𝑛𝑜 𝜕𝑥𝑠                ⎠
+                                (       ∗p )
+                                                                 (      ∗p )
+                         𝜕          𝜕𝑤𝑚                     𝜕        𝜕𝑤𝑘
+To determine                            p      and
+                                               p   , Equation (14)                               3.1 |       Proper Orthogonal Decomposition
+                                     ̂𝜕𝑥𝑟
+                        𝜕𝐹 𝑘𝑙      𝜕 𝑚𝑛𝑜 𝜕𝑥𝑠
+                                         ̂                                                       To reduce the number of DOFs, the fluctuation displacement field
+is differentiated with respect to 𝑭 and  to derive linear tangent
+problems that can be solved to find the corresponding sensitivi-                                 𝒘p is approximated with a reduced basis [46, 47], that is,
+ties. As an example, for one particular component 𝐹 𝑘𝑙 (where the
+indices 𝑘 and 𝑙 are assumed to be temporarily fixed), the differen-                                                                ∑
+                                                                                                                                   𝑁
+                                                                                                                            𝒘p ≈         𝑎𝑛 𝒗𝑛                       (37)
+tiation yields                                                                                                                     𝑛=1
+
+     𝜕Π(𝒘∗p )                 (                )
+                                                  𝜕𝑷∗p |        |                                where 𝑁 is typically much smaller than  , that is, 𝑁 ≪  . The
+                                  𝝁 ⋅ (𝛁𝒙p 𝛿𝒘 ) ∶
+                                𝑭 −𝑇                    |det𝑭 𝝁 |𝑑𝒙p = 0
+                                             p
+                    =
+       𝜕𝐹 𝑘𝑙            ∫Ωp                       𝜕𝐹 𝑘𝑙 |       |
+                                                                                                 global basis functions, {𝒗𝑛 }𝑁𝑛=1 , are obtained by applying POD to
+                                                                                          (34)   a set of pre-computed snapshots of 𝒘p for different parameter
+which can be rearranged with Equation (32) as                                                                  ̂
+                                                                                                 values (𝑭, , 𝝁). Since each of the basis functions is computed
+        (                )       (                 )                                             from a linear combination of pre-computed periodic solutions
+                                                      |     |
+       𝑭 −𝑇  ⋅ (𝛁𝒙p 𝒒𝑘𝑙 ) ∶ 𝔄∗p ∶ 𝑭 −𝑇 ⋅ (𝛁𝒙p 𝛿𝒘p ) |det𝑭 𝝁 |𝑑𝒙p                                 that fulfill the constraints in Equations (17–19), every basis func-
+  ∫Ωp    𝝁                          𝝁                 |     |
+             (             (               )             )                                       tion is periodic and also fulfills Equations (17) and (18). This
+                                         p |         | p                                         implies that any solution 𝒘p that is represented by Equation (37)
+  = −𝑬 𝑇𝑘𝑙 ∶        𝔄∗p ∶ 𝑭 −𝑇
+                             𝝁 ⋅ (𝛁𝒙p 𝛿𝒘 ) ||det𝑭 𝝁 ||𝑑𝒙
+                ∫Ωp                                                                              always fulfills these conditions. However, the basis functions will
+                                                                (35)
+                                           𝜕𝒘∗p                                                  only fulfill the constraint in Equation (19) if a fixed geometry is
+where a new auxiliary vector field 𝒒𝑘𝑙 ∶=        is defined, reflect-                            assumed for the RVE, that is, 𝝁 is constant. For varying geome-
+                                           𝜕𝐹 𝑘𝑙                                                                                                             |     |
+ing the sensitivity of the microfluctuation field with respect to                                tries, the constraint is violated due to the influence of |det𝑭 𝝁 |.
+                                                                                                                                                             |     |
+the change of the macroscopic deformation gradient, and 𝑬 𝑘𝑙 ∈                                   Nevertheless, in our numerical examples, tests with and without
+ℝ𝑑×𝑑 is a second-order tensor with all entries zero except for                                   enforcing Equation (19) through Lagrange multipliers were run
+
+                                                                                                                                                                7 of 20
+                                                                                                                                                                      10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+and only insignificant differences of the solutions were observed.                • Effective stress 𝑷 in Equation (26):
+For that reason, we do not enforce Equation (19) for the ROM.
+This has the added advantage that no constraints have to be con-                                                  1          |        |
+                                                                                                           𝑷=             𝑷p |det𝑭 𝝁 |𝑑𝒙p
+sidered for the ROM and, thus, more efficient solvers for the                                                    |Ωp | ∫Ωp |          |
+                                                                                                                 | |
+resulting system of linear equations can be utilized.                                                             1
+                                                                                                                = p       𝒀 p ⋅ 𝑭 𝑇𝝁 𝑑𝒙p                      (42)
+                                                                                                                 |Ω | ∫Ωp
+Remark.      For the full problem, Equation (19) must be enforced                                                | |
+to remove rigid body modes and ensure a unique solution. How-                                                        1
+                                                                                                                =             𝒀 p 𝑑𝒙p
+                                                                                                                    |Ωp | ∫Ωp
+ever, for the ROM, each basis function is a linear combination of                                                   | |
+snapshots that fulfill Equation (19) in their respective domains.
+Such basis functions should usually not span a solution space that                    where, in the last line the invariance of the integral with
+contains a rigid body mode of the microscopic problem for any                        respect to 𝑭 𝑇𝝁 was used, which was proven in [43, Appendix
+new domain. If numerical issues are encountered during the solu-                     A]. This implies that the accurate integration of the effec-
+tion without the constraint, one should enforce the constraint.                      tive stress is equivalent to the accurate integration of the
+                                                                                     weighted stress 𝒀 p .
+By inserting Equation (37) into Equations (14) and (16) and                       • Effective higher-order stress  in Equation (27):
+assuming a Galerkin projection, the components of the internal
+force f ∈ ℝ𝑁 and global stiffness matrix K ∈ ℝ𝑁×𝑁 can be com-                                    1        1 ( p𝑇              )|       |
+                                                                                             =               𝑷 ⊗ 𝒙𝝁 + 𝒙𝝁 ⊗ 𝑷p |det𝑭 𝝁 |𝑑𝒙p
+puted:                                                                                          |Ωp | ∫Ωp 2                    |       |
+                                                                                                | |
+                       (                  )                                                      1
+                                                       |       |                               = p         p 𝑑𝒙p
+                        𝑭 −𝑇 ⋅              ∶ 𝑷p (𝑭 p )|det𝑭 𝝁 |𝑑𝒙p                             |Ω | ∫Ωp
+     𝑓𝑖 (a) ∶=
+                 ∫Ωp      𝝁    (𝛁𝒙 p 𝒗𝑖 )
+                                                       |       |
+                                                                         (38)                   | |
+                                                                                                                                                               (43)
+                                                                                    where the weighted higher-order stress                                   p ∶=
+                                (                                                   1 ( p𝑇             )|        |
+                                      (       ))                                       𝑷 ⊗ 𝒙𝝁 + 𝒙𝝁 ⊗ 𝑷p |det𝑭 𝝁 | is defined.
+                                                                                                        |        |
+                                                                                    2
+          𝐾𝑖𝑗 (a) ∶=
+                        ∫Ωp        𝝁 ⋅ 𝛁𝒙p 𝒗𝑗
+                                 𝑭 −𝑇
+                                    (               )                    (39)     • Volume:
+                                                      |        | p                                  𝑉 ∶= ||Ωp || =
+                       ∶ 𝔄p (𝑭 p ) ∶ 𝑭 −𝑇
+                                       𝝁 ⋅ (𝛁𝒙p 𝒗𝑖 ) ||det𝑭 𝝁 ||𝑑𝒙
+                                                                                                                       𝑑𝒙p                                    (44)
+                                                                                                                   ∫Ωp
+
+for all 𝑖, 𝑗 = 1, ... , 𝑁, and
+
+                                    (𝑁                      )                   Even though the integration of the volume does not necessarily
+                       ̂             ∑                                          have to be accurate, it helps to stabilize the algorithm used to find
+       𝑭 (a) = 𝑭 + 𝒙 ⋅  +
+          p                 𝝁
+                                            𝑎𝑛 (𝛁𝒙p 𝒗𝑛 )𝑇
+                                                                ⋅ 𝑭 −1
+                                                                    𝝁
+                                                                         (40)
+                                      𝑛=1
+                                                                                the new integration points. In particular, it leads to fewer weights
+                                                                                that are equal to 0 during the solution of the nonnegative least
+                                                                                squares problem introduced later in Equation (56).
+The column matrix a = [𝑎1 , ... , 𝑎𝑁 ]𝑇 contains the unknown coef-
+ficients to be solved for.
+                                                                                3.2.1    |     Algorithm
+
+3.2 |         Hyperreduction                                                    To find an efficient integration scheme, we use concepts from the
+                                                                                ECM, which was previously applied to identify integration points
+While the reduced system of Equations (38) and (39) only has                    and weights for an efficient integration of the internal force, as
+𝑁 DOFs, computing the integrals in Equations (38) and (39) (as                  proposed by Hernández, Caicedo, and Ferrer [32] and recently
+well as Equations (26–33), (35) and (36) for the effective quanti-              extended to varying geometries in Guo, Rokoš, and Veroy [36]. In
+ties) requires integration over the whole full finite element mesh              the first step, similarly to the fluctuation field 𝒘p , snapshots of
+(typically with many Gauss quadrature points). To accelerate this               the weighted stress 𝒀 p and weighted higher-order stress  p are
+computation, a more efficient integration scheme (i.e., fewer inte-                                                            ̂
+                                                                                collected for different parameter values (𝑭, , 𝝁). Utilizing POD,
+gration points and corresponding weights) is sought that closely                                                            p
+                                                                                two sets of basis functions for 𝒀 and  , {𝑩𝑚 }𝑀
+                                                                                                                    p                            𝐿
+                                                                                                                                   𝑚=1 and { 𝑙 }𝑙=1 ,
+approximates the numerical integration with Gaussian quadra-                                                       p
+                                                                                are found, with which 𝒀 and  can be approximated, that is,
+                                                                                                           p
+ture of the following four quantities:
+                                                                                                                         ∑
+                                                                                                                         𝑀
+
+  • Internal force f = [𝑓1 , ... , 𝑓𝑁    ]𝑇 in Equation (38):                                                    𝒀p ≈        𝛼𝑚 𝑩𝑚                            (45)
+                                                                                                                         𝑚=1
+
+                           (               )
+                                               p|         | p                                                              ∑
+                                                                                                                           𝐿
+              𝑓𝑖 =
+                     ∫Ωp      𝝁 ⋅ (𝛁𝒙p 𝒗𝑖 ) ∶ 𝑷 ||det𝑭 𝝁 ||𝑑𝒙
+                            𝑭 −𝑇
+                                                                                                                    p ≈         𝛽𝑙  𝑙                       (46)
+                                                                         (41)                                              𝑙=1
+                 =         𝛁𝒙p 𝒗𝑖 ∶ 𝒀 p 𝑑𝒙p
+                     ∫Ωp                                                        Inserting Equations (45) and (46) into Equations (41–43) yields
+
+     for all 𝑖 = 1, ... , 𝑁 and where the weighted stress 𝒀 p ∶= 𝑷p ⋅                          ∑
+                                                                                               𝑀
+          |        |                                                                    𝑓𝑖 ≈         𝛼𝑚         𝛁𝒙p 𝒗𝑖 ∶ 𝑩𝑚 𝑑𝒙p ,         ∀𝑖 = 1, ... , 𝑁     (47)
+       𝝁 ||
+     𝑭 −𝑇   det𝑭 𝝁 | is defined.                                                                          ∫Ωp
+                   |                                                                           𝑚=1
+
+
+8 of 20                                                                                           International Journal for Numerical Methods in Engineering, 2025
+                                                                                                                                                              10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                           ∑
+                           𝑀                                                       and
+                                         1
+                     𝑷≈          𝛼𝑚              𝑩 𝑑𝒙p                      (48)
+                                        |Ωp | ∫Ωp 𝑚
+                                        | |                                                                        ⎡     𝛁 p 𝒗 ∶ 𝑩1 𝑑𝒙p ⎤
+                           𝑚=1
+
+                            ∑𝐿                                                                                     ⎢ ∫Ωp 𝒙 1              ⎥
+                      ≈
+                                         1
+                                                  𝑑𝒙p                                                             ⎢                      ⎥
+                                   𝛽𝑙
+                                        |Ωp | ∫Ωp 𝑙
+                                                                            (49)                                   ⎢           ⋮          ⎥
+                            𝑙=1         | |                                                                        ⎢                     p⎥
+                                                                                                                         𝛁
+                                                                                                                   ⎢∫ p 𝒙 1p 𝒗   ∶ 𝑩𝑀 𝑑𝒙  ⎥
+ Since Equations (47–49) should be accurately integrated for                                                       ⎢ Ω                    ⎥
+                                                                                                                                          ⎥∈ℝ
+                                                                                                                                              𝑁𝑀
+                                                                                                              b1 = ⎢           ⋮
+any values of 𝛼𝑚 and 𝛽𝑙 , all the occurring integrals in the sums
+                                                                                                                   ⎢                      ⎥
+should be approximated accurately. Together with the volume                                                        ⎢     𝛁𝒙p 𝒗𝑁 ∶ 𝑩1 𝑑𝒙p ⎥
+equation in Equation (44), integration points and weights are                                                      ⎢ ∫Ωp                  ⎥
+                                                                                                                   ⎢           ⋮          ⎥
+sought that approximate these 𝑁𝑀 + 𝑑2 𝑀 + 𝑑3 𝐿 + 1 integrals                                                       ⎢                      ⎥
+accurately. The factors 𝑑2 and 𝑑3 arise due to the number of com-                                                  ⎢     𝛁𝒙p 𝒗𝑁 ∶ 𝑩𝑀 𝑑𝒙p ⎥
+                                                                                                                   ⎣∫Ωp                   ⎦
+ponents of 𝑷 and .
+                                                                                           ⎡          p⎤                     ⎡          p⎤
+Consider for now the full set of Gaussian integration points                               ⎢ ∫ p 𝑩1 𝑑𝒙 ⎥                     ⎢∫ p  1 𝑑𝒙 ⎥
+            ˆ                                                                              ⎢  Ω        ⎥  𝑑2 𝑀               ⎢ Ω          ⎥   𝑑3 𝐿
+ 𝒙𝑞 , ℎ̂𝑞 }𝑄𝑞=1 corresponding to the fully resolved discretization,
+{ˆ                                                                                    b2 = ⎢     ⋮     ⎥∈ℝ ,            b3 = ⎢    ⋮       ⎥∈ℝ
+           ˆ is the total number of Gauss integration points, 𝒙                            ⎢           ⎥                     ⎢            ⎥
+where 𝑄                                                       ˆ𝑞 their                     ⎢    𝑩𝑀 𝑑𝒙p ⎥                     ⎢     𝐿 𝑑𝒙p ⎥
+positions and ℎ̂𝑞 their weights. By defining                                               ⎣∫Ωp        ⎦                     ⎣∫Ωp         ⎦
+                               [          ]𝑇
+                                              ˆ
+                           𝟏 ∶= 1, ... , 1 ∈ ℝ𝑄                   (50)             The system in Equation (53) can be equivalently rewritten as
+
+and the flattened basis functions (in 2D, i.e., 𝑑 = 2),                                                        ⎡Â ⎤   ⎡𝟎⎤
+          [                          ]𝑇                                                                        ⎢ 1⎥    ⎢ ⎥
+                                            2
+  𝑩𝑚 ∶= 𝐵𝑚,11 , 𝐵𝑚,12 , 𝐵𝑚,21 , 𝐵𝑚,22 ∈ ℝ𝑑 , ∀𝑚 = 1, ... , 𝑀                                                   ⎢Â2 ⎥  ⎢𝟎⎥
+                                                                                                               ⎢ ⎥ĥ = ⎢ ⎥
+                                                                            (51)                               ⎢Â3 ⎥  ⎢𝟎⎥                            (54)
+                                                                                                               ⎢ 𝟏𝑇 ⎥  ⎢𝑉 ⎥
+       [                                                                      ]𝑇                               ⎣ ⎦     ⎣ ⎦
+  𝑙 ∶= 𝑙,111 , 𝑙,112 , 𝑙,121 , 𝑙,122 , 𝑙,211 , 𝑙,212 , 𝑙,221 , 𝑙,222                                  ⏟⏟⏟     ⏟⏟⏟
+                                                                                                                =∶Â       =∶b̂
+           3
+     ∈ ℝ𝑑 ,      ∀𝑙 = 1, ... , 𝐿
+                                                                            (52)   with
+                                                                                                                1
+                                                                                                   Â𝑖 = A𝑖 −     b ⊗ 𝟏,     𝑖 = 1, 2, 3              (55)
+the numerical approximation of the 𝑁𝑀 + 𝑑2 𝑀 + 𝑑3 𝐿 + 1 inte-                                                   𝑉 𝑖
+grals with the full Gauss quadrature can be written in algebraic
+form                                                                               which is convenient for the definition of residuals of the
+                       ⎡A ⎤           ⎡b ⎤                                         algorithm discussed below.
+                       ⎢ 1 ⎥ ⎡ ℎ̂1 ⎤ ⎢ 1 ⎥
+                       ⎢A2 ⎥ ⎢ ⎥ ⎢b2 ⎥
+                       ⎢ ⎥ ⎢⋮⎥=⎢ ⎥                                                 The goal now is to select a subset of integration points {𝒙𝑞 }𝑄𝑞=1
+                       ⎢A3 ⎥ ⎢ ⎥ ⎢b3 ⎥                      (53)                                                                                       ˆ
+                       ⎢ 𝟏𝑇 ⎥ ⎣ℎ̂𝑄ˆ ⎦ ⎢ 𝑉 ⎥                                        from the set of all integration points, that is, {𝒙𝑞 }𝑄𝑞=1 ⊂ {ˆ
+                                                                                                                                                 𝒙𝑞 }𝑄𝑞=1 ,
+                       ⎣ ⎦ ⏟⏟⏟ ⎣ ⎦                                                 such that 𝑄 ≪ 𝑄,ˆ with corresponding weights {ℎ𝑞 }      𝑄
+                       ⏟⏟⏟ =∶ĥ       ⏟⏟⏟                                                                                                  𝑞=1 obtained
+                            =∶A                  =∶b                               by minimizing the following weighted nonnegative least squares
+                                                                                   residual,
+where                                                                                                               ||          ||
+                                                                                                 hLS = arg minh≥𝟎 ||b̂ − Â• h||
+         ⎡ (𝛁 p 𝒗 ∶ 𝑩 )| ... (𝛁 p 𝒗 ∶ 𝑩 )| ⎤                                                                        ||          ||𝚺
+                      1 |𝒙                   1 |𝒙
+         ⎢ 𝒙 1            ˆ1         𝒙 1         ˆ𝑄ˆ
+                                                      ⎥                                                             ||             ||
+         ⎢                                            ⎥                                               = arg minh≥𝟎 ||Âĥ − Â• h||                 (56)
+                   ⋮                      ⋮                                                                         ||             ||𝚺
+         ⎢                                            ⎥
+                         |                      |
+         ⎢ (𝛁𝒙p 𝒗1 ∶ 𝑩𝑀 )|𝒙ˆ1 ... (𝛁𝒙p 𝒗1 ∶ 𝑩𝑀 )|𝒙ˆ𝑄ˆ ⎥                                                  = arg minh≥𝟎 ||r̂(h)||𝚺
+         ⎢                                            ⎥     ˆ                                        √
+                                                      ⎥∈ℝ
+                                                         𝑁𝑀×𝑄
+    A1 = ⎢         ⋮                      ⋮                                        where ||a||𝚺 ∶=       a𝑇 𝚺a and the residual
+         ⎢               |                      |     ⎥
+         ⎢ (𝛁𝒙p 𝒗𝑁 ∶ 𝑩1 )|𝒙ˆ1 ... (𝛁𝒙p 𝒗𝑁 ∶ 𝑩1 )|𝒙ˆ𝑄ˆ ⎥
+         ⎢         ⋮                      ⋮           ⎥                                                      r̂(h) ∶= Âĥ − Â• h                   (57)
+         ⎢                                            ⎥
+         ⎢ (𝛁 p 𝒗 ∶ 𝑩 )| ... (𝛁 p 𝒗 ∶ 𝑩 )| ⎥
+         ⎣ 𝒙 𝑁        𝑀 |𝒙 ˆ1       𝒙 𝑁      𝑀 |𝒙 ˆ𝑄ˆ ⎦
+                                                                                   are defined,  denotes a set of non-repeating indices with || = 𝑄
+                                                                                   and Â• is the submatrix of Â with 𝑄 selected columns according
+                     ⎡ 𝑩 (ˆ            𝒙𝑄ˆ ) ⎤
+                          𝒙1 ) ... 𝑩1 (ˆ                                           to the entries of . The matrix 𝚺 is a weighting matrix with a block
+                     ⎢ 1                     ⎥ 2 ˆ                                 diagonal structure
+                A2 = ⎢ ⋮              ⋮ ⎥ ∈ ℝ𝑑 𝑀×𝑄
+                     ⎢                       ⎥
+                     ⎣𝑩𝑀 (ˆ            𝒙𝑄ˆ )⎦
+                          𝒙1 ) ... 𝑩𝑀 (ˆ                                                                    ⎡𝑐 𝚺 𝟎    𝟎 𝟎⎤
+                                                                                                            ⎢ 1 1           ⎥
+                     ⎡ (ˆ               𝒙𝑄ˆ )⎤
+                           𝒙1 ) ...  1 (ˆ                                                                  ⎢ 𝟎 𝑐2 𝚺2 𝟎 𝟎 ⎥
+                     ⎢ 1                      ⎥ 3  ˆ                                                      𝚺=⎢               ⎥                         (58)
+                A3 = ⎢ ⋮                ⋮ ⎥ ∈ ℝ𝑑 𝐿×𝑄                                                        ⎢ 𝟎   𝟎 𝑐3 𝚺3 𝟎 ⎥
+                     ⎢                        ⎥                                                             ⎢ 𝟎
+                     ⎣ 𝐿 (ˆ
+                           𝒙1 ) ...  𝐿 (ˆ
+                                         𝒙𝑄ˆ )⎦                                                             ⎣     𝟎   𝟎 𝚺4 ⎥⎦
+
+                                                                                                                                                   9 of 20
+                                                                                                                                                                                 10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+where each block corresponds to one of the approximated quan-                                   ALGORITHM 1       |   Integration point selection algorithm.
+tities defined as,                                                                              Input: 𝐀ˆ , ˆ𝐛, 𝚺, 𝜀1 , 𝜀2 , 𝜀3 , 𝜀4 , 𝑘max
+                                                                                                Output: 𝐡LS , 
+    𝚺1 = diag(𝜎1𝒘 𝜎1𝒀 , ... , 𝜎1𝒘 𝜎𝑀
+                                   𝒀          𝒘 𝒀
+                                     , ... , 𝜎𝑁             𝒘 𝒀
+                                                𝜎1 , ... , 𝜎𝑁 𝜎𝑀 )            ∈ ℝ𝑁𝑀×𝑁𝑀            Initialize empty list of selected columns  ← ∅
+                                                                                         (59)     Initialize list of candidate indices  ← {1, … , 𝑄}
+                                                                                                                                                    ˆ
+                                                                          2     2
+     𝚺2 = diag(𝜎1𝒀 , ... , 𝜎1𝒀 , ... , 𝜎𝑀
+                                        𝒀          𝒀
+                                          , ... , 𝜎𝑀 )                ∈ ℝ𝑑 𝑀×𝑑 𝑀                  Set iteration number 𝑘 ← 0
+               ⏟⎴⏟⎴⏟                   ⏟⎴⏟⎴⏟                                             (60)     Set initial residual ˆ                  𝐫 ← ˆ𝐛
+                       𝑑2 times                𝑑2 times                                           while 𝑘<𝑘max do
+                                                                                                     𝑘 ←𝑘+1
+      𝚺3 = diag(𝜎1 , ... , 𝜎1 , ... , 𝜎𝐿 , ... , 𝜎𝐿 )
+                                                                          3     3
+                                                                      ∈ ℝ𝑑 𝐿×𝑑 𝐿                     Find the column 𝑖 of 𝐀                  ˆ with
+                ⏟⎴⏟⎴⏟                   ⏟⎴⏟⎴⏟                                            (61)
+                        𝑑3 times                𝑑3 times
+                                                                                                                                      𝐀ˆ 𝑇 𝚺ˆ
+                                                                                                                                            𝐫
+                                                                                                                                         •𝑗
+                                                                                                                      𝑖 = arg max𝑗∈ √
+                            𝚺4 = diag(1)               ∈ ℝ1×1                            (62)                                          ˆ 𝑇 𝚺𝐀
+                                                                                                                                       𝐀    ˆ •𝑗
+                                                                                                                                         •𝑗
+
+
+The entries 𝜎𝑖𝒘 , 𝜎𝑚𝒀
+                      , 𝜎𝑙 for all 𝑖 = 1, ... , 𝑁, 𝑚 = 1, ... , 𝑀, and 𝑙 =                          Add selected index  ←  ∪ {𝑖}
+1, ... , 𝐿 correspond to the ordered normalized singular values of                                   Remove selected index from candidates
+the POD of the fluctuation field 𝒘p , weighted stress 𝒀 p and                                      ←  ⧵ {𝑖}
+weighted higher-order stress  p , with 𝜎1𝒘 = 𝜎1𝒀 = 𝜎1 = 1. The                                     Solve Equation (56) for 𝐡LS
+parameters 𝑐1 , 𝑐2 , 𝑐3 enable control over the importance of each                                   Compute residuals ˆ
+                                                                                                                       𝐫𝑖 according to
+                                                                                                  Equation (57)
+of the approximated quantities. Their influence is illustrated
+                                                                                                     if all conditions in Equation (64) are ful-
+in Section 4. The blocks of the weighting matrix 𝚺 are chosen in                                  filled then
+this fashion to promote the integration scheme to approximate                                           return 𝐡LS ,     ⊳ Algorithm has converged
+the basis functions corresponding to larger singular values more                                     end if
+accurately than the ones corresponding to smaller singular val-                                   end while
+ues. The indices in  are selected one by one, similarly to the
+greedy algorithm presented in [32]. The exact algorithm on the
+selection is provided in Algorithm 1. Here, the residual r̂ is split
+                                                                                                approximation in a reasonable amount of time. Note that the
+into four parts, that is,
+                                                                                                examples considered here could potentially also be solved with
+                                      [                          ]𝑇                             a satisfactory accuracy using first-order CH (CH1). However, as
+                                  r̂ = r̂𝑇1 , r̂𝑇2 , r̂𝑇3 , r̂𝑇4                         (63)   the focus of this work is on the reduced-order modeling of CH2,
+                                                                                                no comparisons with CH1 are conducted. A systematic and quan-
+ where r̂𝑖 for 𝑖 = 1, ... , 4 are the residuals for each quantity. Inde-                        titative comparison of CH1 and CH2 applied to mechanical meta-
+pendent residuals are introduced to check that each quantity                                    materials can be found in [48].
+is approximated accurately up to a precision, depending on the
+choice of tolerances 𝜀1 , 𝜀2 , 𝜀3 , 𝜀4 , with,                                                  For both examples, a metamaterial-based RVE with four identical
+                                                                                                holes is selected, motivated by Specimen 1 in Bertoldi et al. [49].
+                     ||r̂1 ||                            ||r̂2 ||
+                     || ||𝚺1                             || ||𝚺2                                The size of the RVE is 2 mm × 2 mm and the local coordinate sys-
+               𝑟1 ∶=           < 𝜀1 ,              𝑟2 ∶=          < 𝜀2
+                       tr𝚺1                                tr𝚺2                                 tem is chosen in the center of the domain, that is, the domain
+                                                                                         (64)   of the RVE is given by [−1 mm, 1 mm]2 , see Figure 3. Each hole
+                     ||r̂ ||                             ||r̂4 ||
+                     || 3 ||𝚺3                           || ||𝚺4                                is described by a cubic B-spline with eight control points, of
+               𝑟3 ∶=           < 𝜀3 ,              𝑟4 ∶=          < 𝜀4
+                       tr𝚺3                                  𝑉                                  which the coordinates are parameterized by one geometrical
+                                                                                                parameter 𝝁 = {𝜁}. For the top right hole, the coordinates (in
+where 𝑟𝑖 for 𝑖 = 1, ... , 4 are the standardized norms of the resid-
+                                                                                                mm) of the control points are (0.05 + 𝜁, 0.5), (0.125 − 𝜁, 0.125 −
+uals. As will be shown in Section 4, all 𝑟𝑖 generally decay with
+                                                                                                𝜁), (0.5, 0.05 + 𝜁), (0.875 + 𝜁, 0.125 − 𝜁), (0.95 − 𝜁, 0.5), (0.875 +
+different rates, which can, however, be tuned with the parameters
+                                                                                                𝜁, 0.875 + 𝜁), (0.5, 0.95 − 𝜁), (0.125 − 𝜁, 0.875 + 𝜁). The coordi-
+𝑐1 , 𝑐2 , 𝑐3 . The lowest number of quadrature points can be achieved
+                                                                                                nates of the control points for the other holes are obtained by
+when all residuals reach the desired tolerances at the same time.
+                                                                                                shifting the coordinates of the top right hole by 1 mm in the 𝑥-
+This will be demonstrated in Section 4.
+                                                                                                and/or 𝑦-direction, and the same 𝜁 is assumed for each hole.
+                                                                                                The geometry of the RVE is shown for different values of 𝜁 =
+4    | Numerical Examples                                                                       {−0.075 mm, −0.035 mm, 0.025 mm, 0.055 mm} in Figure 3. The
+                                                                                                parent domain Ωp , chosen with 𝜁 = 0.025 mm, and its simulation
+To examine and illustrate different features of the proposed                                    mesh, consisting of 4882 DOFs and 1066 six-noded triangular ele-
+ROM, two macroscopic example problems with a parameter-                                         ments, are shown in Figure 3c. A mesh convergence study was
+ized microstructure are studied in two dimensions and under                                     conducted to ensure that the effective quantities obtained with
+plane strain conditions. The results are compared against the full                              this mesh are converged with respect to the element size. Note
+two-scale second-order CH solution (later referred to as CH2) as                                that the control points (in orange color) are allowed to lie outside
+well as the DNS, where the microstructure is fully resolved at the                              the RVE domain as long as the resulting B-spline curves do not
+macroscale. The ROM is discussed in detail in the first example,                                intersect with the outer boundary of the RVE.
+whereas the second example shows a possible application, in
+which a full DNS might not be feasible anymore (especially                                      Depending on 𝜁, the shape of the holes changes from a circular
+in three dimensions), but the ROM computes an excellent                                         shape to a square-like one. For circular holes, it is known that
+
+10 of 20                                                                                                      International Journal for Numerical Methods in Engineering, 2025
+                                                                                                                                                       10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                   (a)                                  (b)                                  (c)                                  (d)
+FIGURE 3 | Example geometries for (a) 𝜁 = −0.075 mm, (b) 𝜁 = −0.035 mm, (c) 𝜁 = 0.025 mm, and (d) 𝜁 = 0.055 mm. The control points defining
+the hole shapes are shown in orange and the matrix material in blue. Depending on 𝜁, the shape of the holes is more circular or square-like, and the
+RVE more prone to local or global buckling. The parent domain Ωp is chosen for 𝜁 = 0.025 mm with a simulation mesh consisting of 1066 six-noded
+triangular elements with 4882 DOFs.
+
+
+
+
+FIGURE 4 | DNS solutions for 𝜁 = −0.035 mm in (a), 𝜁 = 0.03 mm in (b). In each panel, the undeformed (left) and deformed states at 4% (middle)
+and 7.5% (right) compression are shown. For 𝜁 = −0.035 mm the structure first buckles locally and then globally, while for 𝜁 = 0.03 mm the structure
+first buckles globally with subsequent local patterning.
+
+
+the RVE buckles locally under compression due to the symmetry               4.1 |      Uniaxial Compression of a Perforated
+and exhibits auxetic behavior [49], that is, under uniaxial com-            Plate
+pression in one direction the RVE contracts in the perpendicular
+direction. On the other hand, square-like holes promote global              In the first example, uniaxial compression of a rectangular
+buckling on the macroscale instead of local buckling. This is illus-        perforated plate of size 𝑊 × 𝐻 (width 𝑊 = 6 mm, height
+trated in Section 4.1, where significantly different behaviors of the       𝐻 = 20 mm) in the longitudinal direction is considered. The
+macrostructure are observed when varying 𝜁.                                 top edge is compressed up to 7.5% strain, while the bottom
+                                                                            edge is fixed, and the geometrical parameter 𝜁 is constant
+The RVE material is modeled as a hyperelastic Mooney–Rivlin                 throughout the macrostructure. As the reference solution,
+material with strain energy density function                                full DNS solutions, where the microstructure is fully resolved
+                                                                            and for which triangular six-noded elements are used, are
+                                                      𝐾
+  𝑊(𝑭) = 𝐶1 (𝐼1 − 3) + 𝐶2 (𝐼1 − 3)2 − 2𝐶1 log 𝐽 +       (𝐽 − 1)2 (65)       computed for various values of 𝜁. For each DNS model, the
+                                                      2
+                                                                            number of elements is approximately 32,000 and number of
+where 𝐼1 ∶= tr𝑪 is the first invariant of the right Cauchy–Green            DOFs 140,000. For 𝜁 = {−0.035 mm, 0.03 mm}, the undeformed
+tensor 𝑪 ∶= 𝑭 𝑇 𝑭 and 𝐽 = det𝑭 characterizes the volume change.             state together with the deformed solutions at 4% and 7.5% strain
+The constants 𝐶1 , 𝐶2 and 𝐾 are material parameters, which are              are shown in Figure 4. For 𝜁 = −0.035 mm the macrostructure
+set to 𝐶1 = 0.55 MPa, 𝐶2 = 0.3 MPa, and 𝐾 = 55 MPa, according               first buckles locally (patterning of holes) and then globally
+to the experimental data in Bertoldi and Boyce [1].                         (entire macrostructure buckles). For 𝜁 = 0.03 mm the structure
+
+                                                                                                                                           11 of 20
+                                                                                                                                                                          10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+TABLE 1 |       Parameter bounds used for sampling training data for the ROM.
+
+   𝑭 𝒙𝒙 − 1                                      𝑭 𝒙𝒚                                    𝑭 𝒚𝒙                                  𝑭 𝒚𝒚 − 1
+   [−0.1, 0.02]                              [−0.1, 0.1]                             [−0.1, 0.1]                              [−0.1, 0.02]
+
+   ̂                           ̂                           ̂                         ̂                          ̂                          ̂
+   𝒙𝒙𝒙 [mm−1 ]                𝒙𝒙𝒚 [mm−1 ]                𝒙𝒚𝒙 [mm−1 ]              𝒙𝒚𝒚 [mm−1 ]               𝒚𝒙𝒚 [mm−1 ]               𝒚𝒚𝒚 [mm−1 ]
+   [−0.05, 0.05]               [−0.05, 0.05]               [−0.05, 0.05]             [−0.05, 0.05]              [−0.05, 0.05]                [−0.05, 0.05]
+                                                                                                                            ̂
+Note: The bounds for 𝑭 are motivated by the applied macroscopic compression loads and the auxeticity of the RVE. Bounds for  are assumed to range from −0.05 to
+0.05 mm−1 .
+
+
+
+first buckles globally and then locally, implying that the overall                    4.1.1     |   Results
+behavior of the macrostructure changes significantly for
+different 𝜁.                                                                          The accuracy and efficiency of the ROM depends on several
+                                                                                      factors:
+For the homogenized plate, a uniform mesh, consisting of two
+elements in the horizontal and four elements in the vertical direc-                      • the number of basis functions for the fluctuation displace-
+tion with a total of 32 quadrature points, is chosen, amounting                            ment 𝑁, weighted stress 𝑀 and weighted higher-order stress
+to 32 microscopic problems that must be solved for each macro-                             𝐿,
+scopic Newton iteration. This discretization was found to give
+                                                                                         • the error tolerances 𝜀1 , 𝜀2 , 𝜀3 and 𝜀4 , and
+converged results in terms of the reaction force. Regarding the
+boundary conditions, the displacement is fixed at the bottom                             • the hyperparameters 𝑐1 , 𝑐2 and 𝑐3 that control the weight-
+edge and prescribed at the top edge with value 𝑢.  ̃ Since the pre-                        ing matrix 𝚺 of the weighted least squares problem
+scribed displacements do not vary with the 𝑥-axis, we accordingly                          in Equations (56) and (58).
+set the 𝑥𝑥- and 𝑦𝑥-components of the deformation gradient to
+𝐹̂ 𝑥𝑥 = 1 and 𝐹̂ 𝑦𝑥 = 0 at the top and bottom edge. To prevent zero                   To choose an adequate amount of basis functions, the singular
+energy modes corresponding to the components 𝐹̂ and 𝐹̂ ,         𝑥𝑦          𝑦𝑦
+                                                                                      values of POD are often utilized, as they give an indication on the
+the deformation gradient at the bottom left point is fully fixed                      information loss due to the reduction. Given the ordered singular
+                                                                                                  𝑁S
+                                                                                      values {𝜎𝑖 }𝑖=1 of POD, a criterion can be defined with:
+with 𝑭̂ = 𝑰.
+                                                                                                                   ∑𝑁POD 2
+                                                                                                                          𝜎𝑖
+To construct the ROM, training data must be generated by solving                                              1 − ∑𝑖=1𝑁S 2
+                                                                                                                             < POD                  (66)
+                                                                ̂                                                        𝜎
+the microscopic problem for different input parameters (𝑭, , 𝝁),                                                     𝑖=1 𝑖
+
+which span an 11-dimensional parameter space in 2D. In total,                         where 𝑁S denotes the total number of training snapshots and
+100 samples are generated randomly for the loading parameters                         POD is a user-specified tolerance. The number of basis func-
+     ̂
+(𝑭, ) from a uniform distribution with parameter bounds pro-                         tions is then selected to be equal to the smallest 𝑁POD , for
+vided in Table 1. Since the macrostructure is compressed up to                        which Equation (66) is fulfilled. For the weighted stress and
+7.5% in the 𝑦-direction and locally higher deformations might                         higher-order stress, good results were obtained with POD = 5 ×
+occur, the lower bound for 𝐹 𝑦𝑦 − 1 is chosen as −0.1. Since the                      10−3 , for which 𝑀 = 28 and 𝐿 = 28 were found. For the fluctua-
+RVE behaves auxetically, the lower bound for 𝐹 𝑥𝑥 − 1 is also                         tion field, three values of POD = 1 × 10−4 , 1 × 10−5 and 1 × 10−6
+assumed to be −0.1. The upper bound for both 𝐹 𝑥𝑥 − 1 and 𝐹 𝑦𝑦 −                      were considered, which resulted in 𝑁 = 48, 78 and 112 basis
+1 is chosen as 0.02 to capture some tensile behavior of the RVE.                      functions.
+Due to the global buckling, large shear strains might occur and
+                                                                ̂                     Regarding the error tolerances 𝜀1 , 𝜀2 , 𝜀3 and 𝜀4 , numerical tests
+bounds of [−0.1, 0.1] are chosen for 𝐹 𝑥𝑦 and 𝐹 𝑦𝑥 . Bounds for  are
+                                                                                      for different values were carried out and a good balance in
+difficult to estimate without prior knowledge. Here, every compo-
+                                                                                      terms of accuracy and efficiency was found for 𝜀1 = 𝜀2 = 𝜀3 =
+nent is assumed to range from −0.05 to 0.05 mm−1 , which for the
+                                                                                      𝜀4 = 1 × 10−4 .
+RVE size of 2 mm × 2 mm can result in maximal components of
+the deformation gradient/strains in the range of [−0.1, 0.1] with
+                ̂                                                                     The choice of the hyperparameters 𝑐1 , 𝑐2 and 𝑐3 affects the rates
+𝑭 − 𝑰 = 𝒙p ⋅  and 𝒙p ∈ Ωp = [−1 mm, 1 mm]2 .                                         with which each of the standardized norm of residuals 𝑟1 , 𝑟2 , 𝑟3
+                                                                                      and 𝑟4 (see Equation (64) for the definition) decreases over the
+Subsequently, all samples are divided into five groups,                               number of selected quadrature points 𝑄. In general, the lowest
+each with 20 samples and assigned one value of 𝜁 =                                    number of quadrature points can be found when 𝑐1 , 𝑐2 and 𝑐3
+{−0.05 mm, −0.025 mm, 0.0 mm, 0.025 mm, 0.05 mm}. For each                            are tuned such that all 𝑟𝑖 fall below their corresponding toler-
+sample, the macroscopic loads are applied to the RVE with                             ances at roughly the same time. In Figure 5, the decay of each
+      ̂
+(𝑡𝑭, 𝑡), where 𝑡 ∈ [0, 1] is a parameterization pseudo-time                          𝑟𝑖 over the selected number of quadrature points with 𝑁 = 48,
+increased linearly from 0 to 1 in 20 equidistant load steps,                          𝑀 = 28, 𝐿 = 28 and 𝜀1 = 𝜀2 = 𝜀3 = 𝜀4 = 1 × 10−4 is shown for dif-
+resulting in 20 snapshots per sample. In total, 2000 snap-                            ferent choices of 𝑐1 , 𝑐2 and 𝑐3 . For 𝑐1 = 𝑐2 = 𝑐3 = 1 (see Figure 5a),
+shots are obtained which are all used for the construction of                         it can be clearly seen that 𝑟1 drops much more slowly than 𝑟2 , 𝑟3
+the ROM.                                                                              and 𝑟4 , resulting in a total of 𝑄 = 543 quadrature points. When
+
+12 of 20                                                                                               International Journal for Numerical Methods in Engineering, 2025
+                                                                                                                                                             10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                          (a)                                                 (b)                                                 (c)
+FIGURE 5 | Decay of standardized norm of residuals 𝑟1 , 𝑟2 , 𝑟3 and 𝑟4 , defined in Equation (64), over the number of selected integration points 𝑄
+with 𝑁 = 48, 𝑀 = 28, 𝐿 = 28 and 𝜀1 = 𝜀2 = 𝜀3 = 𝜀4 = 1 × 10−4 . The hyperparameters 𝑐1 , 𝑐2 and 𝑐3 control the rate of decay for each 𝑟𝑖 , which results in
+a different number of required quadrature points to reach the same level of accuracy: (a) 𝑄 = 543, (b) 𝑄 = 358, whereas (c) only 𝑄 = 297 quadrature
+points are selected. The same 𝑥-axis range is used for all plots to highlight that much fewer quadrature points are selected for different combinations of
+𝑐𝑖 . (a) 𝑐1 = 1, 𝑐2 = 1, 𝑐3 = 1. (b) 𝑐1 = 10, 𝑐2 = 1, 𝑐3 = 1. (c) 𝑐1 = 10, 𝑐2 = 1.6, 𝑐3 = 1.1.
+
+
+
+
+                          (a)                                                 (b)                                                 (c)
+FIGURE 6 | Force-displacement curves for 𝜁 = −0.035 mm (i.e., circular holes buckling first locally) for different numbers of basis functions 𝑁 for
+the fluctuation field. The ROM solution closely follows the POD solution, implying that the proposed hyperreduction algorithm yields accurate results.
+For increasing number of fluctuation displacement basis functions 𝑁, the POD and ROM solution both approach that of CH2. (a) 𝑁 = 48, 𝑄 = 297. (b)
+𝑁 = 78, 𝑄 = 318. (c) 𝑁 = 112, 𝑄 = 337.
+
+
+
+increasing 𝑐1 to 10 (see Figure 5b), 𝑟1 drops more quickly, ending             (35) and (36)) with Gauss quadrature. The ROM closely follows
+up in a total number of 𝑄 = 358 quadrature points. Finally, for                the POD solution, showing that the reduced integration is very
+values of 𝑐1 = 10, 𝑐2 = 1.6 and 𝑐3 = 1.1 (see Figure 5c) all toler-            accurate. It is also clear that the prebuckling stage and buck-
+ances are achieved at roughly the same time with only 𝑄 = 297                  ling point predicted by CH2 are sufficiently accurate already
+quadrature points. For 𝑁 = 78 and 112, 𝑄 = 318 and 337 quadra-                 for 𝑁 = 48, but small deviations from the CH2 solution can be
+ture points are found when all other hyperparameters are kept                  observed for increasing 𝑢̃ in the postbuckling stage. This error
+constant.                                                                      is decreased by increasing 𝑁 to 78 or 112. Moreover, it can be
+                                                                               observed that CH2 predicts a slightly higher prebuckling stiffness
+To evaluate the accuracy of the ROM for 𝑁 = 48, 78 and 112                     than the DNS, which was also observed in [48], and is unable to
+basis functions for the displacement, the two-scale compression                predict the second (global) buckling point (at around 6% strain),
+of the perforated plate is solved for 𝜁 = −0.035 mm (recall that               illustrating some modeling limitations of the CH2 scheme.
+the training data was sampled for 𝜁 = {−0.05 mm, −0.025 mm,
+0.0 mm, 0.025 mm, 0.05 mm}), and the total resulting reaction                  In Figure 7, a similar comparison is performed for 𝜁 = 0.03 mm
+force 𝑅 acting on the top edge is plotted over the prescribed dis-             with 𝑁 = 48, 78 and 112. The POD and ROM solutions match
+placement 𝑢̃ and compared to the DNS, CH2 and POD solutions                    well for all 𝑁, but both overestimate the (post-)buckling behavior
+in Figure 6 (𝑅 and 𝑢̃ are normalized with the width 𝑊 and height               of the CH2 solution. Even though with increasing 𝑁 the buck-
+𝐻 of the plate to yield nominal quantities). Here, POD denotes                 ling point is predicted more accurately, the postbuckling stiffness
+the solution obtained with the POD basis in Equation (37), but                 is captured poorly. This suggests that the generated training data
+with full integration of the reduced system, that is, computing the            does not properly cover the kinematics during the postbuckling
+integrals in Equations (38) and (39) (as well as Equations (26–33),            stage and more representative training data is required for good
+
+                                                                                                                                                 13 of 20
+                                                                                                                                                                  10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                          (a)                                                (b)                                                     (c)
+FIGURE 7 | Force-displacement curves for 𝜁 = 0.03 mm (i.e., square-like holes buckling first globally) for different numbers of basis functions 𝑁
+for the fluctuation field. Similarly to 𝜁 = −0.035 mm, the ROM solution closely follows the POD solution. Both POD and ROM solutions approximate
+the CH2 solution poorly, implying that the training data is not representative for the global buckling of the macrostructure. (a) 𝑁 = 48, 𝑄 = 297. (b)
+𝑁 = 78, 𝑄 = 318. (c) 𝑁 = 112, 𝑄 = 337.
+
+
+
+
+                    (a)                                                (b)                                                           (c)
+FIGURE 8 | (a) Employed coarse RVE mesh for generating a more representative training dataset. The resulting ROM has 𝑁 = 48 displacement
+basis functions and 𝑄 = 278 integration points, and its solution closely follows the CH2 solution for both (b) 𝜁 = −0.035 mm and (c) 𝜁 = 0.03 mm. The
+result of the full CH2 model with the coarse RVE mesh is also shown for comparison.
+
+
+
+
+approximations. Compared to the DNS solution, CH2 captures                   TABLE 2 | Run times for DNS and three ROM solutions with 𝑁 = 48,
+the postbuckling stiffness quite accurately, however, it overpre-            𝑁 = 78 and 𝑁 = 112.
+dicts the buckling point, the prebuckling stiffness, and is again
+                                                                                                       DNS         ROM48          ROM78           ROM112
+unable to detect the second buckling which occurs at around 4.5%
+strain.                                                                        𝜁 = −0.035 mm           153 s          30 s           48 s            100 s
+                                                                               𝜁 = 0.03 mm             307 s          69 s          132 s            244 s
+To demonstrate that the results for 𝜁 = 0.03 mm are improved
+                                                                             Note: As this problem is quite small, the DNS can be computed efficiently, and the
+by employing a more representative training dataset, we gen-                 speed ups are not that high for the ROMs.
+erated another training dataset by employing the following
+procedure:
+
+  1. First, we solved the full CH2 problem with a coarse
+                                                                                4. All snapshots computed with the fine mesh are utilized to
+     RVE mesh (142 six-noded elements with 746 DOFs,
+                                                                                   construct the ROM.
+     see Figure 8a) for 𝜁 = {−0.05 mm, −0.025 mm, 0.0 mm,
+     0.025 mm, 0.05 mm}.
+                                                                             The resulting ROM for 𝑁 = 48 displacement basis functions
+  2. This way, for each value of 𝜁 a loading trajectory of values            has 𝑄 = 278 quadrature points (with 𝑀 = 28 and 𝐿 = 28), and
+             ̂                                                               the resulting force-displacement curves for 𝜁 = −0.035 mm and
+     of {(𝑭, )} for each of the 32 macroscale quadrature points
+     is collected.                                                           𝜁 = 0.03 mm are shown in Figure 8b,c. The ROM solution
+                                                                             approaches the CH2 solution nearly perfectly for both cases,
+  3. For each 𝜁, the microscopic problem is solved with the                  showing the importance of the training dataset. Additionally,
+                                                              ̂
+     fine mesh (see Figure 3c) along all 32 trajectories {(𝑭, )},           the results of the full CH2 solution with the coarse RVE mesh
+     and snapshots of the fluctuation displacement 𝒘p , weighted             are also shown, which shows much less accurate (post-)buckling
+     stress 𝒀 p and higher-order stress  p are gathered.                    behavior.
+
+14 of 20                                                                                      International Journal for Numerical Methods in Engineering, 2025
+                                                                                                                                                  10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+All simulations were executed on an Intel Xeon Platinum 8260             4.2 |        Biaxial Compression of Graded Cruciform
+processor. The run times are reported in Table 2. Computing the
+DNS solutions for 𝜁 = −0.035 mm and 0.03 mm took 153 and                 The second example deals with the biaxial compression of
+307 s with one thread. The significant differences in computa-           a graded cruciform-shaped macrostructure with varying hole
+tional times are caused by the global buckling, which requires           shapes (i.e., spatially varying 𝜁 field) throughout the domain,
+                                                                         see Figure 9. Each side edge has length 30 mm, and the cut out
+many more load steps for convergence as compared to the local
+                                                                         parts at each corner are quarter circles with a radius of 15 mm.
+buckling. The ROM with 𝑁 = 48, after the offline stage is com-
+                                                                         Both example parameterizations shown in Figure 9 are consid-
+pleted, took 30 and 69 s for both simulations with one thread,           ered and computed with the DNS, CH2 and the ROM solver.
+achieving an online speed-up of 5 times as compared to the DNS           The discretized DNS problem has for Figure 9a 3,475,044 DOFs
+solver. With 𝑁 = 78 and 𝑁 = 112, both simulations took 48 s (𝜁 =         and 800,889 elements, and 3,627,610 DOFs and 839,580 elements
+−0.035 mm) and 132 s (𝜁 = 0.03 mm), and 100 s (𝜁 = −0.035 mm)            for Figure 9b. Each side edge is compressed by 2% in the nor-
+and 244 s (𝜁 = 0.03 mm). Concerning the offline stage of the ran-        mal direction, while being fixed in the tangential direction. For
+domly generated dataset, with one thread, 100 samples with each          CH2 and the ROM, additionally, the 𝑥𝑥- and 𝑦𝑥-components
+20 load steps were computed in 1020 s, and constructing the ROM          of the deformation gradient are fixed to 𝐹̂ 𝑥𝑥 = 1 and 𝐹̂ 𝑦𝑥 = 0
+took another 80 s. For the more representative training dataset,         on the top and bottom horizontal edges, and the 𝑥𝑦- and
+the generation took significantly longer as full two-scale simula-       𝑦𝑦-components of the deformation gradient are fixed to 𝐹̂ 𝑥𝑦 = 0
+tions need to be run. Note that the offline and online stage with        and 𝐹̂ = 1 on the left and right vertical edges. The simu-
+                                                                                 𝑦𝑦
+the ROM can easily be parallelized, since all RVEs can be solved         lation meshes employed for CH2 and the ROM are shown
+                                                                         in Figure 10.
+independently, which would increase the speed-up. On the other
+hand, DNS parallelization is less straightforward and more dif-
+                                                                         Since the deformation of this example is similar to the previous
+ficult to achieve. CH2 and POD took much longer as compared              example in Section 4.1, the already trained ROM (with randomly
+to the DNS since the considered scale separation is relatively           generated training data, compare Table 1) is re-used here with
+low.                                                                     𝑁 = 48, 78 and 112 displacement basis functions with 𝑄 = 297,
+                                                                         318 and 337 integration points, and referred to as ROM48, ROM78
+While this example problem might not be suitable for homoge-             and ROM112.
+nization since the DNS solution can be obtained quickly, it shows
+that the ROM can accurately approximate the POD solution, that
+is, the proposed algorithm for finding a sparse integration scheme       4.2.1   |    Results
+works well. Moreover, the POD solution approaches the CH2
+solution (provided the training data is representative), which in        Both example geometries are solved with DNS, CH2 and the
+turn approximates the DNS well.                                          three ROM solvers (ROM48, ROM78 and ROM112). To compare
+
+
+
+
+FIGURE 9 | Two geometries are solved with the DNS solver. (a) 𝜁 = 0.03 mm is set for the top right and bottom left part (in blue), and 𝜁 =
+−0.05 mm for the top left and bottom right part (orange). (b) 𝜁 = 0.05 mm is set in the center (orange) for 𝒙 ∈ [18 mm, 42 mm] × [18 mm, 42 mm]
+and 𝜁 = −0.075 mm elsewhere (blue). Six-noded triangular elements are employed for both geometries, resulting in (a) 3,475,044 DOFs and 800,889
+elements, and (b) 3,627,610 DOFs and 839,580 elements. (a) Geometry 1. (b) Geometry 2.
+
+
+                                                                                                                                      15 of 20
+                                                                                                                                                             10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+FIGURE 10 | Discretization of the homogenized cruciform used for CH2 and ROM. (a) 𝜁 = 0.03 mm is set for the blue elements and 𝜁 = −0.05 mm
+for the orange elements. (b) The orange and blue elements correspond to 𝜁 = 0.05 mm and 𝜁 = −0.075 mm, respectively. The meshes have (a) 48 and
+(b) 28 elements with four quadrature points each. (a) Geometry 1. (b) Geometry 2.
+
+
+
+
+                                    (a)                                                                        (b)
+FIGURE 11 | Force-displacement curves for both example geometries of Figures 9 and 10 obtained for DNS, CH2, and three ROMs with different
+numbers of basis functions 𝑁 and quadrature points 𝑄. (a) All ROM solutions are close to the CH2 solution. The CH2 solution approximates the DNS
+adequately. (b) The ROMs do not recover the CH2 solution accurately, since 𝜁 = −0.075 mm is outside the training data. For higher numbers of basis
+functions, the approximation gets increasingly more accurate, and for ROM112 only small deviations are observed during the postbuckling stage. CH2
+is unable to predict the correct buckling load. (a) Geometry 1. (b) Geometry 2.
+
+
+
+
+the results, the total resulting reaction force 𝑅 acting on the top        predicts a higher prebuckling stiffness, but the buckling load
+edge, normalized with the length of the edge 𝑊 = 30 mm, is                 and postbuckling stage are predicted quite well. For the sec-
+plotted over the applied displacement 𝑢,   ̃ normalized with the           ond geometry (see Figure 11b), CH2 cannot capture the cor-
+total height 𝐻 = 60 mm, in Figure 11. For the first geometry               rect buckling load. Since in this example, the center part is set
+(see Figure 11a), all ROM solutions recover the CH2 solution               to 𝜁 = −0.075 mm, which is outside the training data (sampled
+nearly perfectly. As compared to the DNS solution, CH2 again               from 𝜁 = {−0.05 mm, −0.025 mm, 0.0 mm, 0.025 mm, 0.05 mm}),
+
+16 of 20                                                                                  International Journal for Numerical Methods in Engineering, 2025
+                                                                                                                                           10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+FIGURE 12 | Displacement fields for Geometry 1 obtained with DNS (top row) and with ROM48 (bottom row). The shear band forming along the
+diagonal is clearly captured.
+
+
+
+
+ROM48 is not able to follow the CH2 solutions closely. The error      run times of CH2 are again much higher than the run times
+reduces with 𝑁 = 78 and 112. For both geometries, both compo-         of DNS.
+nents of the displacement field at the final loading are shown for
+the DNS and ROM48 solutions in Figures 12 and 13, where clearly       The DNS solution took several hours (with one thread), mostly
+the trend and magnitudes of the displacement fields are compara-      because of the detection of instabilities (i.e., checking the sys-
+ble. Deformed RVEs at selected quadrature points of the ROM48         tem matrix for negative eigenvalues and eigenvalues close to
+                                                                      zero). If a large-scale problem (in 3D) was considered, the DNS
+solutions are also shown, which behave similarly to the DNS at
+                                                                      solution might become infeasible, since (1) detecting negative
+similar location.
+                                                                      eigenvalues is computationally expensive, and (2) negative eigen-
+                                                                      values of the system matrix may cause problems for iterative
+The run times (using one thread of Intel Xeon Platinum 8260)
+                                                                      solvers, while direct solvers become too computationally expen-
+are reported in Table 3. Solving both problems with the DNS
+                                                                      sive for such large systems. On the other hand, the ROM solu-
+solver took 15,129 and 14,087 s, while with ROM48 it took 164
+                                                                      tion should remain relatively computationally inexpensive, since
+and 101 s, implying online speed-ups of 92 and 139 times. With
+                                                                      the solver can be easily parallelized by solving all RVE prob-
+ROM78, the run times were 369 and 333 s, meaning speed-ups of         lems at the macroscopic integration points in parallel. An addi-
+41 and 42 times. With ROM112, the solution took 975 and 439 s,        tional advantage of the ROM is that, after training, different
+which still amounts to online speed-ups of 15 and 32 times. The       geometrical parameters inside the macrostructure can be eas-
+computational costs of the offline stage are the same as reported     ily tuned, while for the DNS, the meshing can become expen-
+for the previous example in Section 4.1. The obtained speed-ups       sive and challenging, especially for 3D problems. This makes this
+could be greatly increased by using more threads due to the supe-     ROM an interesting candidate for the material design of buckling
+rior scaling of the multiscale formulation over the DNS. The          structures.
+
+                                                                                                                                17 of 20
+                                                                                                                                                                10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+FIGURE 13 | Displacement fields for Geometry 2 obtained with DNS (top row) and with ROM48 (bottom row). The sharp transition in the center
+due to the sharp change in 𝜁 is more or less captured.
+
+
+
+TABLE 3 | Run times for DNS and three ROM solutions with 𝑁 = 48,               that the proposed hyperreduction algorithm discovered integra-
+𝑁 = 78 and 𝑁 = 112.                                                            tion points and weights that yield accurate results for several
+                                                                               parameterizations of the microstructure. The second example
+                     DNS             ROM48          ROM78           ROM112
+                                                                               concerned a more complex application, in which the geometry
+    Geometry 1       15,129 s          164 s           369 s           975 s   of the microstructures is varied within the macroscopic domain,
+    Geometry 2       14,087 s          101 s           333 s           439 s   and for which the DNS solution takes a substantial amount of
+                                                                               time to compute. When employing the ROM for this problem,
+Note: For all ROMs, large online speed ups are observed for both geometries.
+                                                                               speed-ups ranging from 15 to 139 as compared to the DNS were
+                                                                               achieved with one thread. These speed-ups could be further
+                                                                               increased by employing more threads, since, in general, the mul-
+5     | Conclusions                                                            tiscale problem scales much better than the DNS.
+
+In this work, we proposed a ROM for CH2, based on POD                          To the best of our knowledge, this work is the first attempt of
+and a novel hyperreduction method that uses ideas from the                     accelerating an enriched computational homogenization formu-
+ECM that is specifically suited for CH2. Several aspects on the                lation. Although we proposed a ROM for CH2, we are confident
+derivation of the reduced system, including the treatment of                   that our findings and employed methods also extend to other for-
+constraints and geometrical parameterizations, expressions for                 mulations, for example, based on micromorphic computational
+the effective quantities, and the novel hyperreduction algorithm               homogenization. It would also be interesting to test the method-
+were discussed. Afterwards, the ROM was tested on two numer-                   ology on more complicated material models, such as damage and
+ical examples, in which the macrostructures are compressed                     fracture. As different parameterizations of the microstructure can
+and multiscale buckling occurs. The ROM solutions were crit-                   be treated as well, interesting applications can be realized with
+ically evaluated by comparison against the results obtained by                 this framework, such as two-scale shape optimization problems,
+DNS and the full CH2 model. The first example demonstrated                     design of materials and uncertainty quantification.
+
+18 of 20                                                                                     International Journal for Numerical Methods in Engineering, 2025
+                                                                                                                                                              10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                                                                               15. O. Rokoš, M. M. Ameen, R. H. J. Peerlings, and M. G. D. Geers, “Micro-
+                                                                               morphic Computational Homogenization for Mechanical Metamaterials
+Acknowledgments                                                                With Patterning Fluctuation Fields,” Journal of the Mechanics and Physics
+                                                                               of Solids 123 (2019): 119–137.
+This result is part of a project that has received funding from the Euro-
+pean Research Council (ERC) under the European Union’s Horizon 2020            16. V. Kouznetsova, M. Geers, and W. Brekelmans, “Multi-Scale
+Research and Innovation Programme (Grant Agreement No. 818473).                Second-Order Computational Homogenization of Multi-Phase Materi-
+                                                                               als: A Nested Finite Element Solution Strategy,” Computer Methods in
+Conflicts of Interest                                                          Applied Mechanics and Engineering 193, no. 48-51 (2004): 5525–5550.
+
+The authors declare no conflicts of interest.                                  17. S. Forest, “Homogenization Methods and Mechanics of Generalized
+                                                                               Continua—Part 2,” Theoretical and Applied Mechanics 28-29 (2002):
+                                                                               113–144.
+Data Availability Statement
+                                                                               18. R. Biswas and L. H. Poh, “A Micromorphic Computational Homog-
+The data that support the findings of this study are available from the
+                                                                               enization Framework for Heterogeneous Materials,” Journal of the
+corresponding author upon reasonable request.
+                                                                               Mechanics and Physics of Solids 102 (2017): 187–208, https://doi.org/10
+                                                                               .1016/j.jmps.2017.02.012.
+References
+                                                                               19. R. Jänicke, S. Diebels, H. G. Sehlhorst, and A. Düster, “Two-Scale
+1. K. Bertoldi and M. C. Boyce, “Mechanically Triggered Transforma-            Modelling of Micromorphic Continua: A Numerical Homogenization
+tions of Phononic Band Gaps in Periodic Elastomeric Structures,” Physi-        Scheme,” Continuum Mechanics and Thermodynamics 21, no. 4 (2009):
+cal Review B 77 (2008): 052105.                                                297–315.
+2. B. Florijn, C. Coulais, and M. Van Hecke, “Programmable Mechanical          20. D. J. Luscher, D. L. McDowell, and C. A. Bronkhorst, “A Second Gra-
+Metamaterials,” Physical Review Letters 113 (2014): 175503.                    dient Theoretical Framework for Hierarchical Multiscale Modeling of
+                                                                               Materials,” International Journal of Plasticity 26, no. 8 (2010): 1248–1275.
+3. S. A. Ramakrishna, “Physics of Negative Refractive Index Materials,”
+Reports on Progress in Physics 68, no. 2 (2005): 449–521, https://doi.org      21. L. Wu, M. Mustafa, J. Segurado, and L. Noels, “Second-Order Compu-
+/10.1088/0034-4885/68/2/R06.                                                   tational Homogenisation Enhanced With Non-uniform Body Forces for
+                                                                               Non-linear Cellular Materials and Metamaterials,” Computer Methods in
+4. A. O. Krushynska, V. G. Kouznetsova, and M. G. Geers, “Towards Opti-
+                                                                               Applied Mechanics and Engineering 407 (2023): 115931.
+mal Design of Locally Resonant Acoustic Metamaterials,” Journal of the
+Mechanics and Physics of Solids 71, no. 1 (2014): 179–196.                     22. J. Yvonnet, N. Auffray, and V. Monchiet, “Computational
+                                                                               Second-Order Homogenization of Materials With Effective Anisotropic
+5. L. Wang, J. Boddapati, K. Liu, P. Zhu, C. Daraio, and W. Chen,
+                                                                               Strain-Gradient Behavior,” International Journal of Solids and Structures
+“Mechanical Cloak via Data-Driven Aperiodic Metamaterial Design,”
+                                                                               191-192 (2020): 434–448.
+Proceedings of the National Academy of Sciences 119, no. 13 (2022):
+e2122185119, https://doi.org/10.1073/pnas.2122185119.                          23. T. Kirchdoerfer and M. Ortiz, “Data-Driven Computational Mechan-
+                                                                               ics,” Computer Methods in Applied Mechanics and Engineering 304 (2016):
+6. K. T. Tan, H. H. Huang, and C. T. Sun, “Blast-Wave Impact Mitigation
+                                                                               81–101, https://doi.org/10.1016/j.cma.2016.02.001.
+Using Negative Effective Mass Density Concept of Elastic Metamateri-
+als,” International Journal of Impact Engineering 64 (2014): 20–29.            24. K. Linka, M. Hillgärtner, K. P. Abdolazizi, R. C. Aydin, M. Itskov,
+                                                                               and C. J. Cyron, “Constitutive Artificial Neural Networks: A Fast and
+7. A. M. Greiner, B. Richter, and M. Bastmeyer, “Micro-Engineered 3D
+                                                                               General Approach to Predictive Data-Driven Constitutive Modeling by
+Scaffolds for Cell Culture Studies,” Macromolecular Bioscience 12, no. 10
+                                                                               Deep Learning,” Journal of Computational Physics 429 (2021): 110010,
+(2012): 1301–1314, https://doi.org/10.1002/mabi.201200132.
+                                                                               https://doi.org/10.1016/j.jcp.2020.110010.
+8. X. Ning, X. Yu, H. Wang, et al., “Mechanically Active Materials in
+                                                                               25. K. P. Abdolazizi, K. Linka, and C. J. Cyron, “Viscoelastic Constitutive
+Three-Dimensional Mesostructures,” Science Advances 4, no. 9 (2018):
+                                                                               Artificial Neural Networks (vCANNs)—A Framework for Data-Driven
+eaat8313.
+                                                                               Anisotropic Nonlinear Finite Viscoelasticity” (2023): http://arxiv.org/abs
+9. J. U. Surjadi, L. Gao, H. Du, et al., “Mechanical Metamaterials and         /2303.12164.
+Their Engineering Applications,” Advanced Engineering Materials 21, no.
+                                                                               26. R. Eggersmann, T. Kirchdoerfer, S. Reese, L. Stainier, and M. Ortiz,
+3 (2019): 1800864, https://doi.org/10.1002/adem.201800864.
+                                                                               “Model-Free Data-Driven Inelasticity,” Computer Methods in Applied
+10. F. Feyel, “Multiscale FE2 Elastoviscoplastic Analysis of Composite         Mechanics and Engineering 350 (2019): 81–99, https://doi.org/10.1016/j
+Structures,” Computational Materials Science 16, no. 1-4 (1999): 344–354.      .cma.2019.02.016.
+11. M. G. D. Geers, V. G. Kouznetsova, and W. A. M. Brekelmans,                27. K. Karapiperis, L. Stainier, M. Ortiz, and J. E. Andrade, “Data-Driven
+“Multi-Scale Computational Homogenization: Trends and Challenges,”             Multiscale Modeling in Mechanics,” Journal of the Mechanics and Physics
+Journal of Computational and Applied Mathematics 234, no. 7 (2010):            of Solids 147 (2021): 104239, https://doi.org/10.1016/j.jmps.2020.104239.
+2175–2182.
+                                                                               28. M. Mozaffar, R. Bostanabad, W. Chen, K. Ehmann, J. Cao, and M. A.
+12. V. G. Kouznetsova, W. A. M. Brekelmans, and F. P. T. Baaijens, “An         Bessa, “Deep Learning Predicts Path-Dependent Plasticity,” Proceedings
+Approach to Micro-Macro Modeling of Heterogeneous Materials,” Com-             of the National Academy of Sciences 116, no. 52 (2019): 26414–26420,
+putational Mechanics 27, no. 1 (2001): 37–48, https://doi.org/10.1007          https://doi.org/10.1073/pnas.1911815116.
+/s004660000212.
+                                                                               29. L. Wu and L. Noels, “Recurrent Neural Networks (RNNs) With
+13. C. Miehe and A. Koch, “Computational Micro-To-Macro Transitions            Dimensionality Reduction and Break Down in Computational Mechan-
+of Discretized Microstructures Undergoing Small Strains,” Archive of           ics; Application to Multi-Scale Localization Step,” Computer Methods in
+Applied Mechanics 72, no. 4-5 (2002): 300–317, https://doi.org/10.1007         Applied Mechanics and Engineering 390 (2022): 114476, https://doi.org/10
+/s00419-002-0212-2.                                                            .1016/j.cma.2021.114476.
+14. V. D. Nguyen and L. Noels, “Computational Homogenization of Cellu-         30. S. Chaturantabut and D. C. Sorensen, “Nonlinear Model Reduction via
+lar Materials,” International Journal of Solids and Structures 51, no. 11-12   Discrete Empirical Interpolation,” SIAM Journal on Scientific Computing
+(2014): 2183–2203, https://doi.org/10.1016/j.ijsolstr.2014.02.029.             32, no. 5 (2010): 2737–2764, https://doi.org/10.1137/090766498.
+
+
+                                                                                                                                                 19 of 20
+                                                                                                                                                                 10970207, 2025, 1, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.7604 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [21/08/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+31. C. Farhat, P. Avery, T. Chapman, and J. Cortial, “Dimensional              47. A. Quarteroni, A. Manzoni, and F. Negri, Reduced Basis Methods for
+Reduction of Nonlinear Finite Element Dynamic Models With Finite               Partial Differential Equations. UNITEXT, vol. 92 (Cham, Switzerland:
+Rotations and Energy-Based Mesh Sampling and Weighting for Compu-              Springer International Publishing, 2016), 1–263, https://doi.org/10.1007
+tational Efficiency,” International Journal for Numerical Methods in Engi-     /978-3-319-15431-2.
+neering 98, no. 9 (2014): 625–662, https://doi.org/10.1002/nme.4668.
+                                                                               48. S. O. Sperling, T. Guo, R. H. J. Peerlings, V. G. Kouznetsova,
+32. J. Hernández, M. Caicedo, and A. Ferrer, “Dimensional                      M. G. D. Geers, and O. Rokoš, “A Comparative Study of Enriched
+Hyper-Reduction of Nonlinear Finite Element Models via Empiri-                 Computational Homogenization Schemes Applied to Two-Dimensional
+cal Cubature,” Computer Methods in Applied Mechanics and Engineering           Pattern-Transforming Elastomeric Mechanical Metamaterials,” Compu-
+313 (2017): 687–722.                                                           tational Mechanics 74 (2024): 169–190, https://doi.org/10.1007/s00466
+                                                                               -023-02428-2.
+33. J. A. Hernández, “A Multiscale Method for Periodic Structures Using
+Domain Decomposition and ECM-Hyperreduction,” Computer Methods                 49. K. Bertoldi, M. C. Boyce, S. Deschanel, S. M. Prange, and T. Mullin,
+in Applied Mechanics and Engineering 368 (2020): 113192, https://doi.org       “Mechanics of Deformation-Triggered Pattern Transformations and
+/10.1016/j.cma.2020.113192.                                                    Superelastic Behavior in Periodic Elastomeric Structures,” Journal of the
+                                                                               Mechanics and Physics of Solids 56, no. 8 (2008): 2642–2668.
+34. M. Caicedo, J. L. Mroginski, S. Toro, M. Raschi, A. Huespe, and
+J. Oliver, “High Performance Reduced Order Modeling Techniques Based
+on Optimal Energy Quadrature: Application to Geometrically Non-linear
+Multiscale Inelastic Material Modeling,” Archives of Computational Meth-
+ods in Engineering 26, no. 4 (2019): 771–792, https://doi.org/10.1007
+/s11831-018-9258-3.
+35. M. Raschi, O. Lloberas-Valls, A. Huespe, and J. Oliver, “High Per-
+formance Reduction Technique for Multiscale Finite Element Modeling
+(HPR-FE2): Towards Industrial Multiscale FE Software,” Computer Meth-
+ods in Applied Mechanics and Engineering 375 (2021): 113580, https://doi
+.org/10.1016/j.cma.2020.113580.
+36. T. Guo, O. Rokoš, and K. Veroy, “A Reduced Order Model for
+Geometrically Parameterized Two-Scale Simulations of Elasto-Plastic
+Microstructures Under Large Deformations,” Computer Methods in
+Applied Mechanics and Engineering 418 (2024): 116467.
+37. R. Mindlin and N. Eshel, “On First Strain-Gradient Theories in Linear
+Elasticity,” International Journal of Solids and Structures 4, no. 1 (1968):
+109–124.
+38. R. A. Toupin, “Elastic Materials With Couple-Stresses,” Archive for
+Rational Mechanics and Analysis 11, no. 1 (1962): 385–414, https://doi
+.org/10.1007/BF00253945.
+39. V. G. Kouznetsova, “Computational Homogenization for the
+Multi-Scale Analysis of Multi-Phase Materials” (thesis, Technische
+Universiteit Eindhoven, 2004).
+40. T. Lesičar, Z. Tonković, and J. Sorić, “A Second-Order Two-Scale
+Homogenization Procedure Using C1 Macrolevel Discretization,” Com-
+putational Mechanics 54, no. 2 (2014): 425–441.
+41. I. A. Rodrigues Lopes and F. M. Andrade Pires, “An Assessment of
+Multi-Scale Models Based on Second-Order Computational Homogeni-
+sation,” Computers and Structures 259 (2022): 106679.
+42. V. Kouznetsova, M. G. Geers, and W. A. Brekelmans, “Multi-Scale
+Constitutive Modelling of Heterogeneous Materials With a
+Gradient-Enhanced Computational Homogenization Scheme,” Inter-
+national Journal for Numerical Methods in Engineering 54, no. 8 (2002):
+1235–1260.
+43. T. Guo, F. A. Silva, O. Rokoš, and K. Veroy, “Learning Constitutive
+Models From Microstructural Simulations via a Non-intrusive Reduced
+Basis Method: Extension to Geometrical Parameterizations,” Computer
+Methods in Applied Mechanics and Engineering 401 (2022): 115636.
+44. P. J. Blanco, P. J. Sánchez, E. A. De Souza Neto, and R. A. Feijóo, “The
+Method of Multiscale Virtual Power for the Derivation of a Second Order
+Mechanical Model,” Mechanics of Materials 99 (2016): 53–67.
+45. T. Belytschko, W. K. Liu, B. Moran, and K. Elkhodary, Nonlinear Finite
+Elements for Continua and Structures (Hoboken, NJ: John Wiley & Sons,
+2014).
+46. J. S. Hesthaven, G. Rozza, and B. Stamm, Certified Reduced Basis
+Methods for Parametrized Partial Differential Equations. Springer Briefs
+in Mathematics (Cham, Switzerland: Springer International Publishing,
+2016), https://doi.org/10.1007/978-3-319-22470-1.
+
+
+20 of 20                                                                                      International Journal for Numerical Methods in Engineering, 2025
+

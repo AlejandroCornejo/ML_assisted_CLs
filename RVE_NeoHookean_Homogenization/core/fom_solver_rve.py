@@ -1592,8 +1592,20 @@ def RunFomBatchSimulation(
     hom_reference_measure=None,
     initial_displacement=None,
     return_final_energy=False,
+    return_final_state=False,
 ):
-    """Executes the RVE simulation for a given strain trajectory."""
+    """Executes the RVE simulation for a given strain trajectory.
+
+    return_final_state=True additionally returns a dict with the last
+    step's own converged K/rhs (from the same "force a full LocalSystem
+    evaluation at converged state" re-assembly already done below for
+    every step, just captured here instead of discarded) plus the
+    Dirichlet/free dof partition and reference measure/thickness needed
+    to build a reaction-force stress and its analytic (implicit-function-
+    theorem) tangent without any new re-solve -- see fe2_extension/
+    fom_nested_consistent_law_claude.py, the only caller that uses this.
+    Purely additive: default False changes nothing for any other caller.
+    """
     os.makedirs(out_dir, exist_ok=True)
     dt = parameters["solver_settings"]["time_stepping"]["time_step"].GetDouble()
 
@@ -1855,7 +1867,7 @@ def RunFomBatchSimulation(
         # NOTE: RHS-only evaluation may not update all stress/tangent-related
         # internal quantities for some elements.
         InitializeNonLinearIteration(entities, mp.ProcessInfo)
-        _, _ = assembler.Assemble(u)
+        K_final, rhs_final = assembler.Assemble(u)
         FinalizeNonLinearIteration(entities, mp.ProcessInfo)
         u_n = u.copy()
         eps_h, sig_h = CalculateHomogenizedFromAssemblerWithElementWeights(
@@ -1886,6 +1898,22 @@ def RunFomBatchSimulation(
         if save_plot:
             _save_diagnostic_plots(np.stack(strain_hist), np.stack(stress_hist), out_dir, tag)
 
+    if return_final_state:
+        if not use_fast_dirichlet_bc:
+            raise NotImplementedError(
+                "return_final_state=True requires use_fast_dirichlet_bc=True "
+                "(dir_dofs_fast/free_dofs_fast/etc. are only computed in that path)."
+            )
+        final_state = dict(
+            K=K_final, rhs=rhs_final, u=u_n.copy(), eq_map=eq_map,
+            free_dofs=free_dofs_fast, dir_dofs=dir_dofs_fast,
+            dir_x=dir_x_fast, dir_y=dir_y_fast, dir_is_x=dir_is_x_fast,
+            hom_reference_measure=float(hom_reference_measure),
+            thickness=float(np.asarray(assembler.thickness, dtype=float).reshape(-1)[0]),
+        )
+        if return_final_energy:
+            return strain_hist, stress_hist, final_energy, final_state
+        return strain_hist, stress_hist, final_state
     if return_final_energy:
         return strain_hist, stress_hist, final_energy
     return strain_hist, stress_hist

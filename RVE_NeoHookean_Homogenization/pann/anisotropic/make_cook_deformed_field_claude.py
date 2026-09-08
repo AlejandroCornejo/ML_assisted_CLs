@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Cook's membrane, genuine FE^2 demonstration: deformed configuration,
-colored by displacement magnitude, for every row of Table 7 (the true,
-non-reduced FE^2 solve first, centered, then the six trained/built laws
-in two columns below it). All seven panels the same size (a 4x4
-GridSpec: the true-FOM panel spans the middle two columns of row 0,
-each other panel spans two columns of its own row). The undeformed
+colored by displacement magnitude, for every row of Table 7, in this
+paper's canonical model order (FOM-FE^2, tiers 1/2/3a/3b, Linear-HPROM,
+HPROM--ANN, D-HPROM--ANN). All eight panels the same size, in a plain
+2x4 GridSpec. The undeformed
 reference mesh is a separate figure (make_cook_reference_mesh_claude.py).
 Real data from fe2_extension/cook_results_*_claude.npz
 (run_cook_hprom_ann_claude.py, nx=ny=8), the same files and resolution
@@ -35,38 +34,33 @@ plt.rcParams.update({
 HERE = Path(__file__).resolve().parent
 COOK_DIR = HERE.parent.parent / "fe2_extension"
 
-ROW_ORDER = ("fom_nested_full", "regression", "free", "certified", "ickan",
-             "hprom_iterative_f64_consistent", "dhprom_f64_consistent")
-FILENAMES = {
-    "fom_nested_full": "cook_results_fom_nested_full_claude.npz",
-    "regression": "cook_results_pann_regression_claude.npz",
-    "free": "cook_results_pann_free_claude.npz",
-    "certified": "cook_results_icnn_w5_final_claude.npz",
-    "ickan": "cook_results_ickan_w5_final_claude.npz",
-    "hprom_iterative_f64_consistent": "cook_results_hprom_iterative_f64_consistent_claude.npz",
-    "dhprom_f64_consistent": "cook_results_dhprom_f64_consistent_claude.npz",
-}
+ROW_ORDER = ("fom_nested_consistent_parallel", "pann_regression", "pann_free", "pann_certified_w5",
+             "pann_ickan_w5", "linear_hprom_parallel_continuation", "hprom_ann_parallel_continuation",
+             "dhprom_ann_parallel")
+FILENAMES = {which: f"cook_results_{which}_claude.npz" for which in ROW_ORDER}
 TITLES = {
-    "fom_nested_full": "FOM-FE$^2$",
-    "regression": "Regression (tier 1), Newton stalled every step",
-    "free": "Free hyperelastic (tier 2), Newton stalled every step",
-    "certified": "Polyconvex ICNN (tier 3a)",
-    "ickan": "Polyconvex ICKAN (tier 3b)",
-    "hprom_iterative_f64_consistent": "HPROM--ANN-FE$^2$",
-    "dhprom_f64_consistent": "D-HPROM--ANN-FE$^2$",
+    "fom_nested_consistent_parallel": "FOM-FE$^2$",
+    "pann_regression": "Regression (tier 1), Newton stalled every step",
+    "pann_free": "Free hyperelastic (tier 2), Newton stalled every step",
+    "pann_certified_w5": "Polyconvex ICNN (tier 3a)",
+    "pann_ickan_w5": "Polyconvex ICKAN (tier 3b)",
+    "hprom_ann_parallel_continuation": "HPROM--ANN-FE$^2$",
+    "dhprom_ann_parallel": "D-HPROM--ANN-FE$^2$",
+    "linear_hprom_parallel_continuation": "Linear-HPROM-FE$^2$",
 }
-# GridSpec(row, col-slice) for each row -- true FOM centered on its own
-# row, the rest two-per-row in the remaining three rows, consistent
-# reading order everywhere in the paper: FOM, tier 1, 2, 3a, 3b, then
-# the two ROM/HPROM-FE^2 rows.
+# GridSpec(row, col) for each row -- a plain 2x4 grid, one panel per
+# cell, consistent reading order everywhere in the paper: FOM, tier 1,
+# 2, 3a, 3b, Linear-HPROM-FE^2, then the two ANN-based ROM/HPROM-FE^2
+# rows (HPROM--ANN, D-HPROM--ANN).
 GRID = {
-    "fom_nested_full": (0, slice(1, 3)),
-    "regression": (1, slice(0, 2)),
-    "free": (1, slice(2, 4)),
-    "certified": (2, slice(0, 2)),
-    "ickan": (2, slice(2, 4)),
-    "hprom_iterative_f64_consistent": (3, slice(0, 2)),
-    "dhprom_f64_consistent": (3, slice(2, 4)),
+    "fom_nested_consistent_parallel": (0, 0),
+    "pann_regression": (0, 1),
+    "pann_free": (0, 2),
+    "pann_certified_w5": (0, 3),
+    "pann_ickan_w5": (1, 0),
+    "linear_hprom_parallel_continuation": (1, 1),
+    "hprom_ann_parallel_continuation": (1, 2),
+    "dhprom_ann_parallel": (1, 3),
 }
 
 
@@ -87,8 +81,9 @@ def load(which: str):
     if not path.exists():
         return None
     d = np.load(path)
-    if "load_per_step" in d:
-        assert len(d["load_per_step"]) == 20, f"{which}: {path.name} has {len(d['load_per_step'])} steps, not 20"
+    if "load_per_step" in d and len(d["load_per_step"]) != 20:
+        print(f"  [skip] {which}: {path.name} is stale/incomplete ({len(d['load_per_step'])} steps, not 20)")
+        return None
     return d["coords"], d["tris"], d["u_nodal"]
 
 
@@ -105,8 +100,8 @@ def main() -> None:
         vmax = max(vmax, float(mag.max()))
         fields[which] = (coords, tris, u_nodal, mag)
 
-    fig = plt.figure(figsize=(9.6, 13.0))
-    gs = fig.add_gridspec(4, 4)
+    fig = plt.figure(figsize=(16.4, 8.4))
+    gs = fig.add_gridspec(2, 4)
 
     for which in ROW_ORDER:
         row, cols = GRID[which]
@@ -134,7 +129,7 @@ def main() -> None:
         cbar = fig.colorbar(tpc, ax=ax, fraction=0.046, pad=0.04)
         cbar.set_label(r"$\|\bm u\|$ [m]", fontsize=9.5)
 
-    fig.suptitle("Cook's membrane: real deformed states, every row of Table 7",
+    fig.suptitle("Cook's membrane: real deformed states, every row of Table~7",
                  fontsize=13.5)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     fig.savefig(HERE / "cook_deformed_field_claude.pdf", bbox_inches="tight")

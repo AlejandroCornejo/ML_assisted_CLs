@@ -1,0 +1,240 @@
+\section{Numerical example I: constitutive response of a periodic porous cell}
+\label{sec:cell}
+\subsection{Purpose and configuration}
+This example asks whether a mechanically constrained learned law can represent the anisotropic response of the chosen cell, and which mechanical properties distinguish the learned alternatives. It does not measure structural speedups. The square periodic cell contains a centered elliptical void with area fraction $0.20$, aspect ratio $2$, and major-axis angle $30^\circ$ relative to the cell axes; see Fig.~\ref{fig:rve}. This orientation avoids the mirror-aligned configurations of the square cell. Centrosymmetry remains, but does not mean that the strain energy is an even function of strain.
+
+The solid is compressible Neo-Hookean in plane strain:
+\begin{equation}
+ \psi_\mu=\frac\mu2(\tr\C_\mu-2)-\mu\log J_\mu
+              +\frac\lambda2(\log J_\mu)^2,
+\end{equation}
+with Young's modulus $1.628$ GPa and Poisson ratio $0.4$. Here $\mu$ and $\lambda$ are the usual Lam\'e constants. This is the specific matrix law used by the reference solver, not a generic assertion about every Neo-Hookean variant. The production mesh contains 1546 quadratic triangles, 3240 nodes, and 4638 quadrature points. Periodicity and null-space constraints leave 6320 independent microscopic displacement coordinates. Cell averages use the complete reference cell measure.
+
+\begin{figure}[htbp]
+ \centering\includegraphics[width=.96\linewidth]{rve_geometry.pdf}
+ \caption{Microstructure and production discretization. The left panel shows corner-edge traces of the quadratic mesh; the right panel specifies the void geometry. The cell side is denoted by $\ell$. No material reflection symmetry is imposed on the learned paired features.}
+ \label{fig:rve}
+\end{figure}
+
+The production mesh was selected using a local stress-field criterion along an investigated uniaxial path, rather than only a homogenized average. At $E_{11}=0.20$, its maximum microscopic first Piola stress norm differs by approximately $0.486\%$ from a 3095-element reference, whereas the average axial stress differs by approximately $0.001\%$. This is a mesh check at a specified state, not a uniform error bound over all multiaxial data.
+
+\subsection{Data domain and model selection}
+The fitting domain is informed by a preliminary macroscopic deformation study. The final training box, shared by the constitutive and reduced models, has the following rounded bounds:
+\begin{equation}
+ \ee_{\min}=(0,-0.09865,-0.16807)^T,\qquad
+ \ee_{\max}=(0.1955,0.01635,0.10793)^T.
+ \label{eq:box}
+\end{equation}
+The new constitutive features do not change this box. For the selected polyconvex network runs, 4208 of the 4950 available training states are used for fitting and 742 for validation, with split seed 5. The independent test set contains 400 states. An additional 350-state probe extends selected distances from the box center by factors $1.05$, $1.10$, $1.25$, $1.50$, and $2.00$. Five probe labels are nonfinite following failed reference solves and are excluded with the same finite-label mask for all compared models. Their exclusion is reported, not interpreted as proof of a physical instability.
+
+The selected feature-learning runs use full-batch Adam for 2600 steps followed by up to 400 L-BFGS iterations. The normalized training objective combines stress, energy, and reference-tangent relative mean-square errors with weights $1$, $0.2$, and $0.02$, respectively. The tangent target is obtained from a separate coarse periodic reference calculation. Candidates are selected by validation stress error; test and probe labels are not used in that second-stage selection. Both selected runs use initialization seed 16, with 32 features and hidden widths $24/24$ for ICNN and $12/12$ for ICKAN. Earlier baselines have different feature families, objectives, and training budgets. Comparisons to them diagnose practical approximability, not compute-matched superiority of one network architecture.
+
+\subsection{Reduced-state representation for this material}
+The 4950 displacement snapshots provide the basis of the reduced microscopic models as well as the effective constitutive labels. Figure~\ref{fig:pod} separates POD compression from the strain-informed coordinate fit. The relative snapshot truncation norm for the retained 39-dimensional space is $9.94\times10^{-7}$. After its orthogonal rotation into primary and secondary spaces, $n=3$ and $\bar n=36$ in the notation of Section~\ref{sec:reduced}.
+
+The fitted relation between the deployed primary coordinates and macroscopic strain has an aggregate relative array discrepancy of $3.60\times10^{-5}$ on these snapshots; its maximum absolute component discrepancy is $2.55\times10^{-5}$. These quantities explain why macroscopic strain is a useful primary-coordinate predictor for this material. They do not imply exact equality at unsampled states, nor do they measure the closure error or the equilibrium residual. In particular, the direct substitution in D-HPROM--ANN is an additional approximation, even when the plot appears visually indistinguishable from the identity.
+
+The secondary-coordinate closure is a $3$--$64$--$64$--$36$ feed-forward network with two $\tanh$ hidden layers and a linear output. Its training script uses input standardization, the raw secondary-coordinate loss in Eq.~\eqref{eq:closure_loss}, and a 90/10 internal fit/validation split with seed 20260903. Full-batch Adam has initial learning rate $2\times10^{-3}$, a validation-driven reduction schedule, and a maximum budget of 20000 epochs. The archived best relative validation mean-square error is $3.75\times10^{-7}$. This is an internal closure metric after a POD built from all 4950 snapshots, not an independent material-generalization estimate. Independent effective-stress and structural tests provide the latter assessment.
+
+Each deployed adaptive cubature field has architecture $3$--$128$--$128$--$128$--$10$, GELU hidden activations, and the scaled softmax output of Eq.~\eqref{eq:softmax_weights}. The residual and stress checkpoints use distinct ten-element supports. Their larger neural cores illustrate why the online cost cannot be inferred solely from the three equilibrium coordinates or from the element count. These reduction-training choices differ from those of the constitutive networks; the common material and data domain do not imply matched offline training budgets.
+
+\begin{figure}[htbp]
+ \centering\includegraphics[width=.99\linewidth]{pod_primary_coordinates.pdf}
+ \caption{Diagnostics from the deployed 39-mode basis artifact. Left: relative POD snapshot truncation norm, before the primary/secondary rotation. Right: strain-informed primary coordinates versus the corresponding macroscopic strains; every tenth snapshot is plotted, whereas the reported discrepancies use all 4950 states. Neither diagnostic measures structural accuracy or proves validity outside the sampled domain.}
+ \label{fig:pod}
+\end{figure}
+
+\subsection{From a restrictive feature family to an accurate fit}
+The earlier 15-feature construction combines $\tr\C$, twelve balanced directional fourth- and sixth-power features of $\F$ and $\cof\F$, and $J,J^2$. Its reference correction uses $-r\log J$. The revised formulation changes both the feature family and the separation of reference normalization from volumetric stiffness; it is not simply a wider network or a relabelling of the old inputs.
+
+A convex nondecreasing core preserves the componentwise ordering of its inputs. Consequently, if all features increase along a deformation path, the core output cannot decrease. Whether the complete energy decreases also depends on its analytic correction terms. An incompatibility with a fixed feature/correction family is a representational restriction of that family, not a contradiction of polyconvexity as a mathematical framework. The revised directional powers and determinant exponents provide additional ways to capture the observed deformation response while maintaining the sufficient convexity conditions.
+
+The saved original ICNN and ICKAN have held-out aggregate stress errors of approximately $22.78\%$ and $18.33\%$, respectively. The selected revised models reduce these errors to approximately $0.65\%$; Table~\ref{tab:constitutive} reports the independently audited selected checkpoints. The Free model's corresponding aggregate stress errors are $1.2643\%$ on the test set and $5.5024\%$ on the finite probe set. Thus the polyconvex models improve this test fit but do not outperform Free on aggregate probe error. This distinction matters when discussing extrapolation.
+
+\begin{table}[htbp]
+ \centering\small
+ \caption{Selected polyconvex models: constitutive errors, in percent.}
+ \label{tab:constitutive}
+ \input{tables/constitutive_errors.tex}
+\end{table}
+
+\begin{figure}[htbp]
+ \centering\includegraphics[width=.85\linewidth]{probe_errors.pdf}
+ \caption{Stress error on increasingly distant probe rings, using only finite reference labels. Ring factors expand the sampling box; they are not coupon load multipliers. The increase to approximately $12.25\%$ at factor 2 illustrates a remaining extrapolation limitation despite architectural admissibility.}
+ \label{fig:probe}
+\end{figure}
+
+The archived independent audit records successful energy first- and second-derivative checks and saved-weight nonnegative-energy sufficient bounds for both selected models. The conservative finite-interval margins are $17.25$ and $16.82$ in normalized energy units. Random admissible-deformation tests support implementation consistency, but the polyconvexity argument is analytical. Neither aggregate error nor a successful bound on energy is a uniform bound on stress prediction error.
+
+\subsection{A closed-cycle witness for direct stress regression}
+\label{sec:cycle}
+For a differentiable hyperelastic potential, any closed strain cycle in its domain satisfies
+\begin{equation}
+ \mathcal W_{\rm cyc}=\oint\ssv\cdot\dd\ee=0.
+ \label{eq:cycle}
+\end{equation}
+This test isolates integrability and does not require a structural Newton failure. The importance of conservative strain--stress mappings is discussed explicitly by As'ad et al.~\cite{asad2022}. We evaluate a counterclockwise rectangular cycle in $(E_{11},E_{22})$, with half-width $0.001$, centered at
+\begin{equation}
+ \ee_c=(0.0051260033,-0.0945507613,-0.1283720602)^T.
+\end{equation}
+The engineering shear component is held fixed. The rectangle lies inside Eq.~\eqref{eq:box}. Its center was chosen after inspecting regression tangent asymmetry at held-out states; it is a deliberately selected mechanical witness, not an unbiased estimate of the frequency of violations. The models remain frozen during this audit.
+
+\begin{figure}[htbp]
+ \centering\includegraphics[width=.97\linewidth]{cycle_convergence.pdf}
+ \caption{Closed-cycle geometry and quadrature refinement of net stress work. Regression approaches a nonzero signed value of $-213.922$ J m$^{-3}$. Free and ICNN cancel to numerical precision; an exact numerical zero is plotted at $10^{-12}$ J m$^{-3}$ solely for logarithmic display. The $C^2$ spline energy also defines a conservative law, but crossing spline knots requires quadrature refinement; its residual work decreases towards zero. The FOM marker is a separately evaluated cycle at eight Gauss points per edge.}
+ \label{fig:cycle}
+\end{figure}
+
+Table~\ref{tab:cycle} retains the signed work and its quadrature dependence. Reversing the cycle reverses the regression work, which is incompatible with interpreting that map as an elastic potential. The result establishes a constitutive inconsistency, not by itself a quantitatively important error for every macroscopic loading history. The Free model passes this test because it is energy-based; energy-cycle consistency therefore cannot distinguish Free from the polyconvex models.
+\begin{table}[htbp]
+ \centering\small
+ \caption{Closed-cycle work under quadrature refinement.}
+ \label{tab:cycle}
+ \input{tables/cycle_convergence.tex}
+\end{table}
+
+\subsection{Rank-one curvature: guarantees, samples, and an unresolved reference}
+For $\bm H=\bm a\otimes\bm b$, the relevant finite-strain curvature is
+\begin{equation}
+ D^2_{\F}W[\bm H,\bm H]
+   =(\delta\ee)^T\bm D\,\delta\ee+\Sg:(\bm H^T\bm H),\quad
+ \delta\E=\operatorname{sym}(\F^T\bm H),
+ \label{eq:lh}
+\end{equation}
+where $\delta\ee$ uses Eq.~\eqref{eq:voigt}. Omitting the second term tests a different property. In particular, a positive semidefinite tangent with respect to $\ee$ does not generally imply rank-one convexity in compression. For energy-based models, Eq.~\eqref{eq:lh} is evaluated over sampled states and unit directions; negative candidates are checked by second differences of $W(\F\pm h\bm H)$.
+
+\begin{table}[htbp]
+ \centering\small
+ \caption{Finite rank-one curvature audit. Positive sampled values do not establish a global property.}
+ \label{tab:rankone}
+ \input{tables/rank_one.tex}
+\end{table}
+
+No negative direction is found for Free in the audited test, finite-label probe, and additional in-box sets. An outward search over 1800 strain-space rays finds its first sampled negative value at expansion factor $1.55$, with $J\simeq0.780$ and curvature approximately $-3.43$ MPa. This is a result of that search, not the exact nearest violation. Independent energy finite differences confirm the negative curvature of the learned model.
+
+However, the attempted FOM continuation fails numerically before reaching that candidate. No refined-continuation or global branch-tracking result is available there. Therefore this candidate establishes that the Free network lacks global rank-one convexity, but does not establish disagreement with a converged stable homogenized reference at that state. Solver nonconvergence is not evidence that the physical branch ceases to exist. The stronger claim of an FOM-confirmed false instability is left open. The ICNN and ICKAN have an analytical polyconvexity argument; their sampling audit is a check of implementation, not its replacement.
+
+\section{Numerical example II: structural accuracy and online cost}
+\label{sec:coupon}
+\subsection{Purpose, boundary conditions, and coverage}
+This example asks how the constitutive approximations affect a complete nonlinear structural calculation. The material is the same periodic cell as in Section~\ref{sec:cell}; the new evidence concerns error propagation and online cost, not a second microstructure. The dog-bone profile has overall length 165 mm, grip width 19 mm, narrow-section width 13 mm, narrow-section length 57 mm, and fillet radius 76 mm. It is a plane-strain computational benchmark using an ASTM-inspired in-plane profile, not a simulation certified to reproduce an ASTM tensile test.
+
+The two end faces receive equal-and-opposite axial resultants of 100 kN per end, applied in 20 equal increments. Three point constraints remove rigid modes: the axial and transverse displacement at the left mid-edge node, and transverse displacement at the right mid-edge node. Entire end faces are not clamped. Consequently, a small skew of the deformed ends is not ruled out by the boundary conditions. The anisotropic response can couple axial extension to shear.
+
+The macro mesh contains 690 quadratic triangles, 1501 nodes, and 2070 integration points. The reference extrusion thickness used to convert the two-dimensional stress integrals into the stated force resultants is 50 mm. This force convention is part of the plane-strain benchmark, not an ASTM specimen-thickness specification. The physical cell size is declared as 1.3 mm, corresponding to ten cells across the narrow width. This provides a scale-separation assumption, not a direct numerical validation of homogenization error at that ratio. All saved converged integration-point strains for every reported model remain inside the unchanged training box. This check does not automatically cover unsaved intermediate Newton iterates or certify another load case.
+
+\begin{figure}[htbp]
+ \centering\includegraphics[width=.99\linewidth]{coupon_fields.pdf}
+ \caption{Nested FOM--FE$^2$ reference at 100 kN per end. Fields are displayed on the actual deformed mesh, without displacement amplification. Gauss-point strain and stress values are first averaged within each element and then patch-averaged to nodes for visualization only. These recovered contours are not the raw fields used in error norms and can smooth local extrema. Stresses are second Piola components. A three-dimensional von Mises stress is not reconstructed because the saved output does not include the necessary out-of-plane Cauchy stress.}
+ \label{fig:coupon}
+\end{figure}
+
+\subsection{Online models and implementation verification}
+The linear HPROM uses $n_{\rm tra}=39$ generalized coordinates, a residual rule supported on 135 elements, and a stress rule on 73 elements; their union contains 183 elements. The iterative HPROM--ANN uses $n=3$ primary generalized coordinates and $\bar n=36$ secondary generalized coordinates supplied by the closure map, with ten residual and ten stress elements and a union of 19. The direct model evaluates stress on ten elements and solves no microscopic equilibrium equations. These counts refer to actual reduced MDPA meshes, not masked evaluations on the full RVE mesh. Figure~\ref{fig:supports} shows their spatial distribution and the overlap of residual and output rules.
+
+\begin{figure}[htbp]
+ \centering\includegraphics[width=.99\linewidth]{reduced_supports.pdf}
+ \caption{Element supports of the deployed hyperreduced microscopic models. The pale full-cell mesh provides location context only; discarded elements are not assembled online. Colors distinguish residual-only, stress-only, and shared elements. Supports are read from the same index arrays used to construct the reduced MDPA meshes.}
+ \label{fig:supports}
+\end{figure}
+
+For the optimized linear and direct implementations, the maximum normalized stress differences from the original implementations over the verification states are $4.71\times10^{-14}$ and $4.20\times10^{-13}$. Corresponding tangent differences are $2.68\times10^{-10}$ and $7.25\times10^{-10}$. Independent finite-difference checks give discrepancies of approximately $3.51\times10^{-9}$ and $2.38\times10^{-9}$. Such comparisons check that optimization preserves the deployed model; they do not establish that either model exactly reproduces full microscopic equilibrium.
+
+\subsection{Error and timing definitions}
+For a saved nodal or integration-point array $A$, the reported relative error is
+\begin{equation}
+ e_A=100\frac{\|\operatorname{vec}(A-A_0)\|_2}{\|\operatorname{vec}(A_0)\|_2},
+ \label{eq:error}
+\end{equation}
+where $A_0$ is the nested reference on the same meshes. These are unweighted discrete array norms. The strain array stores engineering shear, whereas the stress array stores tensor shear. They are neither quadrature-weighted continuum $L^2$ norms nor invariant tensor Frobenius norms. The metric is kept identical across models; this does not make the three different field errors interchangeable.
+
+Online wall time includes the complete macroscopic solve, microscopic or surrogate stress/tangent evaluations, communication, and lazy worker construction within the timed solve. Parent setup, offline data generation, training, reduced-mesh construction outside the timed region, and result export are excluded. The FOM uses 20 worker processes with one numerical-library thread per worker. The three optimized microscopic surrogates use the same process configuration and three sequential fresh complete runs. PANN evaluations are batched in one process and use the separately investigated thread settings shown in Table~\ref{tab:fe2}.
+
+The macroscopic solve stops when the free-degree-of-freedom residual norm falls below $10^{-5}$ N or its ratio to the initial increment residual falls below $10^{-7}$. The periodic FOM uses a relative microscopic displacement-increment tolerance of $10^{-10}$, with continuation when needed. The archived FOM and selected PANN times each have one repetition in this comparison. Thus their ratios are observed online speedups under the stated implementations, not matched-thread efficiency estimates or repeated-run confidence intervals. Table~\ref{tab:repeats} exposes the available reduced-model variability rather than selecting its fastest repetition. A publication-final timing study should repeat every tier under a common resource-budget protocol and retain all repetitions.
+
+\begin{table}[htbp]
+ \centering\footnotesize
+ \caption{Complete coupon simulations: final-field errors against the nested FOM and archived online wall times.}
+ \label{tab:fe2}
+ \input{tables/fe2_comparison.tex}
+\end{table}
+\begin{table}[htbp]
+ \centering\small
+ \caption{Sequential optimized-run repetitions used for median HPROM timings.}
+ \label{tab:repeats}
+ \input{tables/timing_repeats.tex}
+\end{table}
+
+\subsection{Accuracy--cost trade-off and Newton behavior}
+Figure~\ref{fig:cost} and Table~\ref{tab:fe2} show distinct operating points rather than a single universally best model. The linear HPROM gives the smallest displacement error, approximately $0.00565\%$, at a median online time of 67.35 s. The iterative HPROM--ANN reduces this time to 30.14 s with a displacement error of approximately $0.0520\%$. The optimized iterative nonlinear model is therefore about $2.23$ times faster than the \emph{optimized} linear model; comparison against the old linear implementation would overstate this gain. The direct closure reduces the time to 3.79 s and has a displacement error of approximately $0.0232\%$ on this path. Its lower error than the iterative nonlinear model is an observed outcome, not a consequence of a general error ordering.
+
+The ICNN and ICKAN times are 1.73 s and 3.67 s, with displacement errors of approximately $0.425\%$ and $0.387\%$. Their finite-strain structural accuracy is therefore consistent with a useful constitutive approximation, although it is poorer than the reduced microscopic models on this benchmark. Direct stress regression is fastest, but its successful coupon solution does not remove the integrability defect exposed by Section~\ref{sec:cycle}. Free also converges and remains a relevant baseline; its absence of a global convexity constraint is not equivalent to a failure on this load case.
+
+\begin{figure}[htbp]
+ \centering\includegraphics[width=.93\linewidth]{cost_accuracy.pdf}
+ \caption{Online cost versus final displacement error on the common coupon problem. Horizontal segments show the observed range of three optimized HPROM runs; unbarred points are archived single PANN runs. Process and thread counts differ as detailed in Table~\ref{tab:fe2}. The plot does not include offline costs.}
+ \label{fig:cost}
+\end{figure}
+
+All models require four macroscopic iterations per increment in the archived runs. Consequently, this example provides no empirical evidence that polyconvexity reduced Newton iterations relative to Free or Regression. It establishes that the selected constrained models can be used successfully with the common structural solver, while maintaining their constitutive guarantees. A separate challenge problem would be needed to establish a solver-robustness advantage, and its reference solution would need to be validated independently.
+
+\section{Position relative to prior work and limitations}
+\label{sec:discussion}
+\input{sections/literature_comparison}
+
+\subsection{What the present evidence supports}
+The principal positive result is practical compatibility between accurate fitting and a polyconvex architecture for the investigated anisotropic cell. The original training difficulty does not show that polyconvexity is unreliable; it shows that sufficient constructions differ in expressive restrictions. The paired features and independent volume terms substantially improve the fit, but the experiment changes several ingredients simultaneously. A frozen-budget ablation is still needed to attribute the gain separately to feature learning, determinant exponents, reference normalization, and spline curvature flexibility.
+
+The mechanical tests address different requirements. Closed-cycle work detects the lack of a potential in Regression. Rank-one curvature addresses an additional condition not implied by the potential structure of Free. The current Free counterexample is outside the reference-validated region and is not an FOM-confirmed artificial instability. Nominal coupon convergence therefore complements these tests rather than replacing them. It would be scientifically incorrect to report that all unconstrained alternatives fail while all constrained alternatives are accurate everywhere.
+
+The results concern a single material, plane-strain kinematics, one structural loading path, and a prescribed training box. They do not demonstrate universality across microstructures, transfer of one trained network to another material, three-dimensional constitutive completeness, or history-dependent behavior. A second microstructure should answer an additional question---for example, whether the feature family remains effective under qualitatively different deformation mechanisms---rather than simply duplicate the same tensile test. Such a result is not included before its data exist.
+
+Finally, the current online comparison excludes potentially substantial offline costs and has unequal repetition counts and thread configurations. These limitations are visible in the tables. Break-even query counts, deployment robustness under domain exit, and a common repeated timing protocol are necessary complements for a publication-final assessment of computational efficiency.
+
+\section{Conclusions}
+Paired directional features with constrained trainable powers and determinant exponents provide a practical polyconvex constitutive construction for the anisotropic periodic material studied here. Their isotropic reference derivatives allow exact stress normalization through an affine determinant correction without tying the normalization coefficient to the volumetric barrier stiffness. Both a smooth ICNN and an integrated-hat spline-ICKAN achieve approximately $0.65\%$ held-out aggregate stress error and below $0.43\%$ displacement error in the nominal coupon simulation.
+
+Optimized reduced microscopic models occupy a different accuracy--cost range. They are more accurate on this coupon, while direct learned constitutive evaluation is generally faster. A closed-cycle test exposes a conservative-mechanics limitation of the regression baseline that nominal finite element convergence does not reveal. In contrast, the available Free-model curvature witness is not yet supported by a converged FOM reference and is reported only within that limited scope. The study supports the usefulness of the proposed constrained feature family for the present problem, not unrestricted extrapolation or a universal ranking of constitutive and reduced-order models.
+
+\appendix
+\section{Joint convexity of the directional building block}
+\label{app:convex}
+Consider $f(\bm x,J)=\|\bm x\|^aJ^{-b}$ with $J>0$, $a\geq1$ and $0\leq b\leq a-1$. For $t=\|\bm x\|>0$, the Hessian block in the radial and determinant variables is
+\begin{equation}
+ \begin{pmatrix}
+ a(a-1)t^{a-2}J^{-b} & -ab t^{a-1}J^{-b-1}\\
+ -ab t^{a-1}J^{-b-1} & b(b+1)t^aJ^{-b-2}
+ \end{pmatrix}.
+\end{equation}
+Its diagonal entries are nonnegative and its determinant is
+\begin{equation}
+ ab(a-b-1)t^{2a-2}J^{-2b-2}\geq0.
+\end{equation}
+The transverse Hessian eigenvalues are $a t^{a-2}J^{-b}\geq0$. Continuous extension gives convexity at $\bm x=0$. For the constitutive evaluation on $\GL$, a nonzero reference direction cannot satisfy $\F\bm d=0$, so this point does not introduce an interior singularity of the directional norm. Taking $a=2p$ or $2q$ establishes Eq.~\eqref{eq:featureconstraints}.
+
+\section{Sufficient lower bound for nonnegative energy}
+\label{app:nonnegative}
+Write $t=\|\F\bm d_i\|^2$, $u=\|\F\bm d_i^\perp\|^2$. Hadamard's determinant inequality gives $tu\geq J^2$. Since each feature is increasing in $t,u$, its minimum at fixed $J$ occurs on $tu=J^2$. Minimizing
+\begin{equation}
+ \frac{t^{p_i}}{p_iJ^{b_i}}+\frac{J^{2q_i-c_i}t^{-q_i}}{q_i}
+\end{equation}
+gives $t^{p_i+q_i}=J^{2q_i+b_i-c_i}$ and hence $z_i\geq k_iJ^{\eta_i}$. This is a separate lower bound for each feature; simultaneous attainability for all directions is not assumed. It therefore remains valid after summing the supporting-plane inequalities.
+
+For Eq.~\eqref{eq:lowerbound},
+\begin{equation}
+ J^2g''(J)=\alpha+\varepsilon+\beta J^2+\sum_i c_i^*J^{\eta_i},
+ \qquad c_i^*=h_i k_i\eta_i(\eta_i-1).
+\end{equation}
+Only terms with $0<\eta_i<1$ can have negative coefficients. If $c_-=\sum_{c_i^*<0}|c_i^*|$, the two inequalities
+\begin{align}
+ \alpha+\varepsilon+\sum_{\eta_i<0}c_i^*-c_-&\geq0,\\
+ \beta+\sum_{\eta_i\geq1}c_i^*-c_-&\geq0
+\end{align}
+are sufficient on $0<J\leq1$ and $J\geq1$, respectively. For the first region, $J^{\eta_i}\leq1$ for negative-coefficient terms and $J^{\eta_i}\geq1$ when $\eta_i<0$. For the second region, divide $J^2g''$ by $J$: all negative-coefficient powers then satisfy $J^{\eta_i-1}\leq1$, while $J^{\eta_i-1}\geq1$ for $\eta_i\geq1$ and $\beta J\geq\beta$. Dropping the remaining nonnegative contributions gives the stated bounds. Their failure is inconclusive.
+
+The selected parameters require a sharper check. The audit partitions $[10^{-4},10^4]$ into 4000 logarithmically spaced intervals. On each interval $[J_L,J_R]$, a positive power term is bounded below by the smaller endpoint value, whereas a negative-coefficient term is bounded below by $c_i^*J_R^{\eta_i}$, since its exponent lies in $(0,1)$. The constant and quadratic terms are bounded below by $\alpha+\varepsilon$ and $\beta J_L^2$. Below the finite interval, the nonnegative negative-exponent terms increase and the magnitudes of the negative-coefficient terms decrease toward $J=0$. Above it, factoring out $J^{\eta_-}$ with $\eta_-=\max_{c_i^*<0}\eta_i<1$ yields a lower bound whose retained positive powers increase. These endpoint and tail inequalities cover every $J>0$, not only the grid points. Positive margins establish the sufficient analytical argument for the saved parameters to the accuracy of its floating-point evaluation; random energy samples alone would not establish it.
+
+\section{Reproducibility and draft status}
+The accompanying \texttt{build\_evidence.py} reads archived result arrays and metadata, verifies common mesh hashes, loads, completed increments, and saved-state coverage, and regenerates the numerical tables and vector figures. The generated \texttt{evidence\_manifest.json} records SHA-256 hashes of the consumed artifacts. The additional \texttt{build\_method\_figures.py} generates the model-hierarchy diagram and computes the POD/primary-coordinate diagnostics from the retained basis; its separate manifest records that source hash. Neither script performs retraining or a new timing run. Selected checkpoint hashes and training manifests are retained in the constitutive audit directory. Thus regenerated graphics cannot silently be interpreted as newly measured performance.
+
+The source text of the earlier manuscript is preserved. This draft changes its organization and narrows claims to available evidence. Its accompanying \texttt{REFERENCE\_AUDIT.md} distinguishes extraction, inspected source passages, and unfinished full-paper reading. The supplied Boehler chapter is incomplete, and no theorem is attributed to its missing pages. Author metadata, complete reference review, final statistical timing protocol, and any additional numerical example remain editorial or experimental completion tasks rather than implicit completed results.

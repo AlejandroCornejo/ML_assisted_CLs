@@ -1,0 +1,1301 @@
+                                          Available online at www.sciencedirect.com
+                                                     ScienceDirect
+
+                                     Comput. Methods Appl. Mech. Engrg. 344 (2019) 1104–1123
+                                                                                                                www.elsevier.com/locate/cma
+
+
+
+
+  An LP empirical quadrature procedure for reduced basis treatment
+                  of parametrized nonlinear PDEs
+                                          Masayuki Yano a , ∗, Anthony T. Patera b
+                                   a University of Toronto, 4925 Duffein Street, Toronto, ON, M3H 5T6, Canada
+                                   b Room 3-266, MIT, 77 Massachusetts Avenue, Cambridge, MA 02139, USA
+
+
+                       Received 3 November 2017; received in revised form 25 February 2018; accepted 27 February 2018
+                                                       Available online 7 March 2018
+
+
+
+
+Highlights
+
+• A reduced basis method for parametrized nonlinear PDEs is developed.
+• Empirical quadrature procedure (EQP) finds sparse quadrature for parametric integrands.
+• Greedy training strategy simultaneously identifies reduced basis and EQP.
+• Significant computational savings are achieved for a parametrized neo-Hookean beam.
+
+
+Abstract
+
+    We present a model reduction formulation for parametrized nonlinear partial differential equations (PDEs). Our approach builds
+on two ingredients: reduced basis (RB) spaces which provide rapidly convergent approximations to the parametric manifold; sparse
+empirical quadrature rules which provide rapid evaluation of the nonlinear residual and output forms associated with the RB
+spaces. We identify both the RB spaces and the sparse quadrature rules in the offline stage through a greedy training procedure
+over the parameter domain; the procedure requires the dual norm of the finite element (FE) residual at many training points in the
+parameter domain, but only very few FE solutions—the snapshots retained in the RB space. The quadrature rules are identified
+by a linear program (LP) empirical quadrature procedure (EQP) which (i) admits efficient solution by a simplex method, and
+(ii) directly controls the solution error induced by the approximate quadrature. We demonstrate the formulation for a parametrized
+neo-Hookean beam: the dimension of the approximation space and the number of quadrature points are both reduced by two orders
+of magnitude relative to FE treatment, with commensurate savings in computational cost.
+⃝c 2018 Elsevier B.V. All rights reserved.
+
+
+
+Keywords: Reduced basis method; Parametrized nonlinear PDEs; Hyperreduction; Empirical quadrature; Linear programming; Neo-Hookean
+hyperelasticity
+
+
+
+
+  ∗ Corresponding author.
+    E-mail addresses: myano@utias.utoronto.ca (M. Yano), patera@mit.edu (A.T. Patera).
+
+https://doi.org/10.1016/j.cma.2018.02.028
+0045-7825/⃝  c 2018 Elsevier B.V. All rights reserved.
+               M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123   1105
+
+1. Introduction
+   In this work we consider rapid solution of parametrized nonlinear partial differential equations (PDEs) in
+continuum mechanics. In particular, we wish to evaluate an engineering quantity of interest (output) – such as
+displacement and local strain energy – for a given configuration parameter (input) — such as material properties and
+load conditions. Our interest is in many-query scenarios, which require the input–output evaluation for a large number
+of different parameter values; we will also typically demand real-time response. One approach in this context is model
+reduction based on offline–online computational decomposition: in the offline stage, we construct, once, a reduced
+model through a relatively expensive exploration of the parameter domain; in the online stage, we invoke, many
+times, the reduced model to evaluate the input–output map. This work focuses on model reduction for parametrized
+nonlinear PDEs.
+   To make the setting mathematically precise, we define an abstract parametrized second-order PDE. We introduce
+a parameter domain D ⊂ R P , a spatial domain Ω ⊂ Rd , and a function (Hilbert) space V such that H01 (Ω ) ⊂ V ⊂
+H 1 (Ω ); we associate to V an inner product (·, ·)V and induced norm ∥ · ∥V (equivalent to the H 1 (Ω ) norm). We
+further define an N -dimensional “truth” finite element (FE) approximation space V h ⊂ V for N relatively large, and
+an associated N -dimensional RB space V N ⊂ V h ⊂ V for N ≪ N . Our reduced basis approximation is given as
+follows: given µ ∈ D, find u N (µ) ∈ V N such that
+       ∫                            ∫
+           ∇v · A(u N (µ); µ)d x =     v B(u N (µ); µ)d x ∀v ∈ V N ,                                               (1)
+       Ω                               Ω
+and then evaluate an output
+                ∫
+      s N (µ) ≡    C(u N (µ); µ)d x;                                                                                   (2)
+                 Ω
+
+here A : V × D → (L 2 (Ω ))d , B : V × D → L 2 (Ω ), and C : V × D → L 1 (Ω ) are respectively the parametrized
+nonlinear flux, source, and output operators associated with our weak form. The objective of model reduction is to
+approximate the input–output map µ ↦→ s N (µ) for any µ ∈ D in online complexity O(N q ) ≪ O(N ) for q a small
+positive integer. (We will henceforth denote complexity I α , for 0 ≤ α ≤ 3, simply as O(I • ).) A naive approach to the
+problem is to directly evaluate the requisite integrals or, more precisely, to approximate these integrals using “truth”
+FE quadrature rules. The latter will comprise O(N ) points and hence, even though our test and trial spaces are of
+dimension N ≪ N , the overall online complexity is O(N ) ≫ O(N • ).
+   A special case arises if the operators are linear (or polynomially nonlinear) in the state and moreover admit a
+decomposition that is affine in functions of parameters:
+                  Q  A
+                  ∑
+      A(w; µ) =          ΘqA (µ)Aq w
+                  q=1
+
+for some ΘqA    ∈ L ∞ (D) and linear Aq : V → (L 2 (Ω ))d , q = 1, . . . , Q A , with similar representations for B and
+C. This is the setting typically considered by the reduced basis (RB) method; we refer to the review paper [1] for
+further details. The RB method exploits the affine decomposition to precompute all required integrals in the offline
+stage and thus reduce the online complexity to O(N • ) — rapid response. In addition, the RB method provides an
+O(N • )-complexity error indicator, often error bound, for any µ ∈ D — reliable response. Hence, for linear PDEs
+which admit affine decomposition – often the case in linear elasticity, acoustics, and heat transfer – the RB method
+provides rapid and reliable solution.
+   However, many PDEs in continuum mechanics are nonlinear: A, B, and C in (1) and (2) are now nonlinear
+operators. Over the past decade, much work has been done to extend the efficiency and reliability of the RB
+method to nonlinear PDEs (see, e.g., [2–4]) in particular by hyperreduction approaches. A popular approach is
+interpolation-then-integration: we first approximate, for µ ∈ D, the nonlinear sets A(u(µ)), B(u(µ)), and C(u(µ)),
+by construction of a suitable reduced basis and associated sparse interpolation system; we may then precompute
+all required integrals in the offline stage. We do not provide here a comprehensive survey of model reduction
+techniques based on interpolation-then-integration, but rather cite a few representative approaches. The gappy POD
+method, pioneered by Everson and Sirovich in the context of image reconstruction [5], has since been adapted to
+model reduction in the (Galerkin) gappy POD method [6], the missing point estimation (MPE) method [7], and
+1106               M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123
+
+the Gauss–Newton approximate tensor (GNAT) method [8]. The empirical interpolation method (EIM) [9,10], and
+closely related methods such as the best point interpolation method (BPIM) [11,12], also provide a foundation
+for treatment of nonlinear problems. Although these interpolation-then-integration approaches are quite effective in
+practice, the objectives of interpolation and integration are arguably quite different. Moreover, while error bounds for
+certain interpolatory procedures exist (e.g., [13] for EIM), to our knowledge most if not all of the interpolation-then-
+integration approaches do not quantify the effect of the interpolation error on the solution error (in norm ∥ · ∥V ) — the
+quantity we wish to control; a judicious, or conservative, selection of the interpolation tolerance is often required to
+ensure that the solution error tolerance is satisfied.
+    An alternative approach to (1) and (2) is to forgo the interpolation of the nonlinear operators A, B, and C,
+and directly approximate the integrals with an empirical quadrature rule specialized for the relevant parametrized
+integrands. An ℓ2 framework for empirical quadrature procedure of parametrized functions is developed by An
+et al. [14] and further extended by Farhat et al. [15]. In the ℓ2 framework, sparsity must be introduced explicitly,
+either through a heuristic sequential point selection process (as in [14]) or through an approximate ℓ0 optimization
+(as in [15]); in both cases, a somewhat challenging non-negative least-squares problem must be addressed. In [16],
+Ryu and Boyd propose an ℓ1 framework to empirical quadrature construction; the stronger norm naturally yields
+quadrature rules that are sparse and furthermore the offline problem can be cast as a linear program (LP) efficiently
+treated by a simplex method. This LP quadrature framework is further developed in DeVore et al. [17] and extended
+to the parametric context in [18].
+    The current paper builds on [18] to provide an LP empirical quadrature procedure (EQP) approach for RB
+approximation of nonlinear PDEs. The new contribution is threefold. First, we introduce an LP EQP which invokes
+a preconditioned residual to provide, assuming a sufficiently dense training set, direct control of the RB solution
+error induced by the approximate quadrature. Second, we devise an efficient offline training procedure which exploits
+the dual norm of the residual to simultaneously identify an appropriate RB space V N and the associated empirical
+quadrature rule; our approach is related to the simultaneous training procedure for RB and EIM in [19,20]. Third,
+we demonstrate the efficiency and error control of our model reduction formulation for a parametrized neo-Hookean
+beam.
+    This paper is organized as follows. In Section 2, we review the LP EQP and error analysis first presented in [18]. In
+Section 3, we present the LP EQP RB method: we describe the formulation, present an error analysis, and then provide
+a greedy algorithm for offline training. In Section 4, we demonstrate the approach for a parametrized neo-Hookean
+beam.
+
+2. Linear programming (LP) empirical quadrature procedure (EQP)
+   In this section, we review the LP EQP first presented in [18].
+
+2.1. Formulation
+
+   We first introduce a compact parameter domain D ⊂ R P and a bounded integration domain Ω ⊂ Rd . We next
+introduce a parametrized vector-valued function g : D × Ω → R M for M a finite positive integer. We now state our
+integration problem: given µ ∈ D, find I (µ) ∈ R M given by
+              ∫
+      I (µ) =     g(µ; x)d x.                                                                                 (3)
+                   Ω
+We will approximate the integral (3) using a quadrature rule.
+                                                                                                  Kh
+  Towards this end, we introduce a “truth” FE quadrature rule defined by K h points {xkh ∈ Ω }k=1     and the associated
+                      h
+weights {ρkh ∈ R+0 }k=1
+                    K
+                        ; we require the “truth” quadrature to integrate exactly the constant function,
+       K h
+       ∑
+             ρkh = |Ω |.
+       k=1
+
+We then state the “truth”-quadrature integration problem: given µ ∈ D, find I h (µ) ∈ R M such that
+                   K   h
+                   ∑
+       I h (µ) =           ρkh g(µ; xkh ).                                                                                (4)
+                   k=1
+                 M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123   1107
+
+(Here R+ and R+0 refer to the positive and non-negative real numbers, respectively.) Following the custom in the
+reduced-basis community, we use the word “truth” to refer to sufficiently accurate (computable) FE approximations
+to our (in general, uncomputable) continuous problem (3); we characterize the “truth” FE approximations by a
+discretization parameter h. For instance, our “truth” quadrature may be a piecewise Gauss quadrature associated
+with a tessellation of Ω by elements of maximum diameter h.
+   We wish to approximate (4) for all µ ∈ D by an empirical quadrature rule specifically constructed for the
+                                                                                       h
+parametrized integrand. To begin, we define an empirical quadrature operator, Iˆh : R K × D → R M , such that
+                       K    h
+                       ∑                                           h
+      Iˆh (ρ; µ) ≡               ρk g(µ; xkh ) ∀ρ ∈ R+0
+                                                     K
+                                                        , ∀µ ∈ D.
+                           k=1
+                                                                  h
+We note that, for the “truth” quadrature weight ρ h ∈ R K , Iˆh (ρ h ; µ) = I h (µ), ∀µ ∈ D. Our goal is to find a
+quadrature rule {xkh , ρk⋆ }k=1  that is accurate — ∥I h (µ) − Iˆh (ρ ⋆ ; µ)∥∞ ≤ ϵ, ∀µ ∈ D, for ϵ small – and sparse –
+                             K h
+
+       ⋆
+|{k | ρk > 0}| ≪ K . (Here ∥ · ∥m refers to the usual ℓm norm.)
+                        h
+
+   We now introduce an empirical quadrature procedure (EQP) to find ρ ⋆ ∈ R K . To this end, we specify an accuracy
+                                                                                     h
+
+
+parameter δ ∈ R+å å and a parameter training set Ξ J ≡ {µ j } j=1 ⊂ D of size J . We then define our hyperparameter
+                                                     train      train J
+
+ν ≡ {h, δ, Ξ Jtrain }; the hyperparameter summarizes the dependence of our empirical quadrature rule on the underlying
+“truth” quadrature, as characterized by h, the accuracy parameter δ, and the parameter training set Ξ Jtrain . We can now
+define our EQP linear program LPνEQP : find a basic feasible solution ρ ⋆ ∈ R K such that
+                                                                                  h
+
+
+
+                            K    h
+
+      ρ ⋆ = arg min
+                            ∑
+                                      ρk
+                       h
+               ρ∈R K        k=1
+
+subject to K h non-negativity constraints
+
+      ρk ≥ 0,        ∀k = 1, . . . , K h ,                                                                               (5)
+an accuracy constraint associated with the constant function,
+               K h
+               ∑
+      ||Ω |−         ρk | ≤ δ,                                                                                           (6)
+               k=1
+
+and M J accuracy constraints associated with functions on the parameter manifold,
+
+      ∥I h (µ) − Iˆh (ρ; µ)∥∞ ≤ δ                    ∀µ ∈ Ξ Jtrain .                                                     (7)
+                                                                                      ν Kν
+We then extract the (strictly) positive quadrature weights {xkν , ρk }k=1 ≡ {{xih , ρi⋆ } | i ∈ {k | ρk⋆ > 0}}. The resulting
+empirical quadrature rule is given by
+                                           K ν
+
+      I ν (µ) ≡ Iˆh (ρ ⋆ ; µ) ≡                  ρkν g(µ; xkν ).
+                                           ∑
+                                                                                                                         (8)
+                                           k=1
+
+   We make a few remarks. First, we observe that LPνEQP is feasible: the “truth” quadrature weight ρ h ∈ R K
+                                                                                                                           h
+
+
+satisfies (5), (6), and (7). Second, numerical evidence suggests that there exist basic feasible solutions of LPνEQP which
+are sparse — K ν ≪ K h ; indeed, given that our objective function is the ℓ1 norm of ρ, the existence of a sparse
+basic feasible solution is anticipated. Third, numerical evidence suggests that the solution to LPνEQP achieves rapid
+convergence — maxµ∈D ∥I h (µ) − I ν (µ)∥∞ → δ rapidly as J → ∞; we provide a proof of convergence, if not rapid
+convergence, in Section 2.2. Fourth, for a strictly positive (or negative) integral, we may control the relative error
+instead of the absolute error; we replace (6) and (7) by
+                           K h
+                           ∑
+             ||Ω |−                  ρk | ≤ δ|Ω |,
+                           k=1
+      |I h (µ) − Iˆh (ρ; µ)|i ≤ δ|I h (µ)|i ,                ∀i = 1, . . . , M, ∀µ ∈ Ξ Jtrain ,
+1108                M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123
+
+respectively, where the subscript i denotes the ith entry of the M-vector. Finally, we note that the accuracy
+constraint (6) on constant functions improves the robustness of EQP when the integral I h (µ) is close to zero due
+to the cancellation of the integrand g(µ; ·) in different parts of the domain Ω ; in fact, if I h (µ) = 0 ∀µ ∈ Ξ Jtrain , the
+EQP without the constraint (6) would yield a trivial quadrature rule, which does not capture the cancellation of g(µ; ·)
+over Ω and may suffer from a significant generalization error for µ ̸= Ξ Jtrain . Here by a trivial quadrature rule we refer
+to a rule with zero quadrature weights (and hence an indefinite number of quadrature points).
+   We finally comment on the offline and online computational cost. The offline stage consists of two tasks: the
+formation of the LP constraint matrix; the solution of the LP. The LP has K h unknowns, K h positivity constraints,
+and M J + 1 absolute value bound constraints, one of which is associated with the constant function, (6), and M J
+of which are associated with the manifold, (7). (In practice, the absolute value bounds are recast as 2(M J + 1) one-
+sided inequality constraints.) To populate entries of the LP constraint matrix associated with the manifold accuracy
+constraints, we must evaluate the integrand g(·; ·) for all J training parameter values in Ξ Jtrain and all K h “truth”-
+                          Kh
+quadrature points {xkh }k=1   . We then proceed to find a basic feasible solution to the LP by application of the (dual)
+simplex method. In the online stage, given µ ∈ D, we evaluate the integrand g(·; ·) for the specified µ at the EQP
+             Kν
+points {xkν }k=1 , and then evaluate (8); hence the online reduction in computational cost (relative to FE truth quadrature)
+is ≈ K ν /K h .
+
+2.2. A priori error analysis
+
+  We now provide convergence proofs. The results were first provided in [18], which we reproduce here for
+completeness. We first provide a general error bound.
+
+Proposition 2.1. For any µ ∈ D,
+                                                    ⎡                                                                            ⎤
+                                                                J                                  J
+       ∥I h (µ) − I ν (µ)∥∞ ≤
+                                                                ∑                                  ∑
+                                        max         ⎣ inf δ           |α j | + 2|Ω ||gm (µ; ·) −         α j gm (µtrain
+                                                                                                                   j ; ·)| L ∞ (Ω)
+                                                                                                                                   ⎦   (9)
+                                      m∈{1,...,M}       α∈R J
+                                                                j=1                                j=1
+
+
+Proof. See the proof of Lemma 2.1 in [18]. □
+
+                                                                                                         j=1 α j g(µ j ; ·).
+                                                                                                       ∑J           train
+    To interpret (9), we consider an interpolatory approximation of g(µ; ·) by our snapshots
+Eq. (9) quantifies (first term) the stability and (second term) the best-fit approximation error for any µ ∈ D.
+    We note that Proposition 2.1 is not actionable. However, under a suitable regularity assumption on g(·; ·), we arrive
+at the following error bound.
+
+Proposition 2.2. Suppose the integrand g ∈ (L ∞ (D; L ∞ (Ω ))) M satisfies a Lipschitz condition
+           sup          ∥g(µ′ ; ·) − g(µ′′ ; ·)∥(L ∞ (Ω)) M ≤ L g ∥µ′ − µ′′ ∥2
+       (µ′ ,µ′′ )∈D 2
+
+for L g a finite constant and ∥ · ∥2 the usual Euclidean norm in R P . We in addition introduce the fill distance
+       ∆ν ≡ max min ∥µ − µ′ ∥2 .
+                µ∈D µ′ ∈Ξ train
+                              J
+
+Then, for a fixed J and any µ ∈ D,
+       ∥I h (µ) − I ν (µ)∥∞ ≤ δ + 2|Ω |L g ∆ν .
+
+Proof. See the proof of Lemma 2.2 in [18]. □
+
+Remark 1. While the proposition provides a simple interpretation of the error, the bound can be ineffective in
+moderate- to high-dimensional parameter spaces due to a large number of training points required to achieve a usable
+fill distance ∆ν . In higher-dimensional parameter spaces, Proposition 2.1, which directly characterizes the error in
+terms of the best-fit approximation of the manifold {g(µ; ·)}µ∈D by the linear space span{g(µtrain ; ·)}µtrain ∈Ξ train (and
+                                                                                                                  J
+the stability), is more suitable; the proposition shows that the error and the training requirement depend not directly
+               M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123   1109
+
+on the dimensionality of the space but rather on the extent of the parametric manifold {g(µ; ·)}µ∈D . We emphasize
+that Proposition 2.2 is just one particular, and arguably the simplest possible, convergence result which can be derived
+from Eq. (9) of Proposition 2.1; we expect that the actual convergence rate will be much more rapid than the linear-
+in-fill-distance result of Proposition 2.2.
+
+
+3. Reduced-basis empirical-quadrature-procedure (RB-EQP) method
+
+   The LP EQP introduced in Section 2 identifies a sparse quadrature rule for a family of parametrized integrals and
+admits an offline–online computational decomposition. We now apply the technique to RB approximations to provide
+online-efficient solution of parametrized nonlinear PDEs. The formulation is quite general, however, to present the
+method in a concrete manner, we consider a model problem: parametrized neo-Hookean hyperelasticity.
+
+3.1. Model problem: neo-Hookean hyperelasticity
+
+   We first introduce a vector-valued function space V ≡ {v ∈ (H 1 (Ω ))d | v|Γ D = 0} over a Lipschitz domain
+Ω ⊂ Rd with a non-empty Dirichlet boundary Γ D ⊂ ∂Ω . We associate displacement fields with V. We then introduce
+the deformation gradient tensor field F(w) = ∇w + I ∈ (L 2 (Ω ))d×d for a given displacement field w ∈ V. We next
+recall the strain energy density function for a neo-Hookean solid:
+                      λ2 (µ)                                                λ1 (µ) 2
+      Ψ (F(w); µ) =          tr(F T (w)F(w) − I ) − λ2 (µ) log(det(F(w))) +        log (det(F(w))),              (10)
+                        2                                                      2
+where the Lamé first and second constants, respectively λ1 (µ) and λ2 (µ), are in general functions of the parameter
+µ ∈ D. The differentiation of the potential with respect to the deformation gradient tensor F(w) yields the first
+Piola–Kirchhoff stress:
+      P(F(w); µ) = λ2 (µ)(F(w) − F −T (w)) + λ1 (µ) log(det(F(w)))F −T (w),
+where T denotes algebraic transpose.
+   The parametrized residual form r : V × V × D → R associated with a neo-Hookean solid subject to a parametrized
+external volume load f : D → L 2 (Ω ) is then given by
+                    ∫
+      r (w, v; µ) ≡   η(w, v; µ; x)d x, ∀w, v ∈ V, ∀µ ∈ D,                                                   (11)
+                     Ω
+where the integrand η : V × V × D × Ω → R is defined as
+
+      η(w, v; µ; ·) ≡ ∇v(·) : P(µ; F(w(·))) − v(·) · f (µ; ·),        ∀w, v ∈ V, ∀µ ∈ D.                              (12)
+We can now state our model nonlinear problem: given µ ∈ D, find u(µ) ∈ V such that
+
+      r (u(µ), v; µ) = 0    ∀v ∈ V.                                                                                   (13)
+We assume the problem (13) is well posed and that, for all µ ∈ D, we remain on a single solution branch (i.e., no
+bifurcation). For the example problem considered in Section 4, the FE convergence study indeed supports the
+assumption of well-posedness of the continuous (infinite-dimensional) problem.
+
+3.2. FE “truth” approximation
+
+   We now consider a finite element approximation of (13). To this end, we first provide a “truth” finite element space
+      V h ≡ {v ∈ V | v|κ ∈ (P p (κ))d , κ ∈ T h } ⊂ V;
+here T h is a tessellation of the domain Ω into non-overlapping elements {κ}, and P p (κ) is the space of degree- p
+                                                                            Kh
+polynomials over κ. We next introduce a “truth” quadrature rule {xkh , ρkh }k=1 for the piecewise polynomial function
+space. As the neo-Hookean model exhibits non-polynomial nonlinearity, the exact integration of the residual (11) is
+1110             M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123
+
+not possible; in practice, we choose a rule that exactly integrates piecewise polynomials of degree up to 4 p. We then
+define a “truth” quadrature approximation of the residual form (11):
+                         K h
+                         ∑
+       r (w, v; µ) ≡
+        h
+                               ρkh η(w, v; µ; xkh ),   ∀w, v ∈ V, ∀µ ∈ D,                                               (14)
+                         k=1
+
+where η is the integrand (12). We can now state our finite element “truth” problem: given µ ∈ D, find u h (µ) ∈ V h
+such that
+       r h (u h (µ), v; µ) = 0     ∀v ∈ V h .                                                                           (15)
+We again assume the problem is well posed and refer to the solution u h (µ) ∈ V h as the “truth” solution.
+   In practice, we find the solution to (15) by application of a damped Newton’s method. We here outline our nonlinear
+solution strategy for neo-Hookean hyperelasticity; however, we note that the choice of nonlinear solution strategy is
+highly dependent on the particular form of the governing equation. Given a fixed µ ∈ D, we first initialize the solution
+to u h,i=0 = 0 ∈ V h . We now describe the steps by which we proceed from iterate i to iterate i + 1. We first solve for
+the Newton update: find ∆u h,i ∈ V h such that
+       (r h )′ (u h,i , ∆u h,i , v; µ) = −r h (u h,i , v; µ) ∀v ∈ V h ,
+where (r h )′ (u h,i , ∆u h,i , v; µ) is the Gâteaux derivative of r h (·, v; µ) : V h → R at u h,i ∈ V h in the direction
+∆u h,i ∈ V h ; note the bilinear form (r h )′ (u h,i , ·, ·; µ) : V h × V h → R induces the Jacobian. We next update the
+solution according to
+       u h,i+1 = u h,i + α i ∆u h,i
+for a damping parameter α i ∈ (0, 1]. We choose the damping parameter such that the total potential energy decreases
+after each damped Newton update: we require Ψtotalh
+                                                     (u h,i+1 (µ); µ) < Ψtotal
+                                                                          h
+                                                                               (u h,i (µ); µ), where the (“truth”-quadrature
+approximation of the) total potential energy is given by
+                         K h
+                         ∑
+         h
+       Ψtotal (w; µ) ≡         ρkh [Ψ (F(w); µ) − w · f (µ)] (xkh ),      ∀w ∈ V, ∀µ ∈ D,
+                         k=1
+
+for Ψ : R N × D → R the strain energy density function (10). We terminate the Newton iteration when the residual is
+sufficiently small.
+    We remark on the computational cost and storage for the “truth” solve. (We here distinguish between O(N ) and
+O(K h ) to differentiate the requirements which originate in the dimension of the approximation space, N , and in
+the number of quadrature points, K h ; of course, in practice O(N ) = O(K h ).) Throughout the FE computation, we
+exploit the sparsity of the Jacobian matrix. In each Newton iteration, the evaluation of the residual and Jacobian
+requires O(K h ) operations. Then, the solution of the linear system requires O(N • ) operations: the exponent is unity
+in the most favorable case (e.g. multigrid); more generally, the exponent is greater than unity (but less than 2 for d ≤ 3
+for a sparse direct solver). Finally, the evaluation of the total potential energy to find the damping parameter requires
+O(K h ) operations. These three steps are repeated several times – typically 5 to 15 times – to achieve convergence.
+The storage requirement is O(N • ), where the dominant storage is the Jacobian: O(N ) for an iterative solver; O(N • ),
+with an exponent greater than unity (but less than 4/3 for d ≤ 3), for a sparse direct solver.
+
+3.3. “Truth”-quadrature RB approximation
+
+    We now consider a reduced basis approximation of (15). Towards this end, we introduce a reduced basis space
+V N ≡ span{u h (µ)}µ∈Ξ RB ⊂ V h associated with a snapshot parameter set Ξ NRB ⊂ D of size N . We choose snapshot
+                        N
+parameter sets and the associated reduced basis approximations that are hierarchical: Ξ NRB=1 ⊂ · · · ⊂ Ξ NRB=Nmax and
+V N =1 ⊂ · · · ⊂ V N =Nmax ; we defer to Section 3.6 the discussion of a systematic procedure to select a hierarchical
+parameter set. We can now state the “truth”-quadrature reduced basis problem: given µ ∈ D, find u N (µ) ∈ V N such
+that
+       r h (u N (µ), v; µ) = 0      ∀v ∈ V N .                                                                          (16)
+                M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123      1111
+
+We assume the problem is well posed and refer to u N (µ) ∈ V N as the RB solution or, more explicitly, the “truth”-
+quadrature RB solution.
+    We now introduce a discrete form of the RB problem. By way of preliminaries, we introduce a V-orthonormal
+            Nmax
+basis {φi }i=1                            N
+                 such that V N = span{φ}i=1  , N = 1, . . . , Nmax ; the V-orthonormality implies (φi , φ j )V = δi j for δi j
+                                                                           N
+                                                 ∑ N operator Z N : R → V N which maps a generalized coordinate
+the Kronecker delta. We then introduce an associated
+v ∈ R to the associated field v = Z N v ≡
+        N
+                                                    i=1 vi φi ∈ V N . Throughout this work, we denote the generalized
+coordinate associated with a function in a reduced basis space by a corresponding boldface letter; e.g. v ∈ R N ,
+w ∈ R N , and z ∈ R N are associated with v = Z N v ∈ V N , w = Z N w ∈ V N , and z = Z N z ∈ V N , respectively. We
+note that because the basis is V-orthonormal, (w, v)V = (Z N w, Z N v)V = (w, v)2 and ∥v∥V = ∥Z N v∥V√= ∥v∥2 ;
+here (·, ·)2 and ∥ · ∥2 are the Euclidean ℓ2 inner product and norm given by (w, v)2 ≡ vT w and ∥w∥2 ≡ (w, w)2 ,
+respectively.
+    We next define a discrete residual operator associated with the “truth”-quadrature RB approximation (16),
+R hN : R N × D → R N , such that
+
+      (R hN (w; µ))i = r h (Z N w, φi ; µ) ∀i = 1, . . . , N , ∀w ∈ R N , ∀µ ∈ D,                                         (17)
+where (R hN (w; µ))i denotes the ith component of R hN (w; µ) ∈ R N . We can then state the discrete counterpart of the
+“truth”-quadrature RB problem (16): given µ ∈ D, find u N (µ) ∈ R N such that
+
+      R hN (u N (µ); µ) = 0        in R N ;                                                                               (18)
+we note u N (µ) = Z N u N (µ). The well-posedness of the discrete problem (18) follows from the (assumed) well-
+posedness of the continuous counterpart (16). We find the solution to (18) using the damped Newton’s method
+described in Section 3.2 adapted to the RB approximation. The latter requires the RB Jacobian: the (i, j)-entry of
+the RB Jacobian JNh (w; µ) ∈ R N ×N is given by
+                          ∂(R hN (v; µ))i ⏐⏐
+                                           ⏐
+      (JN (w; µ))(i, j) ≡
+        h
+                                                   = (r h )′ (Z N w, φ j , φi ; µ), ∀w ∈ R N , ∀µ ∈ D.        (19)
+                                ∂v j       ⏐
+                                             (w,µ)
+
+Note that in both (18) and (19) we invoke the “truth” FE quadrature.
+   We remark on the online computational cost and storage for the “truth”-quadrature RB solve. (There are several
+implementations, all quite similar, of the “truth”-quadrature RB approach; we present the simplest complexity
+estimates, in particular since in actual practice the “truth”-quadrature RB serves only for purposes of exposition and is
+never implemented.) In each Newton iteration, the evaluation of the RB residual and Jacobian by the “truth” quadrature
+requires O(N 2 K h ) operations. Then, the solution of the (dense) linear system requires O(N 3 ) ≪ O(N • ) operations.
+Finally, the evaluation of the total potential energy to find the damping parameter requires O(K h ) operations. As
+in the FE case in Section 3.2, these three steps are repeated several times to achieve convergence. We note that the
+cost to evaluate the residual, Jacobian, and total potential energy for the “truth”-quadrature RB approximation scales
+as K h — hence expensive; on the other hand, the linear solve cost is reduced, since the RB solution is sought in
+                                                                                                                 N
+the N (≪ N ) dimensional RB space. The online storage is dominated by the RB basis function values {φi }i=1          and
+                 N
+gradients {∇φi }i=1 evaluated at the “truth” quadrature points; the online storage is thus O((d + 1)N K ) for N ≪ K h .
+                                                                                                         h
+
+In summary, we observe that the “truth”-quadrature RB approximation does not meet the online complexity goal of
+model reduction set forth in the Introduction: the online computational cost and storage are both O(max(N , K h )).
+
+3.4. RB-EQP approximation
+
+  We now consider an EQP approximation of (18). To this end, we first introduce an empirical quadrature operator
+                                                h
+now specialized for the RB residual: R̂ hN : R K × R N × D → R N is given by
+                              Kh
+                              ∑                                                                h
+      ( R̂ hN (ρ; w; µ))i ≡         ρk η(w ≡ Z N w, φi ; µ; xkh ),   ∀i = 1, . . . , N , ∀ρ ∈ R+0
+                                                                                               K
+                                                                                                  , ∀w ∈ R N , ∀µ ∈ D;    (20)
+                              k=1
+                                                              h
+note that, for the “truth” quadrature weight ρ h ∈ R K , R̂ hN (ρ h ; w; µ) = R hN (w; µ), ∀w ∈ R N , ∀µ ∈ D. Our goal is to
+find a sparse quadrature rule {xkh , ρk⋆ }k=1
+                                          Kh
+                                              such that the associated RB solution satisfies our error tolerance (in the ∥ · ∥V
+1112               M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123
+
+norm) for any µ ∈ D. We emphasize that we place our error tolerance on the RB solution, and not on the intermediate
+integrals required to form the RB system.
+    Our LP EQP for the RB approximation is a specialization of the general procedure outlined in Section 2.1. To this
+end, we specify (i) an accuracy parameter δ ∈ R0+ , (ii) a parameter training set Ξ Jtrain ≡ {µtrain
+                                                                                                 j       ∈ D} Jj=1 of size
+                                                  train  train                          train
+J , and (iii) the associated state training set U J ≡ {u N (µ) ∈ V N }µ∈Ξ train ≡ {Z N u N (µ)}µ∈Ξ train ; we identify the
+                                                                                                       J                           J
+hyperparameter ν as ν ≡ {h, δ, Ξ Jtrain , U Jtrain }. We now define our linear program LPν,N
+                                                                                         EQP : find a basic feasible solution
+ρ ⋆ ∈ R K such that
+         h
+
+
+                              Kh
+
+       ρ ⋆ = arg min
+                              ∑
+                                       ρk
+                          h
+                ρk ∈R K       k=1
+
+subject to K h non-negativity constraints
+       ρk ≥ 0,         ∀k = 1, . . . , K h ,
+the constant-function accuracy constraint
+                K  h
+                ∑
+       ||Ω |−          ρk | ≤ δ,                                                                                                             (21)
+                k=1
+
+and N J manifold accuracy constraints
+
+               N (µ); µ)) R̂ N (ρ; u N (µ); µ)∥∞ ≤ δ,
+       ∥(JNh (utrain                                                                ∀µ ∈ Ξtrain .
+                         −1 h       train
+                                                                                                                                             (22)
+                                                                                            ν Kν
+We then extract the (strictly) positive quadrature weights {xkν , ρk }k=1 ≡ {{xih , ρi⋆ } | i ∈ {k | ρk⋆ > 0}}. The LP EQP
+approximation to the RB residual (17) is given by
+                                                           K    ν
+
+       (R νN (w; µ))i ≡ ( R̂ hN (ρ ⋆ ; w; µ))i ≡                     ρkν η(Z N w, φi ; µ; xkν ),
+                                                           ∑
+                                                                                                    ∀i = 1, . . . , N , ∀w ∈ R N , ∀µ ∈ D.   (23)
+                                                            k=1
+
+Note that M of the general LP EQP formulation of Section 2 instantiates here to N .
+     We make a few remarks. First, the motivation behind the form of the accuracy constraints (22) may not be clear at
+the moment; the constraints are in fact informed by an error analysis presented in Section 3.5. Second, the accuracy
+                                           h                                                                      Kh
+constraints (22) are linear in ρ ∈ R K – as required for the LP – since R̂ hN (ρ; u train
+                                                                                     N (µ); µ) is linear in ρ ∈ R ; a more
+explicit representation is provided in Appendix. Third, we have not addressed the selection of the state training set
+U Jtrain ≡ {u train
+              N (µ)}µ∈Ξ Jtrain ; the issue will be addressed in Section 3.6. Fourth, we may control the relative, as opposed
+to absolute, error by replacing (21) and (22) by
+                                                           Kh
+                                                           ∑
+                                                  ||Ω |−            ρk | ≤ δ|Ω |,
+                                                           k=1
+
+               N (µ); µ)) R̂ N (ρ; u N (µ); µ)|i ≤ δ∥u N (µ)∥2 ,
+       |(JNh (utrain                                                                           ∀i = 1, . . . , N , ∀µ ∈ Ξtrain ,
+                         −1 h       train             train
+
+
+respectively; in our numerical results, we appeal to this relative form of the LP EQP. Finally, we note that the LP has
+K h unknowns, K h positivity constraints, and N J + 1 absolute-value bound constraints.
+   We can now state the RB-EQP problem: given µ ∈ D, find uνN (µ) ∈ R N such that
+
+        R νN (uνN (µ); µ) = 0               in R N .                                                                                         (24)
+The equivalent problem in functional form is as follows: given µ ∈ D, find u νN (µ) ∈ V such that
+
+       r ν (u νN (µ), v; µ) = 0              ∀v ∈ V N ,                                                                                      (25)
+where
+                              K    ν
+
+       r ν (w, v; µ) ≡                 ρkν η(w, v; µ; xkν ) ∀w, v ∈ V, ∀µ ∈ D.
+                              ∑
+                                                                                                                                             (26)
+                               k=1
+                    M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123      1113
+
+We note that u νN (µ) = Z N uνN (µ). Sufficient conditions for (24) and (25) to be well posed will be discussed
+in Proposition 3.2. We find the solution using the damped Newton’s method described in Section 3.2, but with
+all the ingredients – the residual, Jacobian, and total potential energy – evaluated using the EQP. The Jacobian
+JNν (w; µ) ∈ R N ×N and the total potential energy are given by
+                                                                                    Kν
+                           ∂(R νN (v; µ))i ⏐⏐
+                                            ⏐
+         ν                                              ν ′
+                                                                                       ρkν η′ (Z N w, φ j , φi ; µ; xkν ),
+                                                                                   ∑
+       (JN (w; µ))(i, j) ≡                          = (r ) (Z N w, φ j , φi ; µ) =
+                                 ∂v j       ⏐
+                                              (w,µ)                                k=1
+
+and
+                           K  ν
+        ν
+                                   ρkν [Ψ (F(w); µ) − w · f (µ)] (xkν ),
+                           ∑
+      Ψtotal (w; µ) ≡
+                             k=1
+
+respectively.
+    We now remark on the online storage requirement. The evaluation of the residual (26) (and the associated
+                                                                                          Kν
+Jacobian and total potential energy) requires (i) the EQP weights {ρkν }k=1                  , (ii) the RB values evaluated at the
+                                                    ν
+EQP quadrature points {{φi (xkν )}i=1         N   K
+                                                 }k=1 , and (iii) the RB gradient values evaluated at the EQP quadrature points
+                        Kν d
+{{{ ∂∂φx ij (xkν )}i=1
+                   N
+                       }k=1 } j=1 . The total online storage is hence K ν (1 + N (d + 1)) ≪ O(max(N , K h )); we note a significant
+reduction in the storage requirement relative to the “truth”-quadrature RB approximation, which requires the RB
+values and gradients evaluated at all “truth” quadrature points.
+    We next remark on the online computational cost. In each Newton iteration, the evaluation of the RB-EQP residual
+and Jacobian requires O(N 2 K ν ) ≪ O(K h ) operations. Then, the solution of the (dense) linear system requires
+O(N 3 ) ≪ O(N • ) operations. Finally, the evaluation of the total potential energy to find the damping parameter
+requires O(K ν ) ≪ O(K h ) operations. In short, with respect to the “truth”-quadrature RB approximation, the RB-EQP
+online cost, thanks to the EQP quadrature rule, replaces all appearances of K h with K ν ≪ K h . The RB-EQP method
+hence achieves the online complexity goal of model reduction set forth in the Introduction: the online computational
+cost and storage are O(max(N • , K ν )) and in particular independent of N and K h .
+
+3.5. A priori error analysis
+
+   Our a priori error analysis builds on the Brezzi–Rappaz–Raviart theorem [21]. In earlier work [22], the Brezzi–
+Rappaz–Raviart framework is applied within the RB context to develop a posteriori error estimators relative to the
+“truth” finite element approximation; in our current context, we apply Brezzi–Rappaz–Raviart to understand and
+control the RB error associated with empirical quadrature. Towards that end, we first reproduce the Brezzi–Rappaz–
+Raviart theorem in the form presented in [23] and with specialization to the ℓ2 (R N ) Euclidean space relevant to our
+context:
+
+Lemma 3.1 (Brezzi–Rappaz–Raviart Theorem [21,23] for ℓ2 (R N )). We introduce a C 1 mapping G : R N → R N ,
+v ∈ R N such that the Jacobian DG(v) ∈ R N ×N is non-singular, and constants ϵ, γ , and L(α) such that
+                                     ∥G(v)∥2 ≤ ϵ,                                                                             (27)
+                              ∥DG(v)−1 ∥2 ≤ γ ,                                                                               (28)
+         sup ∥DG(v) − DG(w)∥2 ≤ L(α),                                                                                         (29)
+       w∈ B̄(v,α)
+
+for B̄(v, α) ≡ {z | ∥z − v∥2 ≤ α}. Suppose
+
+      2γ L(2γ ϵ) ≤ 1.                                                                                                         (30)
+Then, for all β ≥ 2γ ϵ such that γ L(β) < 1, there exists a unique solution u ∈ R N that satisfies G(u) = 0 in the ball
+B̄(v, β). Moreover, ∀w ∈ B̄(v, 2γ ϵ),
+
+      ∥w − u∥2 ≤ 2γ ∥G(w)∥2 .                                                                                                 (31)
+
+Proof. See [23].         □
+1114                 M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123
+
+  We now specialize Lemma 3.1 to analyze the error in the RB-EQP solution uνN (µ) with respect to the “truth”-
+quadrature RB solution u N (µ) and, hence, u νN (µ) with respect to u N (µ).
+
+Proposition 3.2. We first fix µ ∈ D. We then introduce û N (µ) ∈ R N such that
+
+       ∥u N (µ) − û N (µ)∥2 ≤ ϵ train                                                                                                         (32)
+for some ϵ   train
+                     ∈ R+0 and such that JNh (û N (µ)) is non-singular. Suppose the EQP-approximated residual form and
+Jacobian satisfy
+            ∥JNh (û N (µ); µ)−1 R νN (û N (µ); µ)∥∞ ≤ δ R ,                                                                                  (33)
+       ∥JN (û N (µ); µ)−1 JNν (û N (µ); µ) − I ∥max ≤ δ J ,
+         h
+                                                                                                                                               (34)
+for some δ R ∈ R+0 and
+
+       δ J ∈ [0, 1/N ).                                                                                                                        (35)
+                              N ×N
+(Here, for any A ∈ R                 , we define the max norm by ∥A∥max ≡ maxi, j∈{1,...,N } |Ai j |.) We in addition define
+
+       L(α) ≡ 2            sup            ∥JNh (û N (µ); µ)−1 JNν (w; µ) − I ∥2 .                                                             (36)
+                      w∈ B̄(û N (µ),α)
+
+Suppose
+         2N 1/2 δ R     1 − N δJ
+       (            )
+     L                ≤          .                                                                                                             (37)
+         1 − N δJ          2
+Then, for all β ≥ 2N 1/2 δ R /(1 − N δ J ) such that L(β) ≤ 1 − N δ J , there exists a unique solution uνN (µ) ∈ R N to (24)
+in the ball B̄(û N , β). Moreover,
+                                                                           2N 1/2 δ R
+       ∥u N (µ) − u νN (µ)∥V = ∥u N (µ) − uνN (µ)∥2 ≤                                 + ϵ train .                                              (38)
+                                                                           1 − N δJ
+
+Proof. Throughout the proof, we suppress the parameter µ in the forms and solutions for notational brevity. Our plan
+is to identify appropriate conditions of Lemma 3.1 given by (27)–(29) in the context of the RB-EQP approximation,
+and then invoke Lemma 3.1. Towards this end, we set G(·) and v in Lemma 3.1 equal to the preconditioned RB-EQP
+residual operator and û N which satisfies (32), respectively: G(·) ≡ JNh (û N )−1 R νN (·) and v ≡ û N . We then invoke
+(a) ∀v ∈ R N , ∥v∥2 ≤ N 1/2 ∥v∥∞ , and (b) the assumption (33), to obtain ϵ in (27):
+       ∥G(v)∥2 = ∥JNh (û N )−1 R νN (û N )∥2 ≤ N 1/2 ∥JNh (û N )−1 R νN (û N )∥∞ ≤ N 1/2 δ R ≡ ϵ.
+We similarly invoke (i) the assumption (34), (ii) condition (35), (iii) ∀A ∈ R N ×N , ∥A∥2 ≤ N ∥A∥max and
+(iv) ∀A ∈ R N ×N such that ∥A∥2 < 1, (I + A)−1 exists, and ∥(I + A)−1 ∥2 ≤ (1 − ∥A∥2 )−1 , to obtain γ in (28):
+       ∥DG(v)−1 ∥2 = ∥(JNh (û N )−1 JNν (û N ))−1 ∥2 = ∥(I + JNh (û N )−1 JNν (û N ) − I )−1 ∥2
+                           ≤ (1 − ∥JNh (û N )−1 JNν (û N ) − I ∥2 )−1 ≤ (1 − N ∥JNh (û N )−1 JNν (û N ) − I ∥max )−1
+                           ≤ (1 − N δ J )−1 ≡ γ ;
+here, (i), (ii), and (iii) imply ∥JNh (û N )−1 JNν (û N ) − I ∥2 ≤ 1, which in turn allows us to invoke (iv) to obtain the first
+inequality. We then invoke (a) the triangle inequality, and (b) û N ∈ B̄(û N , α), to specialize (29) to (36):
+         sup ∥DG(v) − DG(w)∥2 =                           sup       ∥JNh (û N )−1 JNν (û N ) − JNh (û N )−1 JNν (w)∥2
+       w∈ B̄(v,α)                                    w∈ B̄(û N ,α)
+
+                                                   ≤ ∥JNh (û N )−1 JNν (û N ) − I ∥2 +            sup        ∥JNh (û N )−1 JNν (w) − I ∥2
+                                                                                              w∈ B̄(û N ,α)
+
+                                                   ≤2       sup          ∥JNh (û N )−1 JNν (w) − I ∥2 ≡ L(α).
+                                                        w∈ B̄(û N ,α)
+
+Then, (37) is a restatement of (30) for the above specializations of ϵ, γ , and L(·). We next note that uνN ∈ R N
+is a solution to G(uνN ) ≡ JNh (û N )−1 R νN (uνN ) = 0 by (24). The uniqueness of the solution uνN in B̄(û N , β) for
+                 M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123                 1115
+
+β ≥ 2γ ϵ = 2N 1/2 δ R /(1− N δ J ) such that L(β) ≤ 1/γ = 1− N δ J then follows directly from the uniqueness statement
+of Lemma 3.1. Finally, we invoke (a) the triangle inequality, (b) condition (32), and (c) (31) for w ≡ û N ∈ B̄(û N , 2γ ϵ),
+to obtain
+                                                                                             2N 1/2 δ R
+      ∥u N − uνN ∥2 ≤ ∥u N − û N ∥2 + ∥û N − uνN ∥2 ≤ ϵ train + 2γ ∥G(û N )∥2 ≤ ϵ train +            ,
+                                                                                             1 − N δJ
+which is the desired bound (38). □
+
+Corollary 3.3. Suppose all conditions of Proposition 3.2 are satisfied with (32), (33), and (37) replaced by
+                         ∥u N (µ) − û N (µ)∥2 ≤ ϵ train ∥û N (µ)∥2 ,
+       ∥JNh (û N (µ); µ)−1 R νN (û N (µ); µ)∥∞ ≤ δ R ∥û N (µ)∥2 ,
+                        2N δ R ∥û N (µ)∥2         1 − N δJ
+                       ( 1/2                   )
+                    L                            ≤
+                               1 − N δJ                 2
+respectively; we now further assume ϵ train < 1. Then, for ∥û N (µ)∥ > 0 and ϵ train < 1, the relative error in the
+RB-EQP solution with respect to the “truth”-quadrature RB solution is bounded by
+      ∥u N (µ) − u νN (µ)∥V   ∥u N (µ) − uνN (µ)∥2                2N 1/2 δ R
+                                                                [                     ]
+                                                        1
+                            =                      ≤                         +ϵ train
+                                                                                        .                       (39)
+            ∥u N (µ)∥V              ∥u N (µ)∥2       1 − ϵ train 1 − N δ J
+
+Proof. In Proposition 3.2, we first replace δ R and ϵ train with δ R ∥û N (µ)∥2 and ϵ train ∥û N (µ)∥2 , respectively, to obtain
+∥u N − uνN ∥2 /∥û N ∥2 ≤ 2N 1/2 δ R /(1 − N δ J ) + ϵ train . We then invoke ∥u N ∥2 ≥ ∥û N ∥2 − ∥û N − u N ∥2 ≥ ∥û N ∥2 (1 − ϵ train )
+which implies, for ∥û N ∥2 > 0 and ϵ train < 1, ∥u N −uνN ∥2 /∥u N ∥2 ≤ (1−ϵ train )−1 ∥u N −uνN ∥2 /∥û N ∥2 to obtain (39). □
+                                                                                                        ν
+    We note that û N (µ) plays the role of utrain
+                                              N (µ) in (22). Since we wish to control the error of u N (µ) relative to u N (µ),
+we know from Proposition 3.2 that we prefer the choice (û N (µ) and hence) u N (µ) = u N (µ) such that ϵ train = 0.
+                                                                                      train
+
+In actual practice, and as discussed in Section 3.6, we choose a slightly different training strategy which improves
+computational performance at apparently very little compromise in EQP error control.
+    Proposition 3.2 (and its relative-error counterpart Corollary 3.3) identifies sufficient conditions to control the
+difference between the RB-EQP solution (25) and the “truth”-quadrature RB solution (16). We first consider the
+case in which the empirical quadrature is the “truth” quadrature (i.e., ρ = ρ h ) and furthermore ϵ train = 0. In this case,
+the conditions (33) and (34) are trivially satisfied with δ R = 0 and δ J = 0, respectively. Moreover, the condition (37)
+is satisfied because L(2N 1/2 δ R /(1 − N δ J )) = L(0) = 0 ≤ 1/2. Hence ∥u N (µ) − u νN (µ)∥V = 0, ∀µ ∈ D, as expected.
+    We next observe that LPν,N EQP outlined in Section 3.4 incorporates (33) as the accuracy constraint (22), but does
+not include the conditions (34) and (37). We exclude these two conditions from the LPν,N      EQP for the following reasons.
+First, the condition (34) would correspond in our LP to N 2 J constraints; we thus prefer to omit (34) and hence
+retain many fewer constraints, in particular N J (+1). By way of justification, we note that the tolerance δ J in (34)
+only weakly influences the error bound (38) for N δ J ≪ 1; at least for the parametrized PDEs we have considered,
+numerical evidence suggests that the condition δ R ≪ 1 is sufficient to control the error ∥u N (µ)−u νN (µ)∥V . Second, the
+condition (37) does not directly influence the error bound: the condition only identifies a neighborhood of û N (µ) over
+which our Brezzi–Rappaz–Raviart error bound, based on a linearized analysis, holds. We finally note that, although
+the conditions (34) and (37) are omitted in our formulation, (34) could be readily incorporated into the LP problem
+(but at the considerable expense of O(N 2 ) scaling), and (37) can be confirmed a posteriori for certain nonlinearities.
+    We also observe that LPν,NEQP outlined in Section 3.4 incorporates the constant-function condition (21) even though
+the latter does not appear in Proposition 3.2. As discussed in Section 2.1, the constant-function constraint improves
+the robustness of the EQP when the integral evaluates to near-zero due to the cancellation of the integrand in
+different parts of the domain Ω . In the context of our residual integration for which R hN (utrain        N (µ); µ) ≈ 0 for
+utrain
+  N    ≈  u N (µ), the constraint ensures  a nontrivial (generic) solution to the LP.  The  nontrivial   solution is a necessary
+(but not sufficient) condition for the satisfaction of (34) which requires JNh (û N (µ); µ)−1 JNν (û N (µ); µ) ≈ I ; the trivial
+quadrature rule would yield zero for all entries. In this sense, the constant-function accuracy constraint contributes
+to (but unfortunately does not guarantee) the satisfaction of (34). It is furthermore a plausible condition for any
+quadrature scheme.
+1116             M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123
+
+3.6. Greedy algorithm: simultaneous RB and EQP training
+
+   We presented in Section 3.4 a procedure to construct an RB-EQP approximation assuming we have already
+                                N
+identified a reduced basis {φi }i=1 and EQP state training set U Jtrain = {u train
+                                                                             N (µ)}µ∈Ξ train . If the offline computational
+                                                                                                J
+                                                         Nmax
+cost could be entirely neglected, we could identify {φi }i=1    and U Jtrain as follows. We first identify an effective reduced
+basis {φi }i=1 in two steps: solve the “truth” FE problem (15) for each µ ∈ Ξ Jtrain ⊂ D; apply the POD or the strong
+           Nmax
+
+greedy algorithm to the “truth” data. We then identify the EQP state training set for each N ∈ {1, . . . , Nmax } by
+solving the “truth”-quadrature RB problem (16) and setting U Jtrain = {u train      N (µ) = u N (µ)}µ∈Ξ Jtrain . This approach
+requires J ≡ |Ξ Jtrain | “truth” FE solves to identify {φi }i=1
+                                                            N
+                                                                 and N J “truth”-quadrature RB solves to identify U Jtrain .
+(We recall from Section 3.3 that the “truth”-quadrature RB solve is almost as expensive as the “truth” FE solve.)
+While the emphasis of model reduction is often on the online efficiency, the offline training cost cannot be neglected
+in engineering practice, and J “truth” FE solves and N J “truth”-quadrature RB solves may be prohibitive. Here we
+propose an algorithm that identifies {V N } NNmax
+                                              =1 using only Nmax “truth” solves (and no “truth”-quadrature RB solves).
+     Our greedy algorithm is outlined in Algorithm 1. Algorithm 1 considers control of the quadrature contribution to
+absolute solution error. We may also choose to control the quadrature contribution to relative solution error, assuming
+u h (µ) ̸= 0, ∀µ ∈ D: we need only replace line 6 with µ(N ) = arg supµ∈Ξ train ∥r h (u νN −1 (µ), ·; µ)∥(V h )′ /∥u νN −1 (µ)∥V ,
+                                                                                     J
+and invoke in line 16 the relative-error version of LPν,N       EQP ; we invoke this relative-error version of the greedy algorithm
+in our numerical example of Section 4. The inputs to the greedy algorithm, for either absolute error control or relative
+error control, are the parameter training set Ξ Jtrain ≡ {µtrain     j } j=1 ⊂ D of size J , the EQP tolerance δ ∈ R+0 , and the
+                                                                           J
+
+RB residual tolerance ϵRB ∈ R+ ; the parameter training set Ξ Jtrain is used for both RB and EQP training. The outputs
+                                                                                        Kν
+are the reduced basis {φn }n=1      Nmax
+                                           and an empirical quadrature rule {xkν , ρkν }k=1 .
+    In each iteration we perform two distinct tasks: the identification of the next snapshot parameter µ(N ) ∈ Ξ Jtrain ,
+and the evaluation of the associated “truth” snapshot; the construction of the associated EQP quadrature rule. The
+first task, the identification of an appropriate snapshot parameter µ(N ) , is performed as follows (line 6). For each
+µ ∈ Ξ Jtrain , we compute the RB-EQP solution u νN −1 (µ) and the associated dual norm of the residual with respect to the
+“truth” space V h , ∥r h (u νN −1 (µ), ·; µ)∥(V h )′ ≡ supv∈V h |r h (u νN −1 (µ), v; µ)|/∥v∥V . The evaluation of J “truth” residual
+dual norms makes the procedure more expensive than the (original) weak greedy algorithm [1] which appeals to an
+online-efficient a posteriori error bound. However, in the context of nonlinear equations, the evaluation of a “truth”
+residual dual norm is substantially less expensive than the evaluation of the “truth” solution. In particular, the former
+requires a residual evaluation and solution of a (sparse and parameter-independent) SPD linear system. In contrast,
+the latter requires for each Newton iteration the evaluation of the residual and Jacobian as well as the solution of a
+non-symmetric and perhaps indefinite linear system; furthermore, a substantial number of Newton iterations may be
+required for highly nonlinear systems. Hence, the RB-EQP greedy algorithm, while not as efficient as the (original)
+weak greedy algorithm, achieves significant computational savings relative to the strong greedy algorithm.
+    The second task, the update of the EQP quadrature rule (line 16), is based on the LP EQP described in
+Section 3.4. We recall that the LP procedure requires as inputs a parameter training set Ξ Jtrain and a state training
+set U Jtrain ≡ {u train  N (µ)}µ∈Ξ Jtrain . It is clear from Proposition 3.2 that the best choice for error control is the “truth”-
+quadrature RB solution, which in fact corresponds to the following modifications to Algorithm 1: in line 12 set
+Neqp,smooth = 1; in line 14 set u train      N (µ) = u N (µ). But, as previously noted, this choice is rather expensive. As such,
+                                                            ν
+in the greedy algorithm, we set u train         N (µ) = u N (µ) — the current RB-EQP approximation based on the empirical
+quadrature rule. The state training set and the empirical quadrature rule itself are then simultaneously updated using
+Neqp,smooth smoothing iterations (lines 12–17); we have found Neqp,smooth ∈ {2, 3} is sufficient. We note that a similar
+simultaneous update strategy has been introduced in the context of RB-EIM [19,20]. We report in the next section
+empirical results which demonstrate that (38) and (39) hold even for ϵ train = 0; however, we have at present no
+theoretical control over the error induced by the “bootstrap” training set.
+                                                                                                                               Kν
+    We note that, in the N th iteration, our greedy algorithm computes a new EQP quadrature rule {xkν , ρkν }k=1                   for
+                                         N
+the given reduced basis {φi }i=1 . In general, the quadrature rule computed in the N th iteration is independent of
+the quadrature rules computed in earlier iterations, and the quadrature points are not nested. Hence, we store the
+                                                                                              Kν
+online ingredients discussed in Section 3.4 — (i) the EQP weights {ρkν }k=1                      , (ii) the RB values evaluated at the
+                                           ν N     Kν
+EQP quadrature points {{φi (xk )}i=1 }k=1 , and (iii) the RB gradient values evaluated at the EQP quadrature points
+                        Kν d
+{{{ ∂∂φx ij (xkν )}i=1
+                   N
+                       }k=1 } j=1 — separately for each N ∈ {1, . . . , Nmax }. While the online storage has not been a problem for
+                   M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123    1117
+
+
+Algorithm 1: Greedy algorithm for simultaneous RB and EQP training.
+     inputs : Parameter training set: Ξ Jtrain ⊂ D
+              EQP tolerance: δ ∈ R+0
+              RB residual tolerance: ϵRB ∈ R+
+                                   Nmax
+     outputs: Reduced basis: {φi }i=1
+                           ν   ν Kν
+              EQP rule: {xk , ρk }k=1
+
+ 1   Initialize the EQP state training set: set U Jtrain ≡ {u train
+                                                              N (µ) = 0}µ∈Ξ train and Ξ
+                                                                                        train,exact
+                                                                                                    = ∅.
+                                                                                       J
+ 2 for N = 1, . . . , Nmax do
+ 3     if N = 1 then
+           Set µ(N ) = arg infµ∈Ξ train ∥µ̄ − µ∥ for µ̄ ≡ N1 µ∈Ξ train µ.
+                                                            ∑
+ 4
+                                        J                                      J
+ 5       else
+ 6           Find the parameter µ(N ) that maximizes the “truth” dual-norm of the residual:
+             µ(N ) = arg sup ∥r h (u νN −1 (µ), ·; µ)∥(V h )′ .
+                       µ∈Ξ Jtrain
+
+ 7       end
+ 8       If ∥r h (u N −1 (µ(N ) ); µ)∥(V h )′ < ϵRB , terminate.
+ 9       Find the “truth” FE solution u h (µ(N ) ) ∈ V h .
+10       Update reduced basis
+              N
+         {φi }i=1 = Gram–SchmidtV {φ1 , . . . , φ N −1 , u h (µ(N ) )}.
+11       Update EQP state training set: u train
+                                              N (µ
+                                                       (N )
+                                                            ) = u h (µ(N ) ), Ξ train,exact = Ξ train,exact ∪ µ(N ) .
+12       for i = 1, . . . , Neqp,smooth do
+13           if i ̸= 1 then
+14                For µ ∈ Ξ Jtrain but µ ∈ / Ξ train,exact , solve for u νN (µ) and set u train             ν
+                                                                                             N (µ) = u N (µ).
+15           end
+                                                                                                              ν Kν
+16           Solve LPν,NEQP for ν ≡ {h, δ, Ξ J
+                                               train                                                      ν
+                                                                     N (µ)}µ∈Ξ train } to update {x k , ρk }k=1 .
+                                                     , U Jtrain ≡ {u train
+                                                                                   J
+17    end
+18 end
+
+
+
+
+cases we have considered so far, a set of nested quadrature rules which reduces the overall online storage requirement
+(at the expense of a suboptimal rule for each N ) may be desirable in some applications.
+    We also note a subtle, but important, feature of the greedy algorithm (implemented in line 11); the EQP state
+training set associated with the RB snapshot parameters are the “truth” solution. This construction guarantees that for
+µ ∈ {µ(n) }n=1
+            N
+               , ∥u N (µ)−u νN (µ)∥V = ∥u h (µ)−u νN (µ)∥V is O(δ) and hence ∥r h (u νN (µ), ·; µ)∥(V h )′ is O(δ). This feature
+is important for the stability of the greedy procedure; without the feature, the dual-norm of the RB-EQP solution for a
+snapshot parameter may be large, and the algorithm may attempt to add the associated snapshot that already belongs
+to the RB.
+    We finally comment on the computational cost for a single step of the greedy algorithm. We decompose
+the algorithm into three parts: “truth” residual sampling; “truth” solution; and EQP update. The “truth” residual
+sampling requires J RB-EQP solves in O(J N • ) operations and J “truth” residual dual-norm evaluations in O(J N • )
+operations. The “truth” solution requires O(N • ) operations. We again note that although the computation of the
+“truth” residual dual norm and the computation of the “truth” solution each requires O(N • ) operations, the latter is
+much more expensive than the former; for this reason we avoid all reference to the “truth” solution except for the
+(relatively few) snapshots which form the RB space. Finally the EQP update requires J Neqp,smooth RB-EQP solves
+in O(J Neqp,smooth N • ) operations and Neqp,smooth solves of LPν,N           ν,N          h                   h
+                                                                EQP . The LPEQP has K unknowns, K non-negativity
+constraints, and J N + 1 absolute-value bound constraints; the preparation of the absolute-value bounds in particular
+1118            M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123
+
+requires O(J N 2 K h ) operations as shown in Appendix. The storage requirement is dominated by the LP constraint
+matrix and is O(K h (J N + 1)).
+
+3.7. Functional output evaluation
+
+   In many engineering scenarios, our interest is certain (integral) quantities. As before, to fix notation and to provide
+a concrete description, we introduce a model problem: the evaluation of local strain energy associated with a neo-
+Hookean solid,
+       s(µ) ≡ ψ(u(µ); µ) ∈ R,                                                                                                   (40)
+where
+                    ∫
+       ψ(w; µ) ≡           Ψ (F(w(x)); µ)d x         ∀w ∈ V                                                                     (41)
+                     Ωo
+
+for Ψ : R N × D → R the strain energy density function (10) and Ω o ⊂ Ω a region of interest.
+   We now introduce an associated “truth” FE approximation of the output form (41). As before, we also define a
+“truth” quadrature rule {xko,h ∈ Ω o } and the associated weights {ρko,h ∈ R+ }. We then define a “truth”-quadrature
+output form,
+                     K   o,h
+                     ∑
+       ψ (w; µ) ≡
+         h
+                               ρko,h Ψ (F(w(xko,h )); µ),   ∀w ∈ V, ∀µ ∈ D.                                                     (42)
+                        k=1
+
+Our “truth” FE approximation to (40) is as follows: given µ ∈ D, find s h (µ) ≡ ψ h (u h (µ); µ) ∈ R. Similarly, our
+“truth”-quadrature RB approximation to (40) is as follows: given µ ∈ D, find s N (µ) ≡ ψ h (u N (µ); µ) ∈ R. Given
+the solution (field), the computational cost for the evaluation of the output using the “truth” quadrature is O(K h ); the
+approach hence does not meet the online complexity goal of model reduction set forth in the Introduction.
+   We thus introduce an EQP approximation for the output form (41). As before, we introduce an empirical
+quadrature rule {xko,ν ∈ Ω o } ⊂ {xko,h } and the associated weights {ρko,ν ∈ R+ }; we recall that an empirical rule is
+(hyper)parametrized by ν ≡ {h, δ, Ξ J } for h the “truth”-quadrature parameter, δ the threshold tolerance, and Ξ J the
+parameter training set. We then define an EQP-quadrature output form,
+                     K   o,ν
+         ν
+                     ∑
+       ψ (w; µ) ≡              ρko,ν Ψ (F(w(xko,ν )); µ),   ∀w ∈ V, ∀µ ∈ D.
+                        k=1
+
+Our RB-EQP approximation to (40) is as follows: given µ ∈ D, find s Nν (µ) ≡ ψ ν (u νN (µ); µ) ∈ R. We invoke the LP
+EQP described in Section 2.1 on the integrand Ψ (F(u νN (·; µ)); µ), µ ∈ D, to identify the quadrature rule; the linear
+program has K o,h unknowns and J + 1 constraints. Given the solution (field) evaluated at the EQP quadrature points,
+the computational cost for the evaluation of the output using the EQP quadrature is O(K ν ) ≪ O(K h ); we hence meet
+the online complexity goal of model reduction.
+
+4. Numerical example: neo-Hookean beam
+4.1. Problem description
+
+   We consider a neo-Hookean beam subject to self-weight load. The geometry of the beam is shown in Fig. 1; the
+beam is characterized by a height h̃, length L̃, hole radius r̃hole , and hole position (x̃hole , ỹhole ) with respect to the origin
+fixed at the bottom left corner. The beam is clamped (homogeneous Dirichlet) at the left end, free (homogeneous
+Neumann) on all other surfaces, and subject to gravity of magnitude g̃. The beam is modeled as a (plain-strain)
+neo-Hookean solid with a density ρ̃, Young’s module Ẽ, and Poisson ratio ν. The two parameters of the problem
+are the gravity angle θg ∈ [−π/2, π/2] and the Poisson ratio ν ∈ [0.35, 0.45]; the former should be interpreted
+to result from a variation in the orientation of the beam with respect to the vertical. We hence set µ ≡ (θg , ν) and
+D ≡ [−π/2, π/2] × [0.35, 0.45]. The output of interest is the strain energy density integrated over the annular region
+Ω̃annulus of radius r̃annulus ; the output serves as an indicator of stress concentration in the vicinity of the hole.
+                M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123         1119
+
+
+
+
+                                         Fig. 1. Geometry of the neo-Hookean beam problem.
+
+
+
+
+                 (a) Deformed beam (θg = 0, ν = 0.4).                              (b) Output variation (ν = 0.4).
+
+
+                                         Fig. 2. Response of the neo-Hookean beam problem.
+
+
+
+    We introduce characteristic length and pressure scales of h̃ and Ẽ, respectively. With this normalization, the
+geometry of the problem is described in terms of h ≡ h̃/h̃ = 1, L ≡ L̃/h̃ ≡ 4, xhole = x̃hole /h̃ ≡ 1, yhole =
+ỹhole /h̃ ≡ 1/2, rhole = r̃hole /h̃ ≡ 0.15, rannulus = r̃annulus /h̃ ≡ 0.3, and body-force density ρg = (ρ̃ g̃)/( Ẽ/h̃) ≡ 0.005.
+The particular value of body-force density results from typical values of the density and Young’s modulus for a soft-
+rubber-like material. (We however consider the range of Poisson’s ratio away from the incompressible limit ν = 1/2;
+treatment of near-incompressibility introduces complications not specifically related to our LP EQP RB approach.)
+    Fig. 2(a) shows the deformed beam for (θg , ν) = (0, 0.4) and the associated strain energy density distribution over
+Ωannulus . Fig. 2(b) shows the variation in the output as a function of θg for a fixed ν ≡ 0.4; the nonlinear effect of the
+neo-Hookean model is clearly evident in the response.
+
+4.2. Results
+
+   We apply the (relative-error version of the) greedy algorithm, Algorithm 1, to the neo-Hookean beam problem.
+The “truth” space of P2 triangular finite elements has 1568 degrees of freedom; the “truth” quadrature rule contains
+K h = 6878 points over Ω , of which K o,h = 1216 are in Ωannulus . (The p-convergence study for 3 × 3 parameter points
+uniformly distributed over D confirms that the maximum relative error in the P2 “truth” output is ≈ 1.9 × 10−3 with
+respect to the P4 solutions with 6032 degrees of freedom; the convergence study also suggests that the continuous
+(infinite-dimensional) problem is indeed well posed and we remain on a single solution branch.) The inputs to the
+greedy algorithm are as follows: the parameter training set Ξ Jtrain ⊂ D which consists of |Ξ Jtrain | = 31 × 5 points
+uniformly distributed over D; the EQP tolerance of δ = 10−3 for both the residual and output; and RB dual-norm
+tolerance of ϵRB = 10−2 .
+   We first test the RB-EQP model for all parameter values in Ξ Jtrain ; this test does not account for the “generalization
+error” associated with the fact that Ξ Jtrain is a finite subset of D. Table 1 summarizes the behavior of the RB-EQP model.
+We first observe that the dual-norm of the “truth” residual over the parameter training set Ξ Jtrain decreases rapidly with
+N , with the algorithm terminating for Nmax = 7. We next assess the quality of the RB spaces: the solutions (field) and
+outputs associated with the “truth”-quadrature RB approximation converge rapidly with N .
+1120                     M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123
+
+Table 1
+The convergence of RB-EQP approximations over all parameter values in Ξ Jtrain . All entries are supremum over the parameter training set Ξ Jtrain ;
+                                             ∥r h (u νN (µ),·;µ)∥(V )′
+                                                                   h
+e.g., the first column is supµ∈Ξ train             ∥u νN (µ)∥V
+                                                                         .
+                                        J
+
+  N      Residual                  RB assessment                                 RB-EQP assessment
+         ∥r h (u νN ,·)∥(V )′                            |s h −s N |                   ∥u N −u νN ∥V   ∥u h −u νN ∥V            |ψ h (u νN )−ψ ν (u νN )|        |s h −s N ν |
+
+              ∥u νN ∥V
+                         h         ∥u h −u N ∥V
+                                      ∥u h ∥V                |s h |
+                                                                                 Kν       ∥u N ∥V         ∥u h ∥V      K o,ν          |ψ h (u νN )|                  |s h |
+
+  1      1.50 × 102                1.00 × 100            1.00 × 100               5    1.35 × 10−1     1.00 × 100       4      1.00 × 10−3                      1.00 × 100
+  2      1.89 × 10−1               7.87 × 10−1           9.26 × 10−1             14    4.47 × 10−3     7.87 × 10−1     11      1.00 × 10−3                      9.26 × 10−1
+  3      1.77 × 10−1               7.69 × 10−1           9.21 × 10−1             18    1.67 × 10−3     7.69 × 10−1     11      1.00 × 10−3                      9.20 × 10−1
+  4      2.91 × 10−2               1.65 × 10−1           1.42 × 10−1             25    1.78 × 10−3     1.65 × 10−1      9      1.00 × 10−3                      1.38 × 10−1
+  5      2.61 × 10−2               1.24 × 10−1           1.60 × 10−1             29    1.98 × 10−3     1.24 × 10−1     13      1.00 × 10−3                      1.66 × 10−1
+  6      1.51 × 10−2               1.23 × 10−1           1.58 × 10−1             29    2.43 × 10−3     1.24 × 10−1     13      1.00 × 10−3                      1.68 × 10−1
+  7      8.87 × 10−3               1.65 × 10−2           4.09 × 10−2             32    2.29 × 10−3     1.53 × 10−2     14      1.00 × 10−3                      4.50 × 10−2
+
+
+
+
+                                Fig. 3. The error in the RB-EQP approximation with respect to the “truth”-quadrature RB solution.
+
+
+
+   We now assess the quality of the RB-EQP solutions (field) and make the following observations. The EQP
+quadrature rules are sparse: K ν ≤ 32 ≪ 6878 ≡ K h for all       values of N . For N = 1 and N = 2, the relative error
+                                                 ∥u N (µ)−u νN (µ)∥V
+between the RB and RB-EQP solutions, supµ∈Ξ train ∥u N (µ)∥          , does not satisfy the bound of Proposition 3.2, (38),
+                                                                             J                  V
+likely because the conditions that are not explicitly enforced in LPν,N
+                                                                    EQP , (34) and (37), are violated. However, already
+                                                                                                                        ∥u (µ)−u ν (µ)∥
+for N > 2, the relative error between the RB and RB-EQP solutions, supµ∈Ξ train N ∥u N (µ)∥      N   V
+                                                                                                       , is indeed bounded
+                                                                                      J            V
+by 2N δ, as predicted by Proposition 3.2; this error control provided by the RB-EQP procedure is more clearly
+       1/2
+
+depicted in Fig. 3. (We use a fixed EQP tolerance of δ = 10−3 for all N , and hence the relative error between the
+RB and RB-EQP solutions, which is ≲ 2N 1/2 δ according to Proposition 3.2, grows slowly with N .) We emphasize
+that the error here is measured relative to u N (µ) and hence implicitly assumes ϵ train = 0 in (39); this in turn justifies
+(empirically) the bootstrap approach for our particular problem. The error in the RB-EQP solution relative to the
+                     ∥u h (µ)−u νN (µ)∥V
+“truth”, supµ∈Ξ train ∥u h (µ)∥          , is comparable to the error in the “truth”-quadrature RB solution relative to the
+                          J                  V
+                                  h
+“truth”, supµ∈Ξ train ∥u (µ)−u  N (µ)∥V
+                         ∥u h (µ)∥V
+                                        ; the use of the EQP quadrature, which has over two orders of magnitude fewer
+                 J
+quadrature points, does not compromise the accuracy of the approximation. Fig. 4(a) shows the EQP quadrature
+points associated with the N = 7 RB-EQP residual form; the EQP points are distributed in a nontrivial manner and
+are clustered in the regions of high stress concentration at the root and around the hole.
+   We next assess the quality of the RB-EQP output approximations and make the following observations. As before,
+K o,ν ≤ 14 ≪ 1216 ≡ K o,h for all values of N and hence EQP again achieves sparsity. The integration error due to the
+                                                                            |ψ h (u νN (µ);µ)−ψ ν (u νN (µ);µ)|
+use of the EQP quadrature instead of the “truth” quadrature, supµ∈Ξ train              |ψ h (u ν (µ);µ)|
+                                                                                                                , is exactly controlled
+                                                                                                       J               N
+for this test case. (We note that both ψ h (u νN (µ); µ) and ψ ν (u νN (µ); µ) ≡ s Nν (µ) are computed using the same solution
+u νN (µ) and hence the error is solely due to output integration; for a fixed EQP tolerance of δ = 10−3 , the error is
+                                                                                                                                                            |s h (µ)−s N ν (µ)|
+constant with N as anticipated.) The error in the RB-EQP output relative to the “truth”, supµ∈Ξ train                                                             |s h (µ)|
+                                                                                                                                                                                , is
+                                                                                                                                                    J
+                         M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123                                             1121
+
+
+
+
+                                                                ν
+                       (a) Residual quadrature points {xkν }k=1
+                                                                                                                                              o,ν
+                                                            K =32
+                                                                  .                                (b) Output quadrature points {xko,ν }k=1
+                                                                                                                                        K =14 .
+
+
+
+
+                                                  Fig. 4. Residual and output quadrature points for N = 7.
+
+
+Table 2
+The convergence of RB-EQP approximation for Ξ test ̸= Ξ Jtrain comprises 50 random uniformly distributed points over D. All entries are supremum
+                                                                                 ∥r h (u νN (µ),·;µ)∥(V )′
+over the parameter training set Ξ test ; e.g., the first column is supµ∈Ξ test         ∥u νN (µ)∥V
+                                                                                                        h
+                                                                                                             .
+  N      Residual               RB assessment                         RB-EQP assessment
+         ∥r h (u νN ,·)∥(V )′                     |s h −s N |               ∥u N −u νN ∥V            ∥u h −u νN ∥V            |ψ h (u νN )−ψ ν (u νN )|   |s h −s N ν |
+
+              ∥u νN ∥V
+                         h      ∥u h −u N ∥V
+                                   ∥u h ∥V            |s h |
+                                                                      Kν       ∥u N ∥V                  ∥u h ∥V      K o,ν          |ψ h (u νN )|             |s h |
+
+  1      1.46 × 10−1            7.80 × 10−1      9.84 × 10−1           5    1.18 × 10−1            7.84 × 10−1        4      9.59 × 10−4                  9.88 × 10−1
+  2      1.51 × 10−1            7.74 × 10−1      9.19 × 10−1          14    5.04 × 10−3            7.74 × 10−1       11      1.00 × 10−3                  9.18 × 10−1
+  3      1.59 × 10−1            7.54 × 10−1      9.14 × 10−1          18    6.85 × 10−3            7.54 × 10−1       11      9.96 × 10−4                  9.13 × 10−1
+  4      2.11 × 10−2            1.58 × 10−1      1.41 × 10−1          25    1.53 × 10−3            1.57 × 10−1        9      9.83 × 10−4                  1.37 × 10−1
+  5      1.40 × 10−2            1.12 × 10−1      1.47 × 10−1          29    1.89 × 10−3            1.12 × 10−1       13      9.37 × 10−4                  1.48 × 10−1
+  6      1.37 × 10−2            1.11 × 10−1      1.46 × 10−1          29    1.91 × 10−3            1.11 × 10−1       13      1.02 × 10−3                  1.51 × 10−1
+  7      8.35 × 10−3            1.47 × 10−2      4.06 × 10−2          32    3.82 × 10−3            1.37 × 10−2       14      9.36 × 10−4                  4.41 × 10−2
+
+
+                                                                                                                                         h
+comparable to the error in the “truth”-quadrature RB output relative to the “truth”, supµ∈Ξ train |s (µ)−s   N (µ)|
+                                                                                                      |s h (µ)|
+                                                                                                                    , despite the
+                                                                                                J
+significant sparsity of the RB-EQP quadrature rule. Fig. 4(b) shows the EQP quadrature points associated with the
+output evaluation of the N = 7 approximation.
+   We now test the RB-EQP model for Ξ test ⊂ D which consists of |Ξ test | = 50 random points uniformly sampled
+over D. Note that in this case we cannot be assured of (33) since the latter is imposed in the LPν,NEQP and hence only for
+µ in the training set Ξ train . Hence this test, unlike the previous test, accounts for the “generalization error”. Table 2
+shows that the results over Ξ test are largely unchanged from the results over Ξ Jtrain shown in Table 1. The result is
+consistent with Proposition 2.2, which predicts a small generalization error for a sufficiently dense parameter training
+set Ξ Jtrain ⊂ D.
+   We finally report the online computational savings. Both the “truth” FE solver and the RB-EQP solver are
+implemented in Matlab and solve the nonlinear problem using the damped Newton strategy described in Section 3.2.
+All computations are performed on a commodity laptop. Over the 50 test cases defined by Ξ test , the RB-EQP solver
+(N = 7) on average reduces wall-clock time by ≈ 60.
+
+4.3. A perspective on generality
+
+    We have observed that the RB-EQP formulation introduced in this work is rather “blackbox” in the sense that
+(i) it requires minimal hyperparameter specification and (ii) it is quite robust with respect to applications. As regards
+(i), the greedy algorithm discussed in Section 3.6 requires as input only the parameter training set and EQP and
+RB tolerances; the algorithm then yields an online-efficient reduced model for the parametrized nonlinear PDE. As
+regards (ii), in addition to the neo-Hookean hyperelasticity problem reported here, we have also successfully applied
+the formulation to a nonlinear reaction–diffusion equation with a cubic reaction term, nonlinear elasticity based on
+the Saint Venant–Kirchhoff model, and the compressible Navier–Stokes equations.
+
+Acknowledgments
+
+   This work was supported by NSERC Discovery Grant RGPIN-2017-06740 (M Yano) and ONR Grant N00014-17-
+1-2077 (AT Patera).
+1122              M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123
+
+Appendix. Explicit representation of RB-EQP accuracy constraints
+   We provide an explicit presentation of the RB-EQP accuracy constraints (22). We first reproduce the expression:
+
+              N (µ); µ) R̂ N (ρ; u N (µ); µ)∥∞ ≤ δ,
+       ∥JNh (utrain                                                  ∀µ ∈ Ξ Jtrain .
+                       −1 h       train
+                                                                                                                                            (A.1)
+The ith entry of the empirical quadrature operator is given by (20),
+                                      K  h
+                                      ∑
+                    N (µ); µ))i =
+       ( R̂ hN (ρ; utrain                    ρk η(Z N utrain
+                                                       N (µ), φi ; µ; x k ),       i = 1, . . . , N ,
+                                                                        h
+
+                                      k=1
+
+where η(Z N utrain
+               N (µ), φi ; µ; x k ) is the residual integrand (12) evaluated for the trial function Z N u N (µ), the test
+                                h                                                                        train
+
+function φi , parameter µ, and point xk . The (i, j)-entry of the “truth”-quadrature Jacobian matrix is given by
+                                         h
+
+                                                                           K  h
+                                                                           ∑
+              N (µ); µ))i, j = (r ) (Z N u N (µ), φ j , φi ; µ) =
+       (JNh (utrain                                                               ρkh η′ (Z N utrain
+                                                                                               N (µ), φ j , φi ; µ; x k ),   i, j = 1, . . . , N ,
+                                 h ′      train                                                                       h
+
+                                                                           k=1
+
+where η′ (Z N utrain
+                   N (µ), φ j , φi ; µ; x k ) is the Gâteaux derivative of η(·, φi ; µ; x k ) : V → R at Z N u N (µ) ∈ V N in the
+                                          h                                                h                   train
+
+direction φ j ∈ V N . We denote the (i, j)-entry of the inverse of JN (u N (µ); µ) by (JN (u N (µ); µ)−1 )i, j . Then, the
+                                                                             h train                h train
+
+constraints (A.1) (or equivalently (22)) can be explicitly written as
+       ⏐                                                           ⏐
+       ⏐ N h train
+       ⏐∑                                                          ⏐
+       ⏐ (J (u (µ); µ)−1 )i, j ( R̂ h (ρ; utrain (µ); µ)) j ⏐
+                                                                   ⏐
+       ⏐         N   N                      N       N              ⏐
+       ⏐ j=1                                                       ⏐
+           ⏐         ⎡                                                           ⎤⏐
+               h
+           ⏐K           N
+           ⏐∑          ∑                                                           ⏐
+                  ρk       (JN (u N (µ); µ) )i, j η(Z N u N (µ), φ j ; µ; xk ) ⏐ ≤ δ, ∀i = 1, . . . , N , ∀µ ∈ Ξ Jtrain .
+                              h train            −1          train            h ⎦⏐
+                                                                                   ⏐
+       =⏐  ⏐         ⎣
+           ⏐ k=1       j=1                                                         ⏐
+
+In practice, we compute the quantity in the bracket for each µ ∈ Ξ Jtrain as follows: we evaluate the residual kernel
+η(Z N utrain
+         N (µ), φ j ; µ; x k ) for j = 1, . . . , N and k = 1, . . . , K and store it as a N × K matrix; we then apply
+                           h                                            h                          h
+
+(JN (u N (µ); µ)) (from left) to compute N × K entries of LP accuracy constraints. The evaluation of the residual
+   h train          −1                                  h
+
+kernel requires O(N K h ) operations, whereas the application of the inverse Jacobian requires O(N 2 K h ) operations.
+(In practice, the constant associated with the former is typically much greater than the constant associated with the
+latter.) We repeat the procedure for all µ ∈ Ξ Jtrain to populate the (N J ) × K h entries of the LP accuracy constraints.
+
+References
+ [1] G. Rozza, D.B.P. Huynh, A.T. Patera, Reduced basis approximation and a posteriori error estimation for affinely parametrized elliptic coercive
+     partial differential equations — application to transport and continuum mechanics, Arch. Comput. Methods Eng. 15 (3) (2008) 229–275.
+ [2] J.S. Hesthaven, G. Rozza, B. Stamm, Certified Reduced Basis Methods for Parametrized Partial Differential Equations, Springer, 2016.
+ [3] M. Ohlberger, S. Rave, Reduced basis methods: Success, limitations and future challenges, in: Proceedings of the Conference Algoritmy,
+     2016, pp. 1–12.
+ [4] A. Quarteroni, A. Manzoni, F. Negri, Reduced Basis Methods for Partial Differential Equations, Springer, 2016.
+ [5] R. Everson, L. Sirovichs, Karhunen-Loève procedure for gappy data, J. Opt. Soc. Am. A 12 (8) (1995) 1657–1664.
+ [6] T. Bui-Thanh, D. Murali, K. Willcox, Proper orthogonal decomposition extensions for parametric applications in compressible aerodynamics,
+     in: AIAA 2003-4213, AIAA, 2003.
+ [7] P. Astrid, S. Weiland, K. Willcox, T. Backx, Missing point estimation in models described by proper orthogonal decomposition, IEEE Trans.
+     Automat. Control 53 (10) (2008) 2237–2251.
+ [8] K. Carlberg, C. Bou-Mosleh, C. Farhat, Efficient non-linear model reduction via a least-squares Petrov–Galerkin projection and compressive
+     tensor approximations, Internat. J. Numer. Methods Engrg. 86 (2) (2011) 155–181.
+ [9] M. Barrault, Y. Maday, N.C. Nguyen, A.T. Patera, An “empirical interpolation” method: application to efficient reduced-basis discretization
+     of partial differential equations, C. R. Acad. Sci. Paris, Ser. I 339 (2004) 667–672.
+[10] M.A. Grepl, Y. Maday, N.C. Nguyen, A.T. Patera, Efficient reduced-basis treatment of nonaffine and nonlinear partial differential equations,
+     ESAIM Math. Model. Numer. Anal. 41 (3) (2007) 575–605.
+[11] N.C. Nguyen, A.T. Patera, J. Peraire, A best points interpolation method for efficient approximation of parametrized functions, Internat. J.
+     Numer. Methods Engrg. 73 (4) (2008) 521–543.
+[12] N.C. Nguyen, J. Peraire, An efficient reduced-order modeling approach for non-linear parametrized partial differential equations, Internat. J.
+     Numer. Methods Engrg. 76 (1) (2008) 27–55.
+                   M. Yano and A.T. Patera / Computer Methods in Applied Mechanics and Engineering 344 (2019) 1104–1123                         1123
+
+[13] J.L. Eftang, M.A. Grepl, A.T. Patera, A posteriori error bounds for the empirical interpolation method, C. R. Acad. Sci. Paris, Ser. I 348 (9–10)
+     (2010) 575–579.
+[14] S.S. An, T. Kim, D.L. James, Optimizing cubature for efficient integration of subspace deformations, ACM Trans. Graph. 27 (5) (2008)
+     165:1–165:10.
+[15] C. Farhat, T. Chapman, P. Avery, Structure-preserving, stability, and accuracy properties of the energy-conserving sampling and weighting
+     method for the hyper reduction of nonlinear finite element dynamic models, Internat. J. Numer. Methods Engrg. 102 (5) (2015) 1077–1110
+     nme.4820.
+[16] E.K. Ryu, S.P. Boyd, Extensions of Gauss quadrature via linear programming, Found. Comput. Math. 15 (4) (2015) 953–971.
+[17] R. DeVore, S. Fourcart, G. Petrova, P. Wojtaszczyk, Computing a quantity of interest from observational data, preprint, 2017.
+[18] A.T. Patera, M. Yano, An LP empirical quadrature procedure for parametrized functions, C. R. Acad. Sci. Paris, Ser. I (2017).
+[19] M. Drohmann, B. Haasdonk, M. Ohlberger, Reduced basis approximation for nonlinear parametrized evolution equations based on empirical
+     operator interpolation, SIAM J. Sci. Comput. 34 (2) (2012) 33.
+[20] C. Daversin-Catty, C. Prud’homme, Simultaneous empirical interpolation and reduced basis method for non-linear problems, C. R. Acad. Sci.
+     Paris, Ser. I 353 (2015) 1105–1109.
+[21] F. Brezzi, J. Rappaz, P.A. Raviart, Finite dimensional approximation of nonlinear problems. part I: Branches of nonsingular solutions, Numer.
+     Math. 36 (1980) 1–25.
+[22] K. Veroy, A.T. Patera, Certified real-time solution of the parametrized steady incompressible Navier–Stokes equations: rigorous reduced-basis
+     a posteriori error bounds, Internat. J. Numer. Methods Fluids 47 (2005) 773–788.
+[23] G. Caloz, J. Rappaz, Numerical analysis for nonlinear and bifurcation problems, in: P.G. Ciarlet, J.L. Lions (Eds.), Handbook of Numerical
+     Analysis, Vol. V, Elsevier Science BV, Amsterdam, 1997, pp. 487–637.
+

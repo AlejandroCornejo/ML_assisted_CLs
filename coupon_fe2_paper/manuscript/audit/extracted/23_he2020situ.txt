@@ -1,0 +1,1075 @@
+Received: 23 March 2020     Revised: 6 June 2020   Accepted: 7 July 2020
+
+DOI: 10.1002/nme.6505
+
+
+RESEARCH ARTICLE
+
+
+
+
+In situ adaptive reduction of nonlinear multiscale
+structural dynamics models
+
+Wanli He1               Philip Avery2               Charbel Farhat1,2,3
+
+1
+ Department of Mechanical Engineering,
+Stanford University, Stanford, California,         Summary
+USA                                                Conventional offline training of reduced-order bases in a predetermined region
+2
+ Department of Aeronautics and                     of a parameter space leads to parametric reduced-order models that are vul-
+Astronautics, Stanford University,
+                                                   nerable to extrapolation. This vulnerability manifests itself whenever a queried
+Stanford, California, USA
+3
+ Institute for Computational and
+                                                   parameter point lies in an unexplored region of the parameter space. This article
+Mathematical Engineering, Huang                    addresses this issue by presenting an in situ, adaptive framework for nonlin-
+Engineering Center, Stanford, California,          ear model reduction where computations are performed by default online and
+USA
+                                                   shifted offline as needed. The framework is based on the concept of a database
+Correspondence                                     of local reduced-order bases (ROBs), where locality is defined in the parame-
+Philip Avery, Department of Aeronautics
+                                                   ter space of interest. It achieves accuracy by updating on-the-fly a precomputed
+and Astronautics, Stanford University,
+Durand Building, 496 Lomita Mall,                  ROB and approximating the solution of a dynamical system along its trajectory
+Stanford, CA 94305-4035.                           using a sequence of most appropriate local ROBs. It achieves efficiency by man-
+Email: pavery@stanford.edu
+                                                   aging the dimension of a local ROB and incorporating hyperreduction in the
+Funding information                                process. While sufficiently comprehensive, the framework is described in the
+Air Force Office of Scientific Research,           context of dynamic multiscale computations in solid mechanics. In this con-
+Grant/Award Number: FA9550-17-1-
+0182; King Abdulaziz City for Science and
+                                                   text, even in a nonparametric setting of the macroscale problem and when all
+Technology (KACST); National                       offline, online, and adaptation overhead costs are accounted for, the proposed
+Aeronautics and Space Administration,              computational framework can accelerate a single three-dimensional, nonlin-
+Grant/Award Number:
+NASA-NNX17AD02G                                    ear, multiscale computation by an order of magnitude, without compromising
+                                                   accuracy.
+
+                                                   KEYWORDS
+                                                   dynamics, hyperreduction, local reduced-order basis, multiscale, nonlinear model reduction,
+                                                   parameter sampling
+
+
+
+
+1         I N T RO DU CT ION
+
+Heterogeneous materials are encountered to an increasing extent in simulation-based engineering applications involving
+structural analysis of solids. Applications include, but are not limited to, advanced modular armor protection,1 design
+of new materials with special-purpose optimized properties,2 and bone fracture risk assessment.3 When the scale of the
+heterogeneity is such that multiple disparate spatial scales require resolution in order to achieve a reliable prediction,
+multiscale homogenization can be a viable alternative to prohibitively expensive direct numerical simulation involving a
+massive monolithic discretization.4
+    In principle, the method of multiscale homogenization assumes that the material configuration is homogeneous at
+the macroscale level, but heterogeneous at the level of the smallest represented scale. The evaluation of a conventional
+
+Int J Numer Methods Eng. 2020;121:4971–4988.             wileyonlinelibrary.com/journal/nme                       © 2020 John Wiley & Sons, Ltd.   4971
+                                                                                                                                  10970207, 2020, 22, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6505 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+4972                                                                                                                  HE et al.
+
+
+
+constitutive response function at each macroscale material point is replaced by the solution of a discrete boundary value
+problem (BVP) whose computational domain is a so-called microscale representative volume element (RVE) character-
+izing the microstructure. The complete BVP is formulated with prescribed boundary deformations corresponding to the
+deformation gradient at the macroscale material point. The sequence of scales is coupled by formalized procedures of
+localization and homogenization to transmit information between differing scales.5-8 In this work, a particular variant of
+the method of multiscale homogenization known as “finite element squared” or FE2 is considered as a starting point. As
+the name implies, in this variant the finite element (FE) method is used to discretize both the macroscopic computational
+domain and the microscale RVE. The repeated solution of the FE BVP at each material point is an acknowledged compu-
+tational bottleneck, motivating the development of alternative surrogate models to accelerate this task. Projection-based
+model order reduction (PMOR) equipped with a second-tier hyperreduction approximation is one established technique
+for reducing the computational complexity of nonlinear FE models that has recently been demonstrated to be an effec-
+tive candidate surrogate model in the context of multiscale homogenization.9 Alternative surrogate model candidates
+include regression-based models constructed using various methods including Kriging and artificial neural networks.10,11
+Such methods can potentially lead to more computationally efficient surrogate model evaluation compared with PMOR;
+however, a large amount of data may be required to train the model when the constitutive response is complex. To
+accelerate the acquisition of training data, PMOR again presents a useful computational technology. In this work, a multi-
+fidelity framework leveraging low-, medium- and high-fidelity models is proposed to achieve a computationally tractable
+end-to-end procedure for nonlinear multiscale simulations. The proposed framework features a novel in situ construction
+and utilization of an adaptive PMOR to eliminate computation bottlenecks. The usefulness of this novelty is not restricted
+to the current application of interest (ie, multiscale modeling); benefits are anticipated in other related processes such as
+multifidelity optimization. It is therefore presented in what follows as a general-purpose methodology.
+    PMOR is typically embedded in an offline-online computational framework. In the phase of non-time-critical, offline
+training, information data from a high dimensional model (HDM) are collected and used to construct a reduced-order
+basis (ROB)—for example, using proper orthogonal decomposition (POD) and the method of snapshots12 —and the cor-
+responding projection-based reduced order model (PROM). Then, in the phase of time-critical, online evaluation, an
+approximate solution is computed using the PROM as a surrogate model for the underlying HDM. This offline-online
+decomposition of the computational effort is appropriate in real-time applications that are performed for the exploration
+of a space of interest associated with some usually but not necessarily physical model parameters, such as in design
+optimization,13,14 uncertainty quantification,15,16 and repeated analysis.17,18 In these cases where the space of one or more
+physical macroscopic parameters (such as those defining the geometry, boundary/initial conditions, or material proper-
+ties) is explored, the offline cost is amortized by the sizable number of required analyses associated with the number of
+parameter points necessary to adequately perform this exploration. Consequently, the overall speedup can still be sig-
+nificant even when the potentially substantial offline cost is accounted for. However, not all applications require the
+exploration of a space of one or more macroscopic parameters. In particular, the worst-case scenario in terms of opportu-
+nity for amortization of the offline cost is when only a single multiscale simulation is required. Here, it is emphasized that
+in the context of multiscale homogenization, PMOR is computationally feasible even in such a so-called “nonparamet-
+ric setting,” due to the large number of microscale RVE simulations that are required at a single macroscopic parameter
+point. Hence, a desirable speedup of the multiscale computations can be still achieved by building PROMs for all smaller
+scales. Furthermore, a nonparametric application calls for an in situ alternative to the conventional offline-online strat-
+egy, where the construction and utilization of the hyperreduced PROM (HPROM) can be performed during the multiscale
+simulation without requiring any preliminary computational work, using solution snapshots collected during already
+performed microscale RVE computations.
+    Several existing PMOR methods have been previously developed and applied to the solution of nonlinear multiscale
+problems. In Reference 19, a PROM of the microscale problem was constructed based on an a priori training strategy
+that involved computing solution snapshots using predefined microstrain histories. This approach was subsequently
+extended in Reference 20 to formulations with periodic boundary conditions for the microscale model. However, in each
+of these works the PROMs were not equipped with a hyperreduction method, and consequently the resulting speedup
+factor was limited to about an order of magnitude, even without accounting for the offline costs. More recently, the
+coauthors of Reference 9 introduced a nonlinear PMOR framework incorporating the energy conserving sampling and
+weighting (ECSW) hyperreduction method,21,22 which significantly reduced the computational cost of multiscale prob-
+lems characterized by large deformations and material nonlinearity, including when the offline costs were taking into
+account. Specifically, the computational framework proposed in Reference 9 included a two-step training strategy where:
+a microscale HPROM is first constructed in situ in order to achieve significant speedups even in nonparametric settings;
+                                                                                                                                   10970207, 2020, 22, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6505 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+HE et al.                                                                                                                   4973
+
+
+
+next, a conventional offline-online training approach is performed to build a parametric macroscale HPROM. A notable
+feature of this approach is the reduction in the cost of the training by using the in situ microscale HPROM to accelerate
+macroscale snapshot acquisition. However, a weakness of the proposed framework is its vulnerability to extrapolation if
+the underlying approximation subspace is not sufficiently explored during the in situ training phase.
+    The alternative in situ training strategy proposed in this article avoids extrapolation by incorporating an adaptive
+HPROM construction based on the concept of a database of local reduced-order bases (ROBs) constructed and updated
+on-the-fly. This process treats the components of the deformation gradient as a parameter vector, which facilitates the
+locating of each microscale BVP within the database in order to assign to it online the most-appropriate local ROB. Accu-
+racy is optimized by collecting new snapshots and other additional information as needed and updating accordingly the
+local ROBs. This usage of local ROBs enables the efficient solution of difficult problems for which PMOR is not effectively
+performed by constructing a single global ROB. Note that locality in this article refers to the parameter space character-
+ized by the deformation gradient, in sharp contrast with previous works where locality was considered with respect to
+the solution manifold.23
+    The remainder of this article is organized as follows. Section 2 provides a brief summary of the FE2 multiscale homog-
+enization method. Section 3 introduces the microscale HPROM and its training strategy. This section also highlights the
+necessity for ROB adaptation to avoid extrapolation. Section 4 proposes a novel, online, in situ ROB adaptation approach
+suitable for nonlinear, multifidelity, multiscale, computational homogenization. Section 5 provides an assessment of the
+overall proposed adaptive PMOR framework using several representative applications and demonstrates its ability to
+deliver speedups while compromising neither stability nor accuracy.
+
+
+2           T H E FE 2 CO MPUTAT IONAL FRAMEWORK
+
+In this section a brief summary of the FE2 method is provided, focusing on the aspects that are relevant to subse-
+quent developments including notation. For a comprehensive formulation of multiscale homogenization, the interested
+reader is referred to Reference 9 and the references cited therein. The fundamental generalization underlying FE2
+is that the evaluation of stress as a function of strain for a heterogeneous material is governed by the solution of a
+locally attached boundary value problem characterizing its microstructure. This concept can be applied recursively to
+materials that exhibit ns + 1 separated scales. In the present context, this means that the dominant wavelengths at the
+larger of two separated scales are much larger than the characteristic dimensions of the attached RVE. In what follows
+k = 0, … , ns denotes the sequence of scales (or levels), with k = 0 and k = 1, … , ns designating the macroscale and the
+finer meso/microscales, respectively. Specifically, at the ns coarsest scales (k = 0, … , ns − 1) each stress-strain relation is
+associated with a locally attached microstructure, while at the finest scale (k = ns ) the stress-strain relation is defined by
+a conventional constitutive law.
+
+
+2.1          Semidiscrete governing equations
+
+In this work, a distinction is made between constrained and unconstrained degrees of freedom (DOFs), the former being
+those whose values are specified by essential boundary conditions, while the latter are subject to no such restriction.
+                                          ◦
+Following the notation of Reference 9, vk is defined here as a vector over the set of constrained DOFs at level k, vk as
+the corresponding vector over the set of unconstrained DOFs at level k, and vk as the concatenation of these two vectors.
+A similar notation is adopted for matrices. It follows that a subscript 0 attached to any vector or matrix designates a
+                                                               ◦̈
+macroscopic quantity. Using this notation and assuming that u0 = 0, the semidiscrete form of the equations of motion
+governing dynamic equilibrium can be written as
+
+                                                                      ◦
+                                                    M0 ü 0 + f0 (u0 , u0 ) = 0,
+                                                                      ◦
+                                                              fk (uk , uk ) = 0,                                            (1)
+
+for k = 1, … , ns , where M is a FE mass matrix, f is a FE vector of internal forces, u and ü are FE vectors of displace-
+ments and accelerations, respectively. The governing equations (1) are coupled by the localization and homogenization
+conditions presented in the next section.
+                                                                                                                                  10970207, 2020, 22, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6505 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+4974                                                                                                                  HE et al.
+
+
+
+2.2        Scale transmission conditions
+
+Kinematic information is transmitted from coarser to finer scales via prescribed nonhomogeneous displacement bound-
+ary conditions applied to the exterior boundary of the attached microstructure. These prescribed values are specified such
+that the volumetric average of the deformation gradient at the finer scale is identical to the deformation gradient at the
+material point of the coarser scale to which the microstructure is attached. This is referred to as the localization condition
+and can be expressed as follows
+                                                    ◦         ◦
+                                                    Uk+1 = Xk+1 (Fk − I),                                                   (2)
+                                                                                            ◦
+where F k is the coarse-scale deformation gradient, I is the 3 × 3 identity matrix, and Uk+1 is the matrix whose three
+columns contain the prescribed x-, y-, and z-components of displacement. In other words, the displacement vector over
+                                              ◦                                                                         ◦
+the set of constrained DOFs at level k + 1, uk+1 , is obtained—up to a permutation—by stacking the columns of Uk+1 .
+           ◦
+Similarly, Xk+1 is the matrix whose three columns contain the x-, y-, and z-coordinates in the reference configuration of
+the nodes on the exterior boundary of the attached microstructure whose DOFs are constrained. In the particular case
+of the so-called uniform essential boundary conditions, the values of all DOFs located on the exterior boundary of the
+attached microstructure are prescribed. Alternatively, in the case of periodic boundary conditions, only a minimal set of
+corner points have prescribed displacements while the remaining exterior boundary DOFs are constrained using linear
+multipoint constraint equations to enforce the periodicity of the fluctuations between each pair of opposite faces.
+    After computing the response of an attached microstructure to the prescribed boundary displacements, information is
+transmitted back from finer to coarser scales in the form of a homogenized stress tensor defined as the volumetric average
+of the stress in the attached microstructure, that is,
+
+                                                           1
+                                                  Pk =                 Pk+1 dV,                                             (3)
+                                                         |k+1 | ∫k+1
+
+where Pk is the coarse-scale homogenized first Piola-Kirchhoff stress tensor and |k+1 | is the volume of the RVE. Pro-
+vided that the interfaces are perfectly bounded within the microstructure,10 this quantity can be conveniently obtained
+from the reaction forces associated with the constrained boundary DOFs using a discrete (matrix) form derived from (3).
+Specifically,
+
+                                                                           ◦
+                                                             1
+                                                   Pk =              XTk+1 Rk+1 ,                                           (4)
+                                                           |k+1 |
+       ◦
+where Rk+1 is the matrix whose three columns contain the x-, y-, and z-components of the internal force vector of the
+nodes on the exterior boundary of the attached microstructure whose DOFs are constrained, that is, the boundary reaction
+forces.
+    In summary, the multiscale computational model distinguishes itself from a conventional FE model in that it involves
+repeatedly solving one or more microscale BVPs, with one such solution required for each stress-strain evaluation at
+all scales other than the finest. For a given RVE, the microscale BVPs vary only in the values of the prescribed bound-
+ary displacements. Regardless of whether uniform or periodic boundary conditions are adopted, (2) shows that the
+computational response of the microscale model can be characterized as an implicit function of nine components of
+the deformation gradient F k − 1 . In Section 4, the set of components of F k − 1 is treated as a parameter vector as in
+the parametric setting of PMOR. The parameter space k ⊂ Rnsd , where nsd = 4 for two-dimensional problems, nsd = 9
+for three-dimensional ones, and Fk−1 ∈ k , is explored by solving the microscale BVP repeatedly in order to generate
+snapshots of the microstructural response as required for the construction of a surrogate model.
+                                                                                 ∏ns −1
+    At each computational time-step of a single multiscale simulation, a total of k=0   |k | high-dimensional, microscale
+BVPs are solved at the finest scale, where |k | denotes the number of Gauss points at level k. The overall computa-
+tional cost associated with such a computational complexity can be prohibitive for large-scale multiscale models, which
+motivates PMOR to truncate the computational complexity by reducing the operational dimensionality of the multiscale
+model. Even in the absence of a physical parametric setting at the macroscale level, computational savings are still fea-
+sible if the macroscale model is not reduced, but rather a sequence of HPROMs are constructed at all other scales k,
+                                                                                                                                 10970207, 2020, 22, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6505 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+HE et al.                                                                                                                 4975
+
+
+
+k = 1, … , ns . For this setting, the coauthors of Reference 9 proposed an in situ training strategy for microscale reduction
+where only the single multiscale simulation of interest is required to be performed, without any predefined offline com-
+putational work. This methodology will be described in the following section, after which a novel contribution will be
+presented to extend the scope and robustness of the in situ concept without sacrificing its inherent convenience.
+
+
+3           PROJECTION-BASED MODEL O RDER REDUCTION
+
+Here, the application of PMOR to the FE2 computation framework is reviewed. Specifically, the POD reduction and
+ECSW21,22 hyperreduction methods are used to construct a surrogate model to accelerate the solution of each locally
+attached microstructural FE model at all fine scales (k = 1, … , ns ). Training is performed in situ (or on-the-fly), pursuant
+to our objective of enabling a computational technology for multiscale modeling that is tractable, robust, and convenient
+for simulators accustomed to conventional materials. Although not considered in what follows, PMOR can also be applied
+to the macroscale BVP (k = 0, see9 ).
+
+
+3.1          Microscale reduction framework
+
+At each fine scale k, k = 1, … , ns , the number of DOFs ndk of the computational FE model is reduced by searching for the
+solution uk of the problem of interest in a low-dimensional subspace—that is,
+
+                                                                  uk ≈ Vk yk ,                                             (5)
+                d
+where Vk ∈ Rnk ×sk is a ROB constructed using POD and the method of snapshots,12 yk ∈ Rsk is a vector of generalized
+coordinates, and sk ≪ ndk . The snapshots from which the ROB is constructed correspond to high-dimensional solutions
+of the microstructural FE model that are collected and processed in situ. The term in situ indicates that such solutions
+are obtained during the same multiscale simulation in which the model reduction framework is utilized, in contrast to
+online-offline treatments.
+    The dimensionality of the semidiscrete equations governing the microscale BVP (1) is reduced by performing a
+Galerkin projection—that is, substituting (5) into these equations and premultiplying them by the transpose of V k . This
+leads to the microscale PROM
+                                                                 ◦
+                                              VTk fk (Vk yk , uk ) = 0,            k = 1, … , ns ,                         (6)
+
+where the superscript T designates the transpose operation.
+     Furthermore, a second-tier hyperreduction approximation is also introduced to avoid computations that scale with
+the size ndk of the HDM at each level k > 0. In this work, the ECSW method21,22 is preferred for this purpose due to
+its structure-preserving property22 and the simplicity by which its approximation error can be controlled, namely, via a
+user-specified thresholding parameter. As the name suggests, ECSW samples a subset ̃ k of the element set k of a given
+FE mesh—that is, ̃ k ⊂ k —and assigns to each sampled element e a positive weight 𝛼ke ≥ 0. The internal force term in
+the microscale PROM (6) is evaluated by simply weighting the contributions of the sampled elements only, that is,
+
+                                                 ◦          ∑                                 ◦e                ◦
+                                  VTk fk (Vk yk , uk ) ≈              𝛼ke (Vke )T fke (Vek yk , uk ) = fkr (yk , uk ).     (7)
+                                                           e ∈ ̃ k
+
+
+   In the above expressions, the superscript e designates the restriction of a global vector or matrix to element
+e. The optimal reduced mesh ̃ k and associated weights can be estimated using either the non-negative least
+squares (NNLS) algorithm proposed by Lawson and Hanson24 or alternative sparsity promoting L1-minimization
+methods.25
+   In the context of the microscale reduction framework, reduction and hyperreduction are considered not only for the
+unconstrained part of the internal force vector as shown in (7) but also for both the constrained part of the internal force
+required for the homogenization condition and the linear constraint equations required for the enforcement of periodic
+boundary conditions.9
+                                                                                                                                  10970207, 2020, 22, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6505 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+4976                                                                                                                  HE et al.
+
+
+
+3.2       In situ training strategy
+
+As already stated in Section 2, the deformation gradient F k − 1 at a Gauss point characterizes the microscale BVP at level
+k, k = 1, … , ns . In what follows, each microscale BVP at level k is associated with a parameter vector zk in the parameter
+space k ⊂ Rsd (also referred to in the remainder of this section as parameter “point” in k ), where zk is obtained by
+stacking the columns of F k − 1 . This parametric interpretation of the attached microstructure BVPs motivates the adaptive
+reduction process discussed in Section 4.
+                                                                          ∏k−1
+    At each computational time-step of a multiscale simulation, j=0 |j | microscale BVPs are solved at level k,
+k = 1, … , ns . This suggests that sufficient training data can be acquired for the purpose of constructing a PROM at each
+level k, k = 1, … , ns . An in situ microscale training strategy proposed in Reference 9 that leverages this observation can
+be described by the following steps:
+
+1. Solve at level k, k = 1, … , ns , a sufficient number nk−1 of high-dimensional microscale BVPs encountered at the Gauss
+   points of level k − 1, and sample the resulting solution snapshots (note that nk is not necessarily equal to |k |). Such
+   problems are for example solved during the first few time-steps of the multiscale simulation.
+2. Construct a global ROB V k .
+3. Construct a reduced mesh ̃ k .
+4. Exploit the resulting HPROM at level k to solve all remaining microscale BVPs at this level.
+
+    This nonadaptive, in situ, microscale training strategy, where the choice for nk−1 is user-specified (and therefore arbi-
+trary), may encounter scenarios involving extrapolation when the remaining microscale BVPs visit an unexplored region
+of the parameter space k . If a queried parameter point falls outside of the subregion defined by the set of sampled points,
+a good approximate solution of the microscale BVP may not be computable in the existing low-dimensional subspace V k .
+However, an adaptive in situ training strategy has the potential to avoid extrapolation by collecting new high-dimensional
+solution snapshots and using them to enrich the subspace of approximation when a scenario that would otherwise involve
+extrapolation is detected.
+    Typically, the enrichment of the approximation subspace needed when the explored domain within k is enlarged
+requires the expansion of the dimension of the ROB, leading to a deterioration in the attainable speedup. When the
+dimension of the expanded ROB exceeds a certain threshold, a method is proposed next to split the global ROB into two or
+more local ROBs, and subsequently find an approximate solution at each queried parameter point using the most suitable
+of precomputed and stored local ROBs. A similar approach was proposed in Reference 23 for constructing local ROBs,
+where locality was defined however with respect to the solution manifold. This approach is not ideally suited for use with
+in situ microscale training as it requires the clustering of solution snapshots, which can be computationally expensive in
+this context. Thus, this article proposes an adaptive PMOR strategy with a method of databases containing local ROBs,
+where locality is defined with respect to the parameter space. The details of this proposal are presented in Section 4.
+
+
+4       ADAPTIVE IN SITU SA MPLING AND LOCAL REDUCED- ORDER BASES
+
+Next, an in situ, adaptive sampling process based on the concept of a database k of local ROBs at each level k,
+k = 1, … , ns , is presented. It leverages the accuracy and computational efficiency of the PMOR framework. The detec-
+tion of extrapolation when solving a queried microscale BVP is performed using a residual-based error indicator. When
+an update criterion is triggered by this indicator at level k, new information is sampled and used to enrich the content of
+k . In order to preserve the computational efficiency of PMOR, a local ROB is split into two smaller ones if its current
+size exceeds a certain limit.
+    In principle, each time a local ROB is updated, the corresponding reduced mesh should also be updated—because the
+training of ECSW depends on the state of the ROB. Therefore, the HPROM should be updated too accordingly. However,
+efficiently performing such updates is outside the scope of this article: it is the subject of ongoing research. With multiple
+local ROBs stored in a database k , the most appropriate local ROB and associated HPROM must be identified to solve
+a microscale BVP queried at level k.
+    In order to construct such an adaptive PMOR framework, both the microscale solution snapshots and the under-
+lying deformation gradient parameter points are collected. In order to describe this adaptive framework, the following
+additional nomenclature and notation are introduced:
+                                                                                                                                 10970207, 2020, 22, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6505 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+HE et al.                                                                                                                 4977
+
+
+FIGURE 1          Extrapolation scenario for an in situ-trained
+microscale HPROM: dark/light shaded area designates the region of the
+parameter space explored/unexplored during training [Colour figure
+can be viewed at wileyonlinelibrary.com]
+
+
+
+
+      m                (m )
+• z k = {z(1)
+           k
+               , … , zk k }, denotes a set of mk deformation gradient parameter points considered among those that have
+  already been sampled at level k, and z(i) k
+                                              ∈ k , i = 1, … , mk . It is collected in the matrix
+                                                                        (m )
+                                                    Nzk = [z(1)
+                                                            k
+                                                                … zk k ] ∈ Rnsd ×mk .
+
+• Nuk denotes the corresponding snapshot matrix whose ith column stores the HDM-based solution of the microscale
+  BVP characterized by z(i)
+                         k
+                            .
+
+
+4.1         Detection of extrapolation and other large errors
+
+When applied to the solution of a microscale BVP queried at an unsampled parameter point z⋆k ∈ k , a local, in
+situ-trained, microscale HPROM will perform the equivalent of an extrapolated approximation if the sampling process
+underlying the training of the corresponding local ROB did not explore a region of k containing z⋆k . This scenario is
+illustrated in Figure 1, where k denotes the solution manifold at level k. Hence, if its pitfalls are to be avoided, the
+potential for this scenario must be detected before the solution of the queried microscale BVP using a most appropriate
+local HPROM is computed or accepted.
+     There are two main approaches for detecting an extrapolation associated with the approximate solution of a queried
+microscale BVP characterized by z⋆k : a geometric approach that determines the position of z⋆k in k , relative to the sampled
+parameter points collected in Nzk and a residual-based approach that computes the residual obtained when approximating
+the HDM-based solution of the queried microscale problem using a most appropriate local HPROM.
+     The geometric approach is conceptually simple. However, its implementation is not trivial. It can be carried out by
+computing the hypersphere of smallest radius containing all parameter points collected in Nzk , or the minimal hyperpoly-
+gon connecting these parameter points, then checking whether z⋆k lies or not within the hypersphere or hyperpolygon.
+Either implementation necessitates a fair amount of efficient computational geometry. In either case however, the main
+drawback of this approach is that if z⋆k falls within either of the aforementioned target domains, this does not necessar-
+ily imply that the approximate solution computed using the most-appropriate local HPROM has an acceptable accuracy.
+Such information is provided however by the residual-based approach which, unlike the geometric approach, checks for
+potential extrapolation after rather than before the solution of the queried microscale BVP is computed. Specifically, this
+approach computes the following relative residual magnitude
+                                                                               ◦
+                                                               ||fk (Vk yk , uk )||
+                                                        rk =              ◦
+                                                                                                                           (8)
+                                                                 ||fk (0, uk )||
+
+and adopts it as an error indicator. When it exceeds a prescribed tolerance r tol , it suggests discarding the approximate
+solution V k yk , enriching the most appropriate local ROB V k , and repeating this process at subsequent queried parameter
+                                                                                                                                  10970207, 2020, 22, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6505 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+4978                                                                                                                  HE et al.
+
+
+
+points, until r k ≤ r tol . Hence, this alternative approach, which leads to the updating criterion outlined in Algorithm 1,
+equally applies for assessing extrapolation and interpolation errors.
+
+Algorithm 1. Updating criterion for a database of local HPROMs
+
+    Data: Queried parameter point z⋆k ∈ k , and user-specifiedtolerance value rtol <0
+    Result: Updating flag UF
+                                                                                ⋆
+  1 Compute the approximate solution of the microscale BVP characterized by z using the most-appropriate local
+                                                                                k
+     HPROM;
+                                                                ⋆
+  2 Compute the corresponding relative residual magnitude r (8);
+                                                                k
+        ⋆
+  3 if r <rtol then
+        k
+  4     Solve the microscale BVP using the corresponding HDM;
+  5     Collect the computed solution u⋆k in N uk ;
+  6     Sample the parameter point z⋆k and collect it in N zk ;
+  7     Set UF = true
+  8 else
+  9     Accept the HPROM solution u⋆k ;
+ 10     Set UF = false
+
+
+
+4.2       Updating of a local reduced-order basis
+
+Each update of a database k starts by solving a new microscale BVP using the corresponding HDM, appending the com-
+puted solution u⋆k to the current content of the relevant snapshot matrix Nuk , performing the singular value decomposition
+(SVD) of Nuk , and deducing a new ROB using the singular value energy truncation criterion. Because the computational
+complexity of SVD applied to a rectangular matrix scales quadratically with the number of columns of the matrix, a
+low-rank SVD update method such as that presented in Reference 26 is preferred here for compressing the collected
+snapshots.
+    For a highly nonlinear problem, the SVD and singular value energy truncation criterion configured for accuracy typ-
+ically lead to a large ROB. Hence, if the size of such a ROB exceeds a specified capacity limit cmax , this ROB is split here
+into two smaller ROBs, each of which capable of capturing only the local behavior of a nonlinear microstructure. This
+splitting, which is bound in this context to occur recursively, leads to the concept of a local ROB. This concept is similar
+to that of local ROBs pioneered in Reference 23 and equipped with the notion of clustering of solution snapshots. How-
+ever, it differs from it in that locality refers here to the parameter space k , whereas locality in Reference 23 referred to
+the solution manifold (denoted here by k ). Indeed, the data collected in a parameter matrix Nzk provide an alternative
+approach for building local ROBs by a mechanism centered around updating and splitting. Again, the updating criterion,
+which is proposed in this work for avoiding extrapolation, is described in Algorithm 1. Its basic principle is described in
+Algorithm 2. The proposed splitting algorithm is described below.
+
+Algorithm 2. Updating a ROB
+
+    Data: Sampled parameter vector z⋆k (or point in k ), correspondingHDM-based solution snapshot u⋆k , ROB V k ,
+          matrixof sampled deformation gradient parameter points N zk , and snapshot matrixN uk
+    Result: Updated ROB V k , updated sampled parameter matrix N zk ,and updated snapshot matrix N uk
+                  [ z      ]
+  1 Update N ← N
+              z
+                       z⋆k
+              k   [ uk      ]
+  2 Update N ← N
+              u
+              k      k
+                       u⋆k
+                                      u
+  3 Perform low-rank SVD update of N
+                                      k
+  4 Extract new (updated) ROB V k
+
+
+
+    Specifically, Nzk provides a mean for splitting a region of the parameter space k rather than a region of the solution
+space in two parts, using, for example, principle component analysis (PCA) or POD, both of which build on SVD. PCA
+is most useful for exploratory data analysis. It is used here to compute the direction of maximum variance nk of a set of
+                                                                                                                                  10970207, 2020, 22, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6505 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+HE et al.                                                                                                                  4979
+
+
+FIGURE 2           Splitting a set of sampled parameter
+points in two sets in order to partition a snapshot
+matrix into two matrices and thereby split a ROB into
+two local ROBs [Colour figure can be viewed at
+wileyonlinelibrary.com]
+
+
+
+
+                                                              (A)                             (B)
+
+
+
+
+                                  m
+sampled parameter points z k as the first eigenvector of the covariance of the corresponding parameter matrix
+                                                                             T      T
+                                                          Cov(Nzk ) = Nzk Nzk − zk zk ,                                     (9)
+
+where zk ∈ Rnsd is the columnwise mean of Nzk —that is,
+
+                                                            1 ∑ z
+                                                                    mk
+                                                    zki =         N ,      i = 1, … , nsd                                  (10)
+                                                            mk j=1 kij
+
+and therefore zk represents the algebraic centroid of the sampled parameter points.
+   Next, the hyperplane hk containing the centroid point zk and orthogonal to nk is constructed. This hyperplane can be
+described as
+                                                          hk = {x|(x − zk )T nk = 0}.                                      (11)
+
+                            m
+    It naturally splits z k into two smaller sets, where each partitioned set has a more compact spatial distribution in
+k (see Figure 2B). In principle, any suitably efficient splitting algorithm—such as the closely related K-means cluster-
+ing algorithm—can be substituted for PCA in the proposed methodology without any significant impact on its overall
+performance.
+                                                                                    m
+    As illustrated in Figure 2, the splitting of a set of sampled parameter points z k into two smaller sets, which is equiv-
+alent to the partitioning of a matrix Nzk into two smaller matrices, implies a splitting of a region of the parameter space
+k . It also leads to the partitioning of the snapshot matrix Nuk in two snapshot matrices. Finally, the compression of these
+two matrices leads in turn to the construction of two new local ROBs. The entire splitting process is summarized in
+Algorithm 3.
+
+Algorithm 3. Splitting a ROB
+
+    Data: Matrix of sampled deformation gradient parameter points N zk , snapshotmatrix N uk , and database of
+          HPROM-related information k
+                                                                           (1)      (2)                           (1)
+    Result: Split local ROBs V (1)
+                               k
+                                   and V (2)
+                                         k
+                                             , split parametermatrices N zk and N zk , split snapshotmatrices N uk , and
+                 (2)
+           N uk , and updateddatabase k
+                                                        z
+  1 Compute the first eigenvector nk of the matrix Cov(N ) (9)
+                                                        k
+  2 Construct the hyperplane hk (11)
+                                  z                           (1)         (2)
+  3 Using hk , partition N
+                                  k
+                                    into two matrices N zk and N zk
+                 u                                                u(1)        (2)
+  4 Partition N accordingly, into two matrices N
+                 k                                                k
+                                                                       andN uk
+                  (1)     (2)             (1)      (2)
+  5 Compute V , V
+                  k       k
+                                from N uk ,N uk , respectively
+           (1)    z(1)       (1)                  (2)    (2)
+  6 Add V , N
+           k      k
+                       , N uk , andV (2)k
+                                            , N zk , N uk to the contentof the database k
+  7 Delete V k , N , N from the content ofthe database k
+                    z     u
+                    k     k
+                                                                                                                                   10970207, 2020, 22, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6505 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+4980                                                                                                                   HE et al.
+
+
+
+4.3                 Approximation using a most appropriate local ROB
+
+The adaptive, in situ sampling process described so far, which centers around updating and splitting ROBs, eventually
+leads to the presence of multiple local ROBs in a database k . Hence, when a microscale BVP characterized by an
+unsampled parameter point z⋆k is queried for fast solution by a local HPROM, the most appropriate local ROB available
+in k must be identified online. This can be performed as proposed below.
+          n               (n )
+   Let Vk = {V(1)
+                 k
+                   , … , Vk k } denote the set of all nk local ROBs that are precomputed and stored at a given time in a
+database k . Recall from Section 4 that each HDM-based solution u(i)k
+                                                                        of a microscale BVP is associated with a parameter
+                                                                                                      (l)
+point z(i)
+       k
+           of the parameter space k that characterizes the BVP. Hence, a split snapshot matrix Nuk can be associated on
+                                                    (l)
+the same basis with a split parameter matrix Nzk . Similarly, a local ROB V(l)
+                                                                           k
+                                                                               can be associated with the snapshot matrix
+      (l)                                                                                       (l)
+Nuk that was compressed to obtain V(l)
+                                   k
+                                       , and by transitivity, with the split parameter matrix Nzk .
+              (l)                                                                  (l)
+        Let zk denote the algebraic centroid of the parameter matrix Nzk (defined as in (10)). Following the same reasoning
+                              (l)
+as above, it follows that zk can be associated with the local ROB V(l)
+                                                                   k
+                                                                       . More generally, a bijection can be defined between
+the set of sampled parameter points z(l)
+                                     k
+                                         and the set local ROBs V(l)
+                                                                 k
+                                                                     precomputed at any given time.
+    Now, given a queried BVP characterized by an unsampled deformation gradient parameter point z⋆k —or more simply,
+                                                                                                                   n
+given a queried but unsampled parameter point z⋆k —a most appropriate, precomputed, local ROB Vk k ∈ Vk —that is,
+                                                                                                            (j )
+
+jk ∈ {1, … , nk }, can be defined as the precomputed local ROB whose corresponding parameter point is the closest to the
+queried but unsampled parameter point z⋆k —that is,
+
+                                                                          ||zk − z⋆k ||,
+                                                                             (i)
+                                                   jk = argmin
+                                                          i∈{1, … ,nk }
+
+
+where |||| denotes any preferred norm, for example, ||||2 .
+
+
+4.4                 Summary: In situ adaptive microscale PMOR framework
+
+Algorithm 4 summarizes the in situ, adaptive, PMOR framework proposed for the acceleration of the solution of the
+microscale BVPs at any level k, k = 1, … , ns .
+
+Algorithm 4. In situ, adaptive, PMOR framework for the microscale BVPs at level k
+
+    Data: User-specified residual tolerance rtol , and user-specified ROB capacity limit cmax
+                                                    k−1 | |
+    Result: HDM/HPROM-based solutions of Πj=0           |j | microscale BVPsat level k, and database of HPROM-related
+             information k
+  1 Initialize mk
+               z       u
+  2 Collect N and N and compute V k usingthe in situ training strategy described in Section∼3.2
+               k       k
+  3 Initialize the content of k with V k , N andN
+                                              z         u
+                                                        k
+                                      ∏k−1 | k|
+  4 for solving each of the remaining   j=0 |j | − mk microscaleBVPs do
+  5    Compute the deformation gradient parameter point z⋆k
+                                                                                         (j )
+  6         Identify in k the corresponding most-appropriate local ROB V k k
+  7         Apply Algorithm 1 to update or not k
+  8         if UF = true (see Algorithm 1) then
+  9            Update k using Algorithm 2
+ 10            if size of updated ROB <cmax then
+ 11                Split ROB using Algorithm 3
+ 12            else
+ 13                Continue (to the next microscale BVP)
+ 14         else
+ 15            Continue (to the next microscale BVP)
+                                                                                                                                 10970207, 2020, 22, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6505 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+HE et al.                                                                                                                 4981
+
+
+
+5           APPLICAT IONS
+
+Here, the computational feasibility as well as the performance of the in situ, adaptive, PMOR framework for microscale
+BVPs are demonstrated for two nonlinear, nonparametric, dynamic, two-scale simulations (ns = 1). Specifically, this
+framework is applied to the solution of two academic but nevertheless computationally intensive, nonlinear, two-level,
+dynamic response problems. For both applications, all ROBs are constructed using POD based on displacement solution
+snapshots. Because adaptive hyperreduction is beyond the scope of this article, all HPROMs are constructed based on a
+single reduced mesh that is trained and generated using ECSW during the initialization step of Algorithm 4. Given that
+at the macroscale level neither considered problem is parametric, PMOR is applied in both cases only to the microscale
+model. This setting has two benefits:
+
+• It enables the exclusive focusing on the performance of the proposed in situ, adaptive approach for performing the
+  PMOR of microscale problems.
+• It corresponds to the worst-case scenario of PMOR performance, as any computational overhead incurred by the PMOR
+  process may only be amortized in this case by the same simulation to which the PMOR process is applied. Hence, any
+  reported speedup factor is a genuine speedup factor.
+
+    Since both applications considered herein involve two-scale simulations (ns = 1), the model labels PROM and HPROM
+refer throughout the remainder of this section to the microscale computational model. On the other hand, the label HDM
+may refer to either the macroscale or the microscale computational model.
+    In both applications, the tolerance for the residual-based error indicator is set to r tol = 0.001, and the capacity limit
+for the dimension of a local ROB is set to cmax = 20. The accuracy of all PROM and HPROM approximations is evaluated
+using the following definition of a relative global error
+
+                                                | ∑ Δs(u⋄ (t) − ũ ⋄ (t))T 1 |
+                                                | t∈P                        |
+                                         erel = |     ∑                      | × 100%,
+                                                |           ΔsuT
+                                                                 (t)1        |
+                                                |       t∈P    ⋄             |
+                                                                                                          d
+where the ⋄ subscript designates the x, y, or z direction of a global reference frame, u⋄ (t) ∈ Rn0 is the vector of
+⋄-displacements at time t extracted from the macroscale solution based on HDMs at both the macroscale and microscale
+levels, ũ ⋄ (t) ∈ Rn0 is the vector of ⋄-displacements at time t extracted from the macroscale solution but based on a PROM
+                     d
+
+
+or HPROM at the microscale level, Δs is the error sampling time-step size, 1 denotes the vector of 1 entries, and P is the
+set of error sampling time-steps
+
+                                             P = {t0 , t0 + Δs, t0 + 2Δs, … , tf },
+
+where t0 is the initial simulated time and tf is the final simulated time.
+    All computations reported herein are performed on a Linux cluster with 84 compute nodes, dual-socket Intel Xeon
+E5-2650 v2 CPUs (eight cores/socket), 64 GB of DDR3 memory/node, a 1:1 subscribed FDR Infiniband network, and a
+Lustre shared file system tuned for parallel I/O.
+    For both applications, all reported PROM and HPROM wall-clock timings as well as speedup factors account for all
+training costs.
+
+
+5.1          Vibration of a nonlinear solid elastic bar with a microvoid structure
+
+A computational model for a solid bar made of a heterogeneous structure is considered here. At the finest scale, this
+structure is characterized by microscopic voids and a porosity ratio of 0.5 (here, the porosity ratio is defined as the
+ratio of the total volume occupied by the voids, and the total volume occupied by the material and the voids). The
+bar has a solid square cross section of height and width H = 1 cm, and a length L = 20 cm. It is fixed at both ends.
+A distributed external force generated by a uniform pressure of magnitude p = 100 MPa is suddenly applied on its
+upper face and oriented initially in the transverse direction. Due to symmetry, only half of the bar along its length
+is modeled.
+                                                                                                                                    10970207, 2020, 22, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6505 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+4982                                                                                                                    HE et al.
+
+
+                                                                                       FIGURE 3            Vibration of a
+                                                                                       nonlinear solid elastic bar with a
+                                                                                       microvoid structure: exterior geometry
+                                                                                       and FE mesh of the microscale RVE
+                                                                                       (left); interior geometry and FE mesh of
+                                                                                       the rearward half of the microscale RVE
+                                                                                       exposed by a clipping plane (right)
+                                                                                       [Colour figure can be viewed at
+                                                                                       wileyonlinelibrary.com]
+
+
+
+
+                                                                                       FIGURE 4          Vibration of a
+                                                                                       nonlinear solid elastic bar with a
+                                                                                       microvoid structure: FE mesh
+                                                                                       underlying the macroscale HDM
+
+
+
+
+    At the microscale level, a FE model of the bar (see Figure 3) is constructed using 648 eight-noded hexahedral elements
+with three displacement DOFs per node. The dimension of this HDM is nd1 = 1962 (1962 DOFs). At this level, the material
+response is assumed to be well represented by a compressible neo-Hookean (finite strains) hyperelastic constitutive law
+with Young’s modulus E = 207 GPa and Poisson’s ratio 𝜈 = 0.3. Uniform essential boundary conditions are adopted at this
+level.
+    At the macroscale level, a FE model of the bar (see Figure 4) is constructed using 640 eight-noded hexahedral elements
+with three displacement DOFs/node, and a total number of 2975 DOFs (nd0 = 2975). At this level, the material density is
+𝜌0 = 7830 kg/m3 , and temporal discretization is performed using the explicit central difference scheme and the constant
+time-step Δt = 3.25 × 10−7 seconds. The response of the bar is computed from t0 = 0 seconds until tf = 1 × 10−2 seconds.
+    First, an initial nonlinear PROM is constructed for the microscale computational model using the solution snapshots
+collected at t0 = 0 second during the HDM-based solution of the first m1 = 500 microscale BVPs encountered at the Gauss
+points of the macroscale computational model. Then, this PROM is hyperreduced using ECSW configured with the Law-
+son and Hanson sparse NNLS algorithm and a relative accuracy threshold 𝜀 = 10−3 , which generates a reduced mesh with
+115 elements (̃ = 115, see Figure 5).
+    Several simulations are performed for this problem using: the macroscale and microscale HDMs described above; the
+proposed in situ, adaptive, microscale PMOR framework, with and without hyperreduction (the reader is reminded that in
+this work, any reduced mesh generated by ECSW-based hyperreduction is not updated); and the counterpart nonadaptive
+microscale PMOR framework described in Reference 9, with and without hyperreduction.
+    Table 1(a) reports the speedup factors and relative global errors computed using the error sampling time-step Δs = Δt
+measured for the proposed in situ, adaptive, microscale PMOR with and without hyperreduction. Similarly, Tables 1(b)-(d)
+report these performance results for the counterpart in situ, nonadaptive, microscale PMOR framework previously pro-
+posed in Reference 9. Since the latter framework depends in this case on the ad hoc parameter n0 specifying the number
+of microscale BVPs to solve in order to train a global microscale PROM and the corresponding HPROM, three different
+values of this parameter are considered. The first one, n0 = 62, corresponds to 0.2% of the total number nms of microscale
+                                                                                                                                10970207, 2020, 22, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6505 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+HE et al.                                                                                                                4983
+
+
+FIGURE 5          Vibration of a nonlinear solid elastic
+bar with a microvoid structure: FE mesh underlying the
+microscale HDM (wireframes) and associated
+ECSW-generated reduced mesh (shaded elements)
+[Colour figure can be viewed at wileyonlinelibrary.com]
+
+
+
+
+problems solved during the multiscale simulation performed in the time-interval [0,1 × 10−2 ] seconds using the time-step
+size Δt = 3.25 × 10−7 seconds. The second and third values, n0 = 154 and n0 = 308, correspond to 0.5% of nms and 1% of
+nms , respectively. From the results reported in this table, the following observations are noteworthy:
+
+• In all cases, the HPROM delivers a much better speedup factor than its underlying PROM. This is expected given that
+  the problem considered here is geometrically nonlinear (finite strains).
+• The speedup factors delivered by all HPROMs are impressive, considering that the macroscale model is not even
+  reduced.
+• The adaptively computed PROM delivers six to 50 times more accurate results than its nonadaptive counterparts trained
+  with any considered value of n0 and performs about 1.25 times faster.
+• The adaptively computed HPROM—except for the nonadapted but fixed reduced mesh—delivers two to three times
+  more accurate results than its nonadaptive counterpart trained with n0 = 62, but is 1.35 times slower. It delivers roughly
+  the same wall-clock time performance as its nonadaptive counterpart trained with n0 = 154, and about the same accu-
+  racy. On the other hand, it is about 1.2 times faster than its nonadaptive counterpart trained with n0 = 308, while
+  delivering essentially the same accuracy.
+
+    It follows that in all considered cases, the adaptive PROM is faster than its nonadaptive counterpart and considerably
+more accurate. On the other hand, because the reduced mesh resulting from the ECSW-based hyperreduction is fixed in
+this work, the otherwise adaptive HPROM can be anywhere from slightly slower to slightly faster than its nonadaptive
+counterpart, and roughly as accurate.
+    Considering that all aforementioned performance results account for all computational overhead, including the adap-
+tation overhead, and that the proposed in situ, adaptive, microscale PMOR framework is fully automated, these results
+demonstrate not only the feasibility of this framework but also its superiority over its nonadaptive counterpart. In partic-
+ular, Figure 6 shows that even when the reduced mesh underlying the microscale computational model is not adapted,
+the proposed adaptive framework delivers a remarkable accuracy.
+
+
+5.2         Impact of a nonlinear elastic cylinder with a composite microstructure on a rigid
+wall
+
+Next, a computational model is considered for a cylindrical projectile with a heterogeneous microscale structure
+characterized by a stiff, unidirectional fiber embedded in a flexible matrix. The cylinder has a radius R = 0.476 cm and a
+                                                                                                                                      10970207, 2020, 22, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6505 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+4984                                                                                                                      HE et al.
+
+
+              T A B L E 1 Vibration of a nonlinear solid elastic bar with a microvoid structure: performance assessment
+
+               (a) Adaptive                                           (b) Nonadaptive (n0 = 62)
+                                          Wall-clock        Speedup                        Wall-clock        Speedup
+               Model                      time (s)          factor  Model                  time (s)          factor
+
+               HDM                        1.35 × 105        NA        HDM                  1.35 × 105        NA
+                                                   4                                                4
+               PROM                       3.75 × 10         3.60      PROM                 4.64 × 10         3.03
+                                                   3                                                3
+               HPROM                      8.92 × 10         15.2      HPROM                6.58 × 10         20.5
+               Error measure e            PROM              HPROM     Error measure e      PROM              HPROM
+               y-displacement (%)         0.0227            0.440     y-displacement (%)   1.23              1.27
+               z-displacement (%)         0.0435            0.747     z-displacement (%)   2.11              2.59
+               y-velocity (%)             0.103             1.77      y-velocity (%)       3.05              3.23
+               z-velocity (%)             0.986             6.68      z-velocity (%)       9.52              10.6
+
+               (c) Nonadaptive (n0 = 154)                            (d) Nonadaptive (n0 = 308)
+                                          Wall-clock        Speedup                        Wall-clock        Speedup
+               Model                      time (s)          factor  Model                  time (s)          factor
+               HDM                        1.35 × 105        NA        HDM                  1.35 × 105        N.A.
+               PROM                       4.54 × 104        2.97      PROM                 4.68 × 104        2.88
+               HPROM                      8.71 × 103        15.5      HPROM                1.06 × 104        12.7
+               Error measure e            PROM              HPROM     Error measure e      PROM              HPROM
+               y-displacement (%)         0.0530            0.134     y-displacement (%)   0.0271            0.108
+               z-displacement (%)         0.106             0.219     z-displacement (%)   0.0762            0.155
+               y-velocity (%)             1.11              1.21      y-velocity (%)       1.10              1.03
+               z-velocity (%)             6.24              6.50      z-velocity (%)       6.07              5.79
+
+
+
+
+length L = 1.27 cm. It has an initial velocity v = 15 000 cm/s in the negative z-direction, and a frictionless rigid wall bound-
+ary condition at z = 0. Due to symmetry, only one quarter of the bar along its length is modeled. This problem is a variant
+of the so-called Taylor impact problem.27
+    For this problem, a FE microscale computational model (see Figure 7) is constructed using 729 eight-noded hexahe-
+dral elements with three displacement DOFs per node, and a total number of 2988 DOFs. Uniform essential boundary
+conditions are adopted at this level. The microscale material is modeled as follows:
+
+• The fiber is represented as a compressible neo-Hookean (finite strains) material with Young’s modulus
+  E = 212.52 × 1010 dyne/cm2 and Poisson’s ratio 𝜈 = 0.4. It runs parallel to the local x-axis along the center of the cube
+  where the locally attached microstructure is defined. Its cross-section is approximated by a square of edge size equal
+  to one-third of the unit cell width.
+• The flexible matrix surrounding this fiber is also represented as a compressible neo-Hookean material (finite strains),
+  but with Young’s modulus E = 72.52 × 1010 dyne/cm2 and Poisson’s ratio 𝜈 = 0.4.
+
+    At the macroscale level, a FE model is constructed using 1008 eight-noded hexahedral elements with three displace-
+ment DOFs/node, and a total number of 1342 DOFs (see Figure 8). At this level, the density is 𝜌0 = 2.7 g/cm3 . Temporal
+discretization is performed using the explicit central difference scheme and the constant time-step Δt = 1.0 × 10−9
+seconds. For this problem, the multiscale simulation is performed from t0 = 0 seconds until tf = 1 × 10−6 seconds.
+    As in the previous application, the proposed in situ, adaptive, microscale framework for PMOR is initialized with the
+construction of a nonlinear PROM based on the first m1 = 500 HDM-based solutions of the microscale BVPs encountered
+at the Gauss points of the macroscale computational model. Then, this PROM is hyperreduced using ECSW configured
+with the same sparse NNLS algorithm as in the previous application, and the same threshold for relative accuracy 𝜀 = 10−3 .
+ECSW generates in this case a reduced mesh with 88 elements (̃ = 88). Three multiscale computations are performed
+                                                                                                                                          10970207, 2020, 22, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6505 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+HE et al.                                                                                                                          4985
+
+
+
+
+F I G U R E 6 Vibration of a nonlinear solid elastic bar with a microvoid structure—time-histories of a displacement DOF and a velocity
+DOF at a node of the mesh underlying the macroscale HDM computed using the macroscale and microscale HDMs and the in situ, adaptive,
+microscale framework for PMOR with and without hyperreduction [Colour figure can be viewed at wileyonlinelibrary.com]
+
+
+FIGURE 7           Impact on a
+rigid wall of a nonlinear elastic
+cylinder with a composite
+microstructure: exterior
+geometry and FE mesh of the
+microscale RVE (left) with fiber
+shown in green and surrounding
+matrix in red and interior
+geometry and FE mesh of the
+rearward half of the microscale
+RVE exposed by a clipping plane
+(right)
+
+
+
+
+            T A B L E 2 Impact on a rigid wall of a nonlinear elastic cylinder with a composite microstructure: performance
+            assessment of the in situ, adaptive, microscale framework for PMOR with and without hyperreduction
+
+             Model          Wall-clock time (s)        Speedup factor         Error measure e          PROM           HPROM
+
+             HDM            2.44 × 104                 NA                     x-displacement (%)       0.00185        0.000467
+                                     4
+             PROM           1.60 × 10                  1.52                   y-displacement (%)       0.000165       0.000350
+                                     3
+             HPROM          3.34 × 10                  7.3                    x-velocity (%)           0.000449       0.00851
+                                                                              y-velocity (%)           0.000430       0.00991
+
+
+
+
+using the aforementioned macroscale and microscale HDMs and the proposed in situ, adaptive, microscale PMOR frame-
+work, with and without hyperreduction. The obtained performance results are reported in Table 2, where the relative
+global errors are computed with Δs = Δt.
+    Figure 9 displays two sample time-histories computed for a displacement DOF and a velocity DOF at a same node of
+the macroscale FE model. It shows that both adaptive PROM and HPROM reproduce extremely accurately the predic-
+tions obtained using the macroscale and microscale HDMs. This impressive accuracy of the proposed adaptive PMOR
+framework is confirmed by the quantitative error results reported in Table 2. This table also shows that for the application
+considered herein, the in situ, adaptive, microscale framework for PMOR with and without hyperreduction accelerates
+                                                                                                                                            10970207, 2020, 22, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6505 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+4986                                                                                                                            HE et al.
+
+
+                                                                                                FIGURE 8           Impact on a rigid wall
+                                                                                                of a nonlinear elastic cylinder with a
+                                                                                                composite microstructure: FE mesh
+                                                                                                underlying the macroscale HDM
+
+
+
+
+F I G U R E 9 Impact on a rigid wall of a nonlinear elastic cylinder with a composite microstructure—time-histories of a displacement
+DOF and a velocity DOF at a node of the mesh underlying the macroscale HDM computed using the macroscale and microscale HDMs and the
+in situ, adaptive, microscale framework for PMOR with and without hyperreduction [Colour figure can be viewed at wileyonlinelibrary.com]
+
+
+
+the time to solution of the simulation based on the macroscale and microscale HDMs by a factor greater than 7. Again,
+this is an excellent performance result considering that it accounts for the computational time elapsed in the process-
+ing of the macroscale model, which is neither reduced nor hyperreduced, and accounts for all computational overhead
+associated with the PMOR process—including adaptation.
+
+
+6       CO N C LUSION S
+
+An in situ, adaptive, microscale projection-based model order reduction (PMOR) framework is proposed in this arti-
+cle for accelerating the simulation of the nonlinear dynamics of multiscale structural and solid mechanics systems. It
+is designed to avoid by construction the weakness of extrapolation typically found in nonadaptive training methods.
+This framework is based on the parameterization of the deformation gradient for the purpose of PMOR at all but the
+coarsest scale, and on the concept of a database of local reduced-order bases (ROBs) where locality is measured in the
+                                                                                                                                              10970207, 2020, 22, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6505 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+HE et al.                                                                                                                              4987
+
+
+
+deformation gradient parameter space. It achieves accuracy by sampling new high-dimensional information as needed,
+updating on-the-fly a constructed ROB, and approximating the solution along its trajectory using a handbook of most
+appropriate local ROBs. It achieves computational efficiency by splitting an updated ROB that becomes larger than desired
+into two local ones, each capable of capturing only the local behavior of a nonlinear mesostructure or microstructure,
+and incorporating hyperreduction (albeit without adaptivity). If the macroscale computational model is not a parametric
+one, it is not reduced. Even in this case—that is, when the macroscale computational model is high-dimensional and its
+computational cost is accounted for—and when all computational overhead associated with performing PMOR and its
+adaptation are also accounted for, the proposed in situ, adaptive, PMOR framework accelerates three-dimensional, non-
+linear, dynamic, multiscale simulations of the academic type by roughly an order of magnitude without compromising
+accuracy. Larger speedup factors can be expected for more realistic, large-scale problems and when adaptivity is extended
+to hyperreduction.
+    Although described in the context of nonlinear, multiscale, dynamic problems in solid mechanics and structural
+dynamics, the proposed in situ, adaptive, PMOR framework is sufficiently comprehensive to be tailorable to many other
+applications. Indeed, conventional offline training of ROBs in a predetermined region of a parameter space typically leads
+to parametric reduced-order models that are bound to perform some form of extrapolation, whenever they are exercised
+in a region of the parameter space that was not explored during training. The proposed framework is designed specifically
+to remedy this issue.
+
+ACKNOWLEDGEMENTS
+The authors acknowledge partial support by the National Aeronautics and Space Administration (NASA) under Early
+Stage Innovations (ESI) Grant NASA-NNX17AD02G, partial support by the Air Force Office of Scientific Research under
+grant FA9550-17-1-0182, and partial support by a research grant from the King Abdulaziz City for Science and Technology
+(KACST). This document does not necessarily reflect the position of these institutions, and no official endorsement should
+be inferred.
+
+ORCID
+Philip Avery https://orcid.org/0000-0002-1310-6790
+Charbel Farhat https://orcid.org/0000-0003-2563-8820
+
+REFERENCES
+ 1. Qiao P, Yang M, Bobaru F. Impact mechanics and high-energy absorbing materials. J Aerosp Eng. 2008;21(4):235-248.
+ 2. Ma E, Zhu T. Towards strength–ductility synergy through the design of heterogeneous nanostructures in metals. Mater Today.
+    2017;20(6):323-331.
+ 3. Hoffler C, Moore K, Kozloff K, Zysset P, Brown M, Goldstein S. Heterogeneity of bone lamellar-level elastic moduli. Bone.
+    2000;26(6):603-609.
+ 4. Mei CC, Vernescu B. Homogenization Methods for Multiscale Mechanics. Singapore: World scientific; 2010.
+ 5. Smit R, Brekelmans W, Meijer H. Prediction of the mechanical behavior of nonlinear heterogeneous systems by multi-level finite element
+    modeling. Comput Methods Appl Mech Eng. 1998;155(1-2):181-192.
+ 6. Miehe C, Schröder J, Schotte J. Computational homogenization analysis in finite plasticity simulation of texture development in
+    polycrystalline materials. Comput Methods Appl Mech Eng. 1999;171(3-4):387-418.
+ 7. Feyel F, Chaboche JL. FE2 multiscale approach for modelling the elastoviscoplastic behaviour of long fibre SiC/Ti composite materials.
+    Comput Methods Appl Mech Eng. 2000;183(3-4):309-330.
+ 8. Kouznetsova V, Brekelmans W, Baaijens F. An approach to micro-macro modeling of heterogeneous materials. Comput Mech.
+    2001;27(1):37-48.
+ 9. Zahr MJ, Avery P, Farhat C. A multilevel projection-based model order reduction framework for nonlinear dynamic multiscale problems
+    in structural and solid mechanics. Int J Numer Methods Eng. 2017;112(8):855-881.
+10. Le B, Yvonnet J, He QC. Computational homogenization of nonlinear elastic materials using neural networks. Int J Numer Methods Eng.
+    2015;104(12):1061-1084.
+11. Nguyen-Thanh VM, Zhuang X, Rabczuk T. A deep energy method for finite deformation hyperelasticity. Europ J Mech-A/Solids.
+    2020;80:103874.
+12. Sirovich L. Turbulence and the dynamics of coherent structures. I. Coherent structures. Quart Appl Math. 1987;45(3):561-571.
+13. LeGresley P, Alonso J. Airfoil design optimization using reduced order models based on proper orthogonal decomposition. Paper presented
+    at: Proceedings of the Fluids 2000, Conference and Exhibit; Denver, Colorado: 2000:2545.
+14. Manzoni A, Quarteroni A, Rozza G. Shape optimization for viscous flows by reduced basis methods and free-form deformation. Int J Numer
+    Methods Fluids. 2012;70(5):646-670.
+                                                                                                                                               10970207, 2020, 22, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.6505 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+4988                                                                                                                               HE et al.
+
+
+
+15. Farhat C, Bos A, Tezaur R, Chapman T, Avery P, Soize C. A stochastic projection-based hyperreduced order model for model-form uncer-
+    tainties in vibration analysis. Paper presented at: Proceedings of the 2018 AIAA Non-Deterministic Approaches Conference; Kissimmee,
+    Florida: 2018:1410.
+16. Farhat C, Bos A, Avery P, Soize C. Modeling and quantification of model-form uncertainties in eigenvalue computations using a stochastic
+    reduced model. AIAA J. 2018;56(3):1198-1210.
+17. Hetmaniuk U, Tezaur R, Farhat C. Review and assessment of interpolatory model order reduction methods for frequency response
+    structural dynamics and acoustics problems. Int J Numer Methods Eng. 2012;90(13):1636-1662.
+18. Amsallem D, Cortial J, Farhat C. Towards real-time computational-fluid-dynamics-based aeroelastic computations using a database of
+    reduced-order information. AIAA J. 2010;48(9):2029-2037.
+19. Yvonnet J, He QC. The reduced model multiscale method (R3M) for the non-linear homogenization of hyperelastic media at finite strains.
+    J Comput Phys. 2007;223(1):341-368.
+20. Monteiro E, Yvonnet J, He QC. Computational homogenization for nonlinear conduction in heterogeneous materials using model
+    reduction. Comput Mater Sci. 2008;42(4):704-712.
+21. Farhat C, Avery P, Chapman T, Cortial J. Dimensional reduction of nonlinear finite element dynamic models with finite rotations and
+    energy-based mesh sampling and weighting for computational efficiency. Int J Numer Methods Eng. 2014;98(9):625-662.
+22. Farhat C, Chapman T, Avery P. Structure-preserving, stability, and accuracy properties of the energy-conserving sampling and weighting
+    method for the hyper reduction of nonlinear finite element dynamic models. Int J Numer Methods Eng. 2015;102(5):1077-1110.
+23. Amsallem D, Zahr MJ, Farhat C. Nonlinear model order reduction based on local reduced-order bases. Int J Numer Methods Eng.
+    2012;92(10):891-916.
+24. Lawson CL, Hanson RJ. Solving Least Squares Problems. Vol 15. Philadelphia: Siam; 1995.
+25. Chapman T, Avery P, Collins P, Farhat C. Accelerated mesh sampling for the hyper reduction of nonlinear computational models. Int
+    J Numer Methods Eng. 2017;109(12):1623-1654.
+26. Zahr MJ, Farhat C. Progressive construction of a parametric reduced-order model for PDE-constrained optimization. Int J Numer Methods
+    Eng. 2015;102(5):1111-1135.
+27. Taylor GI. The use of flat-ended projectiles for determining dynamic yield stress I. theoretical considerations. Proc Royal Soc Lond Ser
+    A Math Phys Sci. 1948;194(1038):289-299.
+
+
+
+SUPPORTING INFORMATION
+Additional supporting information may be found online in the Supporting Information section at the end of this article.
+
+
+
+   How to cite this article: He W, Avery P, Farhat C. In situ adaptive reduction of nonlinear multiscale structural
+   dynamics models. Int J Numer Methods Eng. 2020;121:4971–4988. https://doi.org/10.1002/nme.6505
+

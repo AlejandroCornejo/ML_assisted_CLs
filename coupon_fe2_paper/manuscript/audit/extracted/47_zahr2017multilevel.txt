@@ -1,0 +1,1627 @@
+INTERNATIONAL JOURNAL FOR NUMERICAL METHODS IN ENGINEERING
+Int. J. Numer. Meth. Engng 2017; 112:855–881
+Published online 8 May 2017 in Wiley Online Library (wileyonlinelibrary.com). DOI: 10.1002/nme.5535
+
+
+
+
+  A multilevel projection-based model order reduction framework
+   for nonlinear dynamic multiscale problems in structural and
+                          solid mechanics
+
+                 Matthew J. Zahr1          , Philip Avery2 and Charbel Farhat1,3,4,*,†
+         1 Institute for Computational and Mathematical Engineering, Stanford University, Stanford, CA, USA
+                                2 US Army Research Laboratory, Adelphi, MD, USA
+                3 Department of Aeronautics and Astronautics, Stanford University, Stanford, CA, USA
+                  4 Department of Mechanical Engineering, Stanford University, Stanford, CA, USA
+
+
+
+
+                                                   SUMMARY
+A reduction/hyper reduction framework is presented for dramatically accelerating the solution of nonlin-
+ear dynamic multiscale problems in structural and solid mechanics. At each scale, the dimensionality of the
+governing equations is reduced using the method of snapshots for proper orthogonal decomposition, and
+computational efficiency is achieved for the evaluation of the nonlinear reduced-order terms using a carefully
+designed configuration of the energy conserving sampling and weighting method. Periodic boundary condi-
+tions at the microscales are treated as linear multipoint constraints and reduced via projection onto the span
+of a basis formed from the singular value decomposition of Lagrange multiplier snapshots. Most importantly,
+information is efficiently transmitted between the scales without incurring high-dimensional operations. In
+this proposed proper orthogonal decomposition – energy conserving sampling and weighting nonlinear model
+reduction framework, training is performed in two steps. First, a microscale hyper reduced-order model is
+constructed in situ, or using a mesh coarsening strategy, in order to achieve significant speedups even in
+non-parametric settings. Next, a classical offline–online training approach is performed to build a paramet-
+ric hyper reduced-order macroscale model, which completes the construction of a fully hyper reduced-order
+parametric multiscale model capable of fast and accurate multiscale simulations. A notable feature of this
+computational framework is the minimization, at the macroscale level, of the cost of the offline training using
+the in situ or coarsely trained hyper reduced-order microscale model to accelerate snapshot acquisition. The
+effectiveness of the proposed hyper reduction framework at accelerating the solution of nonlinear dynamic
+multiscale problems is demonstrated for two problems in structural and solid mechanics. Speedup factors as
+high as five orders of magnitude are shown to be achievable. Copyright © 2017 John Wiley & Sons, Ltd.
+
+Received 12 December 2016; Revised 21 February 2017; Accepted 22 February 2017
+
+KEY WORDS:       hyper reduction; multiscale; nonlinear model order reduction; POD
+
+
+                                             1. INTRODUCTION
+
+Nonlinear multiscale problems – defined here as those nonlinear problems that exhibit vastly dif-
+ferent scale features that are significant to the macroscopic behavior – are ubiquitous in science and
+engineering. They arise, for example, in the accurate and reliable modeling of bone structures where
+the relevant scales range from nanometers to meters [1]. A sample important application is the non-
+linear analysis of the harm that befalls a vehicle occupant when the vehicle is subject to an impact
+load. Numerical methods that attempt to resolve all such scales lead to massive discretized problems.
+For example, the micro-finite-element (𝜇-FE) analysis of an orthopedic component may lead to FE
+
+
+*Correspondence to: Charbel Farhat, Department of Aeronautics and Astronautics, Stanford University, Mail Code 4035,
+  Stanford, CA 94305, U.S.A.
+† E-mail: cfarhat@stanford.edu
+
+
+
+Copyright © 2017 John Wiley & Sons, Ltd.
+                                                                                                               10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+856                                  M. J. ZAHR, P. AVERY AND C. FARHAT
+
+
+meshes with O(108 ) elements [2, 3]. Consequently, a number of multiscale methods have been intro-
+duced to model highly heterogeneous solid and structural systems without requiring a monolithic
+discretization. Despite these advances, the numerical solution of multiscale problems – at least those
+formulated in a general analysis setting, that is, finite deformation and nonlinear, history-dependent
+microscale constitutive laws – remains today computationally intensive if not simply unaffordable.
+To this effect, this work introduces a nonlinear, projection-based, model order reduction (PMOR)
+framework built on the recently developed energy conserving sampling and weighting (ECSW) [4,
+5] hyper reduction method for significantly reducing the computational cost associated with solving
+multiscale problems in general, and those characterized by large deformation, microscale damage,
+plasticity, and viscoelasticity in particular.
+   Here and throughout the remainder of this paper, hyper reduction refers to the approximation of
+the projections onto the subspace of approximation underlying a PMOR approach of residual vectors
+and, for implicit computations, their Jacobian with respect to the solution using a numerical method
+whose computational complexity scales only with the size of the constructed projection-based
+reduced-order model (PROM). Hence, whereas PMOR reduces the dimensionality of a nonlinear
+computational model, it is hyper reduction that ensures its operability in real time.
+   A multitude of multiscale methods have been proposed to circumvent the need to resolve all het-
+erogeneities in a monolithic manner. Self-consistent methods [6, 7], which tend to deliver reasonable
+accuracy if the structure possesses geometric regularity, derive equivalent material properties from
+the solution of an analytical boundary value problem – usually, an ellipsoidal inclusion in an infinite
+matrix problem. Other multiscale methods, such as those based on an asymptotic homogenization
+theory [8], expand the displacement field on a length parameter to approximate the macroscopic dis-
+tribution and use variational principles to bridge scales. The scope of these methods is usually limited
+to small strains and simple microscopic geometries, although their extension to finite deformation
+has been performed in some contexts (for example, see [9]).
+   Another class of multiscale methods considers homogenized material properties by fitting the
+results of a representative volume element (RVE) analysis under a prescribed loading history [10,
+11]. The à priori selection of the loading history and the analysis of the RVE usually limit the range
+of applications of these methods to problems with simple material behaviors and small deformations.
+   The concept of a locally attached microstructure [12–15] leads perhaps to the most general
+approach for solving problems exhibiting multiple, separable scales. It can be described as fol-
+lows. At each macroscale material point, the stress –strain relationship is determined via a detailed
+computational analysis of a microstructure boundary value problem. The corresponding bound-
+ary conditions are determined from the localization of the pointwise deformation gradient at the
+macroscale. The pointwise macroscale stress tensor is determined from the distribution of this ten-
+sor over the microstructure and a homogenization method. An analytic constitutive law is prescribed
+at the microscale where the length scale is sufficiently small so that a homogeneous medium can
+be assumed, and existing material models can accurately capture the response. While this concept
+defines perhaps the most general approach for multiscale modeling and leads to a more computation-
+ally efficient analysis than a full microscale analysis, it is very computationally intensive. It requires
+performing a microstructure analysis at each Gauss point of the macroscale model. Hence, several
+PMOR methods have been recently developed to reduce the computational cost of this multiscale
+approach to that of a single scale computation [16–20]. In [16], proper orthogonal decomposition
+(POD) was used to construct a PROM of the microscale problem based on an á priori training strategy
+that computes solution snapshots from predefined microstrain histories. However, this microscale
+PROM was not hyper reduced, and consequently, the realized speedup was limited to about an order
+of magnitude, even when the offline costs were not accounted for. The PMOR approach proposed in
+[16] was subsequently extended in [17] to formulations with periodic boundary conditions for the
+microstructure model using the Lagrange multiplier approach. It was also very recently equipped
+in [20, 21] with the empirical interpolation method [22, 23] and related variants for hyper reduc-
+tion – albeit at the microscale level only – which nevertheless enabled the speedup of multiscale
+computations based on the concept of a locally attached microstructure by up to three orders of mag-
+nitude, when ignoring the offline costs. A number of other methods based on the so-called reduced
+basis method have also been designed for elliptic (static), multiscale, scalar problems with affine
+
+Copyright © 2017 John Wiley & Sons, Ltd.                        Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                            DOI: 10.1002/nme
+                                                                                                             10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+              MULTILEVEL MODEL ORDER REDUCTION FOR MULTISCALE PROBLEMS                               857
+
+parameter dependence [18, 24, 25]. However, the relevance of these methods to nonlinear, multi-
+scale solid mechanics and structural dynamic problems with rotational degrees of freedom (DOFs)
+and finite deformation, and their impact on the acceleration of the solution of such problems, have
+yet to be determined.
+   In this work, a nonlinear PMOR framework built on an N + 1-level locally attached microstructure
+approach and incorporating hyper reduction is proposed for solving nonlinear dynamic multiscale
+problems arising in solid and structural mechanics. In this computational framework, the dimen-
+sionality of the semi-discrete governing equations is reduced at all N + 1 scales, in sharp contrast
+with previous works on this topic where model reduction was performed only at the finest scale [21,
+26–30]. Specifically, PMOR is performed using a Galerkin projection onto a well-chosen subspace
+of approximation. POD is used to extract this subspace from relevant training data. Averaging-based
+localization and homogenization schemes are used in the proposed framework to transmit strain
+information to finer scales and stress information to coarser scales, respectively. The deformation
+gradient at the k-th scale is used to define uniform or periodic essential boundary conditions at the
+k + 1-th scale. The pointwise first Piola–Kirchhoff stress tensor at the k-th scale is computed as the
+volumetric average of the corresponding stress tensor over the locally attached microstructure, that
+is, the k + 1-th scale. To achieve a computational complexity that depends on the lowest dimensions
+only, the ECSW method [4, 5] is used for hyper reducing the projected nonlinear internal forces.
+Indeed, for nonlinear structural dynamics problems in general, ECSW is the hyper reduction method
+of choice due to its simplicity, strong connection to the FE method, and most importantly, prov-
+able structure-preserving and stability properties [5]. However, this method is first tailored here to
+the context of the locally attached microstructure approach by redesigning its training algorithm to
+ensure that the reaction forces associated with the essential boundary conditions at the microscales
+are well approximated. This revisiting of the ECSW method constitutes another major contribution
+of this paper. In the case where periodic boundary conditions are used for formulating the microstruc-
+ture problems, the periodicity conditions are posed as linear multipoint constraints, enforced by the
+Lagrange multiplier method, and reduced via projection onto a reduced-order subspace represented
+by a dual reduced-order basis (ROB) [31].
+   Additionally, this work contributes a two-step training strategy for the proposed multilevel PMOR
+framework. The first step focuses on the microscale problems and is either performed in situ or using
+a coarsened mesh. It generates snapshots of the state, unconstrained and constrained components
+of the internal forces, history variables, and Lagrange multipliers (in the case of periodic boundary
+conditions) at the N finest scales. Because at each level, a microstructure simulation is performed at
+each Gauss point, and the first step of the training algorithm uses readily available high-dimensional
+solution snapshots to construct a POD-based ROB and a corresponding hyper-reduced PROM for
+the microstructure problems. For example, these may be sampled from the discrete solutions that
+are computed anyway at the first several Gauss points encountered during the first few time-steps
+of a dynamic computation of interest. Alternatively, the solutions computed at the Gauss points of a
+coarsened mesh can be sampled; in which case, more than a few time-steps of the dynamic compu-
+tation of interest may be utilized for this purpose. Therefore, because an entire dynamic multiscale
+simulation is not required to generate solution snapshots for the microstructures, significant speedups
+of the desired multiscale computations can be achieved even in a non-parametric setting.
+   The second step of the training strategy focuses on the macroscale problem. It relies on the
+traditional offline– online approach to generate solution snapshots at the macroscale level, where
+high-dimensional, time-dependent, multiscale simulations are performed for various configurations
+of the parametric multiscale problem of interest. Thus, to realize the additional benefit of reduction
+and hyper reduction at the macroscale level, a parametric analysis setting, such as that encountered
+in optimization, uncertainty quantification, or simply repeated analysis, is required in order to amor-
+tize training costs. However, an important feature of the proposed multilevel PMOR framework is
+that its in situ or coarsened training for microscale problems can be used to speedup the acquisition
+of solution snapshots for macroscale problems.
+   The remainder of this paper is organized as follows. Section 2 provides an overview of the
+N + 1-level nonlinear multiscale framework with locally attached microstructures, in the context
+of large-deformation solid mechanics and structural dynamics problems. Section 3 introduces the
+
+Copyright © 2017 John Wiley & Sons, Ltd.                      Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                          DOI: 10.1002/nme
+                                                                                                               10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+858                                  M. J. ZAHR, P. AVERY AND C. FARHAT
+
+
+particular flavors of the nonlinear PMOR advocated in this work, as well as proposed enhance-
+ments to tailor it to the multiscale framework presented in Section 2. This section also presents
+the two-step training strategy outlined above to enable reduction at all scales and deliver signifi-
+cant speedup factors, even in a non-parametric analysis setting. Section 4 illustrates the resulting
+multilevel PMOR framework proposed for nonlinear dynamic multiscale problems using two struc-
+tural and solid mechanics applications. It also demonstrates the ability of this framework to deliver
+speedup factors as high as five orders of magnitude.
+
+
+       2. LOCALLY ATTACHED MICROSTRUCTURE MULTISCALE FORMULATION
+
+In order to keep this paper as self-contained as possible, a multiscale continuum mechanics formula-
+tion based on the concept of a locally attached microstructure is first overviewed here. The labeling
+of this concept results from the fact that in this formulation, the stress –strain relationship for a het-
+erogeneous material is not defined by a constitutive law but by the solution at each material point of
+a boundary value problem governing its microstructure. For generality, this concept is applied here
+recursively to address problems that exhibit N+1 separate scales. Specifically, the stress –strain rela-
+tionship at the N coarsest scales is defined by the solution of the boundary value problem at the next
+finest scale and an appropriate scale transition method. At the N + 1-th scale, that is, the finest scale,
+where all heterogeneities can be adequately resolved and described by an available constitutive the-
+ory, it is defined by an analytical constitutive law. All considered length scales are assumed to be
+much larger than the molecular dimension so that the continuum assumption holds. Furthermore,
+scale separation is assumed to loosely couple the various scales through localization from coarse to
+fine scales and homogenization from fine to coarse scales.
+   For further details, the reader is referred to [12–15] for the concept of a locally attached
+microstructure and to [13] for the localization/homogenization scale bridging strategy adopted here.
+
+
+2.1. Governing equations and scale bridging
+Consider a domain B0 ⊂ Rnsd that defines a highly heterogeneous structure of interest, where nsd = 2
+in two dimensions and nsd = 3 in three dimensions. Assume that its boundary 𝜕 B0 is subject to
+prescribed displacements on 𝜕 Bu0 ⊂ 𝜕 B0 , and tractions on 𝜕 B0 ⧵ 𝜕 Bu0 . Let 𝝋t0 ∶ B0 → Bt0 denote the
+nonlinear transformation that maps a point in the reference configuration, X0 ∈ B0 , at time t to a
+counterpart in the current configuration, x0 (X0 ; t) = 𝝋t0 (X0 ) ∈ Bt0 . The deformation of this domain is
+governed by the finite deformation continuum equations with an unknown constitutive law due to the
+assumed highly heterogeneous fine scale structure. For this reason, following the work described in
+[12–15], the deformation problem is solved here by locally attaching a microstructure to each point
+X0 ∈ B0 , computing the stress –strain relationship at X0 through the solution of a microstructure
+boundary value problem and bridging the scales via a localization and homogenization strategy.
+   Here and throughout the remainder of this paper, k = 0, … , N denotes the cascade of consec-
+utive scales, with k = 0 and k = N designating the macroscale and the finest scale, respectively.
+For simplicity, a k-th scale is also referred to as scale k or level k, interchangeably. The deformation
+at any scale is governed by the finite deformation continuum equations, with the stress –strain rela-
+tionship defined by the solution of a boundary value problem formulated at a finer scale for levels
+k = 0, … , N − 1, or an assumed constitutive law at the finest scale designated by level k = N. Let
+𝝋k ∶ Bk → Bk′ denote the nonlinear transformation that maps a point in the level k reference con-
+figuration, Xk ∈ Bk , to a counterpart in the current configuration, xk (Xk ) = 𝝋k (Xk ) ∈ Bk′ . As in the
+formulation of the macroscale problem, define 𝜕 Bk as the boundary of Bk and 𝜕 Buk as its part where
+a displacement is prescribed. Also, let Pk denote the level k first Piola–Kirchhoff stress tensor, and
+Fk = 𝜕xk ∕𝜕Xk denote the level k deformation gradient. The governing equations at all scales can be
+written in total Lagrangian form as
+
+                                       𝜌0 ü 0 − ∇0 · P0 = 0 in B0
+                                                                                                        (1)
+                                                 ∇k · Pk = 0 in Bk
+
+Copyright © 2017 John Wiley & Sons, Ltd.                        Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                            DOI: 10.1002/nme
+                                                                                                                        10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+              MULTILEVEL MODEL ORDER REDUCTION FOR MULTISCALE PROBLEMS                                          859
+
+for k = 1, … , N, where 𝜌0 ∶ B0 → R+ denotes the pointwise material density and uk ∶ Bk → Rnsd
+the pointwise displacement for levels k = 0, … , N. The weak form of the above equations is given
+by
+
+                                                            𝜕𝝉 0
+                             𝜌 𝝉 T ü + 𝝉 T P N dA −    P ∶      dV = 0
+                          ∫B0 0 0 0 ∫𝜕B0 0 0 0       ∫B0 0 𝜕X0
+                                                                                                                 (2)
+                                                                              𝜕𝝉 k
+                                              𝝉 Tk Pk Nk dA −          Pk ∶        dV = 0
+                                       ∫𝜕Bk                     ∫B k          𝜕Xk
+
+for k = 1, … , N, where 𝝉 k ∶ Bk → Rnsd is a test function satisfying 𝝉 k |𝜕Buk = 0, Nk denotes the out-
+ward normal in the reference configuration, a dot designates a time derivative, and the superscript
+T designates the transpose operation. The boundary conditions at scale 0 are defined by the phys-
+ical problem of interest, while those at the other scales depend on the deformations at the coarser
+scales. The constitutive law at level N is chosen based on the expected response of the finest scale,
+while those at the other scales depend on the microstructure response. Arbitrarily complex fine-
+scale constitutive relationships, that is, nonlinearities and history variables are allowed and described
+here by
+
+                                              PN = PN (FN , 𝝃; 𝜸)                                                (3)
+
+where 𝝃 ∶ BN → RN are history variables and 𝜸 ∶ BN → RN are material parameters.
+                      𝝃                                                  𝜸
+
+
+  Following the work presented in [13], the boundary conditions on Bk+1 , for k = 0, … , N − 1 are
+defined so that the pointwise deformation gradient at level k, Fk (u(Xk )), is equal to the volumetric
+average of the deformation gradient at level k + 1
+
+                                                       1
+                                    Fk (u(Xk )) =                  Fk+1 dV                                       (4)
+                                                     |Bk+1 | ∫Bk+1
+
+
+  Applying the Gauss-type identity
+
+                                              𝜕s
+                                                 dV =      s ⊗ N dA                                              (5)
+                                           ∫B 𝜕X      ∫𝜕 B
+
+with s = xk+1 , X = Xk+1 , and B = Bk+1 leads to the alternate expression of the transmission condition
+(4)
+
+                                                  1
+                               Fk (u(Xk )) =                   xk+1 ⊗ Nk+1 dA                                    (6)
+                                                |Bk+1 | ∫𝜕Bk+1
+
+which shows that this transmission condition can be enforced based solely on the deformation of the
+boundary. Next, introducing the ansatz
+
+                                xk+1 |𝜕Bk+1 = Fk (u(Xk )) Xk+1 |𝜕Bk+1 + wk+1                                     (7)
+
+where Fk (u(Xk )) Xk+1 |𝜕Bk+1 and wk+1 ∶ 𝜕 Bk+1 → Rnsd represent the uniform (linear) and non-
+uniform (nonlinear) parts of the boundary deformation (displacement), respectively, applying the
+Gauss-type identity (5) with s = X = Xk+1 and B = Bk+1 , considering parallelepiped microstructures
+and partitioning their boundary surfaces as 𝜕 Bk+1 = 𝜕 B+k+1 ∪ 𝜕 B−k+1 where the + and − superscripts
+designate the boundary faces whose normals N+k+1 and N−k+1 = −N+k+1 align with the positive and
+negative directions, respectively, transforms the expression for ∫𝜕B xk+1 ⊗ Nk+1 dA given in the
+                                                                       k+1
+transmission condition (6) into
+
+Copyright © 2017 John Wiley & Sons, Ltd.                                 Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                                     DOI: 10.1002/nme
+                                                                                                                                10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+860                                     M. J. ZAHR, P. AVERY AND C. FARHAT
+
+
+
+              x ⊗ Nk+1 dA = Fk (u(Xk ))       X ⊗ Nk+1 dA +       w ⊗ Nk+1 dA
+        ∫𝜕Bk+1 k+1                      ∫𝜕Bk+1 k+1          ∫𝜕Bk+1 k+1
+
+                                    = Fk (u(Xk ))             dV +               wk+1 ⊗ Nk+1 dA
+                                                     ∫Bk+1           ∫𝜕Bk+1
+                                                                                                                         (8)
+                                    = |Bk+1 |Fk (u(Xk )) +                     w−k+1 ⊗ N−k+1 dA
+                                                                   ∫𝜕B−
+                                                                         k+1
+
+
+                                      +            w+k+1 ⊗ N+k+1 dA
+                                          ∫𝜕B+
+                                             k+1
+
+
+
+From the above result, it follows that for parallelepiped microstructures, the ansatz (7) is consistent
+with the transmission condition (6) provided that the following condition holds
+
+                                    w−k+1 ⊗ N−k+1 dA +                   w+k+1 ⊗ N+k+1 dA = 0
+                           ∫𝜕B−                               ∫𝜕B+
+                              k+1                                  k+1
+
+
+   In this work, two types of boundary conditions that satisfy the above condition are consid-
+ered: (1) uniform essential boundary conditions, wk+1 ≡ 0, and (2) periodic boundary conditions,
+w+k+1 = w−k+1 . Uniform essential boundary conditions have been observed to result in overly stiff
+models but lead to a simple and natural multiscale formulation. Periodic boundary conditions tend to
+produce superior models but lead to constrained problems. A discussion of these and other types of
+microstructure boundary conditions, including natural and mixed boundary conditions, can be found
+in [11].
+   The pointwise first Piola–Kirchhoff stress tensor at level k, for k = 0, … , N − 1, is defined as the
+volumetric average of the stress tensor at level k + 1
+                             1                                 1
+                    Pk =                   Pk+1 dV =                             Pk+1 Nk+1 ⊗ Xk+1 dA                     (9)
+                           |Bk+1 | ∫Bk+1                     |Bk+1 | ∫𝜕Bk+1
+
+The last equality results from yet another Gauss-type identity; it shows that Pk can be determined
+from quantities defined solely on 𝜕 Bk+1 .
+   Next, all governing equations and boundary conditions introduced above are semi-discretized
+using the FE method.
+
+2.2. Finite element discretization
+At each level k, consider an FE model with solid elements Vk defined on a node set NVk . Let
+NSk ⊂ NVk denote the subset of nodes that lie on the boundary 𝜕 Bk , and Sk the corresponding surface
+elements (i.e., faces of elements in Vk that lie on 𝜕 Bk ). Furthermore, let NeV ⊂ NVk denote the subset
+                                                                                k
+of nodes defining element e ∈ Vk , and let NeS ⊂ NSk denote the subset of nodes defining element
+                                                  k
+e ∈ Sk .
+   For the purpose of multiscale hyper reduction discussed in Section 3, a distinction is made in this
+work between unconstrained DOFs, that is, genuine DOFs that are not constrained by any essential
+boundary condition, and constrained DOFs, that is, DOFs that are restricted by essential boundary
+conditions. A vector defined over the set of unconstrained DOFs is not designated by any specific
+                                                                                          ◦
+symbol. However, a vector of constrained DOFs is designated by the ring symbol as in v, and a vector
+defined over the entire set of constrained and unconstrained DOFs is designated by the overline
+symbol as in v. In other words,
+                                                      [ ]
+                                                       v
+                                                 v= ◦
+                                                       v
+
+For example, if uk ∈ Rnsd |NVk | – where |NVk | designates here and throughout the remainder of this
+paper, the cardinal of NVk – denotes the total vector of unconstrained and constrained displacement
+
+Copyright © 2017 John Wiley & Sons, Ltd.                                         Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                                             DOI: 10.1002/nme
+                                                                                                                         10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+              MULTILEVEL MODEL ORDER REDUCTION FOR MULTISCALE PROBLEMS                                           861
+
+DOFs attached to the nodes in the nodeset NVk , then uk denotes the vector of entries of uk correspond-
+                                              ◦
+ing to the unconstrained DOFs at level k, and uk denotes the vector of entries of uk corresponding to
+the constrained DOFs at level k. A similar notational convention is adopted for matrices.
+   In (2), the element-level FE approximations of the terms corresponding to ∇k · Pk in (1) can be
+written as
+                            ◦e
+                           Rk =             Pk Nk ⊗ 𝝓ek dA
+                                  ∫𝜕 S e
+                                        k
+                                                                                                                 (10)
+                                                                          𝜕𝚽ek T
+                           H ek =                 Pk Nk ⊗ 𝚽ek dA −     Pk        dV
+                                  ∫   𝜕 Bek ∩𝜕 Bk                  ∫Be 𝜕Xk
+                                                                     k
+
+
+                        |Ne |
+where 𝚽ek ∶ Bk → R Vk is the matrix of chosen FE shape functions, and 𝝓ek (Xk ) is the subset of
+𝚽ek (Xk ) corresponding to the nodes constrained by prescribed essential boundary conditions. Let
+
+                                                    f ek = Υ(H ek )
+
+where Υ ∶ Rm×n → Rmn denotes the columnwise vectorization of the matrix H ek . The internal force
+vector defined over the entire set of constrained and unconstrained DOFs is obtained via an assembly
+operation over the entire mesh that is denoted here by
+
+                                                    f k = A f ek                                                 (11)
+                                                           e∈Vk
+
+
+   Consistently with the notational convention introduced above, the counterpart internal force vector
+defined over the unconstrained DOFs is denoted by fk . Assuming that ü 0 = 0, the semi-discrete form
+                                                                       ◦
+
+of the governing equations can be written as
+                                                          ◦
+                                       M0 ü0 + f 0 (u0 , u0 , 𝝃 0 ; 𝜸 0 ) = 0
+                                                         ◦                                                       (12)
+                                               f k (uk , uk , 𝝃 k ; 𝜸 k ) = 0
+
+where the dependence of the internal force vector on the material properties and history variables
+is explicitly stated. The material properties at scale N, 𝜸 N , consist of the material properties of the
+chosen constitutive law at all Gauss points in BN . For k < N, 𝜸 k consists of the material properties
+at all Gauss points in Bk+1 , that is,
+                                                         ⋃
+                                                  𝜸k =           𝜸 𝜁k+1
+                                                         𝜁∈GVk
+
+
+where GVk denotes the set of Gauss points for all elements in Vk and the union operation means a
+vector concatenation. When applied recursively, the process described above completely defines the
+material properties at all scales.
+  The multiscale history variables are defined similarly in that 𝝃 N consists of the history variables of
+the chosen constitutive law at all Gauss points in BN . Because constitutive laws that require history
+variables usually also depend on the strain state, the multiscale history variables at scale k, for k < N,
+depend on the history variables and displacements at scale k + 1, that is,
+
+                                        ⎧            ⎫ ⎧           ⎫
+                                        ⎪ ⋃ 𝜁 ⎪⋃⎪ ⋃ v ⎪
+                                   𝝃k = ⎨      𝝃 k+1 ⎬ ⎨      uk+1 ⎬
+                                        ⎪𝜁∈GVk       ⎪ ⎪v∈NVk      ⎪
+                                        ⎩            ⎭ ⎩           ⎭
+
+   Next, the semi-discretization of the scale transmission conditions described in Section 2.1 is
+discussed.
+
+Copyright © 2017 John Wiley & Sons, Ltd.                                  Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                                      DOI: 10.1002/nme
+                                                                                                                       10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+862                                  M. J. ZAHR, P. AVERY AND C. FARHAT
+
+
+2.2.1. Boundary conditions for locally attached microstructure. As stated above, two different types
+of microstructures boundary conditions are considered in this paper: (1) uniform essential bound-
+ary conditions where the displacement of every node on the boundary is prescribed, and (2) periodic
+boundary conditions where the displacements at a minimal set of nodes (three corners of a square
+in two-dimensions and four corners of a cube in three-dimensions [32]) are prescribed and peri-
+odic conditions are enforced at all other boundary nodes. For this purpose, the deformation gradient
+                                                                                 ◦
+at scale k is used to set the essential boundary conditions and construct uk+1 for scale k + 1,
+k = 0, … , N − 1, regardless of the boundary condition type.
+   At a Gauss point 𝜁 ∈ GVk in Bk , k = 0, … , N − 1, consider the locally attached microscale Bk+1 ,
+and let Fk ∈ Rnsd ×nsd be the scale k deformation gradient at that Gauss point. Then, according to (7),
+the essential boundary conditions are defined as
+                                             ◦                      ◦
+                                             Uk+1 = (Fk − I)Xk+1                                               (13)
+       ◦                                                                                            ◦          ◦
+where◦
+       Uk+1 is the matrix whose columns contain the prescribed displacements, that is, uk+1 = Υ(Uk ),
+and Xk+1 is the matrix whose columns contain the nodal coordinates of all nodes where displacements
+are prescribed. Expression (13) can be rewritten as
+                                                  ◦
+                                                  uk+1 = W k+1 zk                                              (14)
+
+where W k ∈ R|NSk |×nsd is defined as
+                       2
+
+
+
+
+                                                    ⎡ X̊ Tk       ⎤
+                                                  ̃
+                                           W k = QkT⎢
+                                                            ⋱     ⎥                                            (15)
+                                                    ⎢         ̊ T ⎥
+                                                    ⎣         X k ⎦
+
+
+Q̃ k+1 is an appropriate permutation matrix, and zk ∈ Rn2sd is the row-wise vectorization of Fk − I, that
+is, zk = Υ(FTk − I). Notice that Wk is fixed, independent of 𝜁 – assuming that the same micromesh
+                                                                       ◦
+is used for all locally attached microscales at a given scale – while uk+1 and zk depend on 𝜁.
+    In the case of uniform essential boundary conditions, (14) completely defines these boundary
+conditions. The case of periodic boundary conditions requires additional constraints that impose the
+equality of the displacements on opposite faces of the RVE. These additional constraints take the
+form of linear multipoint constraints that can be written algebraically as
+                                                                ◦
+                                                  Ak uk = Bk uk                                                (16)
+        ◦
+where uk is defined according to (14). The specific forms of Ak and Bk can be found in a number
+of references (for example, see [32]). Using the Lagrange multiplier method for enforcing the con-
+straints (16), each scale k problem governed by an instance of the second part of equations (12) is
+                                                ◦
+transformed into the following problem: given uk , find uk and 𝝀k such that
+                                              ◦
+                                      f k (uk , uk , 𝝃 k ; 𝜸 k ) + ATk 𝝀k = 0
+                                                                       ◦                                       (17)
+                                                        Ak uk − Bk uk = 0.
+
+   Before proceeding to a discussion of the transmission of information to coarser scales, the nota-
+tions for the DOFs and semi-discrete governing equations in the presence of both aforementioned
+types of boundary conditions are unified into
+                                                          ◦
+                                                  gk (vk ; uk ) = 0                                            (18)
+
+for scales k = 1, … , N. For the case of uniform essential boundary conditions, vk = uk and
+         ◦                ◦
+gk (vk ; uk ) = f k (uk , uk , 𝝃 k ; 𝜸 k ). For that of periodic boundary conditions, these terms are defined as
+
+Copyright © 2017 John Wiley & Sons, Ltd.                                Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                                    DOI: 10.1002/nme
+                                                                                                                              10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+              MULTILEVEL MODEL ORDER REDUCTION FOR MULTISCALE PROBLEMS                                                863
+
+                          [    ]                                      [         ◦                   ]
+                         uk                                      ◦   f (u , u , 𝝃 ; 𝜸 ) + AT 𝝀
+                    vk =                             gk (vk ; uk ) = k k k k k ◦ k k                                  (19)
+                         𝝀k                                                A k uk − B k uk
+
+In both cases, the dependence on the history variables and material properties is dropped from the
+notation only for convenience.
+
+2.2.2. Macroscale stress from microscale deformation state. Recall from Section 2.1 that the point-
+wise stress state at scale k, k = 0, … , N − 1, is defined as the volumetric average of the stress state at
+scale k + 1. From (9), it follows that this quantity can be obtained purely through information on the
+boundary. Let Pk ∈ Rnsd ×nsd denote here specifically the first Piola–Kirchhoff stress tensor at Gauss
+point 𝜁 . Then, substituting the FE approximations in (9) leads to
+                                   1        ∑
+                        Pk =                                 Pk+1 Nk+1 ⊗ Xk+1 dA
+                               |Bk+1 | e∈S       ∫S e
+                                                 (                                       )
+                                             k+1    k+1
+
+
+                                   1        ∑                                                ◦ eT
+                           =                                     Pk+1 Nk+1 ⊗ 𝝓 ek+1 dA       Xk+1                     (20)
+                             |Bk+1 | e∈S       ∫Se
+                                         k+1     k+1
+
+                               1      ∑      ◦ e  ◦ eT
+                           =                 Rk+1 Xk+1
+                             |Bk+1 | e∈S
+                                               k+1
+
+
+where the pointwise positions Xk+1 have been replaced by the FE expansions on the boundary
+◦e
+Xk+1 𝝓ek+1 . Expression (20) can be rewritten as
+
+                                                               1         ◦
+                                                pk =                W T rk+1                                          (21)
+                                                             |Bk+1 | k+1
+where pk = Υ(Pk ) and
+                                        ◦               ◦e                ◦e        ◦e
+                                        rk = A rk                         rk = Υ(Rk )
+                                                e∈Sk
+
+
+2.2.3. Tangent stiffness matrix. To conclude this section, a derivation of the tangent stiffness matrix
+at an arbitrary scale k is described here, as this matrix is typically required when an implicit time-
+integration procedure is applied at scale 0 for solving the nonlinear macroscale problem, or a Newton-
+like solution procedure is chosen for solving the nonlinear static problem arising at any scale k. From
+the form of the unified semi-discrete governing equations at scales k = 1, … , N, the computation of
+                                                              𝜕f
+the tangent stiffness matrix amounts to the computation of k , regardless of the boundary condition
+                                                              𝜕uk
+employed. In the case of periodic boundary conditions, this tangent matrix takes the form
+                                                   [          ]
+                                           𝜕gk       𝜕f k T
+                                                          Ak
+                                                = 𝜕uk                                               (22)
+                                           𝜕vk        Ak 0
+
+   Recall that f k contains both unconstrained and constrained parts of the internal force vector and
+that uk contains both the unconstrained and constrained components of the displacement vector. The
+                  𝜕f                                                               𝜕f
+desired matrix k can be obtained by extracting from its counterpart matrix k the rows and
+                  𝜕uk                                                              𝜕uk
+columns corresponding to the unconstrained DOFs. At the element level, the following chain rule
+expansion holds
+
+                                       𝜕f ek         𝜕f ek       𝜕Pk 𝜕pk 𝜕zk 𝜕Fk
+                                              =              ∶              ∶                                         (23)
+                                       𝜕uk  e        𝜕Pk         𝜕pk 𝜕zk 𝜕Fk 𝜕uek
+
+Copyright © 2017 John Wiley & Sons, Ltd.                                       Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                                           DOI: 10.1002/nme
+                                                                                                                            10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+864                                      M. J. ZAHR, P. AVERY AND C. FARHAT
+
+
+                                         𝜕f ek
+The first term in this expansion,   , can be derived explicitly from the form of the internal force
+                                𝜕Pk
+given in (10). The computation of the last term follows directly from the FE approximation of the
+deformation gradient
+                                                                      𝜕𝚽ek
+                                                      Fk = Ik + Qek
+                                                                      𝜕Xk
+                                𝜕Pk       𝜕z
+where uek = Υ(Qek ). The terms       and k are directly related to the vectorization operator Υ
+                                𝜕pk       𝜕Fk
+                                                        𝜕p
+because pk = Υ(Pk ) and zk = Υ(Fk − I). The quantity k is derived analytically at the finest level
+                                 T
+                                                        𝜕zk
+(k = N) from the assumed constitutive law at this scale; at all other levels, it depends on the scale
+                                                                                                    𝜕p
+transmission method and on the solutions at finer levels. Specifically, at levels k = 0, … , N − 1, 𝜕z k
+                                                                                                      k
+can be expanded as
+                                        [ ◦           ◦          ] ◦
+                           𝜕pk     𝜕pk 𝜕 rk+1       𝜕 rk+1 𝜕vk+1 𝜕 uk+1
+                               = ◦          ◦    +          ◦                                     (24)
+                           𝜕zk    𝜕 rk+1 𝜕 uk+1 𝜕vk+1 𝜕 uk+1 𝜕zk
+From the scale transmission conditions (14) and (21), it follows that
+                                                                             ◦
+                                 𝜕pk              1                         𝜕 uk+1
+                                 ◦       =             W Tk+1                      = W k+1
+                                𝜕 rk+1       |Bk+1 |                          𝜕zk
+                            ◦
+The partial derivatives of rk+1 can be computed using an expansion identical to that in (23) at scale
+                             𝜕vk+1
+k + 1. The remaining term, ◦ , is the sensitivity of the solution vector with respect to the problem
+                            𝜕 uk+1
+parameters – in this case, the essential boundary conditions. It is obtained by differentiating the
+relation
+                                                            ◦     ◦
+                                             gk+1 (vk+1 (uk+1 ); uk+1 ) = 0                                         (25)
+
+as this leads to
+                                                 𝜕vk+1      𝜕gk+1 −1 𝜕gk+1
+                                                   ◦    = −                                                         (26)
+                                                 𝜕 uk+1     𝜕vk+1 𝜕 u◦ k+1
+The partial derivatives of gk+1 follow immediately from the definition of gk+1 in terms of fk+1 and
+from the application of (23) at level k + 1.
+
+                      3. MULTISCALE HYPER REDUCTION FRAMEWORK
+
+Here, a reduction/hyper reduction framework is presented for dramatically accelerating the solution
+of nonlinear dynamic multiscale problems modeled using the multiscale formulation based on the
+concept of a locally attached microstructure overviewed above. Specifically, the POD method is used
+to construct a PROM at each scale, and a computational approach based on the ECSW method [4,
+5] is developed to hyper reduce it. Training at all scales k = 1, … , N is performed in situ (or on-
+the-fly), or using an auxiliary, coarser, computational macroscale model designed for this purpose,
+which leads to impressive speedups even for non-parametric multiscale problems. For a parametric
+problem setting, training is performed at scale k = 0 using the traditional offline– online approach
+in order to gain additional computational efficiency.
+
+3.1. Hyper reduction at multiple scales
+At each scale k, the number of DOFs nk of the computational model is reduced by searching for the
+solution uk of the problem of interest in a carefully constructed low-dimensional subspace, that is,
+
+Copyright © 2017 John Wiley & Sons, Ltd.                                     Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                                         DOI: 10.1002/nme
+                                                                                                                               10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+              MULTILEVEL MODEL ORDER REDUCTION FOR MULTISCALE PROBLEMS                                                 865
+
+                                                    uk ≈ V k yk                                                        (27)
+
+where V k ∈ Rnk ×rk is a basis representing a low-dimensional subspace, yk ∈ Rrk is the vector of gen-
+eralized coordinates of uk in this basis, and rk ≪ nk . In order to achieve implementational efficiency
+in the case of an explicit time-integration scheme, the ROB is chosen to be orthonormal with respect
+to the mass matrix at the macroscale, that is,
+
+                                                  V T0 M0 V 0 = I                                                      (28)
+
+   In this work, the ROB is constructed using POD and the method of snapshots [33]. To this effect,
+                 (m )
+let {u(1)
+       k
+          , … , uk k } be mk state snapshots at scale k, that is, solutions of (12) at various time-instances
+for different parameter configurations. Define the primal snapshot matrix Nuk as the nk × mk matrix
+whose columns are composed of the snapshots
+                                                 [                   ]
+                                                               (mk )
+                                            Nuk = u(1)
+                                                   k
+                                                       · · · u k
+
+
+The origin of these snapshots in the context of the adopted multiscale framework is specified in
+Section 3.4. The ROB Vk is composed of the first rk principle components, or left singular vectors
+                                                                                −1∕2
+of Nuk , left-multiplied by the square root of the inverse of the mass matrix, Mk , in order to ensure
+(28). Furthermore, while this work considers only state snapshots for the construction of Vk , other
+types of snapshots such as Krylov vectors [34] and state sensitivities [35, 36] can be appended to Nuk
+in order to improve the computational efficiency of the training procedure chosen for constructing
+the ROB Vk .
+   The dimensionality of the semi-discrete governing equations (12) is reduced at each scale k by
+performing a Galerkin projection, that is, substituting (27) in these equations and projecting them
+onto the column space of Vk . This leads to the overall multiscale PROM
+                                                              ◦
+                                    ÿ 0 + V T0 f 0 (V 0 y0 , u0 , 𝝃 0 ; 𝜸 0 ) = 0
+                                                              ◦                                                        (29)
+                                           V Tk f k (V k yk , uk , 𝝃 k ; 𝜸 k ) = 0
+
+    Despite the fact that the semi-discrete equations (29) are characterized by a reduced dimensional-
+ity, their time-integration remains computationally intensive due to the presence of the nonlinear term
+fk . Indeed, the projection of this term implies that every evaluation of V Tk f k requires the reconstruc-
+tion of the full state using the approximation Vk yk , the integration and assembly of the internal force
+vector over the entire computational mesh, and its projection onto the subspace represented by the
+ROB Vk . Because such computations scale with the size nk of the high-dimensional model (HDM)
+at level k, they cannot be performed using limited resources or at low-computational cost, and much
+less in real time. Hence, they constitute a substantial bottleneck in the time-integration of (29). For
+this reason, a number of hyper reduction methods have been proposed to overcome this bottleneck
+introduced by nonlinear terms. Two popular classes of such methods are the following: (1) gappy
+approximations where the nonlinear terms are assembled only over a small portion of the mesh and
+some strategy is used to account for the missing information [4, 5, 22, 23, 37–42], and piece-wise
+linearization methods [43]. For solid mechanics and structural dynamics problems, ECSW is the
+preferred hyper reduction method because of its simplicity, strong connection to the FE method, and
+desirable structure-preserving and numerical stability properties [5]. In principle, any other hyper
+reduction methods can be used to overcome the aforementioned computational bottleneck: however,
+a substantial effort may be required in this case to achieve numerical stability [20].
+    As introduced in [4], the ECSW method amounts to a ‘mesh reduction’ algorithm which samples
+a set of elements Vk′ ⊂ Vk and attributes to each sampled element e a positive weight 𝛼ke > 0 such that
+                                           ◦                  ∑ e e e ◦e e
+                        V Tk f k (V k yk , uk , 𝝃 k ; 𝜸 k ) =  (V k )T f k (V k yk , uk , 𝝃 k ; 𝜸 ek )
+                                                      e∈Vk
+                                                      ∑                                    ◦e                          (30)
+                                                  ≈           𝛼ke (V ek )T f ek (V ek yk , uk , 𝝃 ek ; 𝜸 ek )
+                                                      e∈Vk′
+
+
+Copyright © 2017 John Wiley & Sons, Ltd.                                        Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                                            DOI: 10.1002/nme
+                                                                                                                                     10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+866                                     M. J. ZAHR, P. AVERY AND C. FARHAT
+
+
+In the above expressions, the superscript e designates the restriction of a global vector or matrix to
+element e, |Vk′ | ≪ |Vk |, and Vk′ can be efficiently computed using one of three different active set algo-
+rithms that are described and contrasted in [44]. Furthermore, the ECSW method distinguishes itself
+from alternative hyper reduction methods through its preservation of the Lagrangian structure asso-
+ciated with Hamilton’s principle. This enables it to also preserve the numerical stability properties of
+the discrete system to which it is applied. For a fixed set of parameter values, the approximation error
+committed online by ECSW is bounded by its counterpart error committed offline during the train-
+ing of this method. Hence, the approximation error committed by ECSW online can be estimated à
+priori and controlled.
+   However, at the microscale levels of the considered multiscale framework (i.e., for k ⩾ 1), it is
+not sufficient to consider only the unconstrained part of the internal force vector, as the transmis-
+sion condition (21) depends critically on the constrained part of the internal force. Therefore, using
+ECSW, one should search for elements Vk′ ⊂ Vk and weights 𝛼ke ⩾ 0 such that
+                                        ◦                  ∑ e                     ◦e
+                      UTk f k (V k yk , uk , 𝝃 k ; 𝜸 k ) =  (Uk )T f ek (V ek yk , uk , 𝝃 ek ; 𝜸 ek )
+                                                             e∈Vk
+                                                             ∑                                    ◦e                         (31)
+                                                         ≈           𝛼ke (Uek )T f ek (V ek yk , uk , 𝝃 ek ; 𝜸 ek )
+                                                             e∈Vk′
+
+where
+                                                               [                ]
+                                                         Vk 0
+                                                    Uk =    ̃k                                                               (32)
+                                                         0 W
+
+and W ̃ k is constructed by normalizing the columns of Wk . The element subset V ′ and weights
+                                                                                                k
+𝛼k are determined in a training step that seeks to minimize |Vk′ | while maintaining an acceptable
+  e
+
+approximation error for the ensemble of the training data.
+                                                                                                  (m )
+    Recall that the ROB Vk is obtained by compressing the state snapshots {u(1)          k
+                                                                                           , … , uk k }, and let
+                                 ◦ (i)
+y(i)
+ k
+     = V Tk u(i)k
+                  . Also, define uk , 𝝃 (i)
+                                        k
+                                            , and 𝜸 (i)
+                                                    k
+                                                        as the prescribed displacements, history variables, and
+material properties associated with the snapshot u(i)          k
+                                                                 , respectively. The vector of ECSW weights,
+         |V   |
+𝜶 k ∈ R , can be defined as the approximate solution of the following non-negative least squares
+            k
+
+(NNLS) problem [44]
+                                         minimize                    ||Gk 𝜶 k − sk ||
+                                           𝜶 k ∈R|Vk |                                                                       (33)
+                                         subject to                 𝜶k ⩾ 0
+where the block components of the matrix Gk and vector sk are
+                                                                          ◦ (i),e
+                                 (Gk )ie = (Uek )T f ek (V ek y(i)
+                                                               k
+                                                                   , uk , 𝝃 (i),e
+                                                                            k
+                                                                                  ; 𝜸 (i),e
+                                                                                      k
+                                                                                            )
+                                                                      ◦ (i)
+                                                                                                                             (34)
+                                   (sk )i = UTk f k (V k y(i)
+                                                          k
+                                                              , uk , 𝝃 (i)
+                                                                       k
+                                                                           ; 𝜸 (i)
+                                                                               k
+                                                                                   )
+The approximate solution of problem (33) is specifically defined as the first iterate for which the
+relative residual is less than a specified training tolerance 𝜀. Typically, iterates are generated using
+the Lawson and Hanson algorithm [45], and the training tolerance is chosen as 𝜀 ∼ 0.01. An element
+e is included in Vk′ if the corresponding weight 𝛼ke is non-zero, that is, Vk′ = {e ∈ Vk |𝛼ke > 0} (note
+that while the sparsity of 𝜶 k is not strictly enforced in (33), it is promoted by the non-negativity
+constraint [44]). Once the reduced mesh and its corresponding weights are constructed, the reduced-
+order internal force is approximated as
+                                                         ∑
+                         f rk (yk , zk , 𝝃̂ k ; 𝜸̂ k ) =   𝛼ke (V ek )T f ek (V ek yk , W ek zk+1 , 𝝃 ek ; 𝜸 ek ) (35)
+                                                   e∈Vk′
+
+where the hat symbol ̂· designates a vector defined on the reduced mesh Vk′ , and the scale transmission
+          ◦
+condition uk = W k zk−1 was used to derive the expression of f rk .
+
+Copyright © 2017 John Wiley & Sons, Ltd.                                              Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                                                  DOI: 10.1002/nme
+                                                                                                                                   10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+              MULTILEVEL MODEL ORDER REDUCTION FOR MULTISCALE PROBLEMS                                                     867
+
+   In addition to achieving scalability with respect to the size nk of the PROM only in the computation
+of the internal force vector, the reduced mesh ensures that scale transmission is performed efficiently,
+that is, without any operation whose computational complexity scales with |Vk |. This is evident in
+                                           ◦e
+the transmission to finer scales where uk is required for each e ∈ Vk′ , which can be computed as
+W ek zk+1 . Transmission to coarser scales are approximated as
+
+                                                         1       ∑         ◦e      ◦ eT
+                                       Pk =                                Rk+1 Xk+1                                       (36)
+                                                   |Bk+1 | e∈S ′
+                                                                     k+1
+
+
+
+where Sk+1
+        ′
+           ⊂ Sk+1 denotes the subset of surface elements contained in the reduced mesh Vk+1 ′
+                                                                                               .
+  In summary, the overall hyper PROM associated with the semi-discrete governing equations (12),
+which consist of a hyper PROM for each scale k, is given by the set of hyper reduced-order equations
+
+                                           ÿ 0 + f r0 (y0 , z0 , 𝝃̂ 0 ; 𝜸̂ 0 ) = 0
+                                                                                                                           (37)
+                                                  f r (yk , zk , 𝝃̂ k ; 𝜸̂ k ) = 0
+                                                     k
+
+which can be time-integrated without requiring any high-dimensional operation.
+
+3.2. Reduction of periodic boundary conditions
+In the case where periodic boundary conditions are employed at scales k = 1, … , N, the potentially
+large number of periodicity constraints (16) must be reduced for the sake of computational efficiency.
+When using the Lagrange multiplier method for enforcing such constraints, this can be achieved by
+constructing first an ROB for the Lagrange multipliers then projecting the aforementioned constraints
+on this ROB as described subsequently.
+                    (m )
+   Let {𝝀(0)
+          k
+             , … , 𝝀k k } denote a set of collected Lagrange multiplier snapshots associated with the
+                                       , … , uk k }. Define the dual snapshot matrix N𝜆k as
+                                              (m )
+set of collected state snapshots {u(0)
+                                    k
+                                               [                   ]
+                                         N𝜆k = 𝝀(1)k
+                                                      · · · 𝝀
+                                                             (mk )
+                                                             k
+
+and define the dual ROB 𝚲k as the matrix whose columns are populated with the truncated set of left
+                                                                                          ◦
+singular vectors of N𝜆k [31]. The reduced-order approximation (27) and the expression for uk given
+in the scale transmission condition (14) lead to
+
+                                                Ak V k yk = Bk W k zk−1                                                    (38)
+
+Projecting the above equation onto the columnspace of the dual ROB 𝚲k leads to the fully reduced
+periodicity constraints
+
+                                                     Ark yk = Brk zk−1                                                     (39)
+
+where Ark = 𝚲Tk Ak V k and Brk = 𝚲Tk Bk W k are reduced-order matrices. Thus, in the case of periodic
+boundary conditions, the reduced-order semi-discrete governing equations can be written for k ⩾ 1
+as
+                   [ ]                                              [ r r                           ]
+                      y                                              f (y ; z , 𝝃̂ , 𝜸̂ ) − ATr 𝝀rk
+             vrk = kr                grk (vrk ; zk , 𝝃̂ k , 𝜸̂ k ) = k k k k k                        =0 (40)
+                      𝝀k                                                    Ar yk − Br zk
+
+In the case of uniform essential boundary conditions, they can be written as
+
+                          vrk = urk                grk (vrk ; zk , 𝝃̂ k , 𝜸̂ k ) = f rk (urk ; zk , 𝝃̂ k , 𝜸̂ k )          (41)
+
+  Two remarks about the reduction of the periodic boundary conditions described above are
+noteworthy:
+
+Copyright © 2017 John Wiley & Sons, Ltd.                                            Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                                                DOI: 10.1002/nme
+                                                                                                                                10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+868                                       M. J. ZAHR, P. AVERY AND C. FARHAT
+
+
+   • Because these boundary conditions are linear, their reduction leads to linear reduced-order
+     equations governed by the reduced-order matrices Ark and Brk . Furthermore, because these
+     matrices are precomputable, they do not create any bottleneck in the online solution of the
+     reduced-order semi-discrete microscale equations. Consequently, just like in the case of any
+     other linear terms, their efficient processing does not require any hyper reduction.
+   • The solvability of a reduced saddle point problem arising from the reduced-order semi-discrete
+     governing equations (40) hinges on the satisfaction of the associated inf-sup condition. This
+                                                       T
+     condition requires that each reduced matrix Ark = V Tk ATk 𝚲k be full column rank. A standard
+     approach in model reduction for guaranteeing this solvability condition is to equip the solu-
+                                                               T
+     tion procedure with a check of the column rank of Ark and replace the primal ROB Vk by an
+     extended counterpart [V k Ṽ k ] for which Ark has a full column rank, every time this check fails
+                                                   T
+
+
+     (for example, see [31, 46, 47] for example choices for the matrix Ṽ k ).
+
+3.3. Hyper reduced tangent stiffness matrix
+The hyper reduced-order tangent stiffness matrix arises from the linearization of the hyper reduced-
+order equations (37), when an implicit time-integration scheme is used at scale 0. It is also required
+at all scales 1, … , N when the semi-discrete governing equations at these levels are nonlinear
+and solved using a Newton or Newton-like method. For the cases of uniform essential boundary
+conditions and periodic boundary conditions, it is given by
+                                                                       ⎡ 𝜕f k
+                                                                               r
+                                  𝜕grk 𝜕f r                      𝜕grk          r T ⎤
+                                      = k             and            = ⎢ 𝜕yk (Ak ) ⎥                                   (42)
+                                  𝜕vk  𝜕yk                       𝜕vrk ⎢ r          ⎥
+                                                                       ⎣ Ak    0 ⎦
+respectively. Therefore, regardless of the type of boundary conditions employed, the computation of
+                                                                                                                    𝜕f r
+the hyper reduced-order tangent stiffness matrix hinges on the computation of the term 𝜕yk , which is
+                                                                                                                       k
+performed as follows:
+                    𝜕f rk                            ∑                 𝜕f e
+                          (yk , zk , 𝝃̂ k ; 𝜸̂ k ) =       𝛼ke (V ek )T ke (V ek yk , W ek zk+1 , 𝝃 ek ; 𝜸 ek )V ek      (43)
+                    𝜕yk                              e∈V ′
+                                                                       𝜕uk
+                                                     k
+
+
+        𝜕f ek                                                  𝜕f ek
+where       e can be determined from a submatrix of   whose computation is detailed in (23). Thus,
+       𝜕uk                                       𝜕uek
+the complexity of the computation of the hyper reduced-order tangent stiffness matrix scales only
+with the size of the reduced mesh.
+
+3.4. Training strategy for the overall hyper reduced-order microscale model
+A two-step training strategy, that is, a procedure for sampling the parameter space (when applicable)
+and collecting solution snapshots, is proposed here for constructing the overall hyper reduced model
+described in Section 3.1. The first step focuses exclusively on training for the construction of hyper
+reduced models for the microscale problems. Specifically, this training entails solving the second of
+problems (12) in the case of uniform boundary conditions to obtain representative samples – also
+                                                                                    ◦
+referred to in this paper as snapshots – of the displacement solutions uk and uk . Similarly, in the
+case of periodic boundary conditions, the problem solved during training is problem (17), and the
+solution snapshots comprise in this case the Lagrange multipliers 𝝀k as well as the displacements uk
+     ◦
+and uk . To generate a suitable collection of solution snapshots at levels k = 1, … , N, two alterna-
+tive approaches are proposed: an in situ approach also referred to as the on-the-fly approach, and a
+coarsening strategy. The first approach is referred to as in situ because it does not require an entire
+multiscale simulation to collect solution snapshots; instead, it performs training and reduction during
+the multiscale simulation itself. The second approach is labeled as such because it relies on an aux-
+iliary, coarser, computational macroscale model for accelerating data collection. Both approaches
+enable the achievement of significant speedups even in a non-parametric problem setting. The second
+step focuses on training for the construction of a hyper reduced model for the macroscale problem. It
+
+Copyright © 2017 John Wiley & Sons, Ltd.                                   Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                                       DOI: 10.1002/nme
+                                                                                                                10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+              MULTILEVEL MODEL ORDER REDUCTION FOR MULTISCALE PROBLEMS                                  869
+
+employs a traditional offline–online approach to compute solution snapshots at the macroscale level.
+Here, this training entails solving the first of problems (12) – regardless of whether the microscale
+utilizes uniform or periodic boundary conditions – to obtain snapshots of the displacement solutions
+         ◦
+u0 and u0 . In both steps, after the various types of solution snapshots are collected, they are com-
+pressed to build first the level k ROBs then the overall hyper reduced model, as described in Section
+3.1. Specifically, at each level k, the ROB Vk – and for k > 0, the ROB 𝚲k (when applicable) – is/are
+computed, the weighted reduced mesh defined by Vk′ and 𝜶 k is determined, and the corresponding
+hyper reduced model is defined by (37) and (40) –(41), as applicable.
+
+3.4.1. Step I: In situ training for scales 1, … , N. During a single multiscale simulation, the bound-
+ary value problem at scale k = 1, … , N is solved many times – once for each Gauss point in scale
+                ∏
+                k−1
+k − 1, that is,     |Gj | where |Gj | is the number of Gauss points at level j. This highlights the fact that
+               j=0
+sufficient training data can be acquired for the purpose of model reduction at each level k ⩾ 1 with-
+out completing an entire multiscale computation. The simplest training strategy that leverages this
+observation consists in (a) solving at scale k the high-dimensional boundary value problem at the
+first mk Gauss points of scale k − 1, (b) collecting the resulting solution snapshots, (c) compressing
+them to construct Vk , (d) constructing the associated hyper reduced model as described in Section
+                                                                           ∏
+                                                                           k−1
+3.1, and (e) exploiting this hyper reduced model to solve the remaining        |Gj | − mk boundary value
+                                                                              j=0
+problems at scale k. Even in a non-parametric problem setting, this simple training strategy can signif-
+icantly speed up a multiscale simulation by drastically reducing the total number of high-dimensional
+boundary value problems that need to be solved. It can also incorporate a greedy method [48] with a
+residual-based error indicator to perform training at the Gauss points where the PROM errors are the
+largest. Variants of this training strategy that optimize accuracy and wall-clock or CPU time perfor-
+mance can also be considered. For example, substep (a) can be refined by selecting mk training Gauss
+points that provide more diversity in the information about the deformation state of the structure at
+level k − 1 rather than choosing arbitrarily the first mk training Gauss points encountered at this level
+during a time-step of the multiscale computation. For sufficiently large-computational macroscale
+models, it can be equipped with an adaptive reduction process that is similar in its structure to that
+recently proposed in [49] in the context of response surfaces. In this process, after a sufficient num-
+ber of solution snapshots are collected during some time-step of the computation at some Gauss
+points at scale k − 1 for the microscale model at level k, a ROB Vk and associated nonlinear hyper
+reduced model are constructed and applied to accelerate the computation of the remainder of the
+multiscale computation, until an error criterion requests updating Vk with further solution snapshots
+before proceeding with the computation. This type of adaptivity is similar to that which can be found
+in a typical greedy procedure for constructing a global ROB in a parameter space.
+
+3.4.2. Step I: Coarsened training for scales 1, … , N. An alternative approach for performing Step
+I of the two-step training strategy described in this section is to train a ROB for the solution of
+microscale problems using the original microscale models, but an auxiliary, coarser computational
+macroscale model. Although somewhat less convenient from a user perspective than the in situ strat-
+egy, this approach is attractive for a class of simulations in which there is an insufficient diversity
+of microscale snapshots available in the first few time-steps to admit the simplest variant of the in
+situ strategy. In such cases, it furnishes a more implementationally straightforward alternative than
+any of the refinements of the in situ training discussed in the previous section and can potentially
+reduce training costs by eliminating the post-processing of solution snapshots required to update the
+microscale PROM in the adaptive setting.
+
+3.4.3. Step II: Offline– online training for the macroscale. The in situ and coarsened training strate-
+gies outlined above can significantly speedup non-parametric multiscale simulations but do not
+produce any solution snapshot at scale 0. Hence, they do not contribute to the construction of a hyper
+reduced macroscale model. Unlike at scales 1, … , N, solution snapshots at scale 0 are available only
+
+Copyright © 2017 John Wiley & Sons, Ltd.                         Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                             DOI: 10.1002/nme
+                                                                                                               10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+870                                  M. J. ZAHR, P. AVERY AND C. FARHAT
+
+
+after one or a few time-instances of the entire multiscale simulation have been completely computed.
+For this reason, the training strategy at scale 0 outlined below employs a traditional offline– online
+procedure that accounts for a parametric setting of the multiscale problem.
+   In the offline phase, scale 0 solution snapshots are collected by exercising the high-dimensional
+multiscale model, equipped at each level k ⩾ 1 with the corresponding hyper reduced model
+described in Section 3.1, for different parameter configurations and various sampled time-instances.
+In the online phase, all hyper reduced models are employed at their respective scales to deliver a
+near-real-time multiscale computational model.
+   An important feature of this two-step training approach is that the in situ or coarsened mesh train-
+ing strategy of Step I is used to speedup the acquisition of solution snapshots in Step II. This reduces
+significantly the computational cost of the offline phase, which is the main computational overhead
+associated with model reduction, because the macroscale snapshots are multiscale solution snapshots
+that are otherwise very expensive to compute.
+
+
+                                           4. APPLICATIONS
+
+The nonlinear, multiscale, PMOR framework described in the previous sections of this paper was
+implemented by the authors in the general-purpose FE software AERO-S [50, 51]. Here, the com-
+putational efficiency of this framework is demonstrated using a number of nonlinear multiscale
+simulations with N + 1 = 2 scales. Its accuracy is illustrated, and its versatility and potential for sig-
+nificant wall-clock and CPU time reductions are highlighted. Specifically, this framework is applied
+to the solution of two academic but nevertheless computationally intensive nonlinear, multiscale,
+dynamic response problems. All ROBs are constructed using the POD method based on displace-
+ment (and when applicable, Lagrange multiplier) solution snapshots, and all constructed PROMs
+are applied to the same parametric configuration for which they have been trained. Wall-clock time
+and CPU time reduction factors including all offline costs are reported in order to demonstrate the
+ability to achieve true speedups even under such conditions which are unusual for model reduction.
+   The following terminology is borrowed from [41] and adopted in this section:
+   • ‘Model I’: denotes the HDM of interest.
+   • ‘Model II’: denotes a counterpart PROM without hyper reduction.
+   • ‘Model III’: denotes a counterpart PROM equipped with the ECSW approximation for hyper
+     reduction.
+   Furthermore, in the context of a two-level multiscale simulation, ‘Model I×I’ indicates that HDMs
+are used at both macroscale and microscale levels. Likewise, ‘Model I×III’ indicates that an HDM
+is used at the macroscale level while a hyper reduced PROM is employed at the microscale level.
+Other model combinations are also considered and denoted in a similar fashion.
+   Global relative errors reported in this section are defined as follows:
+                                        ∑
+                                      | Δs (u⋄ (t) − ũ ⋄ (t))T 1 |
+                                      | t∈P                       |
+                                      |                           |
+                               GE = |        ∑                    | × 100%
+                                      |          Δs uT
+                                                       (t)1       |
+                                      |              ⋄            |
+                                      |      t∈P                  |
+where the ⋄ subscript designates the x, y (not to be confused with the vector of generalized coordi-
+nates), or z direction of a global reference frame, u⋄ (t) ∈ R|NV0 | is the vector of ⋄-displacements at
+time t extracted from the solution at the coarsest scale based on the HDM of interest, ũ ⋄ (t) ∈ R|NV0 |
+is the vector of ⋄-displacements at time t extracted from the solution at the coarsest scale based on
+the constructed PROM, and P is the set of time-stamps used in the evaluation of the relative error,
+that is,
+                                 {                                          }
+                             P = t ∈ {t0 , t0 + Δs, t0 + 2Δs, … } ∶ t ⩽ tf
+
+where Δs is the error sampling time-step and tf is the maximum simulated time.
+
+Copyright © 2017 John Wiley & Sons, Ltd.                        Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                            DOI: 10.1002/nme
+                                                                                                                 10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+              MULTILEVEL MODEL ORDER REDUCTION FOR MULTISCALE PROBLEMS                                   871
+
+
+
+
+Figure 1. Vibration of a nonlinear elastic bar with a microvoid structure: rendering of the microscale FE mesh
+       highlighting the elements sampled at this level by energy conserving sampling and weighting.
+
+
+   Finally, it is noted that all wall-clock timings are reported for the computation of the macroscale
+displacements and velocities and include the cost of outputting to disk at these solutions at the
+time interval Δs. Hence, they include the computational costs associated with the reconstruction
+of the time-dependent macroscale solution V0 y0 (t) and its time-derivative V 0 ẏ 0 (t) when a PROM
+is deployed for the macroscale. All other offline costs (both macroscale and microscale) associated
+with the construction of the macroscale PROM and/or microscale PROM are taken into account only
+where explicitly noted. Specifically, these offline costs include the collection of solution snapshots,
+the construction of the ROB or bases, and – in the case of hyper reduced PROMs – the construction
+of the reduced mesh or meshes.
+
+4.1. Vibration of a nonlinear elastic bar with a microvoid structure
+First, the performance of the proposed multiscale nonlinear model reduction framework in terms
+of both accuracy and wall-clock/CPU time reduction is assessed for a model problem where the
+computational model has a relatively modest number of DOFs at the macroscale level, and uniform
+essential boundary conditions at the microscale level. This model describes a bar with a heteroge-
+neous structure at the finest scale characterized by microscopic voids with a porosity ratio (defined
+here as the ratio of the void space and total space) equal to 0.5. The bar has a solid square cross-
+section with height and width H = 1 cm, and a length L = 20 cm. It is fully fixed at both ends
+(i.e., z = 0 and z = L). A distributed external force generated by a uniform pressure of magnitude
+p = 100 MPa is suddenly applied on the upper face and oriented initially in the negative y direction.
+Due to symmetry, only half of the length of the bar is modeled.
+   An FE model for the microscale level is constructed for this problem with |V1 | = 648 eight-noded
+hexahedral elements with three displacement DOFs/node and a total number of n1 = 1962 DOFs
+(Figure 1). At this level, the material response is assumed to be well represented by a compressible
+neo-Hookean (finite strains) hyperelastic constitutive law with Young’s modulus E = 207 GPa and
+Poisson’s ratio 𝜈 = 0.3.
+   For the macroscale level, an FE is constructed for this problem with |V0 | = 640 eight-noded
+hexahedral elements with three displacement DOFs/node and a total number of n0 = 2975 DOFs
+(Figure 2). The macroscale density in the reference configuration is 𝜌0 = 7, 830 kg/m3 . Temporal
+discretization at this level is performed using the explicit central difference scheme and the constant
+
+Copyright © 2017 John Wiley & Sons, Ltd.                          Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                              DOI: 10.1002/nme
+                                                                                                               10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+872                                  M. J. ZAHR, P. AVERY AND C. FARHAT
+
+
+
+
+Figure 2. Vibration of a nonlinear elastic bar with a microvoid structure: rendering of the macroscale FE
+   mesh highlighting the elements sampled at this level by energy conserving sampling and weighting.
+
+
+
+
+Figure 3. Vibration of a nonlinear elastic bar with a microvoid structure: sequence of macroscale solution
+                                  snapshots with displacement contours.
+
+
+time-step Δt = 3.25 × 10−7 s. A sequence of solution snapshots illustrating the high-frequency
+vibrational response over the course of one simulation is presented in Figure 3.
+   Next, a nonlinear PROM of dimension r1 = 9 is constructed for the microscale computational
+model using snapshots collected by exercising the macroscale HDM for the first 769 time-steps, and
+sampling every 100th microscale solution snapshot. For the microscale FE model described earlier,
+ECSW equipped with the Lawson and Hanson sparse NNLS algorithm and 𝜀 = 0.01 produces a
+reduced mesh with 49 elements, that is, |V1′ | = 49 (Figure 1). Using the aforementioned microscale
+PROM with and without the ECSW hyper reduction and the same time-step Δt = 3.25 × 10−7 s as
+
+Copyright © 2017 John Wiley & Sons, Ltd.                        Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                            DOI: 10.1002/nme
+                                                                                                                      10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+                 MULTILEVEL MODEL ORDER REDUCTION FOR MULTISCALE PROBLEMS                                     873
+
+          Table I. Vibration of a nonlinear elastic bar with a microvoid structure: performance appraisal.
+
+                                                                                Wall-clock time      CPU time
+            a
+    Model                 Time-step (s)   # Cores      Wall-clock time (s)      speedup factor     speedup factor
+
+    I×I                    3.25 × 10−7      640      5.31 × 104                       N.A.              N.A.
+    I×II                   3.25 × 10−7      640      4.21 × 104 (4.24 × 104 )      1.26 (1.25)       1.26 (1.25)
+    I×III                  3.25 × 10−7      640      3.23 × 103 (4.92 × 103 )      16.4 (10.8)       16.4 (11.9)
+    II×III                1.625 × 10−6      640      8.36 × 102 (5.77 × 103 )      63.5 (9.20)       63.5 (10.0)
+    III×III               1.625 × 10−6       47      6.74 × 102 (6.08 × 103 )      78.7 (8.74)       1024 (10.7)
+
+    Modelb                    I×II         I×III              II×III                 III×III
+
+    y-displacement (%)        0.107        0.038              0.043                  0.422
+    z-displacement (%)        0.976        1.04               2.26                   2.78
+a
+  Vibration of a nonlinear elastic bar with a microvoid structure: wall-clock timings and speedup factors (values
+reported between parentheses are for the wall-clock time and speedup factors obtained when all offline costs are
+accounted for).
+b
+  Global relative errors.
+
+for the HDM computation, two additional simulations are performed. These are referred to as the
+Model I×II and Model I×III simulations, respectively.
+   At the macroscale level, a nonlinear PROM of dimension r0 = 12 is constructed using snapshots
+collected during the Model I×III simulation. For the macroscale FE model described above, ECSW
+equipped with the Lawson and Hanson sparse NNLS algorithm and 𝜀 = 0.01 produces a reduced
+mesh with 47 elements – that is, |V0′ | = 47 (Figure 2). Using the aforementioned macroscale PROM
+with and without the ECSW approximation and the time-step Δt = 1.625×10−6 s, which is five times
+larger than the critical time-step for the HDM simulation (thanks to model reduction which filters
+out the effects of mesh high frequencies), two additional Model II×III and Model III×III simulations
+are performed.
+   All performance results reported for this multiscale problem are for computations performed from
+t = 0 s until tf = 1×10−2 s on a Linux cluster with 84 compute nodes with dual-socket Intel Xeon E5-
+2650 v2 CPUs (8 cores/socket) and 64 GB of DDR3 memory/node, a 1:1 subscribed FDR Infiniband
+network, and a Lustre shared filesystem tuned for parallel I/O. Table I reports the measured speedups
+and global relative errors computed using the error sampling time-step Δs = 1.3 × 10−5 s, and
+Figure 4 displays a sample at one node location of the computed displacement time-histories. From
+the information reported so far, the reader can verify that in this case, the Model I×II and Model I×III
+simulations perform the first 2.5% of the 30,769 time-steps needed to reach tf = 1 × 10−2 s using
+HDMs at both the macroscale and microscale levels, and the remaining 97.5% of these 30,769 time-
+steps using the HDM at the macroscale and the PROM and hyper reduced PROM at the microscale
+level, respectively. Note that the number of cores shown in Table I is specifically the number of
+computational units employed for the online part of the computations in the case of models with
+one or more reduced-order components. For the offline part of the computations, the resources are
+utilized as follows:
+      • Each ROB and the microscale reduced mesh is computed serially using just one core.
+      • The macroscale reduced mesh is generated in parallel using 640 cores.
+      • All post-processing reconstructions of the macroscale displacements and velocities are per-
+        formed in parallel for each of the Model II×III and Model III×III simulations using 640
+        cores.
+     The reader can observe that
+      • The Model I×II simulation reproduces the results of the the Model I×I simulation with an
+        impressive accuracy at both scales. However, as expected, it does not deliver the sought-after
+        speedup because the nonlinear terms of the microscale PROM are not hyper reduced.
+
+Copyright © 2017 John Wiley & Sons, Ltd.                               Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                                   DOI: 10.1002/nme
+                                                                                                               10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+874                                  M. J. ZAHR, P. AVERY AND C. FARHAT
+
+
+
+
+Figure 4. Vibration of a nonlinear elastic bar with a microvoid structure: sample computed time-history for
+                 a displacement dof at a node of the macroscale high-dimensional model.
+
+
+   • On the other hand,
+      – The Model I×III simulation, which features model reduction and hyper reduction only at the
+        microscale level, delivers a speedup factor of 16.4 for both wall-clock and CPU time when
+        the offline costs associated with the microscale PROM are not accounted for in the measure-
+        ment of these speedup factors. When all offline costs are taken into account, these speedup
+        factors become 10.8 and 11.9, respectively. Furthermore, both Model I×III and Model III×III
+        simulations deliver an excellent level of accuracy.
+      – When none of the offline costs associated with either macroscale or microscale PROM are
+        accounted for other than the reconstruction and writing to disk of the high-dimensional
+        displacement and velocity solutions – because for parametric applications these can be amor-
+        tized – the Model III×III simulation, which is performed using hyper reduced PROMs at both
+        scales, delivers a wall-clock time speedup factor of 78.7 and a CPU time speedup factor of
+        over 1000. When all offline costs are taken into account, these speedup factors become 8.74
+        and 10.7, respectively. These are significant results, considering that in addition, the Model
+        III×III simulation delivers an excellent level of accuracy.
+
+4.2. Impact of a nonlinear elastic cylinder with a composite microstructure on a rigid wall
+Next, the performance of the proposed nonlinear, multiscale PMOR framework is assessed for an
+impact problem, and a computational model characterized by a highly refined spatial discretization
+at the macroscale level, and periodic boundary conditions at the microscale level. This multiscale
+computational model is for a cylindrical projectile with a heterogeneous structure at the microscale
+level characterized by a stiff, unidirectional fiber embedded in a flexible matrix. The cylinder has
+a radius R = 0.476 cm and a length L = 1.27 cm. It has an initial velocity v = 15, 000 cm/s in
+the negative z-direction and a frictionless rigid wall boundary condition located at z = 0. Due to
+symmetry, only one quarter of the volume of the bar is modeled. This problem is a variant of the so-
+called Taylor impact problem [52]; it has been previously employed by other authors to evaluate an
+alternative multiscale computational framework [49].
+   For this problem, an FE microscale model is constructed with |V1 | = 729 8-noded hexahedral
+elements with three displacement DOFs/node, and a total number of n1 = 2988 primal DPFs and
+804 dual Lagrange multiplier dofs associated with the microscale periodic boundary conditions. The
+microscale material is modeled as follows:
+   • The fiber is represented as a compressible neo-Hookean (finite strains) material with E =
+     212.52 × 1010 dyne/cm2 and 𝜈 = 0.4. It runs parallel to the local x-axis along the center of
+     the cube where the locally attached microstructure is defined. Its cross section is approximated
+
+Copyright © 2017 John Wiley & Sons, Ltd.                        Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                            DOI: 10.1002/nme
+                                                                                                                10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+              MULTILEVEL MODEL ORDER REDUCTION FOR MULTISCALE PROBLEMS                                  875
+
+
+
+
+Figure 5. Impact of a nonlinear elastic cylinder with a composite microstructure: rendering of the microscale
+  FE mesh highlighting the elements sampled at this level by energy conserving sampling and weighting.
+
+
+
+
+Figure 6. Impact of a nonlinear elastic cylinder with a composite microstructure: rendering of the macroscale
+  FE mesh highlighting the elements sampled at this level by energy conserving sampling and weighting.
+
+
+     by a square of edge size equal to one-third of the unit cell width, which results in a total fiber
+     volume fraction of 1/9.
+   • The flexible matrix surrounding this fiber (Figure 5) is also represented as a compressible neo-
+     Hookean material (finite strains), but with E = 72.52 × 1010 dyne/cm2 and 𝜈 = 0.4.
+At the macroscale level, an FE model is constructed with |V0 | = 432, 000 eight-noded hexahe-
+dral elements with three displacement DOFs/node, and a total number of n0 = 1, 325, 620 DOFs
+(Figure 6). The macroscale density in the reference configuration is 𝜌0 = 2.7 g/cm3 . Temporal
+discretization is performed using the explicit central difference scheme and the constant time-step
+Δt = 1 × 10−9 s.
+
+Copyright © 2017 John Wiley & Sons, Ltd.                         Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                             DOI: 10.1002/nme
+                                                                                                             10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+876                                  M. J. ZAHR, P. AVERY AND C. FARHAT
+
+
+
+
+Figure 7. Impact of a nonlinear elastic cylinder with a composite microstructure: sequence of macroscale
+                           solution snapshots with Von Mises stress contours.
+
+
+   For this problem, all simulations are performed on Excalibur, a Cray XC40 with up to 3166
+compute nodes with dual-socket Intel Xeon E5-2698 v3 CPUs (16 core/socket), 128 GB of DDR3
+memory/node, a dedicated Cray Aries high-speed network, and a Lustre shared filesystem tuned for
+parallel I/O. Unless otherwise noted, they are terminated at time tf = 1 × 10−6 s. A sequence of
+solution snapshots illustrating the propagation of the stress wave over the course of a Model I×I
+simulation performed using a coarser variant of the macroscale HDM (see below) is presented in
+Figure 7.
+   A nonlinear PROM of primal basis dimension r1 = 9 and dual basis dimension 9 is constructed
+for the microscale by exercising a variant of the macroscale HDM characterized by a much coarser
+FE mesh (in this case, a FE mesh with 432 elements only) during the entire time-interval 0 ⩽ t ⩽
+1 × 10−6 s, keeping the microscale HDM and its FE mesh unchanged, and sampling a set of (in this
+case every 100th) microscale dual and primal solution snapshots (Section 3.4.2). ECSW equipped
+with the Lawson and Hanson sparse NNLS algorithm and 𝜀 = 0.01 is applied to the microscale mesh
+with |V1 | = 729 elements to generate a reduced counterpart with |V1′ | = 7 elements only (Figure 5).
+
+Copyright © 2017 John Wiley & Sons, Ltd.                      Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                          DOI: 10.1002/nme
+                                                                                                                   10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+              MULTILEVEL MODEL ORDER REDUCTION FOR MULTISCALE PROBLEMS                                     877
+
+  Table II. Impact of a nonlinear elastic cylinder with a composite microstructure: performance appraisal.
+
+                                                                              Wall-clock time     CPU time
+         a
+ Model                 Time-step (s)    # Cores      Wall-clock time (s)      speedup factor    speedup factor
+
+ I×I                     1 × 10−9          1920    3.97 × 106                      N.A.             N.A.
+ I×III                   1 × 10−9          1920    1.01 × 104 (2.76 × 104 )       393 (144)         393 (280)
+ II×III                  1 × 10−9          1920    1.01 × 104 (4.03 × 104 )       392 (98.5)        392 (164)
+ III×III                 1 × 10−9            60    1.34 × 102 (3.81 × 104 )    29,716 (104)     171,398 (180)
+
+ Modelb                    II×III       III×III
+
+ x-displacement (%)        0.025           0.049
+ y-displacement (%)        0.027           0.039
+ z-displacement (%)        0.004           0.155
+a
+  Impact of a nonlinear elastic cylinder with a composite microstructure: wall-clock timings and speedup factors
+(values reported between parentheses are for the wall-clock time and speedup factors obtained when all offline
+costs are accounted for).
+b
+  Global relative errors measured with respect to the Model I×III solution.
+
+
+Then, the aforementioned microscale PROM is equipped with the ECSW approximation based on
+this reduced mesh and its weights and applied to perform a Model I×III simulation based on the
+macroscale HDM with 432,000 elements using the same time-step Δt = 1 × 10−9 s as for the HDM
+computation.
+   It turns out that performing a multiscale Model I×I (or Model I×II) simulation based on the
+macroscale HDM with 432,000 elements and n0 = 1, 325, 620 DOFs and the microscale HDM with
+729 elements and n1 = 2988 DOFs (or the corresponding nonlinear PROM) during the entire time-
+interval 0 ⩽ t ⩽ 1 × 10−6 s is cost prohibitive – which is why the alternative training strategy
+mentioned above was adopted for constructing the microscale PROM. Hence, for this reason,
+   • No simulation was performed for this problem using Model I×II.
+   • For the purpose of assessing the speedup factors delivered by the proposed nonlinear, multiscale
+     PMOR framework, the aforementioned Model I×I simulation based on the macroscale HDM
+     with n0 = 1, 325, 620 was performed in the 100 times shorter time-interval 0 ⩽ t ⩽ 1 × 10−8 s.
+   • For the purpose of assessing the accuracy delivered by this framework, the results of the Model
+     I×III simulation based on the macroscale HDM model with n0 = 1, 325, 620 DOFs and the
+     hyper reduced microscale model described above are adopted in the remainder of this section
+     as reference results.
+   Finally, a nonlinear PROM of dimension r0 = 12 is constructed for the macroscale level using
+snapshots collected during the Model I×III simulation. It is hyper reduced by applying ECSW
+equipped with the Lawson and Hanson sparse NNLS algorithm and 𝜀 = 0.01 to the FE mesh of the
+FE macroscale HDM with 432,000 elements, which generates a reduced mesh with 60 elements only
+(Figure 6). Using this macroscale PROM with and without the ECSW approximation, two additional
+Model II×III and Model III×III simulations are performed. Even though the critical time-steps of
+these two PROM-based simulations are significantly larger than Δt = 1×10−9 s, both are nevertheless
+performed using this time-step because unlike for the previous multiscale problem, time-stepping in
+this case turns out to be limited by accuracy and not stability.
+   Table II reports the speedup factors and global relative errors obtained using the error sampling
+time-step Δs = 1 × 10−9 s, and Figure 8 displays a sample at one node location of the com-
+puted displacement time histories. (The reader is reminded that the speedup factors are in this case
+estimated based on their measured values for computations performed in the shorter time-interval
+0 ⩽ t ⩽ 1 × 10−8 s and that the relative errors are computed with respect to the Model I×III simula-
+tion results (see above)). Note that the number of cores shown in Table II is specifically the number
+of computational units employed for the online part of the computations in the case of models with
+
+Copyright © 2017 John Wiley & Sons, Ltd.                            Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                                DOI: 10.1002/nme
+                                                                                                             10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+878                                  M. J. ZAHR, P. AVERY AND C. FARHAT
+
+
+
+
+Figure 8. Impact of a nonlinear elastic cylinder with a composite microstructure: sample computed time-
+                         history of a displacement degree of freedom at a node.
+
+one or more reduced-order components. For the offline parts of the computations, the resources are
+utilized as follows:
+   • Snapshot collection for the microscale PROM using the coarsened mesh is performed in parallel
+     using 448 cores.
+   • Each ROB and the microscale reduced mesh is computed serially using just one core.
+   • The macroscale reduced mesh is generated in parallel using 1920 cores.
+   • All post-processing reconstructions of the macroscale displacements and velocities are per-
+     formed in parallel for each of the Model II×III and Model III×III simulations using 1920
+     cores.
+  The reader can observe that
+   • Model II×III reproduces the results of Model I×III with an impressive accuracy. However, as
+     expected, it does not deliver any additional speedup compared with Model I×III.
+   • On the other hand,
+      – The Model I×III simulation – which features model reduction and hyper reduction only at
+        the microscale level – delivers a speedup factor of nearly 400 for both wall-clock and CPU
+        time when the offline costs associated with the construction of the microscale PROM are not
+        accounted for in the measurement of these speedup factors. When all offline costs are taken
+        into account, these speedup factors become 144 and 280, respectively.
+      – When none of the offline costs are accounted for other than the reconstruction and writing to
+        disk of the high-dimensional displacement and velocity solutions, the Model III×III simula-
+        tion, which is performed using hyper reduced PROMs at both scales, delivers a wall-clock
+        time speedup factor of almost 30,000 and a CPU time speedup factor of more than 170,000.
+        When all offline costs are taken into account, these speedup factors become 104 and 180,
+        respectively, which is still an achievement: All this, while maintaining an excellent level of
+        accuracy. To put these impressive results into context, a Model I×I simulation would require
+        the allocation of the entire Cray Excalibur system currently ranked 35th on the Top500 List
+        [53] in order to complete the simulation in the time-interval 0 ⩽ t ⩽ 1 × 10−6 in 24 h, while
+        the generalized (reduced) coordinate solution of the Model III×III simulation can be obtained
+        on a mere two compute nodes (60 cores) of this system in less than 2 min delivering a CPU
+        time speedup factor for the purely online part of the computation of more than 1,000,000.
+
+
+                                           5. CONCLUSIONS
+
+This paper describes a highly efficient computational framework for solving structural and solid
+mechanics problems that exhibit multiple, separable scales. This framework uses the concept of a
+
+Copyright © 2017 John Wiley & Sons, Ltd.                      Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                          DOI: 10.1002/nme
+                                                                                                                            10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+               MULTILEVEL MODEL ORDER REDUCTION FOR MULTISCALE PROBLEMS                                             879
+
+locally attached microstructure at N + 1 scales, leverages PMOR techniques to reduce the dimen-
+sionality of the governing equations at all scales, and relies on the ECSW hyper reduction method
+to efficiently evaluate the resulting nonlinear reduced-order terms. It also enforces the scale trans-
+mission conditions without any operation that scales with the size of a HDM. At each scale k =
+1, … , N, the hyper reduced PROM is trained on-the-fly or using an auxiliary, coarser, computa-
+tional macroscale model, which leads to significant speedup factors even in a non-parametric setting.
+For parametric settings, an offline–online decomposition can be used to train the macroscale level
+(k = 0) and deliver a near-real-time multiscale model.
+   Performance results obtained for the two-level instance of this framework (N + 1 = 2) and two
+academic but nevertheless computationally intensive nonlinear, multiscale, dynamic response prob-
+lems show that the proposed nonlinear, multiscale framework for PMOR is capable of delivering
+wall-clock time speedup factors of the order of tens of thousands and CPU time speedup factors of
+the order of millions, while maintaining a desired level of accuracy.
+
+                                                ACKNOWLEDGEMENTS
+The authors acknowledge the support by the Army Research Laboratory (ARL) through the Army
+High Performance Computing Research Center under Cooperative AgreementW911NF-07-2-0027.
+They also thank Dr Raju Namburu at ARL for facilitating access to the Cray system Excalibur,
+and Dr Jarek Knapp and Dr Ken Leiter at ARL for providing a computational model for the Taylor
+impact model and related discussions. The content of this publication does not necessarily reflect the
+position or policy of ARL, and no official endorsement should be inferred.
+
+                                                      REFERENCES
+ 1. Cardoso L, Fritton SP, Gailani G, Benalla M, Cowin SC. Advances in assessment of bone porosity, permeability and
+    interstitial fluid flow. Journal of Biomechanics 2013; 46(2):253– 265.
+ 2. Adams MF, Bayraktar HH, Keaveny TM, Papadopoulos P. Ultrascalable implicit finite element analyses in solid
+    mechanics with over a half a billion degrees of freedom. In Proceedings of the 2004 ACM/IEEE Conference on
+    Supercomputing, IEEE Computer Society, Washington, DC, USA, 2004; 34.
+ 3. Arbenz P, van Lenthe GH, Mennel U, Müller R, Sala M. A scalable multi-level preconditioner for matrix-free 𝜇-
+    finite element analysis of human bone structures. International Journal for Numerical Methods in Engineering 2008;
+    73(7):927– 947.
+ 4. Farhat C, Avery P, Chapman T, Cortial J. Dimensional reduction of nonlinear finite element dynamic models with
+    finite rotations and energy-based mesh sampling and weighting for computational efficiency. International Journal
+    for Numerical Methods in Engineering 2014; 98(9):625– 662.
+ 5. Farhat C, Chapman T, Avery P. Structure-preserving, stability, and accuracy properties of the energy-conserving
+    sampling and weighting method for the hyper reduction of nonlinear finite element dynamic models. International
+    Journal for Numerical Methods in Engineering 2015; 102(5):1077– 1110.
+ 6. Hill R. Continuum micro-mechanics of elastoplastic polycrystals. Journal of the Mechanics and Physics of Solids
+    1965; 13(2):89– 101.
+ 7. Hill R. A self-consistent mechanics of composite materials. Journal of the Mechanics and Physics of Solids 1965;
+    13(4):213– 222.
+ 8. Bensoussan A, Lions J-L, Papanicolaou G. Asymptotic Analysis for Periodic Structures, vol. 5. North-Holland
+    Publishing Company Amsterdam, 1978.
+ 9. Fish J, Fan R. Mathematical homogenization of nonperiodic heterogeneous media subjected to large deformation
+    transient loading. International Journal for Numerical Methods in Engineering 2008; 76(7):1044– 1064.
+10. Hill R. Elastic properties of reinforced solids: some theoretical principles. Journal of the Mechanics and Physics of
+    Solids 1963; 11(5):357– 372.
+11. Van der Sluis O, Schreurs P, Brekelmans W, Meijer H. Overall behaviour of heterogeneous elastoviscoplastic
+    materials: effect of microstructural modelling. Mechanics of Materials 2000; 32(8):449– 462.
+12. Smit R, Brekelmans W, Meijer H. Prediction of the mechanical behavior of nonlinear heterogeneous systems by multi-
+    level finite element modeling. Computer Methods in Applied Mechanics and Engineering 1998; 155(1):181– 192.
+13. Miehe C, Schröder J, Schotte J. Computational homogenization analysis in finite plasticity simulation of tex-
+    ture development in polycrystalline materials. Computer Methods in Applied Mechanics and Engineering 1999;
+    171(3):387– 418.
+14. Feyel F, Chaboche J-L. FE2 multiscale approach for modelling the elastoviscoplastic behaviour of long fibre SiC/Ti
+    composite materials. Computer Methods in Applied Mechanics and Engineering 2000; 183(3):309– 330.
+15. Kouznetsova V, Brekelmans W, Baaijens F. An approach to micro– macro modeling of heterogeneous materials.
+    Computational Mechanics 2001; 27(1):37– 48.
+
+Copyright © 2017 John Wiley & Sons, Ltd.                                 Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                                    DOI: 10.1002/nme
+                                                                                                                          10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+880                                     M. J. ZAHR, P. AVERY AND C. FARHAT
+
+
+16. Yvonnet J, He Q-C. The reduced model multiscale method (R3M) for the non-linear homogenization of hyperelastic
+    media at finite strains. Journal of Computational Physics 2007; 223(1):341– 368.
+17. Monteiro E, Yvonnet J, He Qi-C. Computational homogenization for nonlinear conduction in heterogeneous materials
+    using model reduction. Computational Materials Science 2008; 42(4):704– 712.
+18. Nguyen NC. A multiscale reduced-basis method for parametrized elliptic partial differential equations with multiple
+    scales. Journal of Computational Physics 2008; 227(23):9807– 9822.
+19. Abdulle A, Bai Y. Adaptive reduced basis finite element heterogeneous multiscale method. Computer Methods in
+    Applied Mechanics and Engineering 2013; 257:203– 220.
+20. Hernández J, Oliver J, Huespe AE, Caicedo M, Cante J. High-performance model reduction techniques in computa-
+    tional multiscale homogenization. Computer Methods in Applied Mechanics and Engineering 2014; 276:149– 189.
+21. Redeker M, Haasdonk B. A POD-EIM reduced two-scale model for crystal growth. Advances in Computational
+    Mathematics 2015; 41(5):987– 1013.
+22. Barrault M, Maday Y, Nguyen NC, Patera AT. An ‘empirical interpolation’ method: application to efficient reduced-
+    basis discretization of partial differential equations. Comptes Rendus Mathematique 2004; 339(9):667– 672.
+23. Chaturantabut S, Sorensen DC. Nonlinear model reduction via discrete empirical interpolation. SIAM Journal on
+    Scientific Computing 2010; 32(5):2737– 2764.
+24. Ohlberger M, Schindler F. Error control for the localized reduced basis multiscale method with adaptive on-line
+    enrichment. SIAM Journal on Scientific Computing 2015; 37(6):A2865– A2895.
+25. Hesthaven JS, Zhang S, Zhu X. Reduced basis multiscale finite element methods for elliptic problems. Multiscale
+    Modeling & Simulation 2015; 13(1):316– 337.
+26. Yvonnet J, Zahrouni H, Potier-Ferry M. A model reduction method for the post-buckling analysis of cellular
+    microstructures. Computer Methods in Applied Mechanics and Engineering 2007; 197(1):265– 280.
+27. Fish J, Yuan Z. N-scale Model Reduction Theory. Oxford University Press: USA, 2008.
+28. Abdulle A, Bai Y. Reduced basis finite element heterogeneous multiscale method for high-order discretizations of
+    elliptic homogenization problems. Journal of Computational Physics 2012; 231(21):7014– 7036.
+29. Abdulle A, Bai Y, Vilmart G. An offline – online homogenization strategy to solve quasilinear two-scale problems at
+    the cost of one-scale problems. International Journal for Numerical Methods in Engineering 2014; 99(7):469– 486.
+30. Abdulle A, Bai Y, Vilmart G. Reduced basis finite element heterogeneous multiscale method for quasilinear elliptic
+    homogenization problems. Discrete and Continuous Dynamical Systems-Series S 2014; 8(1):91– 118.
+31. Balajewicz M, Amsallem D, Farhat C. Projection-based model reduction for contact problems. International Journal
+    for Numerical Methods in Engineering 2015;106:644– 663.
+32. Pina J, Kouznetsova V, Geers M. Thermo-mechanical analyses of heterogeneous materials with a strongly anisotropic
+    phase: the case of cast iron. International Journal of Solids and Structures 2015; 63:153– 166.
+33. Sirovich L. Turbulence and the dynamics of coherent structures. Part i: coherent structures. Quarterly of Applied
+    Mathematics 1987; 45(3):561– 571.
+34. Ryckelynck D. A priori hyperreduction method: an adaptive approach. Journal of Computational Physics 2005;
+    202(1):346– 366.
+35. Carlberg K, Farhat C. A low-cost, goal-oriented ‘compact proper orthogonal decomposition’ basis for model reduction
+    of static systems. International Journal for Numerical Methods in Engineering 2011; 86(3):381– 402.
+36. Zahr MJ, Farhat C. Progressive construction of a parametric reduced-order model for PDE-constrained optimization.
+    International Journal for Numerical Methods in Engineering 2015; 102(5):1111– 1135.
+37. Grepl MA, Maday Y, Nguyen NC, Patera AT. Efficient reduced-basis treatment of nonaffine and nonlinear partial
+    differential equations. ESAIM: Mathematical Modelling and Numerical Analysis 2007; 41(03):575– 605.
+38. An SS, Kim T, James DL. Optimizing cubature for efficient integration of subspace deformations. ACM Transactions
+    on Graphics (TOG) 2008; 27(5):165:1– 165:10.
+39. Nguyen N, Peraire J. An efficient reduced-order modeling approach for non-linear parametrized partial differential
+    equations. International Journal for Numerical Methods in Engineering 2008; 76(1):27– 55.
+40. Astrid P, Weiland S, Willcox K, Backx T. Missing point estimation in models described by proper orthogonal
+    decomposition. Automatic Control, IEEE Transactions on 2008; 53(10):2237– 2251.
+41. Carlberg K, Bou-Mosleh C, Farhat C. Efficient non-linear model reduction via a least-squares Petrov– Galerkin pro-
+    jection and compressive tensor approximations. International Journal for Numerical Methods in Engineering 2011;
+    86(2):155– 181.
+42. Carlberg K, Farhat C, Cortial J, Amsallem D. The GNAT method for nonlinear model reduction: effective implemen-
+    tation and application to computational fluid dynamics and turbulent flows. Journal of Computational Physics 2013;
+    242(C):623– 647.
+43. Rewieński M, White J. Model order reduction for nonlinear dynamical systems based on trajectory piecewise-linear
+    approximations. Linear Algebra and its Applications 2006; 415(2):426– 454.
+44. Chapman T, Avery P, Collins JP, Farhat C. Accelerated mesh sampling for the hyper reduction of nonlinear
+    computational methods. International Journal for Numerical Methods in Engineering 2016;109:1623– 1654 .
+45. Lawson CL, Hanson RJ. Solving least squares problems, 1974;109:1623– 1654.
+46. Rozza G. Shape design by optimal flow control and reduced basis techniques: applications to bypass configurations
+    in haemodynamics. Ph.D. Thesis, EPFL, Lausanne, 2005.
+47. Lvgren AE, Maday Y, Ronquist EM. Reduced basis element method for the steady Stokes problem. ESAIM:
+    Mathematical Modelling and Numerical Analysis 2006; 40:529– 552.
+
+Copyright © 2017 John Wiley & Sons, Ltd.                               Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                                  DOI: 10.1002/nme
+                                                                                                                             10970207, 2017, 8, Downloaded from https://onlinelibrary.wiley.com/doi/10.1002/nme.5535 by Spanish Cochrane National Provision (Ministerio de Sanidad), Wiley Online Library on [30/07/2026]. See the Terms and Conditions (https://onlinelibrary.wiley.com/terms-and-conditions) on Wiley Online Library for rules of use; OA articles are governed by the applicable Creative Commons License
+               MULTILEVEL MODEL ORDER REDUCTION FOR MULTISCALE PROBLEMS                                              881
+
+48. Rozza G, Huynh DBP, Patera AT. Reduced basis approximation and a posteriori error estimation for affinely
+    parametrized elliptic coercive partial differential equations. Archives of Computational Methods in Engineering 2008;
+    15(3):229– 275.
+49. Knap J, Spear C, Leiter K, Becker R, Powell D. A computational framework for scalebridging in multiscale
+    simulations. International Journal for Numerical Methods in Engineering 2016;108:1649– 1666.
+50. Farhat C, Geuzaine P, Brown G. Application of a three-field nonlinear fluid-structure formulation to the prediction of
+    the aeroelastic parameters of an F-16 fighter. Computers & Fluids 2003; 32:3– 29.
+51. Geuzaine P, Brown G, Harris C, Farhat C. Aeroelastic dynamic analysis of a full F-16 configuration for various flight
+    conditions. AIAA Journal 2003; 41:363– 371.
+52. Taylor G. The use of flat-ended projectiles for determining dynamic yield stress. I. Theoretical considera-
+    tions. Proceedings of the Royal Society of London A: Mathematical, Physical and Engineering Sciences 1948;
+    194(1038):289– 299.
+53. Top500: TOP 500 supercomputer sites, 2016. http://www.top500.org. Accessed on October 1, 2016.
+
+
+
+
+Copyright © 2017 John Wiley & Sons, Ltd.                                 Int. J. Numer. Meth. Engng 2017; 112:855–881
+                                                                                                     DOI: 10.1002/nme
+
