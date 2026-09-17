@@ -1,5 +1,6 @@
 """Read-only source/artifact checks; write only the validation report."""
 from collections import Counter
+import argparse
 from pathlib import Path
 import hashlib
 import json
@@ -11,6 +12,10 @@ ROOT = HERE.parent
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--build-dir", type=Path, default=HERE,
+                        help="Directory containing compiled PDFs and logs.")
+    build_dir = parser.parse_args().build_dir.resolve()
     paths = []
     def expand(path):
         paths.append(path)
@@ -29,14 +34,22 @@ def main():
     assert not duplicates(labels), duplicates(labels)
     assert set(cites) == set(keys), (set(cites)-set(keys), set(keys)-set(cites))
     assert not set(refs)-set(labels), set(refs)-set(labels)
+    learned = (HERE/"sections/learned_laws.tex").read_text()
+    # The comparison summarizes definitions and guarantees; it must not
+    # introduce input dimensions or saved-parameter checks ahead of them.
+    assert learned.index(r"\label{eq:features}") < learned.index("$m=32$")
+    assert learned.index("$m=32$") < learned.index(r"\label{tab:tiers}")
+    assert learned.index(r"\label{eq:lowerbound}") < learned.index(r"\label{tab:tiers}")
+    assert learned.index("objective input vector") < learned.index(r"\label{eq:free}")
     assert "aresdeparga2026nonlinear" in keys
     main_text = src.split(r"\appendix", 1)[0]
     section_matches = list(re.finditer(r"\\section\{([^}]+)\}", main_text))
     section_titles = [match.group(1) for match in section_matches]
     assert section_titles[0] == "Introduction"
     introduction = main_text[section_matches[0].start():section_matches[1].start()]
-    assert r"\label{tab:literature}" in introduction, "Literature table must be inside Introduction"
+    assert r"\label{tab:literature}" not in src, "Superseded literature table must not be included"
     assert r"\label{sec:discussion}" in introduction, "Positioning must be inside Introduction"
+    assert r"\begin{tikzpicture}" in introduction, "Figure 1 must use native LaTeX typography"
     assert "Position relative to prior work and limitations" not in section_titles
     assert section_titles[-1] == "Conclusions"
     assert r"\subsection{Physics-augmented neural networks}" in introduction
@@ -49,6 +62,22 @@ def main():
     assert keys == list(dict.fromkeys(cites)), "Bibliography is not in first-citation order"
     figures = re.findall(r"\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}", src)
     assert all((HERE/"figures"/f).is_file() for f in figures)
+    # The supplement preserves evidence removed from the main reading path.
+    supplemental = expand(HERE / "supplementary.tex")
+    supplemental_labels = re.findall(r"\\label\{([^}]+)\}", supplemental)
+    supplemental_refs = re.findall(r"\\(?:ref|eqref)\{([^}]+)\}", supplemental)
+    assert not duplicates(supplemental_labels), duplicates(supplemental_labels)
+    assert not set(supplemental_refs)-set(supplemental_labels)
+    supplemental_figures = re.findall(r"\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}", supplemental)
+    assert all((HERE/"figures"/f).is_file() for f in supplemental_figures)
+    assert "probe_errors.pdf" not in figures
+    assert "probe_errors.pdf" in supplemental_figures
+    assert r"\label{tab:rankone}" in supplemental
+    assert r"\label{tab:rankone}" not in src
+    assert r"\input{tables/constitutive_probe_errors.tex}" in (HERE/"supplementary.tex").read_text()
+    assert "probe" not in (HERE/"tables/constitutive_errors.tex").read_text()
+    assert r"\label{sec:material_b}" in src and r"\pendingresult{" in src
+    assert src.index(r"\label{sec:coupon}") < src.index(r"\label{sec:material_a_reduction}")
     renames = json.loads((HERE/"audit/new_sources/rename_manifest.json").read_text())
     for entry in renames:
         target = Path(entry["target"])
@@ -61,12 +90,28 @@ def main():
     assert methods["secondary_dimension"] == 36
     assert methods["coordinate_transform_identity_error"] < 1e-10
     assert methods["orthogonality_V_Vbar"] < 1e-10
-    log = (HERE/"manuscript.log").read_text(errors="replace")
+    constitutive_audit_path = HERE/"audit/section4_selected_models_20260910.json"
+    constitutive_audit = json.loads(constitutive_audit_path.read_text())
+    for relative, expected in constitutive_audit["source_sha256"].items():
+        assert hashlib.sha256((ROOT.parent/relative).read_bytes()).hexdigest() == expected, relative
+    assert constitutive_audit["unit_tests"]["status"] == "passed"
+    assert len(constitutive_audit["results"]) == 2
+    for result in constitutive_audit["results"].values():
+        assert result["gradcheck"] and result["gradgradcheck"]
+        assert result["nonnegative_energy_certificate"]["certified"]
+    log = (build_dir/"manuscript.log").read_text(errors="replace")
     bad = [line for line in log.splitlines()
            if ("undefined" in line.lower() or "Overfull" in line
                or "multiply defined" in line.lower() or line.startswith("!"))]
     assert not bad, bad
-    info = subprocess.check_output(["pdfinfo", str(HERE/"manuscript.pdf")], text=True)
+    supplemental_log = (build_dir/"supplementary.log").read_text(errors="replace")
+    supplemental_bad = [line for line in supplemental_log.splitlines()
+                        if ("undefined" in line.lower() or "Overfull" in line
+                            or "multiply defined" in line.lower() or line.startswith("!"))]
+    assert not supplemental_bad, supplemental_bad
+    supplemental_info = subprocess.check_output(["pdfinfo", str(build_dir/"supplementary.pdf")], text=True)
+    supplemental_pages = int(re.search(r"Pages:\s+(\d+)", supplemental_info).group(1))
+    info = subprocess.check_output(["pdfinfo", str(build_dir/"manuscript.pdf")], text=True)
     pages = int(re.search(r"Pages:\s+(\d+)", info).group(1))
     report = {
         "status": "passed", "scope": "source consistency, PDF log, input hashes; no simulation or network test",
@@ -74,12 +119,21 @@ def main():
         "main_sections": section_titles,
         "literature_and_positioning_in_introduction": True,
         "pann_prom_framing_and_frontmatter": True,
-        "figures": len(figures), "tables": len(re.findall(r"\\begin\{(?:table|longtable)\}", src)),
+        "figures": len(re.findall(r"\\begin\{figure\}", src)),
+        "native_latex_figures": len(re.findall(r"\\begin\{tikzpicture\}", src)),
+        "tables": len(re.findall(r"\\begin\{(?:table|longtable)\}", src)),
         "labels": len(labels), "referenced_labels": len(set(refs)),
         "new_pdf_renames_verified": len(renames),
+        "constitutive_audit_sha256": hashlib.sha256(constitutive_audit_path.read_bytes()).hexdigest(),
+        "frozen_constitutive_audits_verified": len(constitutive_audit["results"]),
         "source_files": [str(p.relative_to(HERE)) for p in paths],
         "source_sha256": {str(p.relative_to(HERE)):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths},
-        "pdf_sha256": hashlib.sha256((HERE/"manuscript.pdf").read_bytes()).hexdigest(),
+        "pdf_sha256": hashlib.sha256((build_dir/"manuscript.pdf").read_bytes()).hexdigest(),
+        "supplementary_pages": supplemental_pages,
+        "supplementary_pdf_sha256": hashlib.sha256((build_dir/"supplementary.pdf").read_bytes()).hexdigest(),
+        "supplementary_log_issues": supplemental_bad,
+        "material_b_status": "planned; no results",
+        "build_dir": str(build_dir),
         "log_issues": bad,
         "remaining_nonfatal_warnings": [line for line in log.splitlines() if "Underfull" in line],
     }

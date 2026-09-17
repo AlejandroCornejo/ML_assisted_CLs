@@ -3,6 +3,9 @@ from pathlib import Path
 import hashlib
 import json
 import sys
+import os
+import shutil
+import subprocess
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -11,7 +14,6 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
 
 FIG = HERE / "figures"
 
@@ -22,56 +24,27 @@ def save(fig, name):
     plt.close(fig)
 
 
-def hierarchy():
-    fig, ax = plt.subplots(figsize=(9, 6.0))
-    ax.set(xlim=(0, 10), ylim=(0, 7.1))
-    ax.axis("off")
-    colors = {"full": "#eef0f3", "micro": "#e7f0f8", "learn": "#e9f3ec"}
-
-    def box(x, y, width, height, title, body, color):
-        ax.add_patch(FancyBboxPatch((x, y), width, height,
-                                   boxstyle="round,pad=0.06,rounding_size=0.08",
-                                   facecolor=color, edgecolor="#768292", lw=.8))
-        ax.text(x+width/2, y+height-.22, title, ha="center", va="center",
-                fontsize=9.2, fontweight="bold")
-        ax.text(x+width/2, y+height/2-.12, body, ha="center", va="center",
-                fontsize=8.2, linespacing=1.40)
-
-    def arrow(a, b):
-        ax.add_patch(FancyArrowPatch(a, b, arrowstyle="-|>", mutation_scale=11,
-                                    lw=1, color="#536273"))
-
-    box(2.15, 5.80, 5.7, 1.0, "Periodic microscopic HDM",
-        "Displacement snapshots and effective responses\nFixed material and training domain", colors["full"])
-    arrow((3.4, 5.74), (2.45, 5.06))
-    arrow((6.6, 5.74), (7.55, 5.06))
-    box(.25, 3.8, 4.4, 1.20, "Projection-based state approximation",
-        r"Affine: $u_{\rm ref}+V_{\rm tra}q_{\rm tra}$"
-        "\n" + r"Nonlinear: $u_{\rm ref}+Vq+\overline{V}\,\mathcal{N}(q)$",
-        colors["micro"])
-    box(5.35, 3.8, 4.4, 1.20, "PANNs and regression baselines",
-        "Regression: stress output\nFree: unconstrained energy\nICNN / ICKAN: constrained energy",
-        colors["learn"])
-    arrow((2.45, 3.74), (2.45, 3.33))
-    arrow((7.55, 3.74), (7.55, 3.33))
-    box(.25, 1.72, 4.4, 1.55, "Hyperreduced-order models",
-        "HPROM: fixed ECM + equilibrium\n"
-        "HPROM–ANN: adaptive ECM + equilibrium\n"
-        "D-HPROM–ANN: direct stress cubature\n"
-        "Local material law on selected elements",
-        colors["micro"])
-    box(5.35, 1.72, 4.4, 1.55, "Direct constitutive evaluation",
-        "No microscopic mesh or equilibrium solve\n"
-        "Energy models: differentiate the potential\n"
-        "Regression: differentiate the stress map\n"
-        "Guarantees depend on the architecture",
-        colors["learn"])
-    arrow((2.45, 1.66), (3.55, 1.12))
-    arrow((7.55, 1.66), (6.45, 1.12))
-    box(2.15, .15, 5.7, .92, "Common macroscopic FE solver",
-        "Same mesh, loading and stopping criteria\nStress and tangent interface",
-        colors["full"])
-    save(fig, "model_hierarchy")
+def native_diagram(stem):
+    """Build PDF/PNG previews from the same native LaTeX figure used in the paper."""
+    engine = os.environ.get("TECTONIC") or shutil.which("tectonic")
+    fallback = Path("/tmp/coupon-manuscript-tools/tectonic")
+    if engine is None and fallback.is_file():
+        engine = str(fallback)
+    if engine is None:
+        raise RuntimeError("Set TECTONIC to a Tectonic executable to build figure previews.")
+    FIG.mkdir(exist_ok=True)
+    env = dict(os.environ)
+    env.setdefault("XDG_CACHE_HOME", "/tmp/coupon-tectonic-cache")
+    subprocess.run(
+        [engine, "--outdir", str(FIG), f"{stem}_standalone.tex"],
+        cwd=FIG, env=env, check=True,
+    )
+    (FIG / f"{stem}_standalone.pdf").replace(FIG / f"{stem}.pdf")
+    subprocess.run(
+        ["pdftoppm", "-singlefile", "-r", "220", "-png",
+         str(FIG / f"{stem}.pdf"), str(FIG / stem)],
+        check=True,
+    )
 
 
 def pod_diagnostic():
@@ -128,7 +101,9 @@ if __name__ == "__main__":
     plt.rcParams.update({"font.family": "serif", "font.size": 9,
                          "pdf.fonttype": 42, "ps.fonttype": 42})
     FIG.mkdir(exist_ok=True)
-    hierarchy()
+    native_diagram("model_hierarchy")
+    native_diagram("cubature_matrices")
+    native_diagram("convex_core_architectures")
     result = pod_diagnostic()
     (HERE / "method_figures_manifest.json").write_text(json.dumps(result, indent=2)+"\n")
     print(json.dumps(result, indent=2))

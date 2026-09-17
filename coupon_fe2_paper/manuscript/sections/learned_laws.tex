@@ -1,53 +1,101 @@
 \section{Learned constitutive laws}
 \label{sec:learned}
-\input{sections/mechanical_requirements}
-\subsection{What is changed between the four learned models?}
-\label{sec:tiers}
-Table~\ref{tab:tiers} compares the actual model families used in this study. It is deliberately separate from the literature comparison: a property of our implementation is not automatically attributed to an entire class of published methods.
-\begin{table}[htbp]
-\centering\small
-\caption{Learned constitutive models in the present comparison. ``Not imposed'' is not synonymous with ``fails at every state''.}
-\label{tab:tiers}
-\begin{tabularx}{\linewidth}{lYYYY}
-\toprule
- & Regression & Free & ICNN & ICKAN\\
-\midrule
-Network input & $E_{11},E_{22},\gamma_{12}$ & $C_{11}-1,C_{22}-1,C_{12},J-1$ & 32 paired features & 32 paired features\\
-Network output & Three stresses & Scalar energy & Scalar energy core & Scalar energy core\\
-Potential structure & Not imposed & Exact & Exact & Exact\\
-Objectivity & Objective strain input and material stress output & Exact & Exact & Exact\\
-Reference energy/stress & Not imposed & Exact normalization & Exact normalization & Exact normalization\\
-Polyconvexity & Not imposed & Not imposed & By construction & By construction\\
-Global $W\geq0$ & No potential & Not guaranteed & Separate saved-weight bound & Separate saved-weight bound\\
-\bottomrule
-\end{tabularx}
-\end{table}
+The models of Section~\ref{sec:reduced} reconstruct microscopic displacements and evaluate the constituent law. The non-intrusive route instead learns the effective constitutive map itself, without reconstructing the RVE state online. Given pairs of macroscopic strains and effective stresses, the most direct approach is to train a neural network to predict the three stress components from $\ee$. We call this model \emph{Regression}. Choosing objective strain inputs and a symmetric material-stress output preserves the corresponding transformation properties. It does not, however, ensure that the predicted stresses derive from a stored energy: fitting their values at sampled states does not enforce compatibility between their cross derivatives. The fitted law can therefore perform nonzero net work around a closed strain cycle, even when its training data come from a hyperelastic material~\cite{asad2022}.
 
-Regression directly approximates $\ee\mapsto\ssv$ with three outputs. The Free model instead defines an unconstrained energy network $\widetilde W(\ee)$ and applies
+A natural way to remove this inconsistency is to learn one scalar energy and obtain every stress component by differentiation, $\ssv=\nabla_{\ee}W$. The stress predictions are then linked by a common potential rather than fitted as independent outputs. As'ad et al.~\cite{asad2022} use this distinction to introduce a hyperelastic ANN alongside direct stress regression. We adopt the same potential-based principle for an energy baseline termed \emph{Free}: the name indicates that no convexity constraint is imposed on its energy network, not that the model is devoid of mechanical structure. Its objective inputs and reference normalization retain a stress-free, zero-energy reference state, while energy differentiation enforces a conservative constitutive response.
+
+Learning a potential leaves a further question unanswered: what restrictions should be placed on its shape? A smooth energy alone does not ensure rank-one convexity or prevent finite-energy volume collapse. As'ad et al.~\cite{asad2022} also consider an energy convex in the Green--Lagrange strain. Here we pursue a different condition, polyconvexity, by constructing an energy convex in independent deformation minors. The distinction matters at finite strain and is made precise below. We realize this construction with two alternative cores, an input-convex neural network (ICNN) and an input-convex Kolmogorov--Arnold network (ICKAN), coupled to the same directional-feature family and analytic normalization and growth terms.
+
+The two baselines isolate different constitutive choices. We use the following short names consistently in the text, figures, and tables:
+\begin{itemize}
+ \item \textbf{Regression: direct stress regression.} The network predicts three stress components from $\ee$, without imposing a common energy potential. Objective inputs and a symmetric stress output are retained.
+ \item \textbf{Free: hyperelastic energy without convexity constraints.} The network represents one scalar potential, and stresses follow by differentiation. The energy is normalized to zero energy and stress at the reference state; ``Free'' refers specifically to the absence of convexity constraints.
+\end{itemize}
+ICNN and ICKAN complete the comparison as two realizations of the proposed polyconvex energy. To specify what each choice guarantees, we first state the mechanical criteria and distinguish potential structure from finite-strain stability. We then detail the baselines, construct the features and cores, and establish the properties of the complete energy. Throughout this section, $\F\in\GL$ and $J=\det\F>0$. Derivatives with respect to deformation are taken with the learned parameters fixed.
+\input{sections/mechanical_requirements}
+\subsection{Direct stress and unconstrained-energy baselines}
+\label{sec:tiers}
+Regression directly approximates $\ee\mapsto\ssv$ with three stress outputs. The Free model instead uses the objective input vector $(C_{11}-1,C_{22}-1,C_{12},J-1)^T$ and returns one scalar energy. Since $\C=\I+2\E$ and $J=\sqrt{\det\C}$, these four inputs are functions of the same three strain components. Writing the resulting composite map as $\widetilde W(\ee)$, we impose the reference conditions through
 \begin{equation}
  W_{\mathrm{free}}(\ee)=\widetilde W(\ee)-\widetilde W(\bm0)
  -\partial_{\ee}\widetilde W(\bm0)\cdot\ee.
  \label{eq:free}
 \end{equation}
-This enforces zero reference energy and stress without enforcing polyconvexity. The four Free inputs are redundant coordinates of the same three-dimensional strain state; they are not four independent loading parameters. Its use of material-coordinate components of $\C$ does not impose isotropy. Reference-axis changes must transform the material directions together with the tensor components.
+This enforces zero reference energy and stress without enforcing polyconvexity. Using material-coordinate components of $\C$ does not impose isotropy. Reference-axis changes must transform the material directions together with the tensor components.
 
-\subsection{Paired directional features}
-For each feature, let $\bm d_i=(\cos\theta_i,\sin\theta_i)^T$ and $\bm d_i^\perp=(-\sin\theta_i,\cos\theta_i)^T$. Define
+\subsection{Feature design: expressiveness and admissibility}
+\label{sec:feature_order}
+The directional construction can be understood as a continuation of invariant-based constitutive modeling. For a three-dimensional right Cauchy--Green tensor $\C_3$, the familiar first, second, and third principal invariants are
 \begin{equation}
- z_i(\F,J)=\frac{\|\F\bm d_i\|^{2p_i}}{p_i J^{b_i}}
+ I_1^{(3)}=\tr\C_3,\qquad
+ I_2^{(3)}=\tfrac12\bigl[(\tr\C_3)^2-\tr(\C_3^2)\bigr],\qquad
+ I_3^{(3)}=\det\C_3.
+ \label{eq:classical_invariants}
+\end{equation}
+They describe principal stretches without recording their orientation relative to the material. An energy depending only on these scalars is therefore isotropic. In the present two-dimensional setting, the corresponding two independent principal invariants are $I_1=\tr\C$ and $\det\C=J^2$; a third independent principal invariant is not available.
+
+To retain directional information, one can supplement the isotropic measures with a structural direction $\bm d$. The familiar anisotropic stretch invariant is
+\begin{equation}
+ I_4(\bm d)=\bm d^T\C\bm d
+          =\C:(\bm d\otimes\bm d)=\|\F\bm d\|^2,
+ \qquad \|\bm d\|=1.
+ \label{eq:directional_invariant}
+\end{equation}
+It measures squared stretch along a material direction and remains unchanged by a superposed spatial rotation. Such directional invariants are standard ingredients of anisotropic hyperelastic energies~\cite{SchroderNeff2003,Gasser2006}. Here $\bm d$ need not represent a physical fiber: learned directions provide objective scalar descriptors of the RVE's effective anisotropy. For an orthonormal pair $(\bm d,\bm d^\perp)$ in two dimensions,
+\begin{equation}
+ I_4(\bm d)+I_4(\bm d^\perp)=I_1,\qquad
+ \|\cof\F\,\bm d\|^2=I_4(\bm d^\perp).
+ \label{eq:directional_invariant_2d}
+\end{equation}
+The second identity also connects cofactor-based directional measures to this same in-plane stretch description.
+
+Consider a feature vector $\bm z(\F)$ and a scalar core $H$ nondecreasing in each input. For any two deformation states,
+\begin{equation}
+ \bm z(\F_B)\geq\bm z(\F_A)\text{ componentwise}
+ \quad\Longrightarrow\quad H(\bm z(\F_B))\geq H(\bm z(\F_A)).
+ \label{eq:feature_ordering}
+\end{equation}
+This implication holds regardless of the network's width. If the complete constitutive energy is $W=H(\bm z)+W_{\rm corr}$, where $W_{\rm corr}$ collects the analytic normalization and growth terms, the ordered quantity is $W-W_{\rm corr}$, not $W$ alone. Thus a decreasing target energy along such a path indicates an obstruction only after the complete correction is accounted for. The diagnosis must examine the feature map and analytic terms together.
+
+This observation explains why the choice of an admissible feature construction can matter more than the capacity of its convex core. Changing the number of features does not change the number of independent strains: the features remain functions of the same three engineering-strain components. They embed that state into variables on which the network is constrained to be monotone and convex. Additional features can enlarge the admissible response family, but their number alone does not prove completeness.
+
+The paired construction below couples directional stretch to volume through admissible determinant exponents. A feature can therefore decrease along a path when its denominator grows sufficiently, even if a numerator increases. Moreover, its reference derivative is controlled analytically, allowing normalization and volumetric stiffness to be set independently.
+
+\subsubsection{Paired directional features}
+Let $m$ denote the number of scalar features. For each $i=1,\ldots,m$, let $\bm d_i=(\cos\theta_i,\sin\theta_i)^T$ and $\bm d_i^\perp=(-\sin\theta_i,\cos\theta_i)^T$. Define
+\begin{equation}
+ \begin{aligned}
+ z_i(\F,J)
+ &=\frac{I_4(\bm d_i)^{p_i}}{p_i J^{b_i}}
+          +\frac{I_4(\bm d_i^\perp)^{q_i}}{q_i J^{c_i}}\\
+ &=\frac{\|\F\bm d_i\|^{2p_i}}{p_i J^{b_i}}
           +\frac{\|\F\bm d_i^\perp\|^{2q_i}}{q_i J^{c_i}},
+ \end{aligned}
  \label{eq:features}
 \end{equation}
-with
+where $\theta_i$ sets the orientation of the reference directions, $p_i,q_i$ are the powers of the squared-stretch invariants, and $b_i,c_i$ control each contribution's coupling to the area ratio $J$. The exponents satisfy
 \begin{equation}
  p_i,q_i\geq\tfrac12,\qquad
  0\leq b_i\leq2p_i-1,\qquad 0\leq c_i\leq2q_i-1.
  \label{eq:featureconstraints}
 \end{equation}
-The parameters $\theta_i,p_i,q_i,b_i,c_i$ are learned subject to Eq.~\eqref{eq:featureconstraints}. The powers use a shifted softplus parametrization, and the determinant exponents use sigmoid fractions of their admissible upper bounds. The paired terms need not have equal exponents. Consequently, pairing perpendicular directions does not impose invariance under their interchange.
+The parameters $\theta_i,p_i,q_i,b_i,c_i$ are learned subject to Eq.~\eqref{eq:featureconstraints}. We use $\operatorname{softplus}(x)=\log(1+e^x)$ and $\operatorname{sigmoid}(x)=(1+e^{-x})^{-1}$, whose ranges for $x\in\R$ are $(0,\infty)$ and $(0,1)$, respectively. With unconstrained parameters $\widehat p_i,\widehat q_i,\widehat b_i,\widehat c_i\in\R$, set
+\begin{equation}
+ \begin{aligned}
+ p_i&=\tfrac12+\operatorname{softplus}(\widehat p_i),
+ &b_i&=(2p_i-1)\operatorname{sigmoid}(\widehat b_i),\\
+ q_i&=\tfrac12+\operatorname{softplus}(\widehat q_i),
+ &c_i&=(2q_i-1)\operatorname{sigmoid}(\widehat c_i).
+ \end{aligned}
+ \label{eq:feature_parameterization}
+\end{equation}
+The angles are unconstrained. These transformations preserve the inequalities during training; a penalty loss is not needed to enforce them. For finite real values of the unconstrained parameters, the bounds in Eq.~\eqref{eq:featureconstraints} hold strictly; boundary values are approached as limits. Each $z_i$ is one scalar feature containing two perpendicular contributions. The two contributions need not have equal exponents. Consequently, pairing perpendicular directions does not impose invariance under their interchange. In the numerical example of Section~\ref{sec:cell}, both cores use $m=32$ paired features.
+
+Besides ensuring convexity, the paired construction makes the reference strain gradient of each feature isotropic. Consequently, the neural contribution has an isotropic reference stress, which a single scalar determinant correction can cancel in Section~\ref{sec:energy_admissibility}. The following result records the properties needed for that construction.
 
 \begin{proposition}
-Each feature in Eq.~\eqref{eq:features} is objective and convex in the independent variables $(\F,J)$ on $J>0$. Its value and engineering-strain gradient at the identity are
+\label{prop:paired_features}
+Under the constraints in Eq.~\eqref{eq:featureconstraints}, each feature in Eq.~\eqref{eq:features} is objective and convex in the independent variables $(\F,J)$ on $J>0$. Its value and engineering-strain gradient at the identity, evaluated with $J=\det\F$, are
 \begin{equation}
  z_i^0=\frac1{p_i}+\frac1{q_i},\qquad
  \partial_{\ee}z_i\big|_{\bm0}=\rho_i(1,1,0)^T,
@@ -55,45 +103,52 @@ Each feature in Eq.~\eqref{eq:features} is objective and convex in the independe
  \label{eq:referencefeatures}
 \end{equation}
 \end{proposition}
-\begin{proof}
-The map $\|\bm x\|^a J^{-b}$ is jointly convex for $a\geq1$ and $0\leq b\leq a-1$, as shown in Appendix~\ref{app:convex}. Composition with the linear maps $\F\mapsto\F\bm d_i$ and $\F\mapsto\F\bm d_i^\perp$ proves convexity. Norms are unchanged by left rotations, proving objectivity. At the identity, differentiating the two numerators yields $2\bm d_i\otimes\bm d_i$ and $2\bm d_i^\perp\otimes\bm d_i^\perp$ with respect to $\E$. Their sum is $2\I$. The determinant factors contribute $-(b_i/p_i+c_i/q_i)\I$, giving Eq.~\eqref{eq:referencefeatures}.
-\end{proof}
+The proof is given in Appendix~\ref{app:convex}. The mechanism behind the reference gradient is that $1/p_i$ and $1/q_i$ cancel the stretch-power multipliers upon differentiation. The two perpendicular directional contributions then sum to $2\I$, while the determinant terms contribute $-(b_i/p_i+c_i/q_i)\I$. Thus $\rho_i$ is the scalar amplitude of an isotropic reference gradient: its two normal components are equal and its shear component is zero. This reference property does not imply isotropy of the response away from the reference state.
 
-Positive feature scaling and subtraction of a reference feature vector improve numerical conditioning without changing these properties. They are constants with respect to deformation for every frozen parameter set. Learning the directions does not amount to identifying or enforcing a complete material symmetry group. No completeness or universal-approximation theorem is asserted for a finite collection of these features followed by a monotone convex core.
+We condition the core inputs using $y_i=(z_i-z_i^{\rm cen})/s_i$, where $z_i^{\rm cen}$ is a centering value and $s_i>0$ is a scaling factor. Both are independent of deformation for any fixed parameter set. This positive affine transformation preserves convexity in independent $(\F,J)$. The choices used in the numerical example are specified in Section~\ref{sec:constitutive_training}.
 
-\subsection{Reference normalization, growth, and polyconvexity}
-Let $H(\bm z)$ denote a differentiable convex function that is nondecreasing in every feature, absorbing the positive scaling and centering into its definition. Set
-\begin{equation}
- h_i=\partial_{z_i}H(\bm z^0)\geq0,\qquad r=\sum_i h_i\rho_i.
-\end{equation}
-The energy is
-\begin{align}
- W(\F)={}&H(\bm z)-H(\bm z^0)-r(J-1)
- +\alpha(J-1-\log J)+\frac\beta2(J-1)^2\nonumber\\
- &+\varepsilon\left(\frac{\tr\C}{2}-1-\log J\right),
- \qquad \alpha,\beta,\varepsilon>0.
- \label{eq:energy}
-\end{align}
-Affine determinant stress normalization has an established precedent in Linden et al.~\cite{linden2023}. The role of Eq.~\eqref{eq:referencefeatures} here is to make that scalar normalization compatible with this anisotropic paired family. The sign of $r$ is unrestricted. Reference normalization is separated from the independent positive barrier coefficient $\alpha$ and quadratic coefficient $\beta$.
-
-\begin{proposition}
-Equation~\eqref{eq:energy} is objective, is polyconvex in two dimensions, and satisfies $W(\I)=0$ and $\partial_{\ee}W(\bm0)=\bm0$. It grows without bound as $J\to0^+$, as $J\to\infty$, and as $\|\F\|\to\infty$ at bounded positive $J$.
-\end{proposition}
-\begin{proof}
-The composition $H(\bm z(\F,J))$ is convex in independent $(\F,J)$ because each $z_i$ is convex and $H$ is convex and nondecreasing. The correction $-r(J-1)$ is affine in $J$ for either sign of $r$. Every remaining nonconstant term is convex in $(\F,J)$. In two dimensions, convex dependence on $(\F,J)$ supplies the required convex representation in deformation minors. Objectivity follows from the norms and determinant. Equation~\eqref{eq:referencefeatures}, together with $\partial_{\ee}J|_0=(1,1,0)^T$, gives exact reference normalization. Finally, the supporting plane of $H$ and $z_i\geq0$ give a constant lower bound for $H$; the positive logarithmic, quadratic, and $\|\F\|^2$ terms dominate the affine correction in the stated limits.
-\end{proof}
-
-These are constitutive statements. They do not prove uniqueness of a structural equilibrium, absence of geometric buckling, or convergence of a particular Newton algorithm. Nor do they prove that a homogenized material with an arbitrary microscopic instability can be accurately represented by a globally polyconvex law.
+Learning the directions does not amount to identifying or enforcing a complete material symmetry group. No completeness or universal-approximation theorem is asserted for a finite collection of these features followed by a monotone convex core.
 
 \subsection{ICNN and integrated-hat spline cores}
-The ICNN uses softplus activations and nonnegative hidden, input, and output weights. Convexity of ICNNs follows from the composition construction described by Amos et al.~\cite{amos2017}. Nonnegativity of the direct-input weights is an additional restriction needed here for monotonicity in the nonlinear features; convexity alone does not require every direct-input weight to be nonnegative.
+\label{sec:convex_cores}
+The feature proposition is only the first part of the construction. Its composition with a neural core is convex in the independent minors if that core is both convex and componentwise nondecreasing~\cite{klein2022,linden2023}. An input-convex network without this additional monotonicity need not preserve the convexity of nonlinear features.
 
-For the spline core, each scalar edge has the form
+Figure~\ref{fig:convex_core_architectures} contrasts where the two cores place their learned transformations.
+\begin{figure}[!htb]
+ \centering\input{figures/convex_core_architectures}
+ \caption{General multilayer structure of the monotone ICNN (a) and integrated-hat ICKAN (b). Blue connections carry nonnegative learned linear weights; red boxes apply fixed softplus; green boxes contain independently learned convex, nondecreasing spline functions. ICNN hidden nodes apply softplus after an affine sum, while the output is linear. ICKAN nodes sum transformed contributions. Purple dashed paths bundle linear maps of the entire conditioned input $\bm y$, with nonnegative weights: the ICNN supplies original-input contributions to every hidden layer and the output; the ICKAN's additional input map goes only to the output. First-layer ICNN input weights are shown in blue. Ellipses denote intervening hidden layers; widths and curves are illustrative. Unrestricted biases are omitted. The diagram depicts the neural cores, not the complete energy.}
+ \label{fig:convex_core_architectures}
+\end{figure}
+
+\subsubsection{Monotone ICNN}
+Let $L$ denote the number of hidden layers and $\bm a^{(\ell)}$ the vector of activations in layer $\ell$, for $\ell=1,\ldots,L$. We write $\widehat H(\bm y)$ for the scalar neural core acting on the conditioned features $\bm y$; the complete energy additionally includes the reference-normalization and growth terms of Section~\ref{sec:energy_admissibility}. The deployed ICNN has the form
+\begin{align}
+ \bm a^{(1)}&=\phi(\bm U_1\bm y+\bm b_1),\nonumber\\
+ \bm a^{(\ell)}&=\phi(\bm W_\ell\bm a^{(\ell-1)}+\bm U_\ell\bm y+\bm b_\ell),
+ \qquad \ell=2,\ldots,L,\nonumber\\
+ \widehat H(\bm y)&=\bm v^T\bm a^{(L)}+\bm w^T\bm y+b_{\rm out},
+ \label{eq:monotone_icnn}
+\end{align}
+where $\phi=\operatorname{softplus}$ is a smooth, convex, and increasing activation applied componentwise. The matrices $\bm U_\ell$ and $\bm W_\ell$ contain the weights from $\bm y$ and the preceding hidden layer, respectively, and $\bm b_\ell$ is the layer bias vector. The output weight vectors $\bm v$ and $\bm w$ act on $\bm a^{(L)}$ and $\bm y$, respectively; $b_{\rm out}$ is an additive scalar output bias.
+
+Every entry of $\bm W_\ell,\bm U_\ell,\bm v,\bm w$ is nonnegative. Softplus-based transformations of unconstrained weight parameters impose these signs. Biases are unrestricted because adding constants to the layer preactivations preserves convexity and monotonicity. Hidden biases can change the core's derivatives with respect to $\bm y$, whereas $b_{\rm out}$ only shifts $\widehat H$ by a constant and leaves these derivatives unchanged.
+
+The first hidden layer is convex and nondecreasing in $\bm y$. A nonnegative weighted sum, addition of an affine input map with nonnegative linear coefficients, and composition with convex nondecreasing $\phi$ preserve both properties at every subsequent layer and at the output. This is the ICNN composition argument of Amos et al.~\cite{amos2017}, with the additional nonnegativity constraints on $\bm U_\ell$ and $\bm w$ imposed here to guarantee monotonicity. Convexity in $\bm y$ alone does not require the latter restriction.
+
+\subsubsection{Monotone integrated-hat ICKAN}
+Unlike the ICNN, which applies a fixed activation after an affine weighted sum at each hidden node, the ICKAN assigns a learned scalar function to each connection (edge) between layers. Each node sums the transformed contributions from its incoming connections. For an individual edge, let $x$ denote its scalar input: a component of $\bm y$ in the first layer, or an output of the preceding layer thereafter. The edge function has the form
 \begin{equation}
  f(x)=a x+\sum_k c_k B_k(x)+d,\qquad a,c_k\geq0,
  \label{eq:splineedge}
 \end{equation}
-where $B_k''$ is a nonnegative triangular hat. With $s=(x-k)/h$,
+where $a$ is the learned linear slope, $c_k$ are learned weights of the spline bases $B_k$, $k$ indexes these bases, and $d$ is an unrestricted additive constant. Softplus transformations of unconstrained parameters impose the signs of $a$ and $c_k$. In the implementation, additive constants are collected into one trainable bias per output node.
+
+Each $B_k''$ is a nonnegative triangular hat centered at a knot $\kappa_k$. The knots form a fixed uniform grid with spacing $h>0$; neither their locations nor the spacing are optimized. The grid used in the numerical example is specified in Section~\ref{sec:constitutive_training}. Writing $s=(x-\kappa_k)/h$, the curvature is
+\begin{equation}
+ B_k''(x)=\max(1-|s|,0).
+ \label{eq:hat_curvature}
+\end{equation}
+Integrating this hat twice, with $B_k(x)=B_k'(x)=0$ for $x\leq\kappa_k-h$, gives the integrated-hat basis
 \begin{equation}
  B_k(x)=h^2\begin{cases}
  0,&s\leq-1,\\
@@ -103,17 +158,140 @@ where $B_k''$ is a nonnegative triangular hat. With $s=(x-k)/h$,
  \end{cases}
  \label{eq:hat}
 \end{equation}
-Thus $f'$ and $f''$ are nonnegative, and $f''$ is continuous. Positive sums and layer compositions preserve convexity and monotonicity. Linear tails match analytically. Unlike a positive cubic-hinge construction, the curvature can decrease back to zero without becoming negative. This is a local $C^2$ spline implementation inspired by the monotonic input-convex KAN framework~\cite{thakolkaran2025}; it is not an unmodified reproduction of that paper's spline implementation or training procedure.
+The curvature is localized to $[\kappa_k-h,\kappa_k+h]$, not the entire basis: $B_k$ has a zero left tail and a linear right tail.
 
-The distinction at the tails is mathematical rather than terminological. Appendix A.3 of Ref.~\cite{thakolkaran2025} specifies endpoint slopes using finite secants. For a strictly convex interior curve, a forward secant at the left endpoint is larger than the right derivative there, so that using it as a left-tail slope creates a downward derivative jump. An analogous issue occurs at the right endpoint. Exact tangent slopes would preserve convexity, but a finite-secant formula does not generally guarantee exact convexity or $C^1$ continuity across the joins. This observation concerns extrapolation beyond the natural spline interval; it does not negate the interior constrained-spline argument. Equation~\eqref{eq:hat} avoids this distinction through exact matching, with vanishing curvature at both tails.
+Here $B_k'(-\infty)=0$ and $B_k''\geq0$, so $B_k'\geq0$. It follows that $f'\geq0$ and $f''\geq0$, with continuous second derivative. Each layer sums scalar edges applied to its input coordinates; composing such layers preserves convexity and componentwise monotonicity. The deployed core also includes a linear input-to-output skip from $\bm y$ with nonnegative weights, which preserves the same properties.
+
+In Eq.~\eqref{eq:hat}, values and the first two derivatives match analytically at every join, and the curvature vanishes at the outer joins. Each scalar edge is therefore globally $C^2$ with linear tails, while its curvature can decrease to zero without becoming negative. These tails are linear in the scalar input $x$; they do not imply a linear energy in $\F$, because the complete construction also includes nonlinear features and analytic growth terms. This core is inspired by the monotonic input-convex KAN framework~\cite{thakolkaran2025}, using the integrated-hat bases and analytic tail construction specified here.
+
+\subsection{The complete energy and its admissibility guarantees}
+\label{sec:energy_admissibility}
+We construct the effective stored energy by combining the neural contribution with reference-normalization and analytic growth terms:
+\begin{align}
+ W(\F)={}&\underbrace{H(\bm z)-H(\bm z^0)}_{\text{(i)}}
+ +\underbrace{\big[-r(J-1)\big]}_{\text{(ii)}}\nonumber\\
+ &+\underbrace{\alpha(J-1-\log J)+\frac\beta2(J-1)^2}_{\text{(iii)}}\nonumber\\
+ &+\underbrace{\varepsilon\left(\frac{\tr\C}{2}-1-\log J\right)}_{\text{(iv)}},
+ \qquad \alpha,\beta,\varepsilon>0.
+ \label{eq:energy}
+\end{align}
+Here $J=\det\F$, $\C=\F^T\F$, and $\bm z=\bm z(\F,J)$ is the physical feature vector. The positive energy-density coefficients $\alpha$, $\beta$, and $\varepsilon$ weight the analytic growth terms. We write $H(\bm z)=\widehat H(\bm y(\bm z))$ for the neural contribution evaluated through the prescribed centering and positive scaling of the features. For either core, this composition is twice continuously differentiable, convex, and componentwise nondecreasing in $\bm z$.
+
+Let $\bm z^0=\bm z(\I,1)$ denote the reference feature vector defined in Eq.~\eqref{eq:referencefeatures}. The reference sensitivities of the neural contribution and the resulting scalar stress-correction coefficient are
+\begin{equation}
+ h_i=\partial_{z_i}H(\bm z^0)\geq0,\qquad r=\sum_i h_i\rho_i.
+\end{equation}
+where $\rho_i$ are the reference feature-gradient factors in Eq.~\eqref{eq:referencefeatures}. Both $H(\bm z^0)$ and $r$ are computed from the current model parameters. They can change during training, but remain constant when differentiating with respect to deformation at fixed parameters.
+
+The groups marked (i)--(iv) in Eq.~\eqref{eq:energy} have the following roles:
+\begin{itemize}
+ \item[(i)] \emph{Setting the energy reference.} At $\F=\I$, the features equal $\bm z^0$, $J=1$, and $\tr\C=2$. Every term added to the neural contribution then vanishes except the constant subtraction, giving
+ \begin{equation}
+  W(\I)=H(\bm z^0)-H(\bm z^0)=0.
+  \label{eq:energy_reference_value}
+ \end{equation}
+ Since $H(\bm z^0)$ is constant with respect to deformation, subtracting it leaves the stress and tangent unchanged.
+
+ \item[(ii)] \emph{Removing the reference stress.} Stress is the derivative of energy with respect to the work-conjugate strain $\ee$. By the chain rule and Eq.~\eqref{eq:referencefeatures}, the neural contribution has reference stress
+ \begin{equation}
+  \left.\nabla_{\ee}H(\bm z)\right|_0
+  =\sum_i h_i\left.\nabla_{\ee}z_i\right|_0
+  =\sum_i h_i\rho_i(1,1,0)^T
+  =r(1,1,0)^T.
+  \label{eq:neural_reference_stress}
+ \end{equation}
+ The identity $J=\sqrt{(1+2E_{11})(1+2E_{22})-(2E_{12})^2}$ gives $\nabla_{\ee}J|_0=(1,1,0)^T$. Holding $r$ fixed when differentiating therefore yields
+ \begin{equation}
+  \left.\nabla_{\ee}\big[H(\bm z)-r(J-1)\big]\right|_0
+  =r(1,1,0)^T-r(1,1,0)^T=\bm0.
+  \label{eq:energy_reference_stress}
+ \end{equation}
+ A single scalar correction suffices because the paired features give an isotropic reference stress, even when the response away from the reference is anisotropic. The factor $J-1$ also makes the correction zero in value at the reference. The growth terms below preserve both reference conditions.
+
+ \item[(iii)] \emph{Penalizing collapse and large expansion.} The term $\alpha(J-1-\log J)$ diverges as $J\to0^+$, while $\beta(J-1)^2/2$ grows quadratically as $J\to\infty$. Both have zero value at $J=1$. Their derivatives are
+ \begin{equation}
+  \frac{\dd}{\dd J}\big[\alpha(J-1-\log J)\big]
+  =\alpha(1-J^{-1}),\qquad
+  \frac{\dd}{\dd J}\left[\frac\beta2(J-1)^2\right]
+  =\beta(J-1).
+ \end{equation}
+ These derivatives vanish at $J=1$, so their strain gradients also vanish by the chain rule. The quadratic term alone would remain finite at collapse, with limit $\beta/2$.
+
+ \item[(iv)] \emph{Penalizing distortion at bounded area.} Terms depending only on $J$ cannot detect changes of shape that preserve area. For example, with stretch parameter $\lambda>0$,
+ \begin{equation}
+  \F=\diag(\lambda,\lambda^{-1}),\qquad
+  J=1,\qquad
+  \varepsilon\left(\frac{\tr\C}{2}-1-\log J\right)
+  =\frac\varepsilon2\left(\lambda^2+\lambda^{-2}-2\right).
+ \end{equation}
+ This contribution diverges as $\lambda\to\infty$, although the area remains constant. More generally, $\tr\C=\|\F\|_F^2$ supplies growth under unbounded deformation at bounded positive $J$. At the reference, the constant $-1$ sets its value to zero. Using $\C=\I+2\E$ and $\partial_{\E}J|_0=\I$, its stress contribution is
+ \begin{equation}
+  \left.\partial_{\E}\left[\varepsilon\left(\frac{\tr\C}{2}-1-\log J\right)\right]\right|_0
+  =\varepsilon\left[\I-\left.J^{-1}\partial_{\E}J\right|_0\right]
+  =\bm0.
+ \end{equation}
+\end{itemize}
+Zero value and zero first derivative at the reference do not imply zero second derivative: the growth terms contribute to the reference stiffness. The determinant stress correction can also change the strain tangent, since $J$ is nonlinear in $\ee$. The following proposition summarizes the guarantees for the complete sum.
+
+Affine determinant stress normalization has an established precedent in Linden et al.~\cite{linden2023}. The role of Eq.~\eqref{eq:referencefeatures} here is to make that scalar normalization compatible with this anisotropic paired family. The sign of $r$ is unrestricted. Reference normalization is separated from the independent positive barrier coefficient $\alpha$ and quadratic coefficient $\beta$. The equations may be read in physical energy-density units; the implementation uses a positive energy scale, which does not alter any of the following properties.
+
+\begin{proposition}
+\label{prop:complete_energy}
+Let the features satisfy Eq.~\eqref{eq:featureconstraints}, let the core be either of the $C^2$ convex, componentwise nondecreasing constructions in Section~\ref{sec:convex_cores}, and let $\alpha,\beta,\varepsilon>0$. Equation~\eqref{eq:energy} is a twice continuously differentiable, objective, two-dimensional polyconvex energy on $\GL$. With $\ssv=\nabla_{\ee}W$, it has potential structure and symmetric material stress, satisfies $W(\I)=0$ and $\partial_{\ee}W(\bm0)=\bm0$, and diverges under collapse, unbounded expansion, and unbounded distortion at bounded positive area. These are criteria (C1)--(C6). Global nonnegative energy is not asserted by this proposition.
+\end{proposition}
+The proof is given in Appendix~\ref{app:complete_energy_proof}. Its central composition argument is that convex features remain convex after a convex, componentwise nondecreasing core. The reference subtraction is constant, the stress correction is affine in the independent determinant variable, and the remaining analytic terms are convex in independent $(\F,J)$. These properties preserve polyconvexity of the complete sum; the proof also shows that the neural contribution cannot offset the prescribed growth barriers.
+
+The proposition holds for either core and does not depend on the training error or the locations of the training samples. It is therefore a construction proof, not an inference from sampled positive tangents. Its scope is nevertheless constitutive: it does not prove uniqueness of a structural equilibrium, absence of geometric buckling, or convergence of a particular Newton algorithm. Nor does it prove that a homogenized material with an arbitrary microscopic instability can be accurately represented by a globally polyconvex law.
 
 \subsection{A separate nonnegative-energy check}
 \label{sec:nonnegative}
-Zero reference energy and stress do not, on their own, establish global nonnegative energy. This distinction is also explicit in Linden et al.~\cite{linden2023}. For Eq.~\eqref{eq:energy}, define $k_i=1/p_i+1/q_i$ and $\eta_i=\rho_i/k_i$. The determinant inequality $\|\F\bm d_i\|^2\|\F\bm d_i^\perp\|^2\geq J^2$ gives $z_i\geq k_iJ^{\eta_i}$. Together with $\tr\C/2\geq J$ and the supporting plane of $H$, this yields
+Zero reference energy and stress do not, on their own, establish global nonnegative energy. This distinction is also explicit in Linden et al.~\cite{linden2023}. We seek a lower bound $g(J)$ that depends only on the area ratio: if this bound is nonnegative for every $J>0$, then the energy is nonnegative for every admissible deformation.
+
+For Eq.~\eqref{eq:energy}, define $k_i=1/p_i+1/q_i$ and $\eta_i=\rho_i/k_i$. The determinant inequality $\|\F\bm d_i\|^2\|\F\bm d_i^\perp\|^2\geq J^2$ gives $z_i\geq k_iJ^{\eta_i}$. Together with $\tr\C/2\geq J$ and the supporting plane of $H$, this yields
 \begin{equation}
  W\geq g(J):=\sum_i h_i k_i[J^{\eta_i}-1-\eta_i(J-1)]
  +(\alpha+\varepsilon)(J-1-\log J)+\frac\beta2(J-1)^2.
  \label{eq:lowerbound}
 \end{equation}
-Since $g(1)=g'(1)=0$, proving $g''\geq0$ for $J>0$ is sufficient. Appendix~\ref{app:nonnegative} describes the implemented bound. This is a saved-parameter certificate with numerical margins, not a restriction enforced at every training iterate and not a formally verified interval-arithmetic proof.
+Since $g(1)=g'(1)=0$, proving $g''\geq0$ for all $J>0$ makes $g$ convex with a global minimum of zero at $J=1$. Hence $W(\F)\geq g(\det\F)\geq0$. Appendix~\ref{app:nonnegative} describes the implemented bound. This is a saved-parameter certificate with numerical margins, not a restriction enforced at every training iterate and not a formally verified interval-arithmetic proof.
 
+\subsection{From the proof to implementation checks}
+\label{sec:admissibility_checks}
+With the baselines, paired features, neural cores, and complete-energy guarantees now defined, Table~\ref{tab:tiers} summarizes the four learned models. Its entries refer to the implementations used here, not to every method bearing the same model name. The separate nonnegative-energy check is not included among the architectural guarantees.
+\FloatBarrier
+\suppressfloats[t]
+\begin{table}[!htb]
+\centering\small
+\caption{Learned constitutive models in the present comparison, with criteria ordered as in Section~\ref{sec:requirements}. ``Not imposed'' is not synonymous with ``fails at every state''. All four models permit anisotropy without enforcing a named material symmetry group (C3).}
+\label{tab:tiers}
+\begin{tabularx}{\linewidth}{lYYYY}
+\toprule
+ & Regression & Free & ICNN & ICKAN\\
+\midrule
+Network input & $E_{11},E_{22},\gamma_{12}$ & \shortstack[l]{$C_{11}-1,C_{22}-1$\\$C_{12},J-1$} & 32 paired features & 32 paired features\\
+\midrule[.3pt]
+Network output & Three stresses & Scalar energy & Scalar energy core & Scalar energy core\\
+\midrule[.3pt]
+Potential structure (C1) & Not imposed & Exact & Exact & Exact\\
+\midrule[.3pt]
+Objectivity (C2) & Objective strain input and material stress output & Exact & Exact & Exact\\
+\midrule[.3pt]
+Stress symmetry (C3) & Exact & Exact & Exact & Exact\\
+\midrule[.3pt]
+Reference state (C4) & Not imposed & Exact normalization & Exact normalization & Exact normalization\\
+\midrule[.3pt]
+Polyconvexity (C5) & Not imposed & Not imposed & By construction & By construction\\
+\midrule[.3pt]
+Growth (C6) & No potential & Not imposed & By construction & By construction\\
+\midrule[.3pt]
+Global $W\geq0$ & No potential & Not guaranteed & Separate saved-weight bound & Separate saved-weight bound\\
+\bottomrule
+\end{tabularx}
+\end{table}
+\FloatBarrier
+
+The analytical guarantees and their numerical verification have distinct purposes. First, the feature inequalities, positive scales, core weight signs, and analytic normalization identify the admissible model family. Second, the nonnegative-energy bound is evaluated for each selected parameter set, since this property is not guaranteed by the architecture alone. Failure of that sufficient bound would be inconclusive, not proof of a negative energy.
+
+Finally, derivative and constitutive tests check that the implemented model represents the stated equations. These include reference energy and stress, first and second energy derivatives, the analytically assembled stress against energy differentiation, spline derivatives at their joins, and the physical-unit conversion of stress and tangent. Closed-cycle work checks potential consistency, while sampled rank-one curvatures test a consequence of polyconvexity using Eq.~\eqref{eq:strain_vs_F_curvature}, including its stress-dependent term. No finite set of positive curvature samples is a substitute for Proposition~\ref{prop:complete_energy}. Likewise, a negative value in an implementation of this construction would require investigation of the implementation, admissible domain, or numerical differentiation before being interpreted as a constitutive result.
+
+Section~\ref{sec:cell} reports the selected-model checks and predictive errors separately. This separation allows a model to be accurate on the data but lack a constitutive guarantee, or to possess that guarantee while retaining a nonzero approximation error.

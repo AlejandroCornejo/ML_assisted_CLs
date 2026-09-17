@@ -14,6 +14,7 @@ No solver variable or archived array was renamed as part of this revision.
 | T, g_per(e) | Periodic identification and strain-dependent jump lift | PeriodicRVE.T and _g / _g_at |
 | Phi, V_tra | Original POD ROB / conventional PROM ROB | Phi_ROM in decoder_basis_B_r39.npz; 39 columns |
 | n_tra | Conventional PROM equilibrium dimension | 39 |
+| n_tot | Total retained span dimension, n + barred n | 39, equal to n_tra in this comparison |
 | V | Orthonormal primary ROB after strain-informed rotation | Phi_M; 3 columns |
 | barred V | Orthonormal secondary complement in retained span | Phi_S; 36 columns |
 | n, barred n | Primary and secondary dimensions | 3 and 36 |
@@ -25,9 +26,12 @@ No solver variable or archived array was renamed as part of this revision.
 | N(q) | Secondary-coordinate closure in source nomenclature | Nhat(A_m-inverse q) |
 | Nhat(xi) | Closure in deployed coordinates | Network saved in nslave.npz |
 | B(q) | Tangent of decoded independent displacement | value_and_jac, with the coordinate transform included |
+| B_xi | Decoder tangent in deployed coordinates | B(q) A_m |
+| N_el | Number of full-mesh elements; multiplier normalization | n_full_elements / target_sum, not physical volume |
 | Z_r, Z_s | Residual and stress cubature supports | z_res and z_sig |
 | w_e, v_e | Residual and stress multipliers | Fixed for HPROM, learned softmax fields for HPROM–ANN |
 | D_h | Tangent of the complete effective stress map | Local implicit-function derivatives of actual residual/output |
+| s_h | Three-component reduced effective stress output | Diagonal entries of Fbar-inverse Pbar, plus the average of its two shear entries |
 | n_run | Number of timing repetitions | Kept distinct from the primary dimension n |
 
 ## Identities used in the manuscript
@@ -63,6 +67,27 @@ would change the problem.
   The macroscopic tangent uses derivatives of the complete residual and
   stress output, through the implicit-function theorem. A consistent
   derivative is not a proof that the effective map has a scalar potential.
+- For fixed-weight affine HPROM, stiffness and analytic lifting derivatives
+  yield the state sensitivities; the stress derivative uses a central
+  difference along those sensitivities. For HPROM–ANN, the partial
+  derivatives of the complete residual/output are central-differenced.
+  The direct mode central-differences its full strain-to-stress map.
+
+The input-informed identification and the option of direct evaluation are
+introduced alongside MAW–ECM in its current manuscript; they are decoder
+choices, not intrinsic parts of the cubature algorithm. Our primary/secondary
+symbols remain those of aresdeparga2026nonlinear.
+
+Correction to the initial Section 3 audit: the deployed supports do undergo
+adaptive-weight pruning, rather than fixed-ECM selection directly at their
+final size. The residual support in maw_res_long10.npz equals that in the
+archived maw_phase2_res.npz. However, the available sweep_phase2.py does not
+pass K_graph or enable use_global_graph_2ndstage; in the available pruning
+library its smooth_laplacian_all_iterations option forces the local active-set
+phase, not graph coupling. The discarded graph-construction return and script
+comments do not establish historical graph regularization. Historical pruning
+diagnostics are absent from these checkpoints; this provenance gap remains
+explicit in REFERENCE_AUDIT.md.
 
 ## Checked artifacts
 

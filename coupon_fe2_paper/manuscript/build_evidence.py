@@ -164,7 +164,15 @@ def constitutive_results():
                      f"{100*m['probe']['stress_sample_relative_percentiles'][-1]:.2f}"])
         rings = entry['probe_by_ring']
         ax.plot([float(r) for r in rings],[100*rings[r]['stress'] for r in rings], 'o-', label=name,color=color)
-    table('constitutive_errors.tex',['Model', '$e_S^{\\rm test}$', '$e_W^{\\rm test}$', '$e_S^{\\rm probe}$',
+    # Keep out-of-domain evidence in the supplement; do not restore probe
+    # columns in the main-paper test table when regenerating artifacts.
+    test_rows = [[row[0], row[1], row[2], row[4]] for row in rows]
+    table('constitutive_errors.tex',
+          ['Model', '$e_S^{\\rm test}$', '$e_W^{\\rm test}$', 'Worst test'],
+          test_rows, 'lrrr',
+          'All values are percentages. Stress and energy errors are aggregate array norms; '
+          'the last column is the maximum per-state stress error. Material A: 400 independent test states.')
+    table('constitutive_probe_errors.tex',['Model', '$e_S^{\\rm test}$', '$e_W^{\\rm test}$', '$e_S^{\\rm probe}$',
           'Worst test', 'Worst probe'],rows,'lrrrrr',
           'All values are percentages. The last two columns are maximum per-state stress errors; '
           'the first three are aggregate array norms. Test: 400 states; probe: 345 finite reference states out of 350.')
@@ -176,7 +184,27 @@ def constitutive_results():
 def mechanics():
     cycle=read_json(ROOT/'06_pann/mechanics_witness_results/current_rve_cycle_audit.json')['cycle']
     conv=cycle['quadrature_work_convergence_J_per_m3']
-    fig, (left,right)=plt.subplots(1,2,figsize=(7.1,3.4),layout='constrained',gridspec_kw={'width_ratios':[1,1.5]})
+    maw=read_json(ROOT/'06_fe2/maw_closed_cycle_audit.json')
+    assert maw['status'] == 'completed'
+    assert maw['centre_E'] == cycle['centre_E']
+    assert maw['half_width_in_E11_and_E22'] == cycle['half_width_in_E11_and_E22']
+    for relative, expected in maw['source_sha256'].items():
+        assert hashlib.sha256(source(ROOT/relative).read_bytes()).hexdigest() == expected
+    assert set(maw['convergence']) == set(conv)
+    for order in conv:
+        conv[order]['HPROM--ANN'] = maw['convergence'][order]['signed_work_J_per_m3']
+    other=read_json(ROOT/'06_fe2/other_hprom_closed_cycle_audit.json')
+    assert other['status'] == 'completed'
+    assert other['centre_E'] == cycle['centre_E']
+    assert other['half_width_in_E11_and_E22'] == cycle['half_width_in_E11_and_E22']
+    for relative, expected in other['source_sha256'].items():
+        assert hashlib.sha256(source(ROOT/relative).read_bytes()).hexdigest() == expected
+    for name, record in other['models'].items():
+        assert record['status'] == 'completed'
+        assert set(record['convergence']) == set(conv)
+        for order in conv:
+            conv[order][name] = record['convergence'][order]['signed_work_J_per_m3']
+    fig, (left,right)=plt.subplots(1,2,figsize=(8.0,3.8),layout='constrained',gridspec_kw={'width_ratios':[1,1.6]})
     center=cycle['centre_E']; h=cycle['half_width_in_E11_and_E22']
     x=np.array([-1,1,1,-1,-1])*h+center[0]
     y=np.array([-1,-1,1,1,-1])*h+center[1]
@@ -188,15 +216,23 @@ def mechanics():
     for name,color in [('Regression',COLORS[6]),('Free',COLORS[5]),('ICNN',COLORS[3]),('ICKAN',COLORS[4])]:
         values=[max(abs(conv[q][name]),1e-12) for q in conv]
         right.loglog([int(q) for q in conv],values,'o-',label=name,color=color,ms=3)
+    for name, color, marker in [('HPROM',COLORS[0],'v'), ('HPROM--ANN',COLORS[2],'s'),
+                                ('D-HPROM--ANN',COLORS[1],'^')]:
+        right.loglog([int(q) for q in conv], [abs(conv[q][name]) for q in conv],
+                     marker+'--', label=name.replace('--','–'), color=color, ms=3, lw=1.2)
     right.scatter([8],[abs(cycle['FOM']['stress_work_J_per_m3'])],marker='x',color='black',label='FOM (8/edge)',zorder=4)
     right.set(xlabel='Gauss points per cycle edge',ylabel=r'$|\oint s\cdot de|$ [J m$^{-3}$]')
-    right.legend(frameon=False,fontsize=7,ncol=2,loc='upper left',bbox_to_anchor=(.02,.87)); right.grid(alpha=.2)
+    right.legend(frameon=False,fontsize=7,ncol=3,loc='upper center',bbox_to_anchor=(.5,-.24),
+                 columnspacing=.9,handlelength=1.6); right.grid(alpha=.2)
     save(fig,'cycle_convergence')
-    rows=[[q, *(f'{conv[q][n]:.6g}' for n in ('Regression','Free','ICNN','ICKAN'))] for q in conv]
-    table('cycle_convergence.tex',['Points/edge','Regression','Free','ICNN','ICKAN'],rows,'rrrrr',
-          'Signed cycle work in J m$^{-3}$. FOM at 8 points per edge: '
+    names=('Regression','Free','ICNN','ICKAN','HPROM','HPROM--ANN','D-HPROM--ANN')
+    rows=[[name, *(f'{conv[q][name]:.6g}' for q in conv)] for name in names]
+    table('cycle_convergence.tex',['Model',*conv.keys()],rows,'lrrrrr',
+          'Signed cycle work in J m$^{-3}$; column headings give Gauss points per edge. '
+          'FOM at 8 points per edge: '
           f"{cycle['FOM']['stress_work_J_per_m3']:.6g}"+' J m$^{-3}$. '
-          'The spline quadrature error decreases with refinement; it is not physical dissipation.')
+          'The spline quadrature error decreases with refinement; it is not physical dissipation. '
+          'Reversal and equilibrium-tolerance controls are discussed in the text.')
     audit=read_json(ROOT/'06_pann/mechanics_witness_results/current_rve_mechanics_witnesses.json')
     rows=[]
     for key,label in [('held_out_test','Held-out test'),('converged_probe','Finite-label probe'),('uniform_training_box','In-box audit (unlabelled)')]:

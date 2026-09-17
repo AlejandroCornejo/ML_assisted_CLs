@@ -1,27 +1,72 @@
 # New manuscript — current periodic RVE and coupon
 
-Expanded working draft v0.2, 2026-09-07. Written in English for a computational-mechanics
+Expanded working draft v0.2, updated 2026-09-15. Written in English for a computational-mechanics
 journal. This directory is separate from, and does not overwrite, the previous
 Claude manuscript or any result/checkpoint.
+
+Sections 5--6 now contain the two-material assessment skeleton. All reported
+results still concern material A; blue draft tasks identify the pending
+multicavity material B, data/response plots and fixed-versus-learned-feature
+comparison. Material A's reduced-state representation is now in Section 6.
+The existing probe and detailed curvature audits are preserved in the
+separately compiled supplement, not discarded. See `REVISION_PLAN.md` for
+the experimental sequence; no new simulations or training accompanied this
+editorial integration.
 
 ## Deliverables
 
 - `manuscript.tex`: master source; the substantial text is in `sections/`.
   Original title and author order restored; affiliation wording follows the
   current MAW–ECM manuscript, with its CIMNE note for S. Ares de Parga.
-- `manuscript.pdf`: compiled 28-page reading copy, with 42 cited references,
-  eight figures and eight tables.
+- `manuscript.pdf`: compiled 40-page working reading copy, with 43 cited references,
+  nine figures and six tables, including visible pending-evidence notes.
+- `supplementary.tex` / `supplementary.pdf`: standalone two-page supplement
+  with the material-A probe figure, archived test/probe table and detailed
+  rank-one curvature audit. Sections S1--S2 are referenced from the main text.
 - `sections/introduction.tex`: motivation, PMOR/hyperreduction lineage,
-  constitutive learning, literature positioning (including Table 1), precise
+  constitutive learning, prose-based literature positioning, precise
   contribution, and assessment scope. The former standalone Section 7 has
   been integrated here, not retained after the numerical examples.
-- `sections/reduced_micromechanics.tex`: expanded derivation using
-  `aresdeparga2026nonlinear` nomenclature, checked against the deployed code.
-- `figures/`: eight reproducible figures, PDF vectors plus PNG previews.
-- `tables/`: five generated numerical tables; reduction, architecture and
-  literature-comparison tables are in the section sources.
+- `sections/homogenization.tex`: revised Section 2, organized from the strain
+  input through periodic equilibrium, effective outputs, and consistent
+  differentiation to the common structural constitutive interface.
+- `sections/reduced_micromechanics.tex`: revised Section 3, separating
+  affine/nonlinear displacement reduction from fixed/adaptive integration,
+  using `aresdeparga2026nonlinear` nomenclature. Input-informed coordinates
+  and direct evaluation are attributed to MAW–ECM; implementation-specific
+  training, stress extraction and tangent procedures are distinguished.
+- `figures/`: nine reproducible figures, PDF vectors plus PNG previews.
+  Figures 1 and 2 are native TikZ (`model_hierarchy.tex` and
+  `cubature_matrices.tex`), compiled directly in the manuscript to inherit
+  its text and math fonts; their PDF/PNG files are previews. Figure 2
+  is monochrome and illustrates the raw integrand matrix, compressed
+  fixed-ECM constraints, and statewise adaptive-weight systems, including
+  their full-mesh targets. Its third panel expands the four first Piola
+  components and normalization row for stress cubature.
+- `sections/learned_laws.tex` and `sections/mechanical_requirements.tex`:
+  Section 4 introduces direct stress regression, the unconstrained-energy
+  Free baseline, and the motivation for a polyconvex energy before its
+  explicit C1–C6 admissibility checklist, with the
+  feature proof and both monotone cores preceding the complete-energy
+  proposition. Nonnegative energy is a separate saved-parameter bound;
+  numerical checks are distinguished from architectural guarantees.
+- `audit/section4_selected_models_20260910.json`: rerun derivative,
+  energy-bound and sampling checks for both frozen selected PANNs.
+  This is an implementation audit, not a retraining or timing experiment.
+- `tables/`: five generated numerical tables; reduction and architecture
+  tables are in the section sources. The former literature table is archived.
 - `evidence_manifest.json`: result inputs, hashes, exact measured times and
   recomputed field errors. No new timing experiment is implied.
+- `../06_fe2/audit_maw_closed_cycle.py` and `maw_closed_cycle_audit.json`:
+  new frozen-model cycle diagnostic. It re-solves HPROM–ANN at each Gauss
+  point and checks quadrature refinement, reversal and a tighter equilibrium
+  tolerance. Its nonzero net work is included in Figure 6 and Table 4;
+  these diagnostic iteration counts are not structural timing-run counts.
+- `../06_fe2/audit_other_hprom_closed_cycles.py` and
+  `other_hprom_closed_cycle_audit.json`: complementary frozen-model tests
+  for affine HPROM and D-HPROM–ANN on the same cycle. Both are included in
+  Figure 6 and Table 4, with reversal checks and, for the iterative affine
+  model, a tighter equilibrium tolerance. No timing runs are repeated.
 - `REFERENCE_AUDIT.md`: checked claims, corrections, missing sources and the
   unfinished full-reading queue. **Not all supplied references have been read.**
 - `READING_NOTES_v02.md`: completed reading of the eight new articles,
@@ -41,13 +86,15 @@ Claude manuscript or any result/checkpoint.
   moving the final positioning section into the introduction.
 - `archive_pre_pann_prom_revision/`: sources before restoring the original
   title, author block, and PANN/PROM framing.
+- `archive_pre_prose_revision/`: introduction, master source and comparison
+  table before the argument-led literature rewrite and native LaTeX diagram.
 
 ## Narrative
 
-1. FE2 cost and the need for surrogates; non-intrusive PANNs and intrusive
-   projection-based reduced-order models; what each learns and retains;
-   the feature-design question, contribution, and purpose and scope of the
-   numerical examples. Memory savings are not reported as measured results.
+1. Representing the anisotropic RVE response and the cost of repeated RVE
+   evaluations; the polyconvex PANN construction as the central contribution;
+   PROM-based models as complementary comparisons; structural deployment as
+   an illustration. The literature positioning remains in the introduction.
 2. General periodic homogenization and work-conjugate variables.
 3. Affine and nonlinear PROMs; primary/secondary coordinates and closure
    fitting; fixed/adaptive ECM; actual reduced meshes; consistent derivatives
@@ -55,10 +102,14 @@ Claude manuscript or any result/checkpoint.
 4. Mechanical requirements, learned constitutive construction, proofs and
    distinction between the four neural model tiers.
 5. Example I: the current RVE tests approximability, integrability and sampled
-   rank-one curvature. Regression has a valid cycle witness; the Free OOD
+   rank-one curvature. Regression and all three deployed HPROM variants have nonzero cycle
+   witnesses; the Free OOD
    witness is not described as an FOM-confirmed artificial instability.
-6. Example II: the coupon tests error propagation and online time for the same
-   RVE. This is not represented as a second material example.
+6. Example II: the tensile coupon illustrates structural deployment and tests
+   error propagation and online time for the same RVE. FOM–FE2 provides a
+   computational reference within the adopted homogenization model, not an
+   independent validation against a cell-resolved structure. This is neither
+   a second material example nor a new FE2 method.
 7. Conclusions. Literature positioning and assessment scope now precede the
    methodology, within Section 1.
 
@@ -75,6 +126,12 @@ alter the methods, numerical evidence, or measured timings.
 ## Reproduce numerical assets
 
 From the project root:
+
+Building the method-figure previews additionally requires Tectonic and
+`pdftoppm`; set `TECTONIC` if the executable is not on PATH. The existing
+temporary Tectonic installation is detected as a fallback. The manuscript
+itself composes Figures 1 and 2 directly from TikZ and does not depend on
+their previews.
 
 ```bash
 MPLCONFIGDIR=/tmp/coupon-manuscript-mpl OPENBLAS_NUM_THREADS=1 \
@@ -101,7 +158,7 @@ python3 coupon_fe2_paper/manuscript/order_bibliography.py
 Compile from this directory with a standard LaTeX installation, e.g.:
 
 ```bash
-latexmk -pdf manuscript.tex
+latexmk -pdf manuscript.tex supplementary.tex
 ```
 
 A portable Tectonic executable was placed outside the repository at
@@ -110,6 +167,8 @@ A portable Tectonic executable was placed outside the repository at
 ```bash
 XDG_CACHE_HOME=/tmp/coupon-tectonic-cache \
   /tmp/coupon-manuscript-tools/tectonic --keep-logs manuscript.tex
+XDG_CACHE_HOME=/tmp/coupon-tectonic-cache \
+  /tmp/coupon-manuscript-tools/tectonic --keep-logs supplementary.tex
 ```
 
 Initial compilation downloads TeX packages. The bibliography is included
@@ -118,6 +177,12 @@ from `references.tex`, so no BibTeX database is required. After compilation:
 ```bash
 python3 coupon_fe2_paper/manuscript/validate_manuscript.py
 ```
+
+The validator checks both documents. If PDFs and logs were compiled into
+a temporary output directory, pass `--build-dir /absolute/path/to/build`.
+`build_evidence.py` generates separate `constitutive_errors.tex` (main-paper
+test results) and `constitutive_probe_errors.tex` (supplement); regenerating
+assets will not restore probe columns to the main table.
 
 ## Remaining work before submission
 
@@ -151,7 +216,7 @@ No expensive simulation was started by the manuscript-generation script.
 
 - Numerical assets regenerated successfully from saved arrays and metadata;
   support unions checked as 183, 19, and 10 elements.
-- All 42 bibliography entries are cited, keys and labels are unique, all
+- All 43 bibliography entries are cited, keys and labels are unique, all
   referenced labels and figure files exist, and all nine renamed PDFs retain
   their original hashes.
 - TeX compiled with no unresolved citations/references, overfull or underfull
@@ -161,12 +226,11 @@ No expensive simulation was started by the manuscript-generation script.
   not presented as stress or structural error bounds.
 - Representative PDF pages and figure previews inspected; reduced-support
   title overlap corrected in the figure generator.
-- Introduction layout inspected after integration: the literature comparison
-  is Table 1 on pages 4–5, the model hierarchy is on page 6 alongside the
-  assessment scope, and the methodology starts on page 6. The validator checks that
-  literature positioning remains inside the introduction and that the final
-  main section is Conclusions, as well as the requested PANN/PROM terminology
-  and restored front matter.
+- Introduction layout inspected after the prose revision: positioning is
+  explained in paragraphs rather than a comparison table; Figure 1 is on
+  page 5 and the methodology starts on page 6. The validator checks the
+  positioning location, absence of the superseded table, native TikZ figure,
+  PANN/PROM terminology, front matter, and final Conclusions section.
 - A fresh attempt to run `test_flexible_pann.py` could not import PyTorch in
   the v0.1 environment. No new network unit-test pass is claimed for v0.2.
   The manuscript's derivative/energy checks refer to the archived independent
