@@ -1,11 +1,13 @@
 # Report map
 
-Start with only these two:
+Start with these three:
 
 1. [`CAMPAIGN_REPORT.md`](CAMPAIGN_REPORT.md): are the FOM labels numerically
    acceptable, and what are the limitations?
-2. [`TRAINING_PREPARATION.md`](TRAINING_PREPARATION.md): what is fixed before
-   neural optimization, and what remains undone?
+2. [`TRAINING_PREPARATION.md`](TRAINING_PREPARATION.md): what was fixed before
+   neural optimization? Its pending-work statements are historical.
+3. [`FINAL_NEURAL_EVALUATION.md`](FINAL_NEURAL_EVALUATION.md): what did the locked
+   15-model test and held-out paths show, including unfavorable evidence?
 
 The other reports document how those decisions were reached:
 
@@ -22,3 +24,12 @@ The other reports document how those decisions were reached:
 
 These are audit records, not chapters that a new reader must read sequentially.
 The short scientific story and current figures are in `../paper_evidence/`.
+# Latest bounded audit
+
+The subsequent user-requested [directed search](DIRECTED_SEARCH.md) expands
+the domain and optimization budget and finds verified negative Free curvature
+in all three seeds. Its FOM comparison and extrapolation limits are reported there.
+
+[`ROBUSTNESS_AUDIT.md`](ROBUSTNESS_AUDIT.md) closes the post-test volume-collapse
+and rank-one-curvature audit. No negative Free witness was found; the finite
+Free collapse limit is documented separately from stability and accuracy.

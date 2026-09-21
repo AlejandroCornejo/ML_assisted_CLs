@@ -1,0 +1,290 @@
+# Model-story revision checklist
+
+**Status:** active editorial plan
+**Scope:** introduction, Sections 2--6, conclusions, supplement, and paper-facing figures/tables
+**Working rule:** revise and approve one block at a time; do not perform a global rewrite.
+
+## 1. Editorial objective
+
+The paper will compare **learned hyperelastic energies**, rather than present a
+ladder of increasingly constrained neural models. Its central message is:
+
+> We construct learnable anisotropic paired features that retain polyconvexity,
+> exact reference normalization, and growth; we assess whether learning these
+> features improves the constrained models, whether the representation fits two
+> periodic microstructures, and how the resulting energies deploy in FE2.
+
+The final evidence must answer four questions:
+
+- [ ] How accurately can a flexible hyperelastic energy represent the data?
+- [ ] What accuracy is traded for the requested mechanical guarantees?
+- [ ] Within the guaranteed constructions, what is gained by learning the
+      paired features instead of fixing them?
+- [ ] How sensitive is that conclusion to the number `m` of paired features?
+
+## 2. Decisions already closed
+
+- [x] Remove **Pure Regression** as a model from the study.
+- [x] Do not move Pure Regression to the supplement.
+- [x] Remove its numerical results, table rows, plotted points, training details,
+      cycle results, and conclusions from all paper-facing material.
+- [x] Retain only the general theoretical motivation that independently fitted
+      stress components need not derive from a scalar potential.
+- [x] Keep one flexible energy-based reference to quantify the effect of the
+      convexity constraints.
+- [x] Keep intrusive reduced models as a distinct FE2 accuracy--cost route, not
+      as members of the constitutive neural-model hierarchy.
+- [x] Treat intrusive reduced models as secondary deployment references, not as
+      a contribution with equal narrative weight to the paired-feature energies.
+- [x] Add a controlled Material-B sensitivity study in the number of paired
+      features, without using its test results to reselect the locked `m=32`
+      models.
+- [x] Preserve internal Regression code and archived results for provenance;
+      removing the model from the paper does not authorize deleting evidence.
+- [x] Replace the current model-hierarchy Figure 1 with an original visual
+      summary centered on the paired-feature constitutive construction.
+- [x] Prepare a simplified graphical-abstract export only after the retained
+      numerical evidence is frozen; do not burden it with PROM or baseline
+      taxonomy.
+
+## 3. Final model vocabulary
+
+Paper-facing names:
+
+- **FOM:** mechanical reference.
+- **Unconstrained energy:** flexible hyperelastic reference. The word
+  *unconstrained* refers only to the convexity restrictions; this model remains
+  energy-based, objective, and reference-normalized.
+- **ICNN-fixed / ICNN-learned:** controlled feature comparison for the ICNN core.
+- **ICKAN-fixed / ICKAN-learned:** controlled feature comparison for the ICKAN core.
+- **HPROM and variants:** intrusive FE2 references, introduced only in their own
+  methodological and structural-deployment context.
+
+Internal directories and checkpoint slugs may continue to use `Free`; only the
+paper-facing terminology changes.
+
+## 4. Execution order
+
+The final manuscript order will be:
+
+1. Introduction.
+2. Finite-strain homogenization and reference problem.
+3. Learnable paired-feature polyconvex energies (current Section 4).
+4. Compact projection-based structural reference (current Section 3).
+5. Constitutive assessment on periodic microstructures.
+6. Structural deployment.
+7. Conclusions.
+
+The PROM/HPROM material remains a self-contained methods section because the
+structural results compare several intrusive variants whose differences must be
+understandable. Its position and length, however, will make its secondary role
+unambiguous: the proposed constitutive construction comes first, and the PROM
+section retains only what is needed to interpret the deployment study.
+
+Editorial work will not follow this reader order mechanically. We first close
+the constitutive construction already under review, then enact the section
+swap, compress the PROM section, and finally return to the opening and evidence
+sections. Each block ends with a compiled-PDF review and explicit approval
+before the next block begins.
+
+### Block 1 -- Current Section 4 / final Section 3: constitutive construction
+
+- [x] Remove the definition and implementation of Pure Regression.
+- [x] Open the non-intrusive route with the decision to learn a scalar energy.
+- [x] Introduce **Unconstrained energy** once, briefly and precisely.
+- [x] Present ICNN and ICKAN as the two guaranteed constructions.
+- [x] After the Section 4.4 tutorial review, add a compact paper-facing
+      integrated-hat visualization in the established manuscript style. It
+      should show the chain from localized nonnegative curvature to accumulated
+      slope and the resulting convex connection, and may also show how several
+      weighted hats combine. Decide in context whether this is clearer as one
+      composite figure or two small figures; do not include both by default.
+- [x] After closing Section 4.5, design the method-centered replacement for
+      Figure 1: periodic RVE response -> learnable paired directional features
+      -> ICNN/ICKAN core -> normalized energy -> stress, tangent, and guarantees.
+      The paired features must be the visual focus; PROM and comparison
+      baselines do not belong in this overview.
+- [x] Retain integrability as a mechanical requirement, not as an experimental
+      contest against a stress-regression baseline.
+- [x] Remove Pure Regression from the model-hierarchy figure.
+- [x] Keep Unconstrained energy as a short textual reference rather than part of
+      the proposed-method overview.
+- [x] Check every forward reference from Section 4 to Sections 5 and 6.
+- [x] Compile and inspect the affected pages.
+
+**Approval criterion:** a reader can identify the proposed models, the sole
+flexible reference, and the purpose of every comparison without reading the
+results section.
+
+### Block 2 -- Section 1: introduction
+
+- [ ] Rebuild the introduction around one primary contribution: learnable
+      paired directional features for guaranteed anisotropic energies.
+- [ ] Motivate scalar energy learning without defining Pure Regression as a
+      paper-facing model.
+- [ ] Present ICNN and ICKAN as two cores implementing the same constitutive
+      design, rather than as unrelated methods.
+- [ ] Preview the distinct roles of Materials A and B.
+- [ ] Introduce the intrusive route only as a secondary FE2 accuracy--cost
+      reference.
+- [ ] Remove claims inherited from the previous co-equal PANN/PROM narrative.
+- [ ] Compile and inspect the complete introduction in context.
+
+**Approval criterion:** the introduction promises the paired-feature
+constitutive contribution first and assigns every later numerical study a clear
+role. It will receive a final consistency pass after Sections 5--6 are closed.
+
+### Block 3 -- Section 2: reference problem and homogenization
+
+- [ ] Verify that Section 2 remains focused on kinematics, homogenization, FOM
+      quantities, and work-conjugate notation.
+- [ ] Make no change where the current explanation already supports the revised
+      story.
+- [ ] Remove only obsolete taxonomy or forward references.
+- [ ] Verify notation and cross-references after the Section 4 changes.
+- [ ] Compile and inspect Section 2 in context.
+
+**Approval criterion:** Section 2 supplies the common mechanical reference
+without anticipating either surrogate route unnecessarily.
+
+### Block 4 -- Current Section 3 / final Section 4: reduced microscopic reference
+
+- [ ] Recast projection-based models as secondary intrusive references for the
+      structural deployment, not as a co-equal paper contribution.
+- [ ] Open the section with its limited purpose: define the intrusive references
+      required later for the structural accuracy--cost comparison.
+- [ ] Explain, in one common framework, what each retained model reconstructs,
+      which variables it solves for, and what stress and tangent it returns.
+- [ ] Keep the distinction between fixed and adaptive integration, and between
+      iterative and direct deployment, because those distinctions are used in
+      Section 6.
+- [ ] End with one compact comparison table for the retained intrusive models.
+- [ ] Retain in the body only the concepts and equations required to understand
+      the deployed reduced models and their accuracy--cost comparison.
+- [ ] Move detailed PROM/HPROM, closure, cubature, and implementation derivations
+      to the supplement when they are not needed for the central argument.
+- [ ] In particular, consider moving the full POD/SVD derivation, detailed
+      strain-coordinate rotation, manifold-Hessian terms, expanded cubature
+      matrices, fitting losses, and implementation audits to the supplement.
+- [ ] Preserve enough information and citations for reproducibility after the
+      reduction.
+- [ ] Remove artificial contrasts with Pure Regression.
+- [ ] Decide which intrusive models are genuinely needed in the final body.
+- [ ] Compile and inspect the shortened section together with its supplement.
+
+**Approval criterion:** a reader understands the intrusive reference route, but
+Section 3 no longer competes with the constitutive contribution for the center
+of the paper.
+
+### Block 5 -- Section 5: constitutive evidence
+
+- [ ] Organize the section by scientific questions rather than by model count.
+- [ ] Use Material A to validate the constitutive laws later deployed in FE2.
+- [ ] Use Material B to test a second microstructure and the fixed/learned-feature
+      comparison.
+- [ ] Remove every Pure Regression result and reference.
+- [ ] Show FOM, ICNN, and ICKAN in the primary response plots.
+- [ ] Keep Unconstrained energy compact: preferably one separated reference row
+      or a short numerical statement, not a dominant curve in every figure.
+- [ ] State explicitly that the primary ablation is fixed versus learned features
+      within the same core.
+- [ ] Before new training, freeze a Material-B feature-count protocol using only
+      fitting data to construct nested feature sets at
+      `m = 8, 16, 24, 32, 40`.
+- [ ] Verify that the `m=32` member reproduces the existing locked feature set;
+      resolve any mismatch before launching the sensitivity campaign.
+- [ ] Run ICNN-fixed and ICNN-learned for seeds 16, 29, and 47 at all five
+      feature counts, reusing the six valid `m=32` runs where compatible.
+- [ ] Keep the ICKAN fixed/learned comparison at `m=32` as a cross-core
+      confirmation instead of duplicating the complete sweep.
+- [ ] Keep data, core widths, objective, scheduler, stopping rule, and evaluation
+      protocol fixed across `m`; report trainable parameter counts because the
+      sweep is not parameter-matched.
+- [ ] Report all declared feature counts as a sensitivity study; do not choose a
+      new primary `m` from test outcomes.
+- [ ] Summarize the sweep in one compact plot of error versus `m`, showing
+      variation across seeds for fixed and learned features.
+- [ ] Do not claim architectural superiority from unmatched historical budgets.
+- [ ] Check that every figure answers a stated question.
+- [ ] Compile and inspect the complete Section 5.
+
+**Approval criterion:** no result suggests that the paper's objective is to beat
+the unconstrained reference in in-domain fitting error.
+
+### Block 6 -- Section 6 and supplement: structural deployment
+
+- [ ] Remove Pure Regression from FE2 tables, plots, captions, and discussion.
+- [ ] Retain Unconstrained energy as a visually secondary non-intrusive reference.
+- [ ] Compare the guaranteed energies with FOM and only the intrusive reduced
+      references needed to contextualize structural accuracy and online cost.
+- [ ] Make clear that Section 6 evaluates deployment, not neural architecture.
+- [ ] Compress PROM configuration and timing discussion to what is necessary for
+      interpreting the retained comparison; move secondary diagnostics to the
+      supplement.
+- [ ] Remove the Regression row and related interpretation from Supplementary S3.
+- [ ] Keep the closed-cycle note only if it remains useful as a brief diagnostic
+      of the effective intrusive outputs.
+- [ ] Describe the origin of that diagnostic honestly without reintroducing the
+      deleted model into the paper's narrative.
+- [ ] Regenerate every affected paper-facing table and figure from its source.
+- [ ] Compile and inspect the complete Section 6 and supplement.
+
+**Approval criterion:** Section 6 tells one story about structural accuracy and
+cost; the intrusive and constitutive routes are not mixed conceptually.
+
+### Block 7 -- Abstract, conclusions, and title
+
+- [ ] Revisit the introduction after the evidence sections are frozen.
+- [ ] Align the abstract with the evidence actually retained.
+- [ ] Make every conclusion traceable to a table, figure, or construction proof.
+- [ ] Remove claims inherited from the old progression-of-models narrative.
+- [ ] Remove PROM from the title and reduce it in the abstract and keywords if
+      the final body confirms its secondary role.
+- [ ] Select a title only after the final methodological balance is visible.
+- [ ] Derive the final separate graphical abstract from the approved method
+      overview, simplify it to a left-to-right thumbnail-readable story, and
+      export it at Elsevier's required aspect ratio and resolution.
+- [ ] Compile and inspect the opening and closing pages together.
+
+**Approval criterion:** the first page promises exactly the paper delivered by
+Sections 4--6, and the conclusions claim no more than those sections establish.
+
+### Block 8 -- Global audit
+
+- [ ] Search manuscript, supplement, captions, tables, and figure labels for
+      residual `Regression`, `Pure Regression`, and equivalent model names.
+- [ ] Verify that any remaining discussion of componentwise stress fitting is
+      general background, not a hidden evaluated model.
+- [ ] Use **Unconstrained energy** consistently in all paper-facing text.
+- [ ] Check that `Free` survives only in internal filenames, code, and provenance.
+- [ ] Check all equation, section, table, figure, and supplementary references.
+- [ ] Regenerate all paper-facing assets affected by the removal.
+- [ ] Compile manuscript and supplement from a clean auxiliary state.
+- [ ] Review the PDFs page by page for spacing, empty regions, captions, and
+      orphaned explanations.
+- [ ] Record the final editorial decision and evidence scope in `REVISION_PLAN.md`.
+
+**Completion criterion:** the paper contains one coherent constitutive story,
+no paper-facing Pure Regression model, and no dangling evidence or references.
+
+## 5. Review protocol
+
+For every block:
+
+1. Inspect the current source and list only the necessary changes.
+2. Apply the smallest coherent edit.
+3. Show the user what changed and what was intentionally preserved.
+4. Compile and inspect the affected pages.
+5. Mark checklist items only after verification.
+6. Wait for approval before starting the next block.
+
+## 6. Current status
+
+- [x] Editorial direction agreed.
+- [x] Incremental execution agreed.
+- [x] Checklist created.
+- [x] Final manuscript order agreed in principle: constitutive construction
+      before the compact intrusive reference.
+- [ ] **Awaiting approval:** review the new Figure 1 and the closed constitutive
+      block in the compiled PDF. After approval, swap Sections 3 and 4 and
+      update the roadmap and cross-references before compressing PROM.

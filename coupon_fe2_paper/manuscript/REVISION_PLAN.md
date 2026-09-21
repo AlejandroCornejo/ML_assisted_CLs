@@ -1,5 +1,21 @@
 # Manuscript revision plan
 
+> Active model-narrative checklist:
+> [MODEL_STORY_REVISION_CHECKLIST.md](MODEL_STORY_REVISION_CHECKLIST.md).
+> It governs the incremental removal of Pure Regression and the revision of
+> Sections 1--6; the dated entries below remain the technical decision history.
+
+## Decisión editorial — 18 September 2026
+
+El mensaje principal sigue la construcción constitutiva, su precisión y el
+despliegue FE². Los modelos intrusivos se conservan como referencia de precisión
+y coste en la sección 6. El ensayo de ciclos sale de 5.5 y pasa al suplemento
+S3: explicación breve, tabla de trabajo neto y alcance del diagnóstico para
+las implementaciones concretas. La figura logarítmica y la tabla completa de
+refinamiento quedan disponibles en el proyecto. Se retira el ciclo como
+resultado central del resumen, la introducción y las conclusiones. Esta
+decisión sustituye el énfasis editorial en ciclos de las entradas anteriores.
+
 ## Plan vigente: dos materiales y un despliegue FE² — 16 September 2026
 
 Estado: esqueleto editorial incorporado; piloto FOM y preflight de referencia/dominio

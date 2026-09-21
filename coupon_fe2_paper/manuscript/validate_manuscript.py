@@ -35,12 +35,14 @@ def main():
     assert set(cites) == set(keys), (set(cites)-set(keys), set(keys)-set(cites))
     assert not set(refs)-set(labels), set(refs)-set(labels)
     learned = (HERE/"sections/learned_laws.tex").read_text()
-    # The comparison summarizes definitions and guarantees; it must not
-    # introduce input dimensions or saved-parameter checks ahead of them.
-    assert learned.index(r"\label{eq:features}") < learned.index("$m=32$")
-    assert learned.index("$m=32$") < learned.index(r"\label{tab:tiers}")
-    assert learned.index(r"\label{eq:lowerbound}") < learned.index(r"\label{tab:tiers}")
-    assert learned.index("objective input vector") < learned.index(r"\label{eq:free}")
+    results = (HERE/"sections/results_and_discussion.tex").read_text()
+    # The comparison must follow the feature and guarantee definitions; a
+    # particular feature count belongs to the numerical protocol, not here.
+    assert learned.index(r"\label{eq:features}") < learned.index(r"\label{tab:tiers}")
+    assert results.index(r"\label{app:nonnegative}") < results.index(r"\label{eq:lowerbound}")
+    assert learned.index(r"\label{eq:energy_stress_relation}") < learned.index(r"\label{eq:unconstrained_inputs}")
+    assert learned.index(r"\label{eq:unconstrained_inputs}") < learned.index(r"\label{eq:unconstrained_energy}")
+    assert learned.index(r"\label{eq:unconstrained_energy}") < learned.index(r"\label{eq:features}")
     assert "aresdeparga2026nonlinear" in keys
     main_text = src.split(r"\appendix", 1)[0]
     section_matches = list(re.finditer(r"\\section\{([^}]+)\}", main_text))

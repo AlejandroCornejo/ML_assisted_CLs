@@ -17,7 +17,6 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
-from matplotlib.patches import Ellipse
 from matplotlib.patches import Patch
 from matplotlib.colors import ListedColormap
 
@@ -247,9 +246,8 @@ def mechanics():
 
 
 def geometry():
-    sys.path.insert(0,str(ROOT))
-    import config as cfg
-    source(ROOT/'config.py')
+    # The paired RVE panels are built together by build_microstructure_figures.py.
+    # This mesh is still needed for the reduced-support visualization below.
     path=source(ROOT/'03_data/rve_mesh.mdpa')
     nodes, elements={},[]; section=None
     for line in path.read_text().splitlines():
@@ -264,20 +262,6 @@ def geometry():
     ids=list(nodes); index={v:i for i,v in enumerate(ids)}
     xy=np.asarray([nodes[i] for i in ids]); t=np.asarray([[index[i] for i in row] for row in elements])
     assert len(t)==1546
-    fig,(left,right)=plt.subplots(1,2,figsize=(7,3.1),layout='constrained')
-    left.triplot(xy[:,0],xy[:,1],t[:,:3],color='#687c90',lw=.22)
-    left.set(aspect='equal',xlabel='$X_1/\\ell$',ylabel='$X_2/\\ell$',title='Periodic cell: 1546 T6 elements')
-    left.set_xticks([-1,0,1],['−1/2','0','1/2']);left.set_yticks([-1,0,1],['−1/2','0','1/2'])
-    a,b=cfg.ellipse_semi_axes()
-    right.add_patch(plt.Rectangle((-1,-1),2,2,facecolor='#dae3eb',edgecolor='#334155'))
-    right.add_patch(Ellipse((0,0),2*a,2*b,angle=cfg.ELLIPSE_ANGLE_DEG,facecolor='white',edgecolor='#334155'))
-    th=np.deg2rad(cfg.ELLIPSE_ANGLE_DEG)
-    right.plot([0,a*np.cos(th)],[0,a*np.sin(th)],'--',color='#bd5d3b',lw=1)
-    right.text(.35,.02,r'$30^\circ$',color='#bd5d3b')
-    right.text(0,-1.25,'Void fraction 0.20; aspect ratio 2:1',ha='center',fontsize=8)
-    right.set(xlim=(-1.15,1.15),ylim=(-1.4,1.15),aspect='equal',title='Geometry, not an imposed material symmetry')
-    right.axis('off')
-    save(fig,'rve_geometry')
     supports_figure(xy,t)
 
 

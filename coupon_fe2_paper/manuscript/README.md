@@ -101,12 +101,13 @@ editorial integration.
    and the direct operating mode.
 4. Mechanical requirements, learned constitutive construction, proofs and
    distinction between the four neural model tiers.
-5. Example I: the current RVE tests approximability, integrability and sampled
-   rank-one curvature. Regression and all three deployed HPROM variants have nonzero cycle
-   witnesses; the Free OOD
-   witness is not described as an FOM-confirmed artificial instability.
-6. Example II: the tensile coupon illustrates structural deployment and tests
-   error propagation and online time for the same RVE. FOM–FE2 provides a
+5. Constitutive assessment: microstructures, data domains, independent response
+   accuracy, fixed/learned features, and checks of the learned energies.
+   Additional material-A curvature and closed-cycle diagnostics are in
+   Supplementary Sections S2 and S3. S3 retains a compact table for neural and
+   intrusive outputs; it does not establish their structural-error ranking.
+6. The material-A tensile coupon compares learned constitutive laws and reduced
+   microscopic solvers through error propagation and online time. FOM–FE2 provides a
    computational reference within the adopted homogenization model, not an
    independent validation against a cell-resolved structure. This is neither
    a second material example nor a new FE2 method.
@@ -138,6 +139,10 @@ MPLCONFIGDIR=/tmp/coupon-manuscript-mpl OPENBLAS_NUM_THREADS=1 \
   python3 coupon_fe2_paper/manuscript/build_evidence.py
 MPLCONFIGDIR=/tmp/coupon-manuscript-mpl OPENBLAS_NUM_THREADS=1 \
   python3 coupon_fe2_paper/manuscript/build_method_figures.py
+MPLCONFIGDIR=/tmp/coupon-manuscript-mpl OPENBLAS_NUM_THREADS=1 \
+  python3 coupon_fe2_paper/manuscript/build_microstructure_figures.py
+MPLCONFIGDIR=/tmp/coupon-manuscript-mpl OPENBLAS_NUM_THREADS=1 \
+  python3 coupon_fe2_paper/manuscript/build_data_domains_figure.py
 ```
 
 The scripts load NumPy/Matplotlib from the existing local `.pydeps`, leave
@@ -147,6 +152,12 @@ metadata. Error norms are the declared unweighted stored-array norms, not
 quadrature-weighted tensor norms. The POD script sums the discarded singular
 values directly, avoiding cancellation from subtracting a cumulative sum
 from one.
+Run the microstructure command after `build_evidence.py`: it replaces the
+material-A figure and creates the matching material-B figure, using LaTeX for
+all plot labels. It also requires `pdftoppm` for the PNG previews.
+The domain-figure command reads only frozen strain coordinates and the archived
+material-A fit/validation split. It displays deterministic subsets of each role
+to keep the two three-dimensional boxes legible.
 
 If citation order changes, reorder the existing bibliography entries without
 changing their keys:
