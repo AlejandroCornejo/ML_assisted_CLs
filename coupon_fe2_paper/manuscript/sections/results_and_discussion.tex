@@ -402,3 +402,68 @@ Only terms with $0<\eta_i<1$ can have negative coefficients. If $c_-=\sum_{c_i^*
 are sufficient on $0<J\leq1$ and $J\geq1$, respectively. For the first region, $J^{\eta_i}\leq1$ for negative-coefficient terms and $J^{\eta_i}\geq1$ when $\eta_i<0$. For the second region, divide $J^2g''$ by $J$: all negative-coefficient powers then satisfy $J^{\eta_i-1}\leq1$, while $J^{\eta_i-1}\geq1$ for $\eta_i\geq1$ and $\beta J\geq\beta$. Dropping the remaining nonnegative contributions gives the stated bounds. Their failure is inconclusive.
 
 The selected parameters require a sharper check. The audit partitions $[10^{-4},10^4]$ into 4000 logarithmically spaced intervals. On each interval $[J_L,J_R]$, a positive power term is bounded below by the smaller endpoint value, whereas a negative-coefficient term is bounded below by $c_i^*J_R^{\eta_i}$, since its exponent lies in $(0,1)$. The constant and quadratic terms are bounded below by $\alpha+\varepsilon$ and $\beta J_L^2$. Below the finite interval, the nonnegative negative-exponent terms increase and the magnitudes of the negative-coefficient terms decrease toward $J=0$. Above it, factoring out $J^{\eta_-}$ with $\eta_-=\max_{c_i^*<0}\eta_i<1$ yields a lower bound whose retained positive powers increase. These endpoint and tail inequalities cover every $J>0$, not only the grid points. Positive margins establish the sufficient analytical argument for the saved parameters to the accuracy of its floating-point evaluation; random energy samples alone would not establish it.
+
+\section{Elementwise cubature conventions}
+\label{app:cubature}
+This appendix records the implementation conventions omitted from Section~\ref{sec:reduced}. The general ECM construction and MAW--ECM pruning algorithm follow Refs.~\cite{hernandez2017,hernandez2026}; the expressions below specify how the deployed residual and stress rules are assembled.
+
+\paragraph{Fixed rule.}
+Let $\bm c_e^s\in\R^d$ contain the contribution of element $e$ at training state $s$. Residual cubature uses $\bm c_e^s=\bm h_e^s$. Stress cubature uses the four components of
+\begin{equation}
+ \bm p_e^s=\frac{1}{|Y|}\sum_{g\in e}\omega_g\bm P_{\mu,g}^s,
+ \qquad
+ \bm c_e^s=\operatorname{vec}\bm p_e^s
+ =\begin{bmatrix}p_{e,11}^s&p_{e,12}^s&p_{e,21}^s&p_{e,22}^s\end{bmatrix}^{T}.
+\end{equation}
+One element occupies each row of the sampled integrand matrix,
+\begin{equation}
+ \bm M_{\rm int}=
+ \begin{bmatrix}
+  (\bm c_1^1)^T&\cdots&(\bm c_1^{N_c})^T\\
+  \vdots&&\vdots\\
+  (\bm c_{N_{\rm el}}^1)^T&\cdots&(\bm c_{N_{\rm el}}^{N_c})^T
+ \end{bmatrix}
+ \in\R^{N_{\rm el}\times(dN_c)}.
+\end{equation}
+A truncated SVD gives $\bm M_{\rm int}\simeq\bm U_{\rm cub}\bm\Sigma_{\rm cub}\bm V_{\rm cub}^T$. To enforce the multiplier sum without duplicating a constant component already represented by the retained integration modes, the fitting system uses
+\begin{equation}
+ \bm p_\perp=(\bm I-\bm U_{\rm cub}\bm U_{\rm cub}^T)\bm1,
+ \qquad
+ \bm G_{\rm cub}=
+ \begin{bmatrix}
+  \bm U_{\rm cub}^T\\
+  \bm p_\perp^T/\|\bm p_\perp\|_2
+ \end{bmatrix},
+ \qquad
+ \bm b_{\rm cub}=\bm G_{\rm cub}\bm1.
+\end{equation}
+If the constant already lies in the retained span, the last row is redundant. Otherwise its exact reproduction gives $\sum_e w_e=N_{\rm el}$. The reference quadrature measures are already contained in $\bm c_e^s$; the unknowns are element multipliers.
+
+\paragraph{Adaptive neural fields.}
+After MAW--ECM pruning selects a support $\mathcal Z=\{e_1,\ldots,e_m\}$, neural fitting returns to the uncompressed contributions at each decoded state:
+\begin{equation}
+ \bm A^s=
+ \begin{bmatrix}
+  \bm c_{e_1}^s&\cdots&\bm c_{e_m}^s\\
+  1&\cdots&1
+ \end{bmatrix},
+ \qquad
+ \bm b^s=
+ \begin{bmatrix}
+  \displaystyle\sum_{e\in\mathcal E}\bm c_e^s\\
+  N_{\rm el}
+ \end{bmatrix}.
+ \label{eq:statewise_cubature_appendix}
+\end{equation}
+Thus the target uses the full-mesh sum, not the selected-column sum. Residual fitting uses $d=n$ and $\mathcal Z_r$; stress fitting uses $d=4$ and $\mathcal Z_s$. With the scaled-softmax map of Eq.~\eqref{eq:softmax_weights}, the residual network minimizes
+\begin{equation}
+ \mathcal L_{\rm cub}(\bm\theta_r)=
+ \frac{1}{|\mathcal I_{\rm fit}|}
+ \sum_{s\in\mathcal I_{\rm fit}}
+ \frac{\|\bm A^s\bm w(\bm\xi^s)-\bm b^s\|_2^2}
+      {\max(\|\bm b^s\|_2^2,\delta_{\rm floor})},
+\end{equation}
+and the stress network uses the analogous loss with $\bm v$. A preliminary fit to the sampled MAW--ECM weights initializes each network, but the final objective is integration accuracy; a reproducing weight vector is not unique.
+
+\paragraph{Tangent evaluation.}
+Both reduced implementations use Eq.~\eqref{eq:reduced_ift}, but evaluate its partial derivatives differently. For the affine HPROM, the assembled reduced stiffness and the analytic lifting derivative provide $\dd\qq_{\rm tra}^*/\dd\ee$ through three linear right-hand sides; central differences are applied only to the stress along those linearized equilibrium directions. For HPROM--ANN, central differences at fixed $\qq$ or fixed $\ee$ evaluate all four partial-derivative blocks in Eq.~\eqref{eq:reduced_ift}, including decoder curvature and weight variation. The resulting small linear system does not require a new nonlinear microscopic solve for every perturbed strain. Numerical differentiation is an implementation choice; analytic or automatic differentiation would give the same formal tangent subject to their respective numerical tolerances.

@@ -18,9 +18,9 @@ editorial integration.
 - `manuscript.tex`: master source; the substantial text is in `sections/`.
   Original title and author order restored; affiliation wording follows the
   current MAW–ECM manuscript, with its CIMNE note for S. Ares de Parga.
-- `manuscript.pdf`: compiled 40-page working reading copy, with 43 cited references,
-  nine figures and six tables, including visible pending-evidence notes.
-- `supplementary.tex` / `supplementary.pdf`: standalone two-page supplement
+- `manuscript.pdf`: compiled 41-page working reading copy, with 43 cited references,
+  eleven figures and five tables, including visible pending-evidence notes.
+- `supplementary.tex` / `supplementary.pdf`: standalone three-page supplement
   with the material-A probe figure, archived test/probe table and detailed
   rank-one curvature audit. Sections S1--S2 are referenced from the main text.
 - `sections/introduction.tex`: motivation, PMOR/hyperreduction lineage,
@@ -30,7 +30,7 @@ editorial integration.
 - `sections/homogenization.tex`: revised Section 2, organized from the strain
   input through periodic equilibrium, effective outputs, and consistent
   differentiation to the common structural constitutive interface.
-- `sections/reduced_micromechanics.tex`: revised Section 3, separating
+- `sections/reduced_micromechanics.tex`: Section 4, separating
   affine/nonlinear displacement reduction from fixed/adaptive integration,
   using `aresdeparga2026nonlinear` nomenclature. Input-informed coordinates
   and direct evaluation are attributed to MAW–ECM; implementation-specific
@@ -44,9 +44,9 @@ editorial integration.
   their full-mesh targets. Its third panel expands the four first Piola
   components and normalization row for stress cubature.
 - `sections/learned_laws.tex` and `sections/mechanical_requirements.tex`:
-  Section 4 introduces direct stress regression, the unconstrained-energy
-  Free baseline, and the motivation for a polyconvex energy before its
-  explicit C1–C6 admissibility checklist, with the
+  Section 3 introduces the Unconstrained energy reference and motivates the
+  proposed polyconvex construction before its explicit C1–C6 admissibility
+  checklist, with the
   feature proof and both monotone cores preceding the complete-energy
   proposition. Nonnegative energy is a separate saved-parameter bound;
   numerical checks are distinguished from architectural guarantees.
@@ -96,11 +96,11 @@ editorial integration.
    PROM-based models as complementary comparisons; structural deployment as
    an illustration. The literature positioning remains in the introduction.
 2. General periodic homogenization and work-conjugate variables.
-3. Affine and nonlinear PROMs; primary/secondary coordinates and closure
+3. Mechanical requirements, learnable paired features, ICNN/ICKAN cores, and
+   the complete polyconvex energy with its analytical guarantees.
+4. Affine and nonlinear PROMs; primary/secondary coordinates and closure
    fitting; fixed/adaptive ECM; actual reduced meshes; consistent derivatives
    and the direct operating mode.
-4. Mechanical requirements, learned constitutive construction, proofs and
-   distinction between the four neural model tiers.
 5. Constitutive assessment: microstructures, data domains, independent response
    accuracy, fixed/learned features, and checks of the learned energies.
    Additional material-A curvature and closed-cycle diagnostics are in

@@ -69,8 +69,8 @@ The final manuscript order will be:
 
 1. Introduction.
 2. Finite-strain homogenization and reference problem.
-3. Learnable paired-feature polyconvex energies (current Section 4).
-4. Compact projection-based structural reference (current Section 3).
+3. Learnable paired-feature polyconvex energies.
+4. Compact projection-based structural reference.
 5. Constitutive assessment on periodic microstructures.
 6. Structural deployment.
 7. Conclusions.
@@ -87,19 +87,19 @@ swap, compress the PROM section, and finally return to the opening and evidence
 sections. Each block ends with a compiled-PDF review and explicit approval
 before the next block begins.
 
-### Block 1 -- Current Section 4 / final Section 3: constitutive construction
+### Block 1 -- Section 3: constitutive construction
 
 - [x] Remove the definition and implementation of Pure Regression.
 - [x] Open the non-intrusive route with the decision to learn a scalar energy.
 - [x] Introduce **Unconstrained energy** once, briefly and precisely.
 - [x] Present ICNN and ICKAN as the two guaranteed constructions.
-- [x] After the Section 4.4 tutorial review, add a compact paper-facing
+- [x] After the core-architecture tutorial review, add a compact paper-facing
       integrated-hat visualization in the established manuscript style. It
       should show the chain from localized nonnegative curvature to accumulated
       slope and the resulting convex connection, and may also show how several
       weighted hats combine. Decide in context whether this is clearer as one
       composite figure or two small figures; do not include both by default.
-- [x] After closing Section 4.5, design the method-centered replacement for
+- [x] After closing the complete-energy subsection, design the method-centered replacement for
       Figure 1: periodic RVE response -> learnable paired directional features
       -> ICNN/ICKAN core -> normalized energy -> stress, tangent, and guarantees.
       The paired features must be the visual focus; PROM and comparison
@@ -109,7 +109,7 @@ before the next block begins.
 - [x] Remove Pure Regression from the model-hierarchy figure.
 - [x] Keep Unconstrained energy as a short textual reference rather than part of
       the proposed-method overview.
-- [x] Check every forward reference from Section 4 to Sections 5 and 6.
+- [x] Check every forward reference from the constitutive construction to Sections 5 and 6.
 - [x] Compile and inspect the affected pages.
 
 **Approval criterion:** a reader can identify the proposed models, the sole
@@ -141,17 +141,17 @@ role. It will receive a final consistency pass after Sections 5--6 are closed.
 - [ ] Make no change where the current explanation already supports the revised
       story.
 - [ ] Remove only obsolete taxonomy or forward references.
-- [ ] Verify notation and cross-references after the Section 4 changes.
+- [ ] Verify notation and cross-references after the constitutive-section changes.
 - [ ] Compile and inspect Section 2 in context.
 
 **Approval criterion:** Section 2 supplies the common mechanical reference
 without anticipating either surrogate route unnecessarily.
 
-### Block 4 -- Current Section 3 / final Section 4: reduced microscopic reference
+### Block 4 -- Section 4: reduced microscopic reference
 
-- [ ] Recast projection-based models as secondary intrusive references for the
+- [x] Recast projection-based models as secondary intrusive references for the
       structural deployment, not as a co-equal paper contribution.
-- [ ] Open the section with its limited purpose: define the intrusive references
+- [x] Open the section with its limited purpose: define the intrusive references
       required later for the structural accuracy--cost comparison.
 - [ ] Explain, in one common framework, what each retained model reconstructs,
       which variables it solves for, and what stress and tangent it returns.
@@ -173,7 +173,7 @@ without anticipating either surrogate route unnecessarily.
 - [ ] Compile and inspect the shortened section together with its supplement.
 
 **Approval criterion:** a reader understands the intrusive reference route, but
-Section 3 no longer competes with the constitutive contribution for the center
+Section 4 no longer competes with the constitutive contribution for the center
 of the paper.
 
 ### Block 5 -- Section 5: constitutive evidence
@@ -247,7 +247,7 @@ cost; the intrusive and constitutive routes are not mixed conceptually.
 - [ ] Compile and inspect the opening and closing pages together.
 
 **Approval criterion:** the first page promises exactly the paper delivered by
-Sections 4--6, and the conclusions claim no more than those sections establish.
+Sections 3--6, and the conclusions claim no more than those sections establish.
 
 ### Block 8 -- Global audit
 
@@ -285,6 +285,13 @@ For every block:
 - [x] Checklist created.
 - [x] Final manuscript order agreed in principle: constitutive construction
       before the compact intrusive reference.
-- [ ] **Awaiting approval:** review the new Figure 1 and the closed constitutive
-      block in the compiled PDF. After approval, swap Sections 3 and 4 and
-      update the roadmap and cross-references before compressing PROM.
+- [x] New Figure 1 and the constitutive block approved in the compiled PDF.
+- [x] Sections 3 and 4 swapped so that the constitutive contribution precedes
+      the reduced microscopic reference; roadmap and cross-references updated.
+- [x] Reordered Sections 3 and 4 approved in the compiled PDF.
+- [x] Section 4 opening and constrained microscopic reference approved; HDM/FOM
+      terminology and the placement of Figures 2--3 corrected.
+- [x] Section 4.2 approved after its narrative revision.
+- [x] Compact Section 4.3 approved in the main text; detailed
+      strain-informed rotation, reconstruction split, and manifold tangent moved
+      to Supplementary Section S4.
