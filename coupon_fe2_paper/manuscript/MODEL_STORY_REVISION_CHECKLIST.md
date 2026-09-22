@@ -11,16 +11,20 @@ ladder of increasingly constrained neural models. Its central message is:
 
 > We construct learnable anisotropic paired features that retain polyconvexity,
 > exact reference normalization, and growth; we assess whether learning these
-> features improves the constrained models, whether the representation fits two
-> periodic microstructures, and how the resulting energies deploy in FE2.
+> features improves the constrained models on a multidirectional microstructure,
+> whether the resulting construction accurately represents an independent
+> deployment microstructure, and how the corresponding energies perform in FE2.
 
-The final evidence must answer four questions:
+The final evidence must answer five questions, in this order:
 
-- [ ] How accurately can a flexible hyperelastic energy represent the data?
-- [ ] What accuracy is traded for the requested mechanical guarantees?
-- [ ] Within the guaranteed constructions, what is gained by learning the
-      paired features instead of fixing them?
+- [ ] Do learned paired features improve the guaranteed constructions over
+      fixed admissible features on the multicavity microstructure?
 - [ ] How sensitive is that conclusion to the number `m` of paired features?
+- [ ] How accurately do the selected learned energies reproduce independent FOM
+      responses for the single-cavity deployment microstructure?
+- [ ] What accuracy is traded for the requested mechanical guarantees?
+- [ ] How do those energies compare with the intrusive references in structural
+      accuracy and online cost?
 
 ## 2. Decisions already closed
 
@@ -36,9 +40,16 @@ The final evidence must answer four questions:
       as members of the constitutive neural-model hierarchy.
 - [x] Treat intrusive reduced models as secondary deployment references, not as
       a contribution with equal narrative weight to the paired-feature energies.
-- [x] Add a controlled Material-B sensitivity study in the number of paired
+- [x] Add a controlled multicavity sensitivity study in the number of paired
       features, without using its test results to reselect the locked `m=32`
       models.
+- [x] Remove the paper-facing identifiers **Material A** and **Material B**.
+      Use **single-cavity microstructure** for the FE2 deployment case and
+      **multicavity microstructure** for the controlled representation study.
+      Internal filenames, scripts, and provenance may retain A/B identifiers.
+- [x] Present the multicavity representation study before the single-cavity
+      deployment qualification, so that the value of learned features is tested
+      before the paper uses them in the structural case.
 - [x] Preserve internal Regression code and archived results for provenance;
       removing the model from the paper does not authorize deleting evidence.
 - [x] Replace the current model-hierarchy Figure 1 with an original visual
@@ -60,8 +71,15 @@ Paper-facing names:
 - **HPROM and variants:** intrusive FE2 references, introduced only in their own
   methodological and structural-deployment context.
 
-Internal directories and checkpoint slugs may continue to use `Free`; only the
-paper-facing terminology changes.
+Paper-facing benchmark names:
+
+- **Multicavity microstructure:** four-cavity, multidirectional representation
+  benchmark used for fixed/learned ablation and feature-count sensitivity.
+- **Single-cavity microstructure:** rotated single-cavity benchmark used for
+  constitutive qualification and subsequent FE2 deployment.
+
+Internal directories and checkpoint slugs may continue to use `Free`, `A`, and
+`B`; only the paper-facing terminology changes.
 
 ## 4. Execution order
 
@@ -71,8 +89,9 @@ The final manuscript order will be:
 2. Finite-strain homogenization and reference problem.
 3. Learnable paired-feature polyconvex energies.
 4. Compact projection-based structural reference.
-5. Constitutive assessment on periodic microstructures.
-6. Structural deployment.
+5. Constitutive evidence: multicavity representation study followed by
+   single-cavity deployment qualification.
+6. Structural deployment of the single-cavity microstructure.
 7. Conclusions.
 
 The PROM/HPROM material remains a self-contained methods section because the
@@ -124,7 +143,8 @@ results section.
       paper-facing model.
 - [ ] Present ICNN and ICKAN as two cores implementing the same constitutive
       design, rather than as unrelated methods.
-- [ ] Preview the distinct roles of Materials A and B.
+- [ ] Preview the distinct roles of the multicavity representation benchmark and
+      the single-cavity deployment benchmark, in that logical order.
 - [ ] Introduce the intrusive route only as a secondary FE2 accuracy--cost
       reference.
 - [ ] Remove claims inherited from the previous co-equal PANN/PROM narrative.
@@ -162,7 +182,7 @@ without anticipating either surrogate route unnecessarily.
 - [x] Retain in the body only the concepts and equations required to understand
       the deployed reduced models and their accuracy--cost comparison.
 - [x] Move detailed PROM/HPROM, closure, cubature, and implementation derivations
-      to the supplement when they are not needed for the central argument.
+      to the main appendices when they are not needed for the central argument.
 - [x] In particular, consider moving the full POD/SVD derivation, detailed
       strain-coordinate rotation, manifold-Hessian terms, expanded cubature
       matrices, fitting losses, and implementation audits to the supplement.
@@ -170,7 +190,7 @@ without anticipating either surrogate route unnecessarily.
       reduction.
 - [x] Remove artificial contrasts with Pure Regression.
 - [x] Decide which intrusive models are genuinely needed in the final body.
-- [x] Compile and inspect the shortened section together with its supplement.
+- [x] Compile and inspect the shortened section together with its appendices.
 
 **Approval criterion:** a reader understands the intrusive reference route, but
 Section 4 no longer competes with the constitutive contribution for the center
@@ -178,17 +198,39 @@ of the paper.
 
 ### Block 5 -- Section 5: constitutive evidence
 
-- [ ] Organize the section by scientific questions rather than by model count.
-- [ ] Use Material A to validate the constitutive laws later deployed in FE2.
-- [ ] Use Material B to test a second microstructure and the fixed/learned-feature
-      comparison.
+- [ ] Retitle and organize the section as a progression from representation
+      evidence to deployment qualification, rather than by model count or the
+      historical A/B identifiers.
+- [ ] Remove **Material A** and **Material B** from headings, captions, tables,
+      legends, and paper-facing prose; use **single-cavity microstructure** and
+      **multicavity microstructure** consistently.
+- [ ] Open with one compact benchmark-design subsection: state the common matrix
+      law and porosity, show both geometries, document the two mesh checks, and
+      explain that the result order follows scientific role rather than geometric
+      simplicity.
+- [ ] State the questions before giving training details or numerical results:
+      first whether features should be learned, then whether the learned
+      construction is accurate enough for the structural case.
 - [ ] Remove every Pure Regression result and reference.
-- [ ] Show FOM, ICNN, and ICKAN in the primary response plots.
+- [ ] Show FOM, ICNN, and ICKAN in the primary response plots; distinguish fixed
+      and learned variants only where the controlled ablation requires it.
 - [ ] Keep Unconstrained energy compact: preferably one separated reference row
       or a short numerical statement, not a dominant curve in every figure.
+
+#### Block 5A -- Multicavity representation study
+
+- [ ] Present the multicavity microstructure first and define its sampling domain,
+      fitting/validation/test roles, and reserved loading paths before reporting
+      any model comparison.
 - [ ] State explicitly that the primary ablation is fixed versus learned features
-      within the same core.
-- [ ] Before new training, freeze a Material-B feature-count protocol using only
+      within the same core, under common data, objectives, widths, optimization
+      rules, and evaluation states.
+- [ ] Compare ICNN-fixed with ICNN-learned and ICKAN-fixed with ICKAN-learned at
+      the locked `m=32` using seeds 16, 29, and 47.
+- [ ] Use independent aggregate errors and predeclared axial, shear, and combined
+      paths to determine whether any fixed/learned difference is reproducible and
+      mechanically interpretable.
+- [ ] Before new training, freeze a multicavity feature-count protocol using only
       fitting data to construct nested feature sets at
       `m = 8, 16, 24, 32, 40`.
 - [ ] Verify that the `m=32` member reproduces the existing locked feature set;
@@ -204,15 +246,52 @@ of the paper.
       new primary `m` from test outcomes.
 - [ ] Summarize the sweep in one compact plot of error versus `m`, showing
       variation across seeds for fixed and learned features.
+- [ ] If it remains legible and genuinely explanatory, add one compact view of
+      learned orientations relative to the cavity geometry; do not treat visual
+      alignment alone as evidence of physical identification.
+- [ ] Conclude this study without using test results to select a different `m` or
+      to select the independently trained single-cavity checkpoints.
+
+#### Block 5B -- Single-cavity deployment qualification
+
+- [ ] Introduce the single-cavity microstructure only after the representation
+      study has established why feature learning is being examined.
+- [ ] Explain its coupon-derived strain domain, Cartesian sampling, and
+      fit/validation/independent-test split as preparation for FE2 rather than as
+      a second ablation campaign.
+- [ ] Evaluate the locked ICNN-learned and ICKAN-learned checkpoints against FOM
+      on independent states and predeclared axial, shear, and combined paths.
+- [ ] Use Unconstrained energy only to contextualize the cost of the guarantees;
+      do not make beating it the objective of this study.
+- [ ] Report the implementation and saved-checkpoint audits required for the
+      models passed to Section 6: reference normalization, derivatives, the
+      nonnegative-energy sufficient bound, and any retained finite diagnostic.
+- [ ] End with an explicit handoff: the single-cavity models proceed to the
+      structural deployment because their accuracy and domain coverage have now
+      been assessed, not because the multicavity test selected them.
+
+#### Block 5C -- Scope and evidence map
+
+- [ ] State that the two microstructures are trained independently and do not
+      demonstrate transfer between geometries.
+- [ ] Separate analytical guarantees from finite implementation audits and from
+      predictive accuracy.
+- [ ] State in one closing synthesis what the multicavity study establishes, what
+      the single-cavity study establishes, and what remains for Section 6.
 - [ ] Do not claim architectural superiority from unmatched historical budgets.
 - [ ] Check that every figure answers a stated question.
 - [ ] Compile and inspect the complete Section 5.
 
-**Approval criterion:** no result suggests that the paper's objective is to beat
-the unconstrained reference in in-domain fitting error.
+**Approval criterion:** the reader encounters the evidence in causal order---the
+value of learning the features is tested before learned features are deployed---
+and can state the distinct purpose of each microstructure without relying on A/B
+labels. No result suggests that the objective is to beat the unconstrained
+reference in in-domain fitting error.
 
 ### Block 6 -- Section 6 and supplement: structural deployment
 
+- [ ] Replace every paper-facing **Material A** label by **single-cavity
+      microstructure** or a natural shortened reference to that benchmark.
 - [ ] Remove Pure Regression from FE2 tables, plots, captions, and discussion.
 - [ ] Retain Unconstrained energy as a visually secondary non-intrusive reference.
 - [ ] Compare the guaranteed energies with FOM and only the intrusive reduced
@@ -251,6 +330,10 @@ Sections 3--6, and the conclusions claim no more than those sections establish.
 
 ### Block 8 -- Global audit
 
+- [ ] Search paper-facing text, captions, tables, and legends for residual
+      **Material A** and **Material B** identifiers; retain A/B only in internal
+      paths, scripts, checkpoint metadata, and provenance where renaming would
+      obscure reproducibility.
 - [ ] Search manuscript, supplement, captions, tables, and figure labels for
       residual `Regression`, `Pure Regression`, and equivalent model names.
 - [ ] Verify that any remaining discussion of componentwise stress fitting is
@@ -294,7 +377,7 @@ For every block:
 - [x] Section 4.2 approved after its narrative revision.
 - [x] Compact Section 4.3 approved in the main text; detailed
       strain-informed rotation, reconstruction split, and manifold tangent moved
-      to Supplementary Section S4.
+      to Appendix D of the main manuscript.
 - [x] Sections 4.4--4.7 compressed and approved; detailed cubature conventions
       and implementation derivatives retained in the appendix.
 - [x] Section 4 now closes with a common constitutive-output framework and a
@@ -304,3 +387,7 @@ For every block:
       subsection.
 - [x] Block 4 approved: the intrusive route is complete but visually and
       narratively secondary to the paired-feature constitutive contribution.
+- [x] Section 5 evidence order agreed in principle: multicavity representation
+      study first, single-cavity deployment qualification second.
+- [x] Paper-facing naming decision approved: replace A/B by descriptive
+      microstructure names during Blocks 5--6; internal provenance may retain A/B.
