@@ -1,0 +1,200 @@
+{
+  "id": "material_B_feature_count_sweep_preparation_v1_m32",
+  "parent_data_protocol_sha256": "6e252d9bea52d1e71ee11d5103c582ce20654adbfdb599e4e86a15e7374def8f",
+  "labels_sha256": "c2edcb3cc663c75f342f66927335c700d30b2867b0a16b9ff668905366dc32e2",
+  "timing": "Post-hoc multicavity feature-count sensitivity preparation. The parent data split, architectures, initialization, and objective are inherited unchanged. Feature selection is recomputed from only the frozen fit and reference arrays for this declared count.",
+  "selection_allowed_arrays": [
+    "E_fit",
+    "S_fit",
+    "W_fit",
+    "E_reference",
+    "S_reference",
+    "W_reference",
+    "D_reference"
+  ],
+  "feature_selection": {
+    "count": 32,
+    "candidate_angles": "k*pi/12, k=0,...,11, outermost loop",
+    "candidate_powers": [
+      0.5,
+      1.0,
+      1.5,
+      2.0,
+      3.0
+    ],
+    "candidate_couplings": "sorted unique values {0, p-0.5, 2*p-1}, and similarly for q; loop order theta,p,q,b,c",
+    "common_start_projection": {
+      "minimum_power": 0.5001,
+      "minimum_ratio": 0.001,
+      "maximum_ratio": 0.999,
+      "rule": "Project powers first; divide original b,c by the new bounds 2*p-1,2*q-1, clip ratios, then reconstruct b,c. Applied to the entire candidate bank BEFORE selection, equally for fixed and learned starts."
+    },
+    "nnls_maxiter": 20000,
+    "support_coefficient_threshold": 1e-06,
+    "support_rule": "Union of positive supports from fit energy/stress NNLS and a separate reference-tangent NNLS, excluding the two analytic volume columns.",
+    "overflow_rule": "If support exceeds 32, rank support by fit_coefficient*fit_column_norm/fit_target_norm + reference_coefficient*reference_column_norm/reference_target_norm; descending score, ascending candidate index for ties. Otherwise retain support in ascending candidate order.",
+    "qr_rows": 600,
+    "qr_rule": "Rows linspace(0,4*N_fit-1,600,dtype=int) of the weighted fit matrix; exclude two analytic columns; divide columns by max(norm,1e-10); scipy economic pivoted QR. Append unselected pivots to reach exactly 32.",
+    "qr_column_norm_floor": 1e-10,
+    "subset_refit": "Refit nonnegative coefficients on the selected 32 features plus quadratic and logarithmic volume columns using all three training-objective terms, including reference tangent weight 0.02. Subtract the fixed epsilon growth term from targets in this final refit. No validation labels enter.",
+    "limitations": "Finite dictionary and greedy diversity heuristic, not an optimal-feature theorem; fitting the fixed embedding to fit labels is intentional. Interior projection slightly changes boundary candidates to make a genuinely common finite-parameter learned start possible."
+  },
+  "scaling": {
+    "strain_scale": "max(abs(E_fit))",
+    "energy_scale": "max(abs(W_fit))",
+    "targets": "x=e/strain_scale, w=W/energy_scale, s=S*strain_scale/energy_scale, d0=D_reference*strain_scale^2/energy_scale",
+    "stress_denominator": "mean(s_fit^2), over all samples and 3 components",
+    "energy_denominator": "mean(w_fit^2)",
+    "tangent_denominator": "mean(d0^2), over the 9 reference entries",
+    "feature_center": "Current exact undeformed value 1/p+1/q, including during learned-feature fitting",
+    "feature_scale": "max(max_fit(abs(z-z0)),1e-4) per selected feature; identical for both cores and fixed/learned; frozen at initialization, never refitted during optimization",
+    "free_feature_scale": "max(max_fit(abs([2*E11,2*E22,2*E12,J-1])),1e-4)",
+    "metric_floor_fraction": 1e-08,
+    "metric_floors": "Energy floor = fraction*RMS(W_fit); stress-vector floor = fraction*sqrt(mean(sum(S_fit^2,axis=1))); tangent-matrix floor = stress-vector floor/strain_scale. Component stress RMSE uses max(component_fit_RMS,fraction*global_component_fit_RMS). Per-state relative distributions use these floors; aggregate errors use the actual target norm. Zero-strain reference is reported separately. No fit tangents except the reference anchor are used."
+  },
+  "objective": {
+    "stress_weight": 1.0,
+    "energy_weight": 0.2,
+    "reference_tangent_weight": 0.02,
+    "formula": "mean((s_pred-s_fit)^2)/stress_denominator + 0.2*mean((w_pred-w_fit)^2)/energy_denominator + 0.02*mean((d_pred(0)-d0)^2)/tangent_denominator"
+  },
+  "models": {
+    "names": [
+      "ICNN-fixed",
+      "ICNN-learned",
+      "ICKAN-fixed",
+      "ICKAN-learned"
+    ],
+    "seeds": [
+      16,
+      29,
+      47
+    ],
+    "widths": {
+      "Free": [
+        128,
+        128,
+        64
+      ],
+      "ICNN": [
+        24,
+        24
+      ],
+      "ICKAN": [
+        12,
+        12
+      ]
+    },
+    "Free": {
+      "class": "AnisotropicFreeEnergy",
+      "inputs": "material components [C11-1,C22-1,C12,J-1]",
+      "activation": "Softplus(beta=4)",
+      "initialization": "Xavier uniform linear weights and zero biases, constructed in float64; reset strain/feature buffers to exact saved float64 scales after constructor",
+      "reference_correction": "Subtract raw reference energy and its full affine engineering-strain gradient; no polyconvexity claim"
+    },
+    "constrained": {
+      "class": "FlexibleEnergy",
+      "dynamic_center": true,
+      "analytic_stress": true,
+      "spline_basis": "integrated_hat",
+      "initialization": "initialize(shared_subset_coefficients, nonlinear); use the same reset RNG seed for fixed and learned within each core",
+      "calibration": "First 500 fit states in saved order. Compute nonlinear stress relative to the shared affine NNLS response; scale only the final nonlinear branch by min(1,0.05*norm(s_target)/max(norm(s_nonlinear),1e-12)). Apply the same deterministic procedure to both variants; verify equal initial responses.",
+      "initial_skip_floor": 1e-10,
+      "initial_barrier_floor": 1e-06,
+      "initial_quadratic_floor": 0.01,
+      "epsilon_and_volume_floor": 1e-10,
+      "positive_transform": "softplus; ICNN positive weights additionally have a 1e-10 floor; alpha,beta have the volume floor",
+      "learned_parameters": "Unbounded angles; p,q=0.5+softplus(raw); b,c=(2*p-1)*sigmoid(raw_ratio)"
+    },
+    "ICNN": {
+      "hidden_activation": "softplus(beta=1)",
+      "connections": "Nonnegative input-to-every-hidden-layer, hidden-to-hidden, input-to-output and hidden-to-output weights; unrestricted biases"
+    },
+    "ICKAN": {
+      "knots": [
+        -1.2,
+        -0.72,
+        -0.24,
+        0.24,
+        0.72,
+        1.2
+      ],
+      "basis": "Integrated triangular hats: B''_k(x)=max(1-abs((x-k)/h),0), h=0.48; B and B' vanish below k-h; linear tail above k+h",
+      "coefficients": "softplus linear and hat coefficients, unrestricted node biases, positive direct input-to-output skip",
+      "grid_updates": false
+    },
+    "controlled_claim": "Only fixed-versus-learned within a core is a controlled embedding ablation. Widths differ between cores; report actual parameter counts, times and all seeds, not a parameter-matched ICNN/ICKAN/Free comparison."
+  },
+  "execution": {
+    "dtype": "float64",
+    "device": "cpu",
+    "torch_threads": 2,
+    "blas_threads": 2,
+    "deterministic_algorithms": true,
+    "random_seeds": "Set Python, NumPy and torch to the declared run seed independently for every run; no minibatch shuffling",
+    "batch": "All 4200 fit states for each objective evaluation; the separate reference anchor is evaluated once",
+    "autograd": "Keep parameter dependencies through reference corrections and second strain derivatives; no detach of learned feature parameters or reference sensitivities",
+    "environment": {
+      "python": "3.12",
+      "numpy": "2.5.3",
+      "scipy": "1.18.1",
+      "torch": "2.14.0+cpu",
+      "existing_interpreter": "/home/sares/.venv-rom/bin/python"
+    }
+  },
+  "adam": {
+    "maximum_steps": 2600,
+    "learning_rates": {
+      "Free": 0.0004,
+      "ICNN": 0.005,
+      "ICKAN": 0.005
+    },
+    "betas": [
+      0.9,
+      0.999
+    ],
+    "eps": 1e-08,
+    "weight_decay": 0.0,
+    "gradient_clip_norm": 50.0,
+    "clip_norm_type": 2.0,
+    "validation_interval_steps": 10,
+    "scheduler": {
+      "type": "ReduceLROnPlateau",
+      "mode": "min",
+      "factor": 0.5,
+      "patience_validation_calls": 40,
+      "threshold": 0.0001,
+      "threshold_mode": "rel",
+      "cooldown": 0,
+      "min_lr": 1e-05,
+      "eps": 1e-08
+    },
+    "early_stopping": false
+  },
+  "lbfgs": {
+    "start": "Restore minimum-validation Adam checkpoint",
+    "outer_calls": 40,
+    "maximum_iterations_per_call": 10,
+    "maximum_iterations_total": 400,
+    "maximum_evaluations_per_call": 12,
+    "learning_rate": 1.0,
+    "history_size": 50,
+    "tolerance_grad": 1e-10,
+    "tolerance_change": 1e-12,
+    "line_search": "strong_wolfe",
+    "gradient_clipping": false,
+    "validation": "After each outer call; do not reset optimizer history between calls",
+    "budget_note": "400 is an upper bound on internal iterations, not a bound on closure calls. Strong-Wolfe bracketing may exceed the nominal max_eval. Record actual n_iter and func_evals from optimizer state; never label 40 calls as 400 completed iterations."
+  },
+  "checkpoints": {
+    "score": "Validation stress MSE divided by the frozen FIT stress denominator; no energy/tangent term in selection",
+    "candidates": "Initialization, each 10 Adam steps, each LBFGS outer call",
+    "tie": "Strictly lower score only; earliest checkpoint wins equal scores",
+    "final": "Minimum validation score across both phases; restore it before saving",
+    "persistence": "Save resumable current optimizer/scheduler/RNG state and distinct best state every 200 Adam steps and after each LBFGS call; record hashes of data, recipe, feature table, scaling and all imported model sources",
+    "failure": "Stop and retain failed run and diagnostics for any nonfinite objective/gradient/score or constraint violation; do not change seeds, silently restart or tune on reserved labels",
+    "evaluation_gate": "All 15 final checkpoints, all declared seeds and models, must be hash-locked before loading reserved test/path prediction targets",
+    "reporting": "All seeds plus mean and sample standard deviation (ddof=1); curves use median-validation seed with seed-number tie break"
+  },
+  "scope": "Preparation only for the constrained feature-count sweep: no Adam/LBFGS optimization and no validation, test, or path labels are read."
+}

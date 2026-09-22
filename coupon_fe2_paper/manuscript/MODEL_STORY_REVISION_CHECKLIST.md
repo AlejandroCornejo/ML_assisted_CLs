@@ -230,15 +230,19 @@ of the paper.
 - [ ] Use independent aggregate errors and predeclared axial, shear, and combined
       paths to determine whether any fixed/learned difference is reproducible and
       mechanically interpretable.
-- [ ] Before new training, freeze a multicavity feature-count protocol using only
-      fitting data to construct nested feature sets at
-      `m = 8, 16, 24, 32, 40`.
-- [ ] Verify that the `m=32` member reproduces the existing locked feature set;
-      resolve any mismatch before launching the sensitivity campaign.
-- [ ] Run ICNN-fixed and ICNN-learned for seeds 16, 29, and 47 at all five
-      feature counts, reusing the six valid `m=32` runs where compatible.
-- [ ] Keep the ICKAN fixed/learned comparison at `m=32` as a cross-core
-      confirmation instead of duplicating the complete sweep.
+- [x] Before new training, freeze a multicavity feature-count protocol using only
+      fitting and reference data to construct deterministic count-specific feature
+      sets at `m = 8, 16, 24, 32, 40`; validation, test, and path labels remain
+      closed during this step.
+- [x] Verify that the `m=32` member inherits the existing locked feature table
+      byte-for-byte; resolve any mismatch before launching the sensitivity campaign.
+- [ ] Run ICNN-fixed, ICNN-learned, ICKAN-fixed, and ICKAN-learned for seeds
+      16, 29, and 47 at every feature count: 4 cores/feature treatments x 5
+      counts x 3 seeds = 60 fresh constrained fits. Do not include Free, whose
+      architecture has no paired-feature count.
+- [ ] Apply one prospective validation-plateau rule to all 60 fits, with 200000
+      Adam steps as a safety cap rather than a required training length; retain
+      the stop reason and final checkpoint hash for every fit.
 - [ ] Keep data, core widths, objective, scheduler, stopping rule, and evaluation
       protocol fixed across `m`; report trainable parameter counts because the
       sweep is not parameter-matched.
