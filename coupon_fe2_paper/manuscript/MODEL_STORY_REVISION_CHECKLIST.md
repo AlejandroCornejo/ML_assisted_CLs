@@ -153,24 +153,24 @@ without anticipating either surrogate route unnecessarily.
       structural deployment, not as a co-equal paper contribution.
 - [x] Open the section with its limited purpose: define the intrusive references
       required later for the structural accuracy--cost comparison.
-- [ ] Explain, in one common framework, what each retained model reconstructs,
+- [x] Explain, in one common framework, what each retained model reconstructs,
       which variables it solves for, and what stress and tangent it returns.
-- [ ] Keep the distinction between fixed and adaptive integration, and between
+- [x] Keep the distinction between fixed and adaptive integration, and between
       iterative and direct deployment, because those distinctions are used in
       Section 6.
-- [ ] End with one compact comparison table for the retained intrusive models.
-- [ ] Retain in the body only the concepts and equations required to understand
+- [x] End with one compact comparison table for the retained intrusive models.
+- [x] Retain in the body only the concepts and equations required to understand
       the deployed reduced models and their accuracy--cost comparison.
-- [ ] Move detailed PROM/HPROM, closure, cubature, and implementation derivations
+- [x] Move detailed PROM/HPROM, closure, cubature, and implementation derivations
       to the supplement when they are not needed for the central argument.
-- [ ] In particular, consider moving the full POD/SVD derivation, detailed
+- [x] In particular, consider moving the full POD/SVD derivation, detailed
       strain-coordinate rotation, manifold-Hessian terms, expanded cubature
       matrices, fitting losses, and implementation audits to the supplement.
-- [ ] Preserve enough information and citations for reproducibility after the
+- [x] Preserve enough information and citations for reproducibility after the
       reduction.
-- [ ] Remove artificial contrasts with Pure Regression.
-- [ ] Decide which intrusive models are genuinely needed in the final body.
-- [ ] Compile and inspect the shortened section together with its supplement.
+- [x] Remove artificial contrasts with Pure Regression.
+- [x] Decide which intrusive models are genuinely needed in the final body.
+- [x] Compile and inspect the shortened section together with its supplement.
 
 **Approval criterion:** a reader understands the intrusive reference route, but
 Section 4 no longer competes with the constitutive contribution for the center
@@ -295,3 +295,12 @@ For every block:
 - [x] Compact Section 4.3 approved in the main text; detailed
       strain-informed rotation, reconstruction split, and manifold tangent moved
       to Supplementary Section S4.
+- [x] Sections 4.4--4.7 compressed and approved; detailed cubature conventions
+      and implementation derivatives retained in the appendix.
+- [x] Section 4 now closes with a common constitutive-output framework and a
+      compact comparison table for HDM/FOM, HPROM, HPROM--ANN, and D-HPROM--ANN.
+- [x] New Figure 4 approved in the compiled PDF and referenced from the Section 4
+      roadmap, the nonlinear-reduction discussion, and the constitutive-output
+      subsection.
+- [x] Block 4 approved: the intrusive route is complete but visually and
+      narratively secondary to the paired-feature constitutive contribution.
