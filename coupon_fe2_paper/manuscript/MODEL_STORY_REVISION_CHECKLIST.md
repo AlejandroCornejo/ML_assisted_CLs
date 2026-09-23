@@ -230,17 +230,21 @@ of the paper.
 - [ ] Use independent aggregate errors and predeclared axial, shear, and combined
       paths to determine whether any fixed/learned difference is reproducible and
       mechanically interpretable.
-- [x] Before new training, freeze a multicavity feature-count protocol using only
-      fitting and reference data to construct deterministic count-specific feature
-      sets at `m = 8, 16, 24, 32, 40`; validation, test, and path labels remain
-      closed during this step.
-- [x] Verify that the `m=32` member inherits the existing locked feature table
-      byte-for-byte; resolve any mismatch before launching the sensitivity campaign.
+- [x] Freeze the original multicavity protocol using only fitting and reference
+      data to construct deterministic feature tables at `m = 8, 16, 24, 32, 40`;
+      validation, test, and path labels were closed during this step.
+- [x] Verify that the original `m=32` member inherits the existing locked feature
+      table byte-for-byte before launching its fresh fits.
+- [x] Amend the unstarted high-count block after inspecting validation-only results:
+      cancel all 12 pending `m=40` fits before they start, retain the ongoing
+      `m=8,16,24,32` fits, and add independently frozen `m=2,4,6` tables. Record
+      the decision, its validation-only basis, and the cancellation receipt.
 - [ ] Run ICNN-fixed, ICNN-learned, ICKAN-fixed, and ICKAN-learned for seeds
-      16, 29, and 47 at every feature count: 4 cores/feature treatments x 5
-      counts x 3 seeds = 60 fresh constrained fits. Do not include Free, whose
-      architecture has no paired-feature count.
-- [ ] Apply one prospective validation-plateau rule to all 60 fits, with 200000
+      16, 29, and 47 at `m = 2, 4, 6, 8, 16, 24, 32`: 4 treatments x 7 counts x
+      3 seeds = 84 constrained fits. Complete the two queued `m=32` ICKAN fits
+      under their original frozen rule. Do not include Free, whose architecture
+      has no paired-feature count.
+- [ ] Apply the same validation-plateau criterion to every new fit, with 200000
       Adam steps as a safety cap rather than a required training length; retain
       the stop reason and final checkpoint hash for every fit.
 - [ ] Keep data, core widths, objective, scheduler, stopping rule, and evaluation
