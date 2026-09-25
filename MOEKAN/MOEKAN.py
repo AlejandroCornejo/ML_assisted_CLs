@@ -3,8 +3,11 @@ import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
-
+##################################################
+##################################################
 class MOEKAN:
+##################################################
+##################################################
     def __init__(
         self,
         width,
@@ -23,12 +26,16 @@ class MOEKAN:
 
         self.initialize()
 
+    ##################################################
+    ##################################################
     def initialize(self):
         self.params = self.initialize_network(
             self.width,
             seed=self.seed,
         )
 
+    ##################################################
+    ##################################################
     def initialize_layer(
         self,
         input_width,
@@ -80,6 +87,8 @@ class MOEKAN:
             ),
         }
 
+    ##################################################
+    ##################################################
     def initialize_network(self, width, seed=42):
         """Initialize all layers of the MOEKAN network."""
         key = jax.random.PRNGKey(seed)
@@ -98,6 +107,8 @@ class MOEKAN:
             for layer_index in range(len(width) - 1)
         ]
 
+    ##################################################
+    ##################################################
     def moekan_edge(self, x, edge_params):
         """Evaluate one or more MOEKAN edges."""
         a = edge_params["a"]
@@ -131,6 +142,8 @@ class MOEKAN:
             axis=-1,
         )
 
+    ##################################################
+    ##################################################
     def moekan_layer(self, layer_params, x):
         """
         Apply one MOEKAN layer.
@@ -175,6 +188,8 @@ class MOEKAN:
             axis=(-1, -2),
         )
 
+    ##################################################
+    ##################################################
     def moekan_network(self, x, params=None):
         """Evaluate the complete multilayer MOEKAN network."""
         if params is None:
@@ -190,6 +205,8 @@ class MOEKAN:
 
         return activations
 
+    ##################################################
+    ##################################################
     def parameter_count(self):
         """Return the number of trainable scalar parameters."""
         return sum(
@@ -198,12 +215,16 @@ class MOEKAN:
             for value in layer_params.values()
         )
 
+    ##################################################
+    ##################################################
     def __call__(self, x, params=None):
         return self.moekan_network(
             x,
             params=params,
         )
 
+    ##################################################
+    ##################################################
     def plot_edge_tree(
         self,
         x,
@@ -525,6 +546,8 @@ class MOEKAN:
             f"Saved MOEKAN edge tree to {filename}"
         )
 
+    ##################################################
+    ##################################################
     def plot_edge_functions(
         self,
         x,
@@ -731,6 +754,8 @@ class MOEKAN:
                 f"Saved MOEKAN edge functions to {filename}"
             )
 
+    ##################################################
+    ##################################################
     def plot_edge_functions(
         self,
         x,
@@ -941,6 +966,8 @@ class MOEKAN:
             f"Saved MOEKAN edge-function plots to {filename}"
         )
 
+    ##################################################
+    ##################################################
     def plot_edge_functions(
         self,
         x,
@@ -1161,4 +1188,180 @@ class MOEKAN:
 
         print(
             f"Saved separate MOEKAN edge plots to {filename}"
+        )
+
+    ##################################################
+    ##################################################
+    def log_expert_weights(
+        self,
+        filename="moekan_expert_weights.log",
+        params=None,
+    ):
+        """
+        Write the analytical expert weights of every MOEKAN edge.
+
+        For every edge phi^(layer)_(output,input), the log contains:
+            - raw softmax logits w
+            - normalized probabilities
+            - dominant analytical expert
+            - edge parameters a, b, c, d
+        """
+        if params is None:
+            params = self.params
+
+        expert_names = [
+            "z",
+            "z**2",
+            "z**3",
+            "tanh(z)",
+            "sin(z)",
+        ]
+
+        with open(filename, "w", encoding="utf-8") as log_file:
+            log_file.write(
+                "MOEKAN analytical expert weights\n"
+            )
+            log_file.write(
+                f"Temperature: {self.temperature:.8e}\n"
+            )
+            log_file.write(
+                f"Network width: {self.width}\n\n"
+            )
+
+            for layer_index, layer_params in enumerate(params):
+                weights = np.asarray(
+                    layer_params["w"]
+                )
+
+                probabilities = np.asarray(
+                    jax.nn.softmax(
+                        layer_params["w"]
+                        / self.temperature,
+                        axis=-1,
+                    )
+                )
+
+                if weights.shape[-1] == 6:
+                    current_expert_names = expert_names + [
+                        "exp(clip(z,-8,8))"
+                    ]
+                else:
+                    current_expert_names = expert_names
+
+                if len(current_expert_names) != weights.shape[-1]:
+                    current_expert_names = [
+                        f"expert_{index}"
+                        for index in range(weights.shape[-1])
+                    ]
+
+                output_width = weights.shape[0]
+                input_width = weights.shape[1]
+
+                log_file.write(
+                    f"{'=' * 72}\n"
+                )
+                log_file.write(
+                    f"Layer {layer_index + 1}: "
+                    f"{input_width} inputs -> "
+                    f"{output_width} outputs\n"
+                )
+                log_file.write(
+                    f"{'=' * 72}\n\n"
+                )
+
+                for output_index in range(output_width):
+                    for input_index in range(input_width):
+                        edge_weights = weights[
+                            output_index,
+                            input_index,
+                            :,
+                        ]
+
+                        edge_probabilities = probabilities[
+                            output_index,
+                            input_index,
+                            :,
+                        ]
+
+                        dominant_index = int(
+                            np.argmax(edge_probabilities)
+                        )
+
+                        log_file.write(
+                            f"phi^({layer_index + 1})"
+                            f"_({output_index + 1},"
+                            f"{input_index + 1})\n"
+                        )
+
+                        log_file.write(
+                            "  edge parameters:\n"
+                        )
+                        a_value = float(
+                            np.asarray(
+                                layer_params["a"]
+                            )[output_index, input_index]
+                        )
+                        b_value = float(
+                            np.asarray(
+                                layer_params["b"]
+                            )[output_index, input_index]
+                        )
+                        c_value = float(
+                            np.asarray(
+                                layer_params["c"]
+                            )[output_index, input_index]
+                        )
+                        d_value = float(
+                            np.asarray(
+                                layer_params["d"]
+                            )[output_index, input_index]
+                        )
+
+                        log_file.write(
+                            f"    a = {a_value:+.8e}\n"
+                        )
+                        log_file.write(
+                            f"    b = {b_value:+.8e}\n"
+                        )
+                        log_file.write(
+                            f"    c = {c_value:+.8e}\n"
+                        )
+                        log_file.write(
+                            f"    d = {d_value:+.8e}\n"
+                        )
+
+                        log_file.write(
+                            "  raw logits w:\n"
+                        )
+
+                        for expert_index, value in enumerate(
+                            edge_weights
+                        ):
+                            log_file.write(
+                                f"    "
+                                f"{current_expert_names[expert_index]}"
+                                f": {value:+.8e}\n"
+                            )
+
+                        log_file.write(
+                            "  softmax probabilities:\n"
+                        )
+
+                        for expert_index, value in enumerate(
+                            edge_probabilities
+                        ):
+                            log_file.write(
+                                f"    "
+                                f"{current_expert_names[expert_index]}"
+                                f": {value:.8f}\n"
+                            )
+
+                        log_file.write(
+                            "  dominant expression: "
+                            f"{current_expert_names[dominant_index]}"
+                            f"\n\n"
+                        )
+
+        print(
+            f"Saved MOEKAN expert weights to {filename}"
         )
