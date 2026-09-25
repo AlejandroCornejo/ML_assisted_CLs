@@ -93,8 +93,8 @@ def train_model(
 
 def main():
     # Generate a two-dimensional training grid.
-    x_values = np.linspace(1.0e-3, 1.0, 100)
-    y_values = np.linspace(1.0e-3, 1.0, 100)
+    x_values = np.linspace(0.25, 3.0, 80)
+    y_values = np.linspace(0.25, 3.0, 80)
 
     x_grid, y_grid = np.meshgrid(
         x_values,
@@ -130,7 +130,7 @@ def main():
 
     model = MOEKAN(
         # width=(2, 2, 1), # Case A
-        width=(2, 5, 1), # Case B
+        width=(2, 3, 2, 1), # Case B
         temperature=1.0
     )
 
@@ -144,7 +144,7 @@ def main():
         inputs_jax,
         targets_jax,
         learning_rate=1e-3,
-        epochs=50_000,
+        epochs=100_000,
         patience=1e-4,
         mse_ref=mse_ref
     )
