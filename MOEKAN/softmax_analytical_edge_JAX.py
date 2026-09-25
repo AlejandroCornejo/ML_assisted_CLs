@@ -30,7 +30,7 @@ class SoftMaxAnalyticalEdge:
             "b_i": jnp.array(0.0, dtype=jnp.float32),
             "c_i": jnp.array(1.0, dtype=jnp.float32),
             "d_i": jnp.array(0.0, dtype=jnp.float32),
-            "w_i": jnp.zeros((self.num_experts,), dtype=jnp.float32),
+            "w_i": jnp.ones((self.num_experts,), dtype=jnp.float32),
         }
 
 # -----------------------------------------------------------------
@@ -126,15 +126,17 @@ def train_model(X, Y, temperature=1.0, lr=1e-3, epochs=10_000, patience=1e-6):
 
 def main():
     X = np.linspace(-1.0, 1.0, 500)
-    Y = np.sin(3 * X) * np.log(X + 5)
+    # Y = np.sin(3 * X) * np.log(X + 5)
+    Y = np.sin(10 * X)
 
     X_j = jnp.asarray(X, dtype=jnp.float32)
     Y_j = jnp.asarray(Y, dtype=jnp.float32)
 
     model = train_model(X_j, Y_j,
-                        temperature=1.0e-2,
-                        lr=1e-3,
-                        epochs=10_000)
+                        patience=1e-4,
+                        temperature=1.0e-0,
+                        lr=1e-4,
+                        epochs=1_000_000)
 
     PI = model.get_expert_probabilities()
     Y_pred = np.asarray(model(X_j))
@@ -156,7 +158,7 @@ def main():
     plt.xlabel("x")
     plt.ylabel("y")
     plt.title("JAX MOEKAN (1 edge)")
-    out_file = "train_result_jax.png"
+    out_file = "train_result_jax.pdf"
     plt.savefig(out_file)
     print(f"Saved comparison plot to {out_file}")
     plt.grid()
