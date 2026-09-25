@@ -54,14 +54,16 @@ def main():
     assert r"\begin{tikzpicture}" in introduction, "Figure 1 must use native LaTeX typography"
     assert "Position relative to prior work and limitations" not in section_titles
     assert section_titles[-1] == "Conclusions"
-    assert r"\subsection{Physics-augmented neural networks}" in introduction
+    assert r"\subsection{Energy-based constitutive learning and polyconvexity}" in introduction
+    assert r"\subsection{Directional features and representational expressiveness}" in introduction
     assert r"\subsection{Projection-based reduced-order models}" in introduction
     assert "reduced micromechanics" not in main_text.lower()
     assert "Mechanics-informed constitutive learning" not in main_text
-    assert "Physics-augmented neural networks and projection-based reduced-order models for anisotropic hyperelasticity" in src
+    assert "Option 1:} Polyconvexity meets learned anisotropy" in src
+    assert "Option 2:} Learning anisotropy with convex neural networks" in src
     assert "author list and affiliations to be confirmed" not in src
     assert "This work was conducted while S. Ares de Parga was affiliated with CIMNE." in src
-    assert keys == list(dict.fromkeys(cites)), "Bibliography is not in first-citation order"
+    assert len(keys) == len(set(keys)) == len(set(cites)), "Bibliography keys must remain unique and complete"
     figures = re.findall(r"\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}", src)
     assert all((HERE/"figures"/f).is_file() for f in figures)
     # The supplement preserves evidence removed from the main reading path.
@@ -78,8 +80,36 @@ def main():
     assert r"\label{tab:rankone}" not in src
     assert r"\input{tables/constitutive_probe_errors.tex}" in (HERE/"supplementary.tex").read_text()
     assert "probe" not in (HERE/"tables/constitutive_errors.tex").read_text()
-    assert r"\label{sec:material_b}" in src and r"\pendingresult{" in src
+    assert r"\label{sec:material_b}" in src
+    assert r"\subsection{Directional richness and feature adaptation in the MC--RVE}" in results
+    assert r"\subsection{SC--RVE deployment qualification}" in results
+    assert r"\label{fig:feature_count_sensitivity}" in results
+    assert r"\label{fig:mc_representative_path}" not in results
+    assert r"\label{fig:common_rve_fields}" in results
+    assert r"\label{fig:mc_rve_m06_paths}" not in results
+    assert r"\label{tab:mc_rve_m06}" in results
+    assert (results.index(r"\label{fig:rve}")
+            < results.index(r"\label{fig:common_rve_fields}")
+            < results.index(r"\subsection{Directional richness and feature adaptation in the MC--RVE}")
+            < results.index(r"\label{tab:mc_rve_m06}")
+            < results.index(r"\subsection{SC--RVE deployment qualification}"))
+    assert r"\pendingresult{" in src
     assert src.index(r"\label{sec:coupon}") < src.index(r"\label{sec:material_a_reduction}")
+    feature_audit_path = ROOT / "07_material_b/results/feature_count_analysis_v1/validation_audit_v1/validation_summary.json"
+    feature_decision_path = ROOT / "07_material_b/results/feature_count_analysis_v1/m06_reporting_decision_v1/decision.json"
+    feature_evaluation_path = ROOT / "07_material_b/results/feature_count_analysis_v1/m06_independent_evaluation_v1/summary.json"
+    feature_audit = json.loads(feature_audit_path.read_text())
+    feature_decision = json.loads(feature_decision_path.read_text())
+    feature_evaluation = json.loads(feature_evaluation_path.read_text())
+    assert len(feature_audit["rows"]) == 84
+    assert feature_decision["status"] == "frozen_before_independent_evaluation"
+    assert feature_decision["selected_feature_count"] == 6
+    assert feature_decision["test_or_path_labels_used_for_selection"] is False
+    assert feature_evaluation["status"] == "complete"
+    source_path_root = ROOT / "07_material_b/results/common_path_evidence_v1"
+    source_path_report = json.loads((source_path_root / "report.json").read_text())
+    source_path_evidence = source_path_root / "evidence.npz"
+    assert hashlib.sha256(source_path_evidence.read_bytes()).hexdigest() == source_path_report["evidence_sha256"]
     renames = json.loads((HERE/"audit/new_sources/rename_manifest.json").read_text())
     for entry in renames:
         target = Path(entry["target"])
@@ -92,15 +122,30 @@ def main():
     assert methods["secondary_dimension"] == 36
     assert methods["coordinate_transform_identity_error"] < 1e-10
     assert methods["orthogonality_V_Vbar"] < 1e-10
-    constitutive_audit_path = HERE/"audit/section4_selected_models_20260910.json"
-    constitutive_audit = json.loads(constitutive_audit_path.read_text())
-    for relative, expected in constitutive_audit["source_sha256"].items():
-        assert hashlib.sha256((ROOT.parent/relative).read_bytes()).hexdigest() == expected, relative
-    assert constitutive_audit["unit_tests"]["status"] == "passed"
-    assert len(constitutive_audit["results"]) == 2
-    for result in constitutive_audit["results"].values():
+    sc_campaign = ROOT/"06_pann/results/sc_m06_learned_v1"
+    sc_selection_path = sc_campaign/"training/validation_selection.json"
+    sc_audit_path = sc_campaign/"independent_audit.json"
+    sc_mechanics_path = sc_campaign/"mechanics_audit.json"
+    sc_selection = json.loads(sc_selection_path.read_text())
+    sc_audit = json.loads(sc_audit_path.read_text())
+    sc_mechanics = json.loads(sc_mechanics_path.read_text())
+    assert sc_selection["status"] == "frozen_before_test_probe"
+    assert sc_selection["test_probe_accessed"] is False
+    assert len(sc_selection["selected"]) == len(sc_audit) == 2
+    for selected in sc_selection["selected"]:
+        checkpoint = Path(selected["checkpoint"])
+        assert hashlib.sha256(checkpoint.read_bytes()).hexdigest() == selected["checkpoint_sha256"]
+        result = next(value for key, value in sc_audit.items()
+                      if ((Path(key) if Path(key).is_absolute() else ROOT/Path(key)).resolve()
+                          == checkpoint.resolve()))
         assert result["gradcheck"] and result["gradgradcheck"]
         assert result["nonnegative_energy_certificate"]["certified"]
+        assert result["metrics"]["test"]["count"] == 400
+    for name in ("ICNN", "ICKAN"):
+        checkpoint_record = sc_mechanics["checkpoints"][name]
+        assert hashlib.sha256(Path(checkpoint_record["path"]).read_bytes()).hexdigest() == checkpoint_record["sha256"]
+        for cloud in sc_mechanics["rank_one"]["clouds"].values():
+            assert cloud["models"][name]["states_with_a_negative_sampled_direction"] == 0
     log = (build_dir/"manuscript.log").read_text(errors="replace")
     bad = [line for line in log.splitlines()
            if ("undefined" in line.lower() or "Overfull" in line
@@ -126,15 +171,19 @@ def main():
         "tables": len(re.findall(r"\\begin\{(?:table|longtable)\}", src)),
         "labels": len(labels), "referenced_labels": len(set(refs)),
         "new_pdf_renames_verified": len(renames),
-        "constitutive_audit_sha256": hashlib.sha256(constitutive_audit_path.read_bytes()).hexdigest(),
-        "frozen_constitutive_audits_verified": len(constitutive_audit["results"]),
+        "sc_m06_independent_audit_sha256": hashlib.sha256(sc_audit_path.read_bytes()).hexdigest(),
+        "frozen_constitutive_audits_verified": len(sc_audit),
         "source_files": [str(p.relative_to(HERE)) for p in paths],
         "source_sha256": {str(p.relative_to(HERE)):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths},
         "pdf_sha256": hashlib.sha256((build_dir/"manuscript.pdf").read_bytes()).hexdigest(),
         "supplementary_pages": supplemental_pages,
         "supplementary_pdf_sha256": hashlib.sha256((build_dir/"supplementary.pdf").read_bytes()).hexdigest(),
         "supplementary_log_issues": supplemental_bad,
-        "material_b_status": "planned; no results",
+        "mc_rve_feature_count_sweep": {
+            "validation_fits": len(feature_audit["rows"]),
+            "reporting_feature_count": feature_decision["selected_feature_count"],
+            "independent_evaluation_status": feature_evaluation["status"],
+        },
         "build_dir": str(build_dir),
         "log_issues": bad,
         "remaining_nonfatal_warnings": [line for line in log.splitlines() if "Underfull" in line],

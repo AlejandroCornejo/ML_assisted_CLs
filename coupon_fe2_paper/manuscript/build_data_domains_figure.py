@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare the material-A and material-B constitutive sample domains.
+"""Compare the MC-RVE and SC-RVE constitutive sample domains.
 
 Only frozen strain coordinates and the archived A fit/validation split are
 read. Display subsets are deterministic and never used for model selection.
@@ -117,12 +117,12 @@ def main():
                          "font.family": "serif", "font.size": 9})
     FIGURES.mkdir(exist_ok=True)
     fig = plt.figure(figsize=(7.3, 3.75))
-    for position, load, seed, label in ((121, material_a, 10, "Material A"),
-                                       (122, material_b, 20, "Material B")):
+    for position, load, seed, label in ((121, material_b, 20, "MC-RVE"),
+                                       (122, material_a, 10, "SC-RVE")):
         ax = fig.add_subplot(position, projection="3d")
         draw_panel(ax, *load(), seed, label)
         if position == 121:
-            # A's 3D z label is otherwise overpainted by the neighboring axes.
+            # The left 3D z label is otherwise overpainted by the neighboring axes.
             ax.set_zlabel("")
     fig.text(0.485, 0.62, r"$2E_{12}$ [\%]", rotation=90,
              ha="center", va="center")

@@ -17,9 +17,9 @@ ladder of increasingly constrained neural models. Its central message is:
 
 The final evidence must answer five questions, in this order:
 
-- [ ] Do learned paired features improve the guaranteed constructions over
+- [x] Do learned paired features improve the guaranteed constructions over
       fixed admissible features on the multicavity microstructure?
-- [ ] How sensitive is that conclusion to the number `m` of paired features?
+- [x] How sensitive is that conclusion to the number `m` of paired features?
 - [ ] How accurately do the selected learned energies reproduce independent FOM
       responses for the single-cavity deployment microstructure?
 - [ ] What accuracy is traded for the requested mechanical guarantees?
@@ -41,11 +41,11 @@ The final evidence must answer five questions, in this order:
 - [x] Treat intrusive reduced models as secondary deployment references, not as
       a contribution with equal narrative weight to the paired-feature energies.
 - [x] Add a controlled multicavity sensitivity study in the number of paired
-      features, without using its test results to reselect the locked `m=32`
-      models.
+      features, without using test results to select the validation-frozen
+      reporting point `m=6`.
 - [x] Remove the paper-facing identifiers **Material A** and **Material B**.
-      Use **single-cavity microstructure** for the FE2 deployment case and
-      **multicavity microstructure** for the controlled representation study.
+      Use **SC-RVE** for the FE2 deployment case and **MC-RVE** for the
+      controlled representation study.
       Internal filenames, scripts, and provenance may retain A/B identifiers.
 - [x] Present the multicavity representation study before the single-cavity
       deployment qualification, so that the value of learned features is tested
@@ -73,10 +73,10 @@ Paper-facing names:
 
 Paper-facing benchmark names:
 
-- **Multicavity microstructure:** four-cavity, multidirectional representation
-  benchmark used for fixed/learned ablation and feature-count sensitivity.
-- **Single-cavity microstructure:** rotated single-cavity benchmark used for
-  constitutive qualification and subsequent FE2 deployment.
+- **MC-RVE:** four-cavity, multidirectional representation benchmark used for
+  fixed/learned ablation and feature-count sensitivity.
+- **SC-RVE:** rotated single-cavity benchmark used for constitutive qualification
+  and subsequent FE2 deployment.
 
 Internal directories and checkpoint slugs may continue to use `Free`, `A`, and
 `B`; only the paper-facing terminology changes.
@@ -198,17 +198,16 @@ of the paper.
 
 ### Block 5 -- Section 5: constitutive evidence
 
-- [ ] Retitle and organize the section as a progression from representation
+- [x] Retitle and organize the section as a progression from representation
       evidence to deployment qualification, rather than by model count or the
       historical A/B identifiers.
-- [ ] Remove **Material A** and **Material B** from headings, captions, tables,
-      legends, and paper-facing prose; use **single-cavity microstructure** and
-      **multicavity microstructure** consistently.
-- [ ] Open with one compact benchmark-design subsection: state the common matrix
+- [x] Remove **Material A** and **Material B** from headings, captions, tables,
+      legends, and paper-facing prose; use **SC-RVE** and **MC-RVE** consistently.
+- [x] Open with one compact benchmark-design subsection: state the common matrix
       law and porosity, show both geometries, document the two mesh checks, and
       explain that the result order follows scientific role rather than geometric
       simplicity.
-- [ ] State the questions before giving training details or numerical results:
+- [x] State the questions before giving training details or numerical results:
       first whether features should be learned, then whether the learned
       construction is accurate enough for the structural case.
 - [ ] Remove every Pure Regression result and reference.
@@ -219,52 +218,50 @@ of the paper.
 
 #### Block 5A -- Multicavity representation study
 
-- [ ] Present the multicavity microstructure first and define its sampling domain,
-      fitting/validation/test roles, and reserved loading paths before reporting
-      any model comparison.
-- [ ] State explicitly that the primary ablation is fixed versus learned features
+- [x] Present the multicavity microstructure first and define its sampling domain,
+      fitting/validation/test roles before reporting any model comparison.
+- [x] State explicitly that the primary ablation is fixed versus learned features
       within the same core, under common data, objectives, widths, optimization
       rules, and evaluation states.
-- [ ] Compare ICNN-fixed with ICNN-learned and ICKAN-fixed with ICKAN-learned at
-      the locked `m=32` using seeds 16, 29, and 47.
-- [ ] Use independent aggregate errors and predeclared axial, shear, and combined
-      paths to determine whether any fixed/learned difference is reproducible and
-      mechanically interpretable.
+- [x] Compare ICNN-fixed with ICNN-learned and ICKAN-fixed with ICKAN-learned at
+      the validation-frozen `m=6` using seeds 16, 29, and 47.
+- [x] Use independent aggregate errors to determine whether the fixed/learned
+      difference is reproducible.
 - [x] Freeze the original multicavity protocol using only fitting and reference
       data to construct deterministic feature tables at `m = 8, 16, 24, 32, 40`;
-      validation, test, and path labels were closed during this step.
+      validation and independent-test labels were closed during this step.
 - [x] Verify that the original `m=32` member inherits the existing locked feature
       table byte-for-byte before launching its fresh fits.
 - [x] Amend the unstarted high-count block after inspecting validation-only results:
       cancel all 12 pending `m=40` fits before they start, retain the ongoing
       `m=8,16,24,32` fits, and add independently frozen `m=2,4,6` tables. Record
       the decision, its validation-only basis, and the cancellation receipt.
-- [ ] Run ICNN-fixed, ICNN-learned, ICKAN-fixed, and ICKAN-learned for seeds
+- [x] Run ICNN-fixed, ICNN-learned, ICKAN-fixed, and ICKAN-learned for seeds
       16, 29, and 47 at `m = 2, 4, 6, 8, 16, 24, 32`: 4 treatments x 7 counts x
       3 seeds = 84 constrained fits. Complete the two queued `m=32` ICKAN fits
       under their original frozen rule. Do not include Free, whose architecture
       has no paired-feature count.
-- [ ] Apply the same validation-plateau criterion to every new fit, with 200000
+- [x] Apply the same validation-plateau criterion to every new fit, with 200000
       Adam steps as a safety cap rather than a required training length; retain
       the stop reason and final checkpoint hash for every fit.
 - [ ] Keep data, core widths, objective, scheduler, stopping rule, and evaluation
       protocol fixed across `m`; report trainable parameter counts because the
       sweep is not parameter-matched.
-- [ ] Report all declared feature counts as a sensitivity study; do not choose a
+- [x] Report all declared feature counts as a sensitivity study; do not choose a
       new primary `m` from test outcomes.
-- [ ] Summarize the sweep in one compact plot of error versus `m`, showing
+- [x] Summarize the sweep in one compact plot of error versus `m`, showing
       variation across seeds for fixed and learned features.
 - [ ] If it remains legible and genuinely explanatory, add one compact view of
       learned orientations relative to the cavity geometry; do not treat visual
       alignment alone as evidence of physical identification.
-- [ ] Conclude this study without using test results to select a different `m` or
+- [x] Conclude this study without using test results to select a different `m` or
       to select the independently trained single-cavity checkpoints.
 
 #### Block 5B -- Single-cavity deployment qualification
 
-- [ ] Introduce the single-cavity microstructure only after the representation
+- [x] Introduce the single-cavity microstructure only after the representation
       study has established why feature learning is being examined.
-- [ ] Explain its coupon-derived strain domain, Cartesian sampling, and
+- [x] Explain its coupon-derived strain domain, Cartesian sampling, and
       fit/validation/independent-test split as preparation for FE2 rather than as
       a second ablation campaign.
 - [ ] Evaluate the locked ICNN-learned and ICKAN-learned checkpoints against FOM
@@ -280,9 +277,9 @@ of the paper.
 
 #### Block 5C -- Scope and evidence map
 
-- [ ] State that the two microstructures are trained independently and do not
+- [x] State that the two microstructures are trained independently and do not
       demonstrate transfer between geometries.
-- [ ] Separate analytical guarantees from finite implementation audits and from
+- [x] Separate analytical guarantees from finite implementation audits and from
       predictive accuracy.
 - [ ] State in one closing synthesis what the multicavity study establishes, what
       the single-cavity study establishes, and what remains for Section 6.

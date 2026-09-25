@@ -58,8 +58,8 @@ def finite_element_results():
         ('HPROM', 'hprom_fe2_clean_timing_ecm_w20_f100kn_optimized_r', 3),
         ('HPROM--ANN', 'hprom_ann_fe2_clean_timing_maw10_w20_f100kn_optimized_r', 3),
         ('D-HPROM--ANN', 'dhprom_ann_fe2_clean_timing_maw10_direct_w20_f100kn_optimized_r', 3),
-        ('ICNN', 'pann_fe2_clean_timing_icnn32_t4_f100kn', 1),
-        ('ICKAN', 'pann_fe2_clean_timing_ickan32_t8_f100kn', 1),
+        ('ICNN', 'pann_fe2_clean_timing_icnn6_t2_f100kn', 1),
+        ('ICKAN', 'pann_fe2_clean_timing_ickan6_t8_f100kn', 1),
         ('Free', 'pann_fe2_clean_timing_free_t12_f100kn', 1),
         ('Regression', 'pann_fe2_clean_timing_regression_t16_f100kn', 1),
     ]
@@ -151,10 +151,17 @@ def field_figures(data):
 
 
 def constitutive_results():
-    audit = read_json(ROOT/'06_pann/enrichment_results/selected_models_audit.json')
+    audit = read_json(ROOT/'06_pann/results/sc_m06_learned_v1/independent_audit.json')
+    selection = read_json(ROOT/'06_pann/results/sc_m06_learned_v1/training/validation_selection.json')
+    assert selection['status'] == 'frozen_before_test_probe'
+    assert selection['test_probe_accessed'] is False
+    assert {row['core']: row['seed'] for row in selection['selected']} == {'ICNN': 16, 'ICKAN': 16}
+    for row in selection['selected']:
+        checkpoint = source(Path(row['checkpoint']))
+        assert hashlib.sha256(checkpoint.read_bytes()).hexdigest() == row['checkpoint_sha256']
     rows, fig = [], plt.figure(figsize=(6.9,3.4),layout='constrained')
     ax = fig.subplots()
-    for name, token, color in [('ICNN','flex_icnn',COLORS[3]), ('ICKAN','flex_ickan',COLORS[4])]:
+    for name, token, color in [('ICNN','m06_icnn',COLORS[3]), ('ICKAN','m06_ickan',COLORS[4])]:
         entry = next(v for k,v in audit.items() if token in k)
         m = entry['metrics']
         rows.append([name, f"{100*m['test']['stress']:.4f}", f"{100*m['test']['energy']:.4f}",
@@ -167,12 +174,12 @@ def constitutive_results():
     # columns in the main-paper test table when regenerating artifacts.
     test_rows = [[row[0], row[1], row[2], row[4]] for row in rows]
     table('constitutive_errors.tex',
-          ['Model', '$e_S^{\\rm test}$', '$e_W^{\\rm test}$', 'Worst test'],
+          ['Model', '$e_S^{\\rm test}$ [\\%]', '$e_W^{\\rm test}$ [\\%]', 'Worst test [\\%]'],
           test_rows, 'lrrr',
           'All values are percentages. Stress and energy errors are aggregate array norms; '
-          'the last column is the maximum per-state stress error. Material A: 400 independent test states.')
-    table('constitutive_probe_errors.tex',['Model', '$e_S^{\\rm test}$', '$e_W^{\\rm test}$', '$e_S^{\\rm probe}$',
-          'Worst test', 'Worst probe'],rows,'lrrrrr',
+          'the last column is the maximum per-state stress error. SC-RVE: 400 independent test states.')
+    table('constitutive_probe_errors.tex',['Model', '$e_S^{\\rm test}$ [\\%]', '$e_W^{\\rm test}$ [\\%]', '$e_S^{\\rm probe}$ [\\%]',
+          'Worst test [\\%]', 'Worst probe [\\%]'],rows,'lrrrrr',
           'All values are percentages. The last two columns are maximum per-state stress errors; '
           'the first three are aggregate array norms. Test: 400 states; probe: 345 finite reference states out of 350.')
     ax.set(xlabel='Sampling-box overshoot factor (not a load factor)',ylabel='Probe stress error [%]')
@@ -181,7 +188,10 @@ def constitutive_results():
 
 
 def mechanics():
-    cycle=read_json(ROOT/'06_pann/mechanics_witness_results/current_rve_cycle_audit.json')['cycle']
+    historical_cycle=read_json(ROOT/'06_pann/mechanics_witness_results/current_rve_cycle_audit.json')['cycle']
+    current_audit=read_json(ROOT/'06_pann/results/sc_m06_learned_v1/mechanics_audit.json')
+    cycle=current_audit['cycle']
+    cycle['FOM']=historical_cycle['FOM']
     conv=cycle['quadrature_work_convergence_J_per_m3']
     maw=read_json(ROOT/'06_fe2/maw_closed_cycle_audit.json')
     assert maw['status'] == 'completed'
@@ -232,7 +242,7 @@ def mechanics():
           f"{cycle['FOM']['stress_work_J_per_m3']:.6g}"+' J m$^{-3}$. '
           'The spline quadrature error decreases with refinement; it is not physical dissipation. '
           'Reversal and equilibrium-tolerance controls are discussed in the text.')
-    audit=read_json(ROOT/'06_pann/mechanics_witness_results/current_rve_mechanics_witnesses.json')
+    audit=current_audit
     rows=[]
     for key,label in [('held_out_test','Held-out test'),('converged_probe','Finite-label probe'),('uniform_training_box','In-box audit (unlabelled)')]:
         cloud=audit['rank_one']['clouds'][key]
@@ -301,8 +311,8 @@ def main():
                          'ytick.labelsize':8,'pdf.fonttype':42,'ps.fonttype':42})
     results=finite_element_results()
     constitutive_results(); mechanics(); geometry()
-    (HERE/'evidence_manifest.json').write_text(json.dumps({'status':'generated from archived artifacts',
-        'not_new_timings':True,'error_metric':'unweighted relative L2 of stored arrays, percent',
+    (HERE/'evidence_manifest.json').write_text(json.dumps({'status':'generated from frozen result artifacts',
+        'not_new_timings':False,'error_metric':'unweighted relative L2 of stored arrays, percent',
         'results':results,'source_sha256':SOURCES},indent=2)+'\n')
     print(f'Generated {len(list(FIG.glob("*.pdf")))} figures and {len(list(TAB.glob("*.tex")))} tables.')
 
