@@ -47,18 +47,22 @@ class SoftMaxAnalyticalEdge:
 
         return jnp.stack(
             [
-                PI[0] * ((z) * params["c_i"] + params["d_i"]),
-                PI[1] * ((z ** 2) * params["c_i"] + params["d_i"]),
-                PI[2] * ((z ** 3) * params["c_i"] + params["d_i"]),
-                PI[3] * (jnp.tanh(z) * params["c_i"] + params["d_i"]),
-                PI[4] * (jnp.sin(z) * params["c_i"] + params["d_i"]),
-            ],
-            axis=0,
-        )
+                PI[0] * ((z) * params["c_i"] + params["d_i"]),          # x
+                PI[1] * ((z ** 2) * params["c_i"] + params["d_i"]),     # x**2
+                PI[2] * ((z ** 3) * params["c_i"] + params["d_i"]),     # x**3
+                PI[3] * (jnp.tanh(z) * params["c_i"] + params["d_i"]),  # tanh(x)
+                PI[4] * (jnp.sin(z) * params["c_i"] + params["d_i"]),   # sin(x)
+            ], axis=0)
 
-    def __call__(self, X, params=None):
+# -----------------------------------------------------------------
+    def __call__(self, X, params=None): # forward method
         functs = self.eval_functions(X, params=params)
         return jnp.sum(functs, axis=0)
+
+# ------------------------------ End class -----------------------------------
+# ----------------------------------------------------------------------------
+
+
 
 # -----------------------------------------------------------------
 def relative_mse_loss(model, params, X, Y):
@@ -127,7 +131,10 @@ def main():
     X_j = jnp.asarray(X, dtype=jnp.float32)
     Y_j = jnp.asarray(Y, dtype=jnp.float32)
 
-    model = train_model(X_j, Y_j, temperature=1.0, lr=1e-3, epochs=100_000)
+    model = train_model(X_j, Y_j,
+                        temperature=1.0e-2,
+                        lr=1e-3,
+                        epochs=10_000)
 
     PI = model.get_expert_probabilities()
     Y_pred = np.asarray(model(X_j))
@@ -144,11 +151,11 @@ def main():
 
     plt.figure(figsize=(8, 5))
     plt.plot(X, Y, label="reference")
-    plt.plot(X, Y_pred, "--", label="model prediction")
+    plt.plot(X, Y_pred, "--", label="MOEKAN prediction")
     plt.legend()
     plt.xlabel("x")
     plt.ylabel("y")
-    plt.title("SoftMaxAnalyticalEdge fit (JAX)")
+    plt.title("JAX MOEKAN (1 edge)")
     out_file = "train_result_jax.png"
     plt.savefig(out_file)
     print(f"Saved comparison plot to {out_file}")
