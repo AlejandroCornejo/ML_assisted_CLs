@@ -20,6 +20,7 @@ class SoftMaxAnalyticalEdge:
     where PI is a softmax over the learned weights w_i.
     """
 
+# -----------------------------------------------------------------
     def __init__(self, temperature=1.0):
         self.num_experts = 5
         self.temperature = float(temperature)
@@ -32,11 +33,13 @@ class SoftMaxAnalyticalEdge:
             "w_i": jnp.zeros((self.num_experts,), dtype=jnp.float32),
         }
 
+# -----------------------------------------------------------------
     def get_expert_probabilities(self, params=None):
         params = self.params if params is None else params
         logits = params["w_i"] / self.temperature
         return jax.nn.softmax(logits, axis=0)
 
+# -----------------------------------------------------------------
     def eval_functions(self, X, params=None):
         params = self.params if params is None else params
         PI = self.get_expert_probabilities(params)
@@ -57,33 +60,63 @@ class SoftMaxAnalyticalEdge:
         functs = self.eval_functions(X, params=params)
         return jnp.sum(functs, axis=0)
 
-
+# -----------------------------------------------------------------
 def relative_mse_loss(model, params, X, Y):
     pred = model(X, params=params)
     return jnp.mean((pred - Y) ** 2) / (jnp.mean(Y ** 2) + 1e-12)
 
 
+# -----------------------------------------------------------------
 def train_model(X, Y, temperature=1.0, lr=1e-3, epochs=10_000, patience=1e-6):
-    model = SoftMaxAnalyticalEdge(temperature=temperature)
-    params = model.params
-    optimizer = optax.adamw(learning_rate=lr)
-    opt_state = optimizer.init(params)
+    gpu_devices = jax.devices("cpu") # gpu not supported in windows jax version, so using cpu for now
+    if not gpu_devices:
+        raise RuntimeError(
+            "No JAX GPU device found. Install a CUDA-enabled JAX build "
+            "and run with a supported NVIDIA CUDA environment."
+        )
 
-    for epoch in range(1, epochs + 1):
-        loss_value, grads = jax.value_and_grad(
-            lambda p: relative_mse_loss(model, p, X, Y)
-        )(params)
+    device = gpu_devices[0]
+    print(f"Using JAX device: {device}")
+
+    X = jax.device_put(X, device)
+    Y = jax.device_put(Y, device)
+
+    model = SoftMaxAnalyticalEdge(temperature=temperature)
+    params = jax.device_put(model.params, device)
+
+    optimizer = optax.adamw(learning_rate=lr)
+    opt_state = jax.device_put(optimizer.init(params), device)
+
+    # -----------------------------------------------------------------
+    @jax.jit
+    def train_step(params, opt_state, X, Y):
+        def loss_fn(current_params):
+            return relative_mse_loss(model, current_params, X, Y)
+
+        loss_value, grads = jax.value_and_grad(loss_fn)(params)
         updates, opt_state = optimizer.update(grads, opt_state, params)
         params = optax.apply_updates(params, updates)
-        model.params = params
 
+        return params, opt_state, loss_value
+
+    for epoch in range(1, epochs + 1):
+        params, opt_state, loss_value = train_step(
+            params, opt_state, X, Y
+        )
+
+        # This synchronizes only periodically instead of every iteration.
         if epoch % 1000 == 0 or epoch == 1:
-            print(f"Epoch {epoch}/{epochs} loss={float(loss_value):.6e}")
+            loss_float = float(loss_value)
+            print(f"Epoch {epoch}/{epochs} loss={loss_float:.6e}")
 
-        if float(loss_value) < patience:
-            print(f"Early stopping at epoch {epoch} with loss={float(loss_value):.6e}")
-            break
+            if loss_float < patience:
+                print(
+                    f"Early stopping at epoch {epoch} "
+                    f"with loss={loss_float:.6e}"
+                )
+                break
 
+    model.params = params
     return model
 
 
