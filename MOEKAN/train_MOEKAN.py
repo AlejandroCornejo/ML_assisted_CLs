@@ -93,7 +93,7 @@ def train_model(
 
 def main():
     x = np.linspace(-1.0, 1.0, 1500)
-    y = np.sin(8.0 * x) + np.log(x**4 + 5.0) + 10.0
+    y = np.exp(np.sin(3.14159*x) + x**2)
 
     x_jax = jnp.asarray(
         x[:, None],
@@ -106,7 +106,7 @@ def main():
     )
 
     model = MOEKAN(
-        width=(1, 4, 2, 1),
+        width=(1, 3, 1, 1),
         temperature=0.1,
         seed=42,
     )
@@ -120,9 +120,9 @@ def main():
         model,
         x_jax,
         y_jax,
-        learning_rate=1e-4,
-        epochs=1_000_000,
-        patience=1e-6,
+        learning_rate=1e-3,
+        epochs=100_000,
+        patience=1e-5,
     )
 
     prediction = model(x_jax)
@@ -148,9 +148,10 @@ def main():
         "multilayer_moekan_result.pdf"
     )
     
-    model.plot_edge_tree(
+    model.plot_edge_functions(
         x=x_jax,
-        filename="multilayer_moekan_edge_tree.pdf")
+        filename="multilayer_moekan_edge_tree.pdf",
+        samples=300,)
 
     plt.show()
 
