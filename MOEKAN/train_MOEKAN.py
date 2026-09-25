@@ -106,7 +106,7 @@ def main():
     )
 
     model = MOEKAN(
-        width=(1, 5, 5, 1),
+        width=(1, 4, 2, 1),
         temperature=0.1,
         seed=42,
     )
@@ -147,8 +147,12 @@ def main():
     plt.savefig(
         "multilayer_moekan_result.pdf"
     )
-    plt.show()
+    
+    model.plot_edge_tree(
+        x=x_jax,
+        filename="multilayer_moekan_edge_tree.pdf")
 
+    plt.show()
 
 if __name__ == "__main__":
     main()
