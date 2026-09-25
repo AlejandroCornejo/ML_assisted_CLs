@@ -203,7 +203,7 @@ class MOEKAN:
             x,
             params=params,
         )
-        
+
     def plot_edge_tree(
         self,
         x,
@@ -521,4 +521,212 @@ class MOEKAN:
 
         plt.close(figure)
 
-        print(f"Saved MOEKAN edge tree to {filename}")
+        print(
+            f"Saved MOEKAN edge tree to {filename}"
+        )
+
+    def plot_edge_functions(
+        self,
+        x,
+        params=None,
+        filename="moekan_edge_functions.pdf",
+        samples=300,
+    ):
+        """
+        Plot all MOEKAN edge functions in a grid.
+
+        Columns correspond to network layers.
+        Rows correspond to input-output edge relations.
+        """
+        if params is None:
+            params = self.params
+
+        x = jnp.asarray(x)
+
+        if x.ndim == 1:
+            x = x[:, None]
+
+        if x.shape[-1] != self.width[0]:
+            raise ValueError(
+                f"Expected input width {self.width[0]}, "
+                f"received {x.shape[-1]}"
+            )
+
+        # Store the inputs entering each layer.
+        layer_inputs = []
+        activations = x
+
+        for layer_params in params:
+            layer_inputs.append(activations)
+            activations = self.moekan_layer(
+                layer_params,
+                activations,
+            )
+
+        n_layers = len(params)
+        edges_per_layer = [
+            self.width[layer_index]
+            * self.width[layer_index + 1]
+            for layer_index in range(n_layers)
+        ]
+
+        n_rows = max(edges_per_layer)
+        n_cols = n_layers
+
+        figure, axes = plt.subplots(
+            n_rows,
+            n_cols,
+            squeeze=False,
+            figsize=(
+                4.0 * n_cols,
+                2.5 * n_rows,
+            ),
+        )
+
+        for layer_index, layer_params in enumerate(params):
+            input_width = self.width[layer_index]
+            output_width = self.width[layer_index + 1]
+            layer_data = np.asarray(
+                layer_inputs[layer_index]
+            )
+
+            edge_number = 0
+
+            for output_index in range(output_width):
+                for input_index in range(input_width):
+                    axis = axes[edge_number, layer_index]
+
+                    edge_values = np.asarray(
+                        layer_data[:, input_index]
+                    )
+
+                    finite_values = edge_values[
+                        np.isfinite(edge_values)
+                    ]
+
+                    if finite_values.size == 0:
+                        axis.set_visible(False)
+                        edge_number += 1
+                        continue
+
+                    lower_bound = float(
+                        np.min(finite_values)
+                    )
+                    upper_bound = float(
+                        np.max(finite_values)
+                    )
+
+                    if np.isclose(
+                        lower_bound,
+                        upper_bound,
+                    ):
+                        padding = max(
+                            1.0,
+                            0.1 * abs(lower_bound),
+                        )
+                        lower_bound -= padding
+                        upper_bound += padding
+
+                    edge_x = jnp.linspace(
+                        lower_bound,
+                        upper_bound,
+                        samples,
+                    )
+
+                    edge_parameters = {
+                        name: value[
+                            output_index,
+                            input_index,
+                        ]
+                        for name, value in layer_params.items()
+                    }
+
+                    edge_y = self.moekan_edge(
+                        edge_x,
+                        edge_parameters,
+                    )
+
+                    edge_x = np.asarray(edge_x)
+                    edge_y = np.asarray(edge_y)
+
+                    axis.plot(
+                        edge_x,
+                        edge_y,
+                        color="tab:blue",
+                        linewidth=1.2,
+                    )
+
+                    axis.axhline(
+                        0.0,
+                        color="black",
+                        linewidth=0.4,
+                        alpha=0.5,
+                    )
+
+                    axis.grid(
+                        True,
+                        linewidth=0.4,
+                        alpha=0.4,
+                    )
+
+                    axis.set_title(
+                        rf"$\phi^{{({layer_index + 1})}}_"
+                        rf"{{{output_index + 1},{input_index + 1}}}$",
+                        fontsize=10,
+                    )
+
+                    axis.tick_params(
+                        labelsize=7,
+                    )
+
+                    edge_number += 1
+
+        # Hide unused rows in layers with fewer edges.
+        for row_index in range(
+            edge_number,
+            n_rows,
+        ):
+            axes[row_index, layer_index].axis("off")
+
+        axes[0, layer_index].set_title(
+            f"Layer {layer_index + 1}\n"
+            rf"$n_{{in}}={input_width},\ "
+            rf"n_{{out}}={output_width}$",
+            fontsize=12,
+            fontweight="bold",
+        )
+
+        for layer_index in range(n_layers):
+            axes[-1, layer_index].set_xlabel(
+                "edge input",
+                fontsize=9,
+            )
+
+            for row_index in range(n_rows):
+                if axes[row_index, 0].get_visible():
+                    axes[row_index, 0].set_ylabel(
+                        "edge output",
+                        fontsize=9,
+                    )
+
+            figure.suptitle(
+                "MOEKAN analytical edge functions",
+                fontsize=16,
+                fontweight="bold",
+            )
+
+            figure.tight_layout(
+                rect=[0.0, 0.0, 1.0, 0.96]
+            )
+
+            figure.savefig(
+                filename,
+                format="pdf",
+                bbox_inches="tight",
+            )
+
+            plt.close(figure)
+
+            print(
+                f"Saved MOEKAN edge functions to {filename}"
+            )
