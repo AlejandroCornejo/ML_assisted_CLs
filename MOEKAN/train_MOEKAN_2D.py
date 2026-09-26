@@ -107,7 +107,8 @@ def main():
 
     # Target function: z = x * y.
     # z_grid = x_grid * y_grid # Case A
-    z_grid = x_grid / y_grid # Case A
+    # z_grid = x_grid / y_grid # Case B
+    z_grid = jnp.exp(jnp.sin(3.14159 * x_grid)+y_grid**2) # Case C
     
     mse_ref = jnp.mean(z_grid**2) + 1e-12
 
@@ -133,7 +134,8 @@ def main():
 
     model = MOEKAN(
         # width=(2, 2, 1), # Case A
-        width=(2, 3, 2, 1), # Case B
+        # width=(2, 3, 2, 1), # Case B
+        width=(2,  1, 1), # Case B
         temperature=1.0
     )
 
@@ -148,7 +150,7 @@ def main():
         targets_jax,
         learning_rate=1e-3,
         epochs=200_000,
-        patience=1e-5,
+        patience=1e-4,
         mse_ref=mse_ref
     )
 
