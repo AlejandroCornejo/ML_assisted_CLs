@@ -62,26 +62,15 @@ def pod_diagnostic():
     span_error = float(np.linalg.norm(projected-V)/np.linalg.norm(V))
     # q = V^T Phi Q_POD and xi = T_m Q_POD imply A_m^-1 = Z Sigma.
     coordinate_identity = float(np.linalg.norm(z["T_m"] @ Phi.T @ V @ A-np.eye(3)))
-    fig, axes = plt.subplots(1, 2, figsize=(8.4, 3.15), layout="constrained")
-    axes[0].semilogy(n, np.sqrt(tail[:80]), color="#244f79", lw=1.7)
-    axes[0].axvline(39, ls="--", color="#a8453c", lw=1)
-    axes[0].annotate("Retained POD span: 39", (39, np.sqrt(tail[38])),
-                     (42, 2e-3), fontsize=8,
-                     arrowprops={"arrowstyle": "-", "color": "#a8453c"})
-    axes[0].set(xlabel="Number of POD modes", ylabel="Relative snapshot truncation norm",
-                title="(a) Compression before the primary / secondary rotation")
-    labels = [r"$E_{11}$", r"$E_{22}$", r"$\gamma_{12}$"]
-    for j, (label, color) in enumerate(zip(labels, ["#244f79","#a8453c","#458364"])):
-        axes[1].scatter(E[::10,j], xi[::10,j], s=5, alpha=.45, label=label, color=color)
-    lim = (-.18,.21)
-    axes[1].plot(lim,lim, color=".35", lw=.8, ls="--")
-    axes[1].set(xlim=lim, ylim=lim, xlabel="Macroscopic engineering strain component",
-                ylabel="Corresponding strain-informed coordinate",
-                title="(b) Fitted primary coordinate relation")
-    axes[1].legend(frameon=False, markerscale=2, loc="upper left", fontsize=8)
-    for ax in axes:
-        ax.grid(alpha=.2)
-        ax.title.set_fontsize(9)
+    # One panel: the primary-coordinate fit is reported by its two discrepancies in the text.
+    # Neutral colours keep green, blue, and red for the constitutive models of the other figures.
+    fig, ax = plt.subplots(figsize=(4.6, 2.9), layout="constrained")
+    ax.semilogy(n, np.sqrt(tail[:80]), color="#334155", lw=1.6)
+    ax.axvline(39, ls="--", color="#7C8794", lw=1)
+    ax.annotate("39 retained modes", (39, np.sqrt(tail[38])), (44, 2e-3), fontsize=8,
+                arrowprops={"arrowstyle": "-", "color": "#7C8794"})
+    ax.set(xlabel="Number of POD modes", ylabel="Relative truncation norm")
+    ax.grid(alpha=.2)
     save(fig, "pod_primary_coordinates")
     return {
         "source": str(path.relative_to(ROOT)), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
@@ -98,12 +87,19 @@ def pod_diagnostic():
 
 
 if __name__ == "__main__":
-    plt.rcParams.update({"font.family": "serif", "font.size": 9,
-                         "pdf.fonttype": 42, "ps.fonttype": 42})
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--pod-only", action="store_true",
+                        help="Rebuild only the POD figure and manifest (the native diagrams need Tectonic).")
+    args = parser.parse_args()
+    # LaTeX typography shared with the other figure builders.
+    plt.rcParams.update({"text.usetex": True, "text.latex.preamble": r"\usepackage{lmodern}\usepackage{amsmath}",
+                         "font.family": "serif", "font.size": 9, "axes.linewidth": 0.65})
     FIG.mkdir(exist_ok=True)
-    native_diagram("model_hierarchy")
-    native_diagram("cubature_matrices")
-    native_diagram("convex_core_architectures")
+    if not args.pod_only:
+        native_diagram("model_hierarchy")
+        native_diagram("cubature_matrices")
+        native_diagram("convex_core_architectures")
     result = pod_diagnostic()
     (HERE / "method_figures_manifest.json").write_text(json.dumps(result, indent=2)+"\n")
     print(json.dumps(result, indent=2))

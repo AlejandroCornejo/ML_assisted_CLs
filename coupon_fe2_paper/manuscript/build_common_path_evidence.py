@@ -53,6 +53,15 @@ def positive_sqrt_from_green(strain: np.ndarray) -> np.ndarray:
     return (vectors * np.sqrt(values)) @ vectors.T
 
 
+def nodal_average(triangles: np.ndarray, values: np.ndarray, nodes: int) -> np.ndarray:
+    """Average element values to the corner nodes for smooth display; unused nodes get zero."""
+    total = np.zeros(nodes)
+    count = np.zeros_like(total)
+    np.add.at(total, triangles.ravel(), np.repeat(values, 3))
+    np.add.at(count, triangles.ravel(), 1.0)
+    return total / np.maximum(count, 1.0)
+
+
 def field_figure(data: np.lib.npyio.NpzFile) -> None:
     F = positive_sqrt_from_green(data["strain"][-1])
     fluctuation, deformed, triangulations = {}, {}, {}
@@ -73,9 +82,10 @@ def field_figure(data: np.lib.npyio.NpzFile) -> None:
         top.set_title(title, fontsize=10, fontweight="bold", pad=5)
 
         bottom = axes[1, column]
-        stress_max = float(data[f"{key}_von_mises_element"].max()) / 1e6
-        im_s = bottom.tripcolor(tri, facecolors=data[f"{key}_von_mises_element"] / 1e6,
-                                shading="flat", cmap="jet", vmin=0.0, vmax=stress_max, alpha=0.82)
+        stress = nodal_average(data[f"{key}_triangles"], data[f"{key}_von_mises_element"] / 1e6,
+                               len(data[f"{key}_xy"]))
+        im_s = bottom.tripcolor(tri, stress, shading="gouraud", cmap="jet",
+                                vmin=0.0, vmax=float(stress.max()), alpha=0.82)
         bottom.triplot(tri, color="#334155", linewidth=0.075, alpha=0.30)
         for ax in (top, bottom):
             ax.set_aspect("equal")
