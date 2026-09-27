@@ -97,3 +97,30 @@ implementation sources are build_decoder_basis.py, train_nslave.py,
 numpy_decoder.py, maw_lab.py, maw_hprom_ann_law.py,
 maw_hprom_ann_fast.py and direct_hprom_ann_law.py.
 The paper describes these codes; this editorial revision does not modify them.
+
+# Manuscript glossary (style pass, agreed 2026-09-27)
+
+Every fragment of the style pass applies these names. The last column lists the
+variants to search for before a fragment is closed.
+
+| Object | Canonical form | Replace |
+|---|---|---|
+| Energy without curvature constraints | Unconstrained energy (capitalized, abstract included) | flexible energy reference, flexible energy-based reference, unconstrained energy |
+| ICNN and ICKAN energies together | constrained energies ("polyconvex" only as an adjective) | polyconvex energies/models as a name |
+| ICNN, ICKAN and Unconstrained together | learned energies | PANN evaluations/times |
+| Periodic microscopic problem | periodic (e.g. periodic microscopic reference) | constrained discretization/tangent/residual |
+| Cells | MC-RVE, SC-RVE (defined in the Introduction roadmap) | multicavity cell, single-cavity cell |
+| Region of the data | fitting box; "beyond the data" = outside the fitting box | box (undefined), training box, sampling box, engineering-strain box, strain domain |
+| Probe distances | overshoot factors | ring factors, probe rings, ringwise |
+| Two-scale scheme | FE² (any micro evaluator); nested FOM–FE² is the reference | "is not itself" FE² |
+| Unreduced microscopic model | FOM, always | HDM |
+| Linear-basis reduced model | affine HPROM at first mention per section, then HPROM | linear HPROM, conventional HPROM, D--HPROM--ANN |
+| Acronyms | only acronyms reused later: ECSW, ECM, MAW--ECM (en dash), HPROM; ICNN/ICKAN/POD expanded once in the body | DEIM/EQP/CECM/SAW acronyms (never reused), repeated expansions |
+| Feature scale | tau_i | s_i as a scale |
+| Fixed-rule cubature states | N_c = 495 (every tenth training state) | undefined N_c |
+| Stress names | second Piola–Kirchhoff stress (second Piola stress hereafter) | lone "Piola--Kirchhoff" later |
+| Section 5.2 headings | Number of paired features; Effect of learning the features; Admissibility beyond the data | question headings, "answers this question" |
+| Figure references | Figure~ at sentence start, Fig.~ elsewhere | mid-sentence Figure~ |
+| Citations | Author et al.~\cite{} kept; no Ref./Refs. | Ref.~, Refs.~ |
+| Author name | Ares de Parga, everywhere including references | Ares De Parga |
+| Spelling | labeled; 100~kN | labelled; 100 kN |

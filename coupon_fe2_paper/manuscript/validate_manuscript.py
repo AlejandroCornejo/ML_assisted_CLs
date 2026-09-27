@@ -51,7 +51,10 @@ def main():
     introduction = main_text[section_matches[0].start():section_matches[1].start()]
     assert r"\label{tab:literature}" not in src, "Superseded literature table must not be included"
     assert r"\label{sec:discussion}" in introduction, "Positioning must be inside Introduction"
-    assert r"\begin{tikzpicture}" in introduction, "Figure 1 must use native LaTeX typography"
+    # The construction overview (native TikZ) opens Section 3, next to the notation it uses (moved 2026-09-27).
+    section3 = main_text[section_matches[2].start():section_matches[3].start()]
+    assert r"\label{fig:constitutive_pipeline}" in section3 and r"\begin{tikzpicture}" in section3
+    assert r"\label{fig:constitutive_pipeline}" not in introduction
     assert "Position relative to prior work and limitations" not in section_titles
     assert section_titles[-1] == "Conclusions"
     assert r"\subsection{Energy-based constitutive learning and polyconvexity}" in introduction
