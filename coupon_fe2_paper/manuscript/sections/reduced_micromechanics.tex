@@ -1,55 +1,55 @@
 \section{Projection-based reduced-order models}
 \label{sec:reduced}
-The learned energies of Section~\ref{sec:learned} remove the microscopic solve from online constitutive evaluation. To place their structural accuracy and cost against physics-based alternatives, Section~\ref{sec:coupon} also uses three projection-based microscopic surrogates as intrusive references. These models instead approximate the microscopic displacement field while retaining the underlying constituent law. Reduced coordinates decrease the number of equilibrium unknowns; hyperreduction decreases the required element evaluations. We consider an affine HPROM, an iterative HPROM--ANN with adaptive integration, and its direct counterpart D-HPROM--ANN.
+The learned energies of Section~\ref{sec:learned} remove the microscopic solve from online constitutive evaluation. To place their structural accuracy and cost against physics-based alternatives, Section~\ref{sec:coupon} also uses three projection-based microscopic surrogates as intrusive references. These models instead approximate the microscopic displacement field while retaining the underlying constituent law. Reduced coordinates decrease the number of equilibrium unknowns, and hyperreduction decreases the number of element evaluations. The three references are an affine HPROM, an iterative HPROM--ANN with adaptive integration, and its direct counterpart D-HPROM--ANN.
 
-Figure~\ref{fig:reduced_model_hierarchy} provides a visual roadmap. Its first three stages follow the offline construction from RVE snapshots to the affine and nonlinear state representations; the final two compare the three online routes and their common stress--tangent output. The details are introduced in the remainder of this section.
+Figure~\ref{fig:reduced_model_hierarchy} summarizes the construction, from the offline RVE snapshots to the affine and nonlinear state representations and the three online routes, which share the same stress--tangent output.
 
-\subsection{Constrained microscopic reference}
-All three reduced evaluators derive from the periodic RVE problem of Section~\ref{sec:fom}. Following the nomenclature of Ref.~\cite{aresdeparga2026nonlinear}, we refer to its $N$-dimensional constrained discretization as the high-dimensional model (HDM), or full-order model (FOM). A PROM solves the same equilibrium problem in reduced coordinates, and an HPROM additionally hyperreduces its projected operators.
+\subsection{Periodic microscopic reference}
+All three reduced evaluators derive from the periodic RVE problem of Section~\ref{sec:fom}, whose $N$-dimensional discretization defines the FOM. A PROM solves the same equilibrium problem in reduced coordinates, and an HPROM additionally hyperreduces its projected operators.
 
-To express this common equilibrium problem in the coordinates used by the reduced models, we distinguish the physical nodal displacement vector $\bm d\in\R^{N_{\rm dof}}$ from the independent state $\bm u\in\R^N$ obtained after enforcing periodicity and removing rigid translation. In the deployed convention,
+The reduced models use the independent state $\bm u\in\R^N$ obtained from the physical nodal displacement vector $\bm d\in\R^{N_{\rm dof}}$ after enforcing periodicity and removing rigid translation. In the deployed convention,
 \begin{equation}
  \bm d(\bm u,\ee)=\bm T\bm u+\bm g_{\rm per}(\ee),
  \qquad \bm R(\bm u;\ee)=\bm T^T\bm f_{\rm int}
                  \bigl(\bm d(\bm u,\ee)\bigr)=\bm0.
  \label{eq:hdm_lifting}
 \end{equation}
-Here $\bm T$ identifies periodic degrees of freedom, and the lifting $\bm g_{\rm per}$ supplies the strain-dependent displacement jumps and anchor values defined in Section~\ref{sec:fom}. Thus any independent state $\bm u$ produces a physical field satisfying the prescribed kinematic constraints. If $\bm K_{\rm phys}=\partial_{\bm d}\bm f_{\rm int}$ is the assembled physical stiffness, the constrained HDM tangent is $\bm K=\partial_{\bm u}\bm R=\bm T^T\bm K_{\rm phys}\bm T$. We use the internal-force sign convention for all residuals.
+Here $\bm T$ identifies periodic degrees of freedom, and the lifting $\bm g_{\rm per}$ supplies the strain-dependent displacement jumps and anchor values of Section~\ref{sec:fom}, so any independent state $\bm u$ produces a physical field that satisfies the prescribed kinematic constraints. With $\bm K_{\rm phys}=\partial_{\bm d}\bm f_{\rm int}$ the assembled physical stiffness, the FOM tangent is $\bm K=\partial_{\bm u}\bm R=\bm T^T\bm K_{\rm phys}\bm T$, and all residuals follow the internal-force sign convention.
 
-The reduced bases below are built from snapshots of this affine-retaining state $\bm u$, rather than from the fluctuation coordinates $\bm a$ of Eq.~\eqref{eq:microeq}. If $\bm u_{\rm aff}(\ee)$ denotes the affine displacement at the independent nodes, the two descriptions satisfy $\bm a=\bm u-\bm u_{\rm aff}(\ee)$. This coordinate choice leaves the periodic boundary conditions unchanged and preserves load-correlated information used by the strain-informed identification below. Consequently, the reported POD dimension characterizes this representation and its truncation tolerance; it is not an intrinsic material dimension.
+The reduced bases are built from snapshots of this affine-retaining state, which relates to the fluctuation coordinates of Eq.~\eqref{eq:microeq} through $\bm a=\bm u-\bm u_{\rm aff}(\ee)$, with $\bm u_{\rm aff}$ the affine displacement at the independent nodes. This choice leaves the periodic boundary conditions unchanged and keeps the load-correlated information used by the strain-informed identification below, so the reported POD dimension characterizes this representation and its truncation tolerance.
 
 \begin{figure}[p]
  \centering\input{figures/reduced_model_hierarchy}
- \caption{Intrusive reduced references used in the structural comparison. HDM snapshots provide either an affine state representation or a primary--secondary partition in which the ANN predicts the secondary coordinates. Online, HPROM and HPROM--ANN solve projected equilibrium with fixed and adaptive cubature, respectively, whereas D-HPROM--ANN evaluates the nonlinear decoder directly. All three retain microscopic constitutive evaluations and return the same stress--tangent interface.}
+ \caption{Intrusive reduced references used in the structural comparison. FOM snapshots provide either an affine state representation or a primary--secondary partition in which the ANN predicts the secondary coordinates. Online, HPROM and HPROM--ANN solve projected equilibrium with fixed and adaptive cubature, respectively, whereas D-HPROM--ANN evaluates the nonlinear decoder directly. All three retain microscopic constitutive evaluations and return the same stress--tangent interface.}
 \label{fig:reduced_model_hierarchy}
 \end{figure}
 
-\subsection{POD approximation and the conventional PROM}
-The first reduction targets the number of equilibrium unknowns. We collect HDM solutions $\bm u^s$ at sampled macroscopic strains $\ee^s$, with $s=1,\ldots,N_s$, and center them about a reference state $\bm u_{\rm ref}$. Their singular value decomposition (SVD) is
+\subsection{POD approximation and the affine PROM}
+The first reduction targets the number of equilibrium unknowns. FOM solutions $\bm u^s$ at sampled strains $\ee^s$, $s=1,\ldots,N_s$, are centered about a reference state $\bm u_{\rm ref}$, and the singular value decomposition (SVD) of the snapshot matrix
 \begin{equation}
  \bm S_{\rm snap}=
  [\,\bm u^1-\bm u_{\rm ref},\ldots,\bm u^{N_s}-\bm u_{\rm ref}\,]
  =\bm U_S\bm\Sigma_S\bm Y_S^T.
  \label{eq:snapshot_svd}
 \end{equation}
-Proper orthogonal decomposition (POD) retains the columns of $\bm U_S$ associated with the largest singular values. Collecting $n_{\rm tra}$ of these modes in the orthonormal reduced-order basis (ROB) $\bm V_{\rm tra}$ gives the conventional affine approximation
+supplies the POD modes. The $n_{\rm tra}$ leading left singular vectors form the orthonormal reduced-order basis (ROB) $\bm V_{\rm tra}$ of the affine approximation
 \begin{equation}
  \widetilde{\bm u}=\bm u_{\rm ref}+\bm V_{\rm tra}\qq_{\rm tra},
  \qquad \qq_{\rm tra}\in\R^{n_{\rm tra}},
  \qquad \bm V_{\rm tra}^T\bm V_{\rm tra}=\bm I.
  \label{eq:linear_prom}
 \end{equation}
-The PROM therefore replaces the $N$ independent displacement coordinates by $n_{\rm tra}\ll N$ modal amplitudes. Here \emph{linear PROM} describes only the affine approximation space; the constitutive law and the reduced equilibrium equations remain nonlinear.
+which replaces the $N$ independent displacement coordinates by $n_{\rm tra}\ll N$ modal amplitudes. The subscript ``tra'' marks this traditional affine approximation, and the term affine refers only to the approximation space, since the constitutive law and the reduced equilibrium equations remain nonlinear.
 
-The retained dimension is selected from the relative squared reconstruction error. For a Euclidean POD,
+The retained dimension is selected from the relative squared reconstruction error, which for a Euclidean POD is
 \begin{equation}
  \epsilon_{\rm POD}^2(n_{\rm tra})=
  \frac{\sum_{j>n_{\rm tra}}\sigma_j^2}{\sum_j\sigma_j^2}.
  \label{eq:pod_tail}
 \end{equation}
-This criterion measures how accurately the supplied displacement snapshots are compressed; it is not an error bound for stresses at unsampled strains. Force evaluation, constitutive differentiation, and equilibrium conditioning can make small displacement components important.
+This criterion measures how well the snapshots are compressed but does not bound the stress error at unsampled strains, because force evaluation, constitutive differentiation, and equilibrium conditioning can make small displacement components important.
 
-Once the approximation space is fixed, equilibrium is enforced by Galerkin projection. At a prescribed strain $\ee$, the admissible variations are $\delta\widetilde{\bm u}=\bm V_{\rm tra}\delta\qq_{\rm tra}$; requiring zero residual work against them gives the reduced equations and tangent
+Galerkin projection onto the admissible variations $\delta\widetilde{\bm u}=\bm V_{\rm tra}\delta\qq_{\rm tra}$ gives the reduced equations and tangent at a prescribed strain $\ee$,
 \begin{equation}
  \bm r_{\rm tra}(\qq_{\rm tra};\ee)
  =\bm V_{\rm tra}^T
@@ -58,11 +58,11 @@ Once the approximation space is fixed, equilibrium is enforced by Galerkin proje
  \bm K_{\rm tra}=\bm V_{\rm tra}^T\bm K\bm V_{\rm tra}.
  \label{eq:linear_galerkin}
 \end{equation}
-POD has reduced the nonlinear system to $n_{\rm tra}$ unknowns, but evaluating $\bm R$ and $\bm K$ still visits every microscopic element. Hyperreduction, introduced below, addresses this remaining cost.
+The system now has $n_{\rm tra}$ unknowns, but evaluating $\bm R$ and $\bm K$ still visits every microscopic element, which the hyperreduction of Section~\ref{sec:hyperreduction} addresses.
 
 \subsection{Nonlinear reduction through latent-space closure}
 \label{sec:latent_closure}
-The POD dimension required to reconstruct a displacement field can exceed the number of coordinates needed to parametrize the loading family. Latent-space closure exploits this distinction: it retains a rich linear span, but learns dependencies among its modal amplitudes so that only a smaller subset remains unknown in equilibrium~\cite{barnett2023,aresdeparga2026nonlinear}. We partition an $n_{\rm tot}=n+\bar n$ dimensional ROB into orthonormal primary and secondary blocks,
+The POD dimension required to reconstruct a displacement field can exceed the number of coordinates needed to parametrize the loading family. Latent-space closure exploits this distinction by retaining a rich linear span while learning dependencies among its modal amplitudes, so that only a smaller subset remains unknown in equilibrium~\cite{barnett2023,aresdeparga2026nonlinear}. An $n_{\rm tot}=n+\bar n$ dimensional ROB is partitioned into orthonormal primary and secondary blocks,
 \begin{equation}
  \bm V_{\rm tot}=[\,\bm V,\overline{\bm V}\,],\qquad
  \bm V^T\bm V=\bm I,\quad
@@ -70,7 +70,7 @@ The POD dimension required to reconstruct a displacement field can exceed the nu
  \bm V^T\overline{\bm V}=\bm0,
  \label{eq:partitioned_rob}
 \end{equation}
-and project each snapshot onto the corresponding coordinates,
+and each snapshot is projected onto the corresponding coordinates,
 \begin{equation}
  \qq^s=\bm V^T(\bm u^s-\bm u_{\rm ref}),
  \qquad
@@ -85,7 +85,7 @@ The primary coordinates $\qq\in\R^n$ remain independent unknowns, whereas an ANN
        =\bm V+\overline{\bm V}\mathcal N_{,\qq}.
  \label{eq:prom_ann}
 \end{equation}
-Thus the ANN predicts neither stress nor energy: it predicts the amplitudes needed to reconstruct the microscopic displacement. The secondary modes remain in that field, but no longer appear as independent equilibrium unknowns.
+The ANN predicts modal amplitudes of the microscopic displacement, not stress or energy, and the secondary modes remain in that field without appearing as independent equilibrium unknowns.
 
 The closure is trained on snapshot pairs $(\qq^s,\overline{\qq}^{\,s})$ by minimizing
 \begin{equation}
@@ -95,9 +95,9 @@ The closure is trained on snapshot pairs $(\qq^s,\overline{\qq}^{\,s})$ by minim
  \|\mathcal N(\qq^s;\bm\eta)-\overline{\qq}^{\,s}\|_2^2.
  \label{eq:closure_loss}
 \end{equation}
-Input standardization is absorbed into the closure map, while the secondary outputs remain unscaled. Smooth $\tanh$ activations provide the decoder derivatives required by projection. This coordinate loss measures displacement reconstruction within the secondary space; it is not a stress- or energy-error guarantee.
+Input standardization is absorbed into the closure map, while the secondary outputs remain unscaled. Smooth $\tanh$ activations provide the decoder derivatives required by projection. This coordinate loss measures displacement reconstruction within the secondary space.
 
-The leading POD coefficients need not provide a well-conditioned primary-to-secondary map. We therefore use the input-informed construction of Ref.~\cite{hernandez2026dimensional} to rotate the retained POD span and obtain three primary coordinates $\bm\xi$ approximately aligned with the three macroscopic strain components. If $\bm A_m$ denotes the resulting nonsingular coordinate transformation, the deployed decoder is
+The leading POD coefficients need not provide a well-conditioned primary-to-secondary map. The input-informed construction of Hernández et al.~\cite{hernandez2026dimensional} instead combines the retained modal amplitudes linearly into three primary coordinates $\bm\xi$ approximately aligned with the three macroscopic strain components. If $\bm A_m$ denotes the resulting nonsingular coordinate transformation, the deployed decoder is
 \begin{equation}
  \widetilde{\bm u}(\bm\xi)=\bm u_{\rm ref}
    +\bm V\bm A_m\bm\xi
@@ -106,7 +106,7 @@ The leading POD coefficients need not provide a well-conditioned primary-to-seco
  \bm B_\xi=\partial_{\bm\xi}\widetilde{\bm u}.
  \label{eq:deployed_decoder}
 \end{equation}
-The alignment $\bm\xi^s\approx\ee^s$ is fitted from the snapshots; it is not a kinematic identity. The iterative PROM--ANN therefore solves at fixed $\ee$ for the state satisfying
+Because the alignment $\bm\xi^s\approx\ee^s$ is only fitted from the snapshots, the iterative PROM--ANN solves at fixed $\ee$ for the state satisfying
 \begin{equation}
  \bm r(\bm\xi;\ee)=\bm B_\xi^T
        \bm R(\widetilde{\bm u}(\bm\xi);\ee)=\bm0,
@@ -114,14 +114,11 @@ The alignment $\bm\xi^s\approx\ee^s$ is fitted from the snapshots; it is not a k
 \end{equation}
 rather than imposing $\bm\xi=\ee$. Because $\bm B_\xi$ depends on the state, the exact Newton derivative includes the curvature of the decoder manifold. Appendix~\ref{app:latent_closure} gives the coordinate construction, the reconstruction-error split, and this tangent explicitly.
 
-For the comparison below, the affine and nonlinear models share the same retained span, $n_{\rm tot}=n_{\rm tra}$. The nonlinear model reduces the number of equilibrium unknowns from $n_{\rm tra}$ to $n=3$; hyperreduction has not yet been introduced.
-
-For compactness, the cubature and output formulas below retain $\qq$ for the primary modal amplitudes; in the deployed nonlinear model, the decoder and adaptive-weight maps are evaluated through $\bm\xi=\bm A_m^{-1}\qq$.
+For the comparison below, the affine and nonlinear models share the same retained span, $n_{\rm tot}=n_{\rm tra}$, and the nonlinear model reduces the number of equilibrium unknowns from $n_{\rm tra}$ to $n=3$ before any hyperreduction. For compactness, the cubature and output formulas below retain $\qq$ for the primary modal amplitudes, and the deployed nonlinear model evaluates the decoder and adaptive-weight maps through $\bm\xi=\bm A_m^{-1}\qq$.
 
 \subsection{Hyperreduction of the projected equations}
-Although the PROMs reduce the number of equilibrium unknowns, their projected equations still require full-mesh element evaluations. Hyperreduction addresses this remaining cost by replacing each full sum with a sparse weighted sum. It is therefore a second approximation, introduced after the displacement representation has been chosen.
-
-Two integration tasks must be distinguished: assembling the projected equilibrium equations and recovering the homogenized stress. Hernández et al.~\cite{hernandez2026dimensional} formulate both tasks and discuss the use of either a common or a dedicated output rule. We use separate elementwise rules because their integrands and accuracy requirements differ. The construction is summarized here; Appendix~\ref{app:cubature} records the matrix conventions and fitting losses used in our implementation.
+\label{sec:hyperreduction}
+Hyperreduction replaces each full element sum in the projected equations with a sparse weighted sum, a second approximation introduced after the displacement representation has been chosen. Two integration tasks must be distinguished: assembling the projected equilibrium equations and recovering the homogenized stress. Hernández et al.~\cite{hernandez2026dimensional} formulate both tasks and discuss the use of either a common or a dedicated output rule. Separate elementwise rules are used here because the two integrands and their accuracy requirements differ.
 
 \subsubsection{Fixed elementwise cubature}
 Let $\mathcal E$ be the microscopic element set and $\bm L_e$ extract element nodal values from $\bm d$. At fixed macroscopic input, define the reconstructed element state and its reduced tangent by
@@ -137,15 +134,15 @@ $\bm h_e=\bm B_e^T\bm f_{{\rm int},e}$. Fixed ECM approximates it as
  \quad \mathcal Z_r\subset\mathcal E,\quad w_e\geq0.
  \label{eq:ecm}
 \end{equation}
-For the conventional HPROM, $\bm B$ is replaced by $\bm V_{\rm tra}$ and the unknown is $\qq_{\rm tra}$. There is no ANN in this tier. A selected element retains its ordinary within-element quadrature. Consequently, selected elements, selected Gauss points, and independent coordinates are distinct counts.
+For the affine HPROM, which contains no ANN, $\bm B$ is replaced by $\bm V_{\rm tra}$ and the unknown is $\qq_{\rm tra}$. A selected element retains its ordinary within-element quadrature, so selected elements, selected Gauss points, and independent coordinates are distinct counts.
 
-Offline, the element contributions are collected over the training states and compressed by SVD. ECM then selects a sparse support and nonnegative multipliers that reproduce the retained integration modes~\cite{hernandez2017}. If $\bm G_{\rm cub}$ denotes those modes augmented by the constant-integration constraint and $\bm b_{\rm cub}=\bm G_{\rm cub}\bm1$, selection stops when
+Offline, the element contributions are collected over $N_c$ training states and compressed by SVD. ECM then selects a sparse support and nonnegative multipliers that reproduce the retained integration modes~\cite{hernandez2017}. If $\bm G_{\rm cub}$ denotes those modes augmented by the constant-integration constraint (Appendix~\ref{app:cubature}) and $\bm b_{\rm cub}=\bm G_{\rm cub}\bm1$, selection stops when
 \begin{equation}
  \frac{\|\bm G_{\rm cub}\bm w-\bm b_{\rm cub}\|_2}
       {\|\bm b_{\rm cub}\|_2}\leq\varepsilon_{\rm ECM}.
  \label{eq:ecm_tolerance}
 \end{equation}
-The tolerance $\varepsilon_{\rm SVD}$ controls the preceding integrand compression, whereas $\varepsilon_{\rm ECM}$ controls the sparse fit. For the residual rule, the element data are $\bm h_e$. For the output rule, they are the four components of the element contribution to the average first Piola--Kirchhoff stress; all four are retained because this tensor is not generally symmetric. Both rules impose $\sum_e w_e=N_{\rm el}$, with physical quadrature measures already included in the element contributions. Their supports and weights remain fixed online.
+The tolerance $\varepsilon_{\rm SVD}$ controls the preceding integrand compression, whereas $\varepsilon_{\rm ECM}$ controls the sparse fit. For the residual rule, the element data are $\bm h_e$. For the output rule, they are the four components of the element contribution to the average first Piola--Kirchhoff stress, all four of which are retained because this tensor is not generally symmetric. Both rules impose $\sum_e w_e=N_{\rm el}$, with physical quadrature measures already included in the element contributions. Their supports and weights remain fixed online.
 
 \subsubsection{Manifold-adaptive weights}
 \label{sec:adaptive_weights}
@@ -156,7 +153,7 @@ A fixed rule must represent every sampled state with the same multipliers. MAW--
                    \bm f_{{\rm int},e}(\bm d_e)=\bm0.
  \label{eq:maw}
 \end{equation}
-Starting from a fixed ECM rule, the MAW--ECM pruning algorithm removes elements while redistributing nonnegative statewise weights; its local and graph-regularized stages are described in Ref.~\cite{hernandez2026dimensional}. Pruning identifies the support but not the continuous online map. We instantiate that final regression stage with neural fields. Because our equilibrium and stress rules are separate, we train two maps, $\mathcal N_r$ and $\mathcal N_s$, on independently pruned supports $\mathcal Z_r$ and $\mathcal Z_s$:
+Starting from a fixed ECM rule, the MAW--ECM pruning algorithm removes elements while redistributing nonnegative statewise weights, through the local and graph-regularized stages described by Hernández et al.~\cite{hernandez2026dimensional}. Pruning identifies the support but not the continuous online map, and neural fields are used here for that final regression stage. Because the equilibrium and stress rules are separate, two maps, $\mathcal N_r$ and $\mathcal N_s$, are trained on independently pruned supports $\mathcal Z_r$ and $\mathcal Z_s$,
 \begin{equation}
  \begin{aligned}
   \bm w(\bm\xi)&=N_{\rm el}\operatorname{softmax}
@@ -168,14 +165,16 @@ Starting from a fixed ECM rule, the MAW--ECM pruning algorithm removes elements 
  \end{aligned}
  \label{eq:softmax_weights}
 \end{equation}
-Input standardization is absorbed into each network. The closure ANN $\mathcal N$ remains a different object: it predicts secondary displacement coordinates, not weights. The two weight fields are fitted against full-mesh element sums at each decoded training state. The scaled softmax guarantees positivity and normalization, but integration accuracy is learned. Thus the offline order is: train the closure, select and prune the two supports, and finally fit the two weight fields.
+Input standardization is absorbed into each network. Unlike the closure ANN $\mathcal N$, which predicts secondary displacement coordinates, these networks predict integration weights, fitted against full-mesh element sums at each decoded training state with the loss of Appendix~\ref{app:cubature}. The scaled softmax guarantees positivity and normalization, whereas integration accuracy is learned. Offline, the closure is trained first, the two supports are then selected and pruned, and the two weight fields are fitted last.
 
-Online, the current reduced iterate is passed to both the closure and $\mathcal N_r$; $\mathcal N_s$ supplies the output weights. The supports and all network parameters remain fixed. Differentiating the adaptive residual produces three contributions: element stiffness, decoder curvature, and weight variation. We retain only the first in the microscopic modified-Newton iteration, while the consistent constitutive tangent differentiates the complete implemented residual and output, as described next. For the affine HPROM, the decoder curvature and weight-variation terms vanish, so its projected stiffness is the exact residual Jacobian.
+Online, the current reduced iterate is passed to both the closure and $\mathcal N_r$, and $\mathcal N_s$ supplies the output weights, with the supports and all network parameters fixed. Differentiating the adaptive residual produces three contributions: element stiffness, decoder curvature, and weight variation. Only the first enters the microscopic modified-Newton iteration, which changes the convergence rate but not the converged state, whereas the consistent constitutive tangent differentiates the complete implemented residual and output, as described next. For the affine HPROM, the decoder curvature and weight-variation terms vanish, so its projected stiffness is the exact residual Jacobian.
+
+To translate sparse cubature into wall-clock savings, each optimized reduced mesh contains only the selected elements and the nodes they require. The corresponding basis operators and periodic lifting are restricted to that support before online evaluation. Online cost therefore depends on the support size, the retained secondary dimension, the equilibrium iterations, and the derivative evaluation, and not only on the number of primary coordinates.
 
 \subsection{Constitutive output}
 \label{sec:reduced_outputs}
 \subsubsection{Equilibrium-based stress and consistent tangent}
-The reduced microscopic solver must return the same work-conjugate stress and tangent required by the FE$^2$ problem. The final stage of Figure~\ref{fig:reduced_model_hierarchy} summarizes this common output path. Residual cubature alone is insufficient because equilibrium and effective stress involve different integrands. The separate output rule introduced above reconstructs the average first Piola--Kirchhoff stress as
+The reduced microscopic solver must return the same work-conjugate stress and tangent required by the FE$^2$ problem. The final stage of Figure~\ref{fig:reduced_model_hierarchy} summarizes this common output path. The separate output rule introduced above reconstructs the average first Piola--Kirchhoff stress as
 \begin{equation}
  \bm P_h(\qq,\ee)=
  \frac1{|Y|}\sum_{e\in\mathcal Z_s}v_e(\qq)
@@ -190,7 +189,7 @@ Here $v_e$ is fixed for HPROM and state dependent for HPROM--ANN. Because the in
  \tfrac12[(S_h)_{12}+(S_h)_{21}]\right)^T,
  \label{eq:reduced_stress_vector}
 \end{equation}
-and differentiates this actual output. The residual and stress supports may overlap; their union defines the element data required by the iterative constitutive evaluation, whereas only $\mathcal Z_r$ enters the equilibrium solve.
+and differentiates this actual output. The residual and stress supports may overlap. Their union defines the element data required by the iterative constitutive evaluation, whereas only $\mathcal Z_r$ enters the equilibrium solve.
 
 Reduced equilibrium defines an implicit state $\qq^*(\ee)$ and hence the constitutive map $\ssv_h(\qq^*(\ee),\ee)$. If the residual Jacobian is nonsingular, differentiating equilibrium gives
 \begin{equation}
@@ -198,24 +197,24 @@ Reduced equilibrium defines an implicit state $\qq^*(\ee)$ and hence the constit
        -\ssv_{h,\qq}\bm r_{h,\qq}^{-1}\bm r_{h,\ee}.
  \label{eq:reduced_ift}
 \end{equation}
-The partial derivatives hold the other argument fixed and are evaluated at the converged state. They include the periodic lifting, stress conversion, decoder curvature, and---for adaptive rules---weight variation. Equation~\eqref{eq:reduced_ift}, rather than the modified-Newton matrix used to reach microscopic equilibrium, supplies the tangent returned to the structural solver. Appendix~\ref{app:cubature} records how these derivatives are evaluated in the two implementations.
+The partial derivatives hold the other argument fixed and are evaluated at the converged state. They include the periodic lifting, stress conversion, decoder curvature, and, for adaptive rules, weight variation. Equation~\eqref{eq:reduced_ift}, rather than the modified-Newton matrix used to reach microscopic equilibrium, supplies the tangent returned to the structural solver. Appendix~\ref{app:cubature} records how these derivatives are evaluated in the two implementations.
 
 \subsubsection{Direct decoder evaluation: D-HPROM--ANN}
-When input-informed coordinates closely approximate the loading parameters, the decoder can also be evaluated without solving reduced equilibrium, as discussed in the hyperelastic example of Ref.~\cite{hernandez2026dimensional}. Here this defines a separate operating mode, D-HPROM--ANN, obtained by prescribing $\bm\xi=\ee$ in Eq.~\eqref{eq:deployed_decoder}:
+When input-informed coordinates closely approximate the loading parameters, the decoder can also be evaluated without solving reduced equilibrium, as discussed by Hernández et al.~\cite{hernandez2026dimensional} for their hyperelastic example. Here this defines a separate operating mode, D-HPROM--ANN, obtained by prescribing $\bm\xi=\ee$ in Eq.~\eqref{eq:deployed_decoder},
 \begin{equation}
  \widetilde{\bm u}_{D}(\ee)=\bm u_{\rm ref}
        +\bm V\bm A_m\ee
        +\overline{\bm V}\widehat{\mathcal N}(\ee).
  \label{eq:direct_decoder}
 \end{equation}
-The decoded state is inserted directly into the adaptive stress rule, using the same closure and stress-weight field as the iterative model. Only the stress support is needed; no residual cubature or reduced equilibrium Jacobian is evaluated. The tangent is obtained by central differences of the complete direct stress map, updating the decoder, weights, lifting, and stress conversion at each perturbed input.
+The decoded state is inserted directly into the adaptive stress rule, using the same closure and stress-weight field as the iterative model. Only the stress support is needed, since no residual cubature or reduced equilibrium Jacobian is evaluated. The tangent is obtained by central differences of the complete direct stress map, updating the decoder, weights, lifting, and stress conversion at each perturbed input.
 
-This route still evaluates the microscopic material law on selected elements; it is not a neural stress regressor or a learned macroscopic potential. The prefix D is our label for the direct operating mode, not a new projection method. Its accuracy depends on both the closure and the approximation $\bm\xi\approx\ee$. Conversely, solving projected equilibrium corrects the primary state only within the chosen manifold and cubature approximation, so it does not guarantee a smaller stress error than direct evaluation at every input.
+The accuracy of D-HPROM--ANN depends on both the closure and the approximation $\bm\xi\approx\ee$. Conversely, solving projected equilibrium corrects the primary state only within the chosen manifold and cubature approximation, so it need not give a smaller stress error than direct evaluation at every input.
 
 \subsection{Mechanical structure retained by the reduced models}
-Unlike a direct constitutive surrogate, every reduced model above continues to evaluate the original microscopic hyperelastic law; the iterative variants also enforce projected equilibrium. This preserves a direct micromechanical link, but it does not automatically make the deployed macroscopic stress the derivative of an effective potential.
+Unlike a direct constitutive surrogate, every reduced model above continues to evaluate the original microscopic hyperelastic law, and the iterative variants also enforce projected equilibrium. This preserves a direct micromechanical link, but it does not automatically make the deployed macroscopic stress the derivative of an effective potential.
 
-For fixed weights and consistent kinematics, Galerkin internal forces can be derived from a weighted reduced energy, as in the structure-preservation results established for ECSW under their stated hypotheses~\cite{farhat2015}. Two features of the present deployment prevent us from transferring that conclusion without further assumptions. First, equilibrium and stress use independently fitted cubature rules and therefore need not be derivatives of the same energy. Second, when the weights depend on the reduced state, weighting energy derivatives is not equivalent to differentiating the weighted energy:
+For fixed weights and consistent kinematics, Galerkin internal forces can be derived from a weighted reduced energy, as in the structure-preservation results established for ECSW under their stated hypotheses~\cite{farhat2015}. Two features of the present deployment prevent that conclusion from transferring without further assumptions. First, equilibrium and stress use independently fitted cubature rules, so they need not derive from the same energy. Second, when the weights depend on the reduced state, weighting energy derivatives is not equivalent to differentiating the weighted energy, because
 \begin{equation}
  \nabla_{\qq}\sum_e w_e(\qq)\Pi_e(\qq,\ee)
  =
@@ -223,26 +222,21 @@ For fixed weights and consistent kinematics, Galerkin internal forces can be der
  +\sum_e\Pi_e\nabla_{\qq}w_e .
  \label{eq:weight_energy_difference}
 \end{equation}
-The final term is absent from Eq.~\eqref{eq:maw}, and nonnegative weights do not eliminate it. Consequently, we claim neither an exact effective potential nor a polyconvexity certificate for the deployed HPROM variants. Their consistent tangent is the derivative of the implemented stress map, not a certificate of conservativity or tangent symmetry.
+The final term is absent from Eq.~\eqref{eq:maw}, and nonnegative weights do not eliminate it. Consequently, no exact effective potential or polyconvexity certificate is claimed for the deployed HPROM variants, whose consistent tangent is the derivative of the implemented stress map and need not be symmetric.
 
-\subsection{Offline preparation and online evaluation}
-The accuracy--cost comparison in Section~\ref{sec:coupon} concerns online constitutive evaluation. Before deployment, the offline stage collects HDM snapshots, constructs the reduced spaces and latent coordinates, fits the nonlinear closure, selects the cubature supports, trains adaptive weights where applicable, and builds the reduced meshes. These preparation costs are not included in the reported online timings.
-
-To translate sparse cubature into wall-clock savings, each optimized reduced mesh contains only the selected elements and the nodes they require. The corresponding basis operators and periodic lifting are restricted to that support before online evaluation. Selected elements retain the original geometry, constituent law, and quadrature; their cubature weights approximate the omitted contributions. At each online query, the model reconstructs the required displacement entries, solves reduced equilibrium when its operating mode requires it, and returns effective stress and tangent.
-
-Online cost therefore depends on the support size, the retained secondary dimension, the equilibrium iterations, and the derivative evaluation---not only on the number of primary coordinates. Table~\ref{tab:reduction_levels} closes the construction by comparing the three deployed evaluators with their HDM/FOM reference.
+Table~\ref{tab:reduction_levels} summarizes the three deployed evaluators and their FOM reference.
 
 \begin{table}[htbp]
  \centering\small
- \caption{Intrusive evaluators used in the structural accuracy--cost comparison and their HDM/FOM reference. All reduced models retain microscopic constitutive evaluations.}
+ \caption{Intrusive evaluators used in the structural accuracy--cost comparison and their FOM reference. All reduced models retain microscopic constitutive evaluations.}
  \label{tab:reduction_levels}
  \setlength{\tabcolsep}{4pt}
  \renewcommand{\arraystretch}{1.2}
  \begin{tabularx}{\linewidth}{@{}llcYY@{}}
  \toprule
- Model & State representation & \shortstack{Equilibrium\\unknowns} & Integration & Learned component\\
+ Model & State representation & \begin{tabular}[t]{@{}c@{}}Equilibrium\\unknowns\end{tabular} & Integration & Learned component\\
  \midrule
- HDM / FOM & $\bm u\in\R^N$ & $N$ & Full mesh & None\\
+ FOM & $\bm u$ & $N$ & Full mesh & None\\
  \addlinespace[.3em]
  HPROM & $\widetilde{\bm u}=\bm u_{\rm ref}+\bm V_{\rm tra}\qq_{\rm tra}$ & $n_{\rm tra}$ & Fixed ECM & None\\
  \addlinespace[.3em]
