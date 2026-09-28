@@ -33,7 +33,7 @@ def train_model(
     targets = jax.device_put(targets, device)
     params = jax.device_put(model.params, device)
 
-    optimizer = optax.adam( # lbfgs
+    optimizer = optax.adamw( # lbfgs
         learning_rate=learning_rate,
     )
 
@@ -96,8 +96,8 @@ def train_model(
 
 def main():
     # Generate a two-dimensional training grid.
-    x_values = np.linspace(0.05, 3.0, 80)
-    y_values = np.linspace(0.05, 3.0, 80)
+    x_values = np.linspace(-1.0, 1.0, 80)
+    y_values = np.linspace(-1.0, 1.0, 80)
 
     x_grid, y_grid = np.meshgrid(
         x_values,
@@ -108,7 +108,7 @@ def main():
     # Target function: z = x * y.
     # z_grid = x_grid * y_grid # Case A
     # z_grid = x_grid / y_grid # Case B
-    z_grid = jnp.exp(jnp.sin(3.14159 * x_grid)+y_grid**2) # Case C
+    z_grid = jnp.exp(jnp.sin(3.14159 * x_grid) + y_grid**2) # Case C
     
     mse_ref = jnp.mean(z_grid**2) + 1e-12
 
@@ -135,7 +135,7 @@ def main():
     model = MOEKAN(
         # width=(2, 2, 1), # Case A
         # width=(2, 3, 2, 1), # Case B
-        width=(2,  1, 1), # Case B
+        width=(2,  4, 3, 1), # Case C
         temperature=1.0
     )
 
@@ -150,7 +150,7 @@ def main():
         targets_jax,
         learning_rate=1e-3,
         epochs=200_000,
-        patience=1e-4,
+        patience=1e-5,
         mse_ref=mse_ref
     )
 
