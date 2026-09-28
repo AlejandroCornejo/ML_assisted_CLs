@@ -118,7 +118,7 @@ variants to search for before a fragment is closed.
 | Acronyms | only acronyms reused later: ECSW, ECM, MAW--ECM (en dash), HPROM; ICNN/ICKAN/POD expanded once in the body | DEIM/EQP/CECM/SAW acronyms (never reused), repeated expansions |
 | Feature scale | tau_i | s_i as a scale |
 | Fixed-rule cubature states | N_c = 495 (every tenth training state) | undefined N_c |
-| Stress names | second Piola–Kirchhoff stress (second Piola stress hereafter) | lone "Piola--Kirchhoff" later |
+| Stress names | first/second Piola–Kirchhoff stress, full name always (as in As'ad, Klein, Linden) | "first/second Piola stress" shorthand |
 | Section 5.2 headings | Number of paired features; Effect of learning the features; Admissibility beyond the data | question headings, "answers this question" |
 | Figure references | Figure~ at sentence start, Fig.~ elsewhere | mid-sentence Figure~ |
 | Citations | Author et al.~\cite{} kept; no Ref./Refs. | Ref.~, Refs.~ |
