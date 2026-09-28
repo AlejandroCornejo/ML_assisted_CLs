@@ -123,4 +123,8 @@ variants to search for before a fragment is closed.
 | Figure references | Figure~ at sentence start, Fig.~ elsewhere | mid-sentence Figure~ |
 | Citations | Author et al.~\cite{} kept; no Ref./Refs. | Ref.~, Refs.~ |
 | Author name | Ares de Parga, everywhere including references | Ares De Parga |
+| Tangent $\bm D=\partial\ssv/\partial\ee$ | constitutive tangent (Sec. 2, Eq. 3) | material tangent, strain tangent |
+| Untrained feature controls | fixed features, fixed paired directions (pairs with learned) | prescribed features/directions |
+| Feature scale | $\tau_i$ in $y_i=(z_i-z_i^{\rm cen})/\tau_i$ | $s_i$ (clashes with stress components) |
+| $H(\bm z)=\widehat H(\bm y(\bm z))$ | learned contribution ($\widehat H$: neural core) | neural contribution, core contribution, scalar core $H$ |
 | Spelling | labeled; 100~kN | labelled; 100 kN |

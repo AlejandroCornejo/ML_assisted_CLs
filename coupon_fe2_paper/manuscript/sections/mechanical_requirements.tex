@@ -1,53 +1,52 @@
 \subsection{Admissibility criteria and scope of the guarantees}
 \label{sec:requirements}
-A small prediction error is not sufficient to define an admissible hyperelastic surrogate. We therefore separate six requirements relevant to the present construction. The requirements themselves are standard in constitutive PANN formulations~\cite{klein2022,linden2023}; their grouping and labels below are specific to this paper:
+A small prediction error is not sufficient to define an admissible hyperelastic surrogate. Six requirements, standard in constitutive PANN formulations~\cite{klein2022,linden2023} and labeled here for later reference, organize the construction:
 \begin{enumerate}
  \item[(C1)] \emph{Potential structure:} stress is the derivative of a single-valued stored energy in work-conjugate variables.
  \item[(C2)] \emph{Objectivity:} a superposed rigid rotation does not change that energy.
- \item[(C3)] \emph{Stress symmetry and anisotropy:} the second Piola--Kirchhoff stress is symmetric, while directional dependence is allowed without imposing an unverified material symmetry group.
+ \item[(C3)] \emph{Stress symmetry and anisotropy:} the second Piola--Kirchhoff stress is symmetric, while directional dependence is allowed without prescribing a material symmetry group.
  \item[(C4)] \emph{Reference normalization:} the undeformed state has zero energy and zero stress.
- \item[(C5)] \emph{Polyconvexity:} the energy admits a convex representation in deformation minors, providing a sufficient rank-one convexity condition.
+ \item[(C5)] \emph{Polyconvexity:} the energy admits a convex representation in deformation minors, which is sufficient for rank-one convexity.
  \item[(C6)] \emph{Growth:} energy diverges under volume collapse, unbounded volume expansion, and unbounded distortion at bounded positive volume.
 \end{enumerate}
-This list is an organizing device, not a universal checklist or a claim that polyconvexity is necessary for every physical material. The Unconstrained energy reference satisfies (C1)--(C4) but carries no construction-level claim of (C5) or (C6). The ICNN and ICKAN models proposed here satisfy all six criteria by construction for every finite parameter set that obeys the stated architectural constraints.\footnote{Global nonnegative energy is not part of (C1)--(C6); the saved checkpoints are audited separately in Section~\ref{sec:mechanical_assessment} using the sufficient bound in Appendix~\ref{app:nonnegative}.}
+The Unconstrained energy satisfies (C1)--(C4) by construction, whereas (C5) and (C6) are not imposed on it. The ICNN and ICKAN energies satisfy all six criteria by construction for every finite parameter set that obeys the stated architectural constraints.\footnote{Global nonnegative energy is not part of (C1)--(C6). It is checked separately for the trained parameters in Section~\ref{sec:mechanical_assessment}, using the sufficient bound of Appendix~\ref{app:nonnegative}.} A property counts here as guaranteed only if it follows from the representation itself or from a sufficient bound under stated assumptions. Sampled numerical checks verify the implementation but do not replace such an argument.
 
-These statements rest on different levels of evidence. Constitutive identities follow from the representation itself; sufficient bounds hold under their stated assumptions; and sampled numerical checks verify an implementation but do not replace a proof. The discussion below maintains this distinction while examining each criterion.
+\begin{figure}[p]
+ \centering\input{figures/model_hierarchy}
+ \caption{Overview of the proposed constitutive construction. Sampled strain states are evaluated with the periodic RVE model to supply energy and stress data. These responses train learnable paired directional features and a monotone convex ICNN or ICKAN core. Analytic reference and growth terms complete the stored energy. Differentiation then supplies the work-conjugate stress and constitutive tangent. Criteria (C1)--(C6), defined in Section~\ref{sec:requirements}, follow from the complete construction rather than from sampled numerical checks.}
+ \label{fig:constitutive_pipeline}
+\end{figure}
 
-\paragraph{Potential structure (C1).}
-To ensure mutually compatible stresses, we derive all stress components from a single scalar potential. Equation~\eqref{eq:energy_stress_relation} gives the resulting work-conjugate stress. It also implies that the work around every closed strain path $\Gamma$ vanishes:
+Potential structure (C1), supplied by Eq.~\eqref{eq:energy_stress_relation}, implies that the work around every closed strain path $\Gamma$ satisfies
 \begin{equation}
  \oint_{\Gamma}\ssv\cdot\dd\ee=0 .
  \label{eq:conservative_requirement}
 \end{equation}
-For the isothermal purely elastic setting considered here, (C1) likewise gives $\ssv\cdot\dot{\ee}-\dot W=0$: the mechanical dissipation vanishes. Moreover, the stress Jacobian is the Hessian of $W$ and therefore obeys the cross-derivative identities $\partial s_i/\partial e_j=\partial s_j/\partial e_i$. These statements follow from the scalar-potential representation itself, not from a small error at sampled states.
+For the isothermal purely elastic setting considered here, (C1) likewise gives $\ssv\cdot\dot{\ee}-\dot W=0$, so the mechanical dissipation vanishes. The stress Jacobian is then the Hessian of $W$ and obeys the cross-derivative identities $\partial s_i/\partial e_j=\partial s_j/\partial e_i$, that is, the major symmetry $\bm D=\bm D^T$ of the constitutive tangent in Eq.~\eqref{eq:tangent}.
 
-\paragraph{Objectivity and the three meanings of symmetry (C2)--(C3).}
-Objectivity must remove dependence on the spatial observer without inadvertently imposing material isotropy. For a superposed proper rotation $\bm Q$, it requires
+Objectivity (C2) must remove dependence on the spatial observer without inadvertently imposing material isotropy. For a superposed proper rotation $\bm Q$, it requires
 \begin{equation}
  W(\bm Q\F)=W(\F),\qquad
  \bm P(\bm Q\F)=\bm Q\bm P(\F).
 \end{equation}
-Using $\C=\F^T\F$ as an energy input enforces the first identity, because a superposed spatial rotation leaves $\C$ unchanged; differentiating the objective energy then gives the stress transformation. Objectivity does not itself imply either potential structure or material isotropy. For the energy models considered here, the symmetry $\Sg=\Sg^T$ follows from differentiation with respect to symmetric strain. It implies a symmetric Cauchy stress $\bm\sigma=J^{-1}\F\Sg\F^T$, as required by angular-momentum balance in the present continuum.
+Using $\C=\F^T\F$ as an energy input enforces the first identity, because a superposed spatial rotation leaves $\C$ unchanged. Differentiating the objective energy then gives the stress transformation. The stress symmetry required by (C3), $\Sg=\Sg^T$, follows for the energy models considered here from differentiation with respect to symmetric strain. It implies a symmetric Cauchy stress $\bm\sigma=J^{-1}\F\Sg\F^T$, as required by angular-momentum balance in the present continuum.
 
-Objectivity still permits anisotropy. Material symmetry is a different invariance: a right action $\F\mapsto\F\bm Q_m$ leaves the energy unchanged only when $\bm Q_m$ belongs to the material symmetry group. Section~\ref{sec:feature_order} will implement this distinction using directions attached to the reference material; a superposed spatial rotation acts on $\F$ from the left and does not alter the directional stretch measured in that reference. Finally, the constitutive tangent $\bm D$ of Eq.~\eqref{eq:tangent} measures how the three stress components change with engineering strain. For an energy-based law it is the Hessian $\partial^2_{\ee\ee}W$. Its \emph{major symmetry}, $\bm D=\bm D^T$, is a third property: it follows from a twice differentiable scalar energy, not merely from a symmetric stress tensor.
+Objectivity still permits anisotropy, because material symmetry is a different invariance. A right action $\F\mapsto\F\bm Q_m$ leaves the energy unchanged precisely when $\bm Q_m$ belongs to the material symmetry group. Section~\ref{sec:feature_order} implements this distinction with directions attached to the reference material. A superposed spatial rotation acts on $\F$ from the left and does not alter the directional stretch measured in that reference. The major symmetry of $\bm D$ is a third, separate property, which follows from (C1) rather than from the symmetry of the stress tensor.
 
-\paragraph{Reference normalization (C4).}
-To make the learned energy consistent with the undeformed reference state, we require both zero energy and zero stress:
+Reference normalization (C4) makes the learned energy consistent with the undeformed state by requiring
 \begin{equation}
  W(\I)=0,\qquad \ssv(\bm0)=\bm0,
 \end{equation}
-where $\ssv(\bm0)=\bm0$ is equivalent to $\bm P(\I)=\bm0$ in the undeformed state. The first condition fixes an arbitrary additive energy constant. The second is a substantive stress condition, and the admissible correction depends on the model class. Section~\ref{sec:tiers} subtracts the raw reference value and a term linear in $\E$ for the Unconstrained energy reference. That correction preserves its scalar potential, but an arbitrary linear function of $\E$ need not preserve polyconvexity in $\F$. Section~\ref{sec:energy_admissibility} therefore uses a different correction for the proposed models: it is affine in independent deformation minors and thus preserves convexity in those variables.
+where $\ssv(\bm0)=\bm0$ is equivalent to $\bm P(\I)=\bm0$. The first condition fixes an arbitrary additive energy constant. The second is a substantive stress condition, and the admissible correction depends on the model class. For the Unconstrained energy, Section~\ref{sec:tiers} subtracts the raw reference value and a term linear in $\E$. That correction preserves its scalar potential, but an arbitrary linear function of $\E$ need not preserve polyconvexity in $\F$. The ICNN and ICKAN energies instead use a correction that is affine in the determinant, which preserves convexity in the independent minors (Section~\ref{sec:energy_admissibility}).
 
-\paragraph{Polyconvexity and finite-strain stability (C5).}
-Potential structure alone does not control the energy curvature under changes in deformation. Direct convexity in $\F$ is generally too restrictive for objective finite-strain energies with singular-volume growth. Polyconvexity instead imposes convexity in independent deformation minors~\cite{ball1977,Ciarlet1988}. In two dimensions,\footnote{The standard three-dimensional definition uses $(\F,\cof\F,\det\F)$. The two-dimensional guarantee established here does not imply an admissible extension to arbitrary out-of-plane deformation.} this means that the energy admits the representation
+Polyconvexity (C5) supplies the curvature control that potential structure leaves open. Direct convexity in $\F$ is generally too restrictive for objective finite-strain energies with singular-volume growth, so convexity is imposed instead in independent deformation minors~\cite{ball1977,Ciarlet1988}. In two dimensions,\footnote{The standard three-dimensional definition uses $(\F,\cof\F,\det\F)$. The two-dimensional guarantee established here does not imply an admissible extension to arbitrary out-of-plane deformation.} this means that the energy admits the representation
 \begin{equation}
  W(\F)=\mathcal P(\F,\det\F),\qquad
  \mathcal P\text{ convex in its independent arguments}.
  \label{eq:polyconvex_definition}
 \end{equation}
-Here $\mathcal P$ is defined on the convex set $\R^{2\times2}\times(0,\infty)$, treating its matrix and scalar arguments as independent; only its evaluation in $W$ sets the second argument equal to $\det\F$. The cofactor is linear in the entries of a $2\times2$ matrix, so it need not be introduced as an additional independent argument. Convexity of $\mathcal P$ implies that $W$ cannot curve downward along an admissible rank-one perturbation of $\F$. Appendix~\ref{app:finite_strain_curvature} derives this consequence and states its differential form.
+Here $\mathcal P$ is defined on the convex set $\R^{2\times2}\times(0,\infty)$, treating its matrix and scalar arguments as independent. Only its evaluation in $W$ sets the second argument equal to $\det\F$. The cofactor is linear in the entries of a $2\times2$ matrix, so it need not be introduced as an additional independent argument. Convexity of $\mathcal P$ implies that $W$ cannot curve downward along an admissible rank-one perturbation of $\F$.
 
-To distinguish the present construction from alternatives that impose convexity in strain space~\cite{asad2022,GaoNeffRoventaThiel2017}, we emphasize that convexity in $\C$ or $\E$ does not imply polyconvexity. The reason is that $\E=\tfrac12(\F^T\F-\I)$ depends quadratically on $\F$; Appendix~\ref{app:finite_strain_curvature} provides the corresponding derivation and an analytical counterexample.
+Convexity in $\C$ or $\E$, as imposed in strain-space formulations such as that of As'ad et al.~\cite{asad2022}, does not imply polyconvexity~\cite{GaoNeffRoventaThiel2017}, because $\E=\tfrac12(\F^T\F-\I)$ depends quadratically on $\F$. Appendix~\ref{app:finite_strain_curvature} derives the rank-one consequence of (C5), states its differential form, and gives an analytical counterexample for convexity in $\E$.
 
-\paragraph{Growth and the limits of the guarantees (C6).}
-Polyconvexity alone does not prevent volume collapse or unbounded deformation. We therefore require $W\to\infty$ as $J\to0^+$, as $J\to\infty$, and as $\|\F\|\to\infty$ while $J$ remains bounded away from zero and infinity. These growth conditions contribute to coercivity but do not alone prove existence of a minimizer: the standard existence argument also requires admissible boundary data and finite-energy competitors~\cite{Ciarlet1988}. Nor does a constitutive barrier guarantee convergence of an unconstrained Newton iteration. Architectural guarantees and numerical solver behavior are therefore reported separately.
+Growth (C6) guards against volume collapse and unbounded deformation, which a polyconvex energy may still allow. It requires $W\to\infty$ as $J\to0^+$, as $J\to\infty$, and as $\|\F\|\to\infty$ while $J$ remains bounded away from zero and infinity. These conditions contribute to coercivity. Existence of a minimizer also requires admissible boundary data and finite-energy competitors~\cite{Ciarlet1988}, and no constitutive barrier guarantees convergence of an unconstrained Newton iteration.
