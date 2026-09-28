@@ -150,7 +150,7 @@ def main():
         targets_jax,
         learning_rate=1e-3,
         epochs=200_000,
-        patience=1e-5,
+        patience=1e-7,
         mse_ref=mse_ref
     )
 
@@ -190,7 +190,7 @@ def main():
     )
 
     reference_axis.set_title(
-        r"Reference: $z=x y$"
+        r"Reference"
     )
     reference_axis.set_xlabel("x")
     reference_axis.set_ylabel("y")
