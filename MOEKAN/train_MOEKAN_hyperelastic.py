@@ -66,10 +66,10 @@ def strain_to_moekan_inputs(strain_history):
 
     # J = sqrt(det(C)) = product of the principal stretches.
     J = lambda_x * lambda_y
-    log_J = jnp.log(J)
+    log_J = jnp.log(J + 1.0e-12)
 
     return jnp.stack(
-        [lambda_x, lambda_y, J, log_J], axis=-1
+        [lambda_x, lambda_y, log_J], axis=-1
     )
 #=============================================================================================================
 
@@ -123,8 +123,8 @@ def relative_l2_loss(model, params, inputs, targets):
     """
     prediction = model(inputs, params=params)
     diff = prediction - targets
-    numerator = jnp.sqrt(jnp.sum(diff ** 2))
-    denominator = jnp.sqrt(jnp.sum(targets ** 2)) + 1.0e-12
+    numerator = jnp.mean(diff ** 2)
+    denominator = jnp.mean(targets ** 2) + 1.0e-12
     return numerator / denominator
 
 
@@ -207,7 +207,7 @@ def train_model(
 n_batches = moekan_inputs.shape[0]
 n_steps = moekan_inputs.shape[1]
 
-moekan_inputs_flat = moekan_inputs.reshape(n_batches * n_steps, 4)
+moekan_inputs_flat = moekan_inputs.reshape(n_batches * n_steps, 3)
 work_flat = jnp.asarray(
     ref_work_database.reshape(n_batches * n_steps, 1).numpy(),
     dtype=jnp.float32,
@@ -216,9 +216,9 @@ work_flat = jnp.asarray(
 print("Flattened MOEKAN inputs shape: ", moekan_inputs_flat.shape)
 print("Flattened work shape         : ", work_flat.shape)
 
-# Create the MOEKAN model: 4 inputs, n hidden, 1 output (W).
+# Create the MOEKAN model: 3 inputs, n hidden, 1 output (W).
 model = MOEKAN(
-    width=(4, 1, 1),
+    width=(3, 8, 4, 1),
     temperature=1.0,
 )
 
@@ -232,7 +232,7 @@ model = train_model(
     model,
     moekan_inputs_flat,
     work_flat,
-    learning_rate=1e-4,
+    learning_rate=1e-3,
     epochs=50_000,
     patience=1e-7,
 )
