@@ -124,8 +124,9 @@ def relative_l2_loss(model, params, inputs, targets):
     prediction = model(inputs, params=params)
     diff = prediction - targets
     numerator = jnp.mean(diff ** 2)
-    denominator = jnp.mean(targets ** 2) + 1.0e-12
-    return numerator / denominator
+    # denominator = jnp.mean(targets ** 2) + 1.0e-12
+    # return numerator / denominator
+    return numerator
 
 
 def train_model(
