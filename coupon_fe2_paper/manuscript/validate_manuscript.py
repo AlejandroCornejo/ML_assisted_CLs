@@ -79,6 +79,13 @@ def main():
     assert r"\begin{thebibliography}" in src
     assert re.search(r"reduced microscopic|microscopic surrogate|reduced evaluator|intrusive reduced reference"
                      r"|\breduced models?\b", body, re.I) is None, "Use PROMs or HPROMs for the reduced models"
+    # CMAME numbers references in order of first citation; rerun order_bibliography.py after moving citations.
+    cited = []
+    for group in re.findall(r"\\cite\{([^}]+)\}", body):
+        for key in (key.strip() for key in group.split(",")):
+            if key not in cited:
+                cited.append(key)
+    assert re.findall(r"\\bibitem\{([^}]+)\}", src) == cited, "Run order_bibliography.py"
     supplemental = expand(HERE / "supplementary.tex")
     supplemental_labels = re.findall(r"\\label\{([^}]+)\}", supplemental)
     supplemental_refs = re.findall(r"\\(?:ref|eqref)\{([^}]+)\}", supplemental)
@@ -92,6 +99,9 @@ def main():
     assert r"\label{tab:rankone}" not in src
     assert r"\input{tables/constitutive_probe_errors.tex}" in (HERE/"supplementary.tex").read_text()
     assert "probe" not in (HERE/"tables/constitutive_errors.tex").read_text()
+    # Table 4 compares the three HPROMs with the energies on the same test states.
+    assert all(f"\n{name} & " in (HERE/"tables/constitutive_errors.tex").read_text()
+               for name in ("HPROM", "HPROM--ANN", "D-HPROM--ANN", "ICNN", "ICKAN", "Unconstrained energy"))
     assert r"\label{sec:material_b}" in src
     assert r"\subsection{Multicavity RVE: learning the paired features}" in results
     assert r"\subsection{Single-cavity RVE: constitutive accuracy and FE$^2$ deployment}" in results
@@ -157,6 +167,9 @@ def main():
         else:
             assert search["cloud_negative_states"] == 0 and search["most_negative"]["curvature_Pa"] > 0
     assert src.index(r"\label{sec:material_a_reduction}") < src.index(r"\label{sec:coupon}")
+    # The HPROMs are built before Table 4 compares them with the energies.
+    assert (src.index(r"\label{sec:material_a}") < src.index(r"\label{sec:material_a_reduction}")
+            < src.index(r"\label{sec:constitutive_accuracy}") < src.index(r"\label{sec:coupon}"))
     feature_audit_path = ROOT / "07_material_b/results/feature_count_analysis_v1/validation_audit_v1/validation_summary.json"
     feature_decision_path = ROOT / "07_material_b/results/feature_count_analysis_v1/m06_reporting_decision_v1/decision.json"
     feature_evaluation_path = ROOT / "07_material_b/results/feature_count_analysis_v1/m06_independent_evaluation_v1/summary.json"

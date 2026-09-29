@@ -306,14 +306,32 @@ def constitutive_results():
                      f"{100*m['probe']['stress_sample_relative_percentiles'][-1]:.4f}"])
         rings = entry['probe_by_ring']
         ax.plot([float(r) for r in rings],[100*rings[r]['stress'] for r in rings], 'o-', label=name,color=color)
+    # The HPROMs on the same test states, from 05_validation/official_table.py --predictions.
+    # Their 40-state development subset must reproduce official_table.npz to round-off
+    # (about 1e-12 relative, from thread counts inside the Newton solves).
+    hprom = np.load(source(ROOT/'05_validation/hprom_test400.npz'))
+    labels = np.load(source(ROOT/'03_data/data.npz'))
+    assert np.array_equal(hprom['E'], labels['E_test']) and np.array_equal(hprom['S_reference'], labels['S_test'])
+    official = np.load(source(ROOT/'05_validation/official_table.npz'))
+    reference = hprom['S_reference']
+    subset = np.random.default_rng(3).choice(len(reference), 40, replace=False)
+    hprom_rows = []
+    for name, key, official_key in (('HPROM', 'HPROM', 'HPROM'),
+                                    ('HPROM--ANN', 'MAW_HPROM_ANN', 'MAW-HPROM-ANN'),
+                                    ('D-HPROM--ANN', 'MAW_D_HPROM_ANN', 'MAW-D-HPROM-ANN')):
+        stress = hprom[key]
+        assert stress.shape == reference.shape == (400, 3) and np.isfinite(stress).all()
+        error = lambda idx: np.linalg.norm(stress[idx]-reference[idx])/np.linalg.norm(reference[idx])
+        assert np.isclose(error(subset), float(official[official_key + '_test_frob']), rtol=1e-9, atol=0)
+        hprom_rows.append([name, f"{100*error(np.arange(len(reference))):.4f}", '--'])
     # Probe and worst-state evidence stays in the internal supplement, which the
     # paper does not cite; do not restore those columns in the main-paper table.
-    test_rows = [[row[0], row[1], row[2]] for row in rows]
+    test_rows = hprom_rows + [[row[0], row[1], row[2]] for row in rows]
     table('constitutive_errors.tex',
           ['Model', '$e_S^{\\rm test}$ [\\%]', '$e_W^{\\rm test}$ [\\%]'],
           test_rows, 'lrr',
           'All values are percentages. Stress and energy errors are aggregate array norms. '
-          'SC-RVE: 400 independent test states.')
+          'SC-RVE: 400 independent test states. The HPROMs return no energy.')
     table('constitutive_probe_errors.tex',['Model', '$e_S^{\\rm test}$ [\\%]', '$e_W^{\\rm test}$ [\\%]', '$e_S^{\\rm probe}$ [\\%]',
           'Worst test [\\%]', 'Worst probe [\\%]'],rows,'lrrrrr',
           'All values are percentages. The last two columns are maximum per-state stress errors; '
