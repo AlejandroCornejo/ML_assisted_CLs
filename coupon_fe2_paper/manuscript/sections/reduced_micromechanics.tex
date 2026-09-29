@@ -1,8 +1,13 @@
 \section{Projection-based reduced-order models}
 \label{sec:reduced}
-The periodic RVE problem of Section~\ref{sec:fom} has $N$ independent displacement coordinates, and the nested FOM--FE$^2$ calculation solves it at every macroscopic integration point and Newton iteration. Its solutions, however, depend on only three strain components, so the microscopic states visited by a structural calculation form a three-parameter family. Projection-based model order reduction exploits this structure by collecting FOM solutions as snapshots and seeking each new state in a space learned from them.
+Three HPROMs serve as intrusive, physics-based references for the accuracy and cost of the learned energies in Sections~\ref{sec:constitutive_accuracy} and~\ref{sec:coupon}. Unlike those energies, they approximate the microscopic displacement field while retaining the underlying constituent law. Reduced coordinates decrease the number of equilibrium unknowns, and hyperreduction decreases the number of element evaluations. The three references are an affine HPROM, an iterative HPROM--ANN with adaptive integration, and its direct counterpart D-HPROM--ANN.
 
-These snapshots are taken of the independent state $\bm u\in\R^N$, obtained from the physical nodal displacement vector $\bm d\in\R^{N_{\rm dof}}$ after enforcing periodicity and removing rigid translation. In the deployed convention,
+Figure~\ref{fig:reduced_model_hierarchy} summarizes the construction, from the offline RVE snapshots to the affine and nonlinear state representations and the three online routes, which share the same stress--tangent output.
+
+\subsection{Periodic microscopic reference}
+All three HPROMs derive from the periodic RVE problem of Section~\ref{sec:fom}, whose $N$-dimensional discretization defines the FOM. A PROM solves the same equilibrium problem in reduced coordinates.
+
+The PROMs use the independent state $\bm u\in\R^N$ obtained from the physical nodal displacement vector $\bm d\in\R^{N_{\rm dof}}$ after enforcing periodicity and removing rigid translation. In the deployed convention,
 \begin{equation}
  \bm d(\bm u,\ee)=\bm T\bm u+\bm g_{\rm per}(\ee),
  \qquad \bm R(\bm u;\ee)=\bm T^T\bm f_{\rm int}
@@ -11,7 +16,13 @@ These snapshots are taken of the independent state $\bm u\in\R^N$, obtained from
 \end{equation}
 Here $\bm T$ identifies periodic degrees of freedom, and the lifting $\bm g_{\rm per}$ supplies the strain-dependent displacement jumps and anchor values of Section~\ref{sec:fom}, so any independent state $\bm u$ produces a physical field that satisfies the prescribed kinematic constraints. With $\bm K_{\rm phys}=\partial_{\bm d}\bm f_{\rm int}$ the assembled physical stiffness, the FOM tangent is $\bm K=\partial_{\bm u}\bm R=\bm T^T\bm K_{\rm phys}\bm T$, and all residuals follow the internal-force sign convention.
 
-Because $\bm u=\bm a+\bm u_{\rm aff}(\ee)$ adds to the fluctuation coordinates $\bm a$ of Eq.~\eqref{eq:microeq} the affine displacement $\bm u_{\rm aff}$ at the independent nodes, the snapshots retain the affine part of the displacement. This choice leaves the periodic boundary conditions unchanged and keeps the load-correlated information used by the strain-informed identification below, so the reported POD dimension characterizes this representation and its truncation tolerance.
+The reduced bases are built from snapshots of this affine-retaining state, which relates to the fluctuation coordinates of Eq.~\eqref{eq:microeq} through $\bm a=\bm u-\bm u_{\rm aff}(\ee)$, with $\bm u_{\rm aff}$ the affine displacement at the independent nodes. This choice leaves the periodic boundary conditions unchanged and keeps the load-correlated information used by the strain-informed identification below, so the reported POD dimension characterizes this representation and its truncation tolerance.
+
+\begin{figure}[p]
+ \centering\input{figures/reduced_model_hierarchy}
+ \caption{Intrusive HPROMs used in the comparison. FOM snapshots provide either an affine state representation or a primary--secondary partition in which the ANN predicts the secondary coordinates. Online, HPROM and HPROM--ANN solve projected equilibrium with fixed and adaptive cubature, respectively, whereas D-HPROM--ANN evaluates the nonlinear decoder directly. All three retain microscopic constitutive evaluations and return the same stress--tangent interface.}
+\label{fig:reduced_model_hierarchy}
+\end{figure}
 
 \subsection{POD approximation and the affine PROM}
 FOM solutions $\bm u^s$ at sampled strains $\ee^s$, $s=1,\ldots,N_s$, are centered about a reference state $\bm u_{\rm ref}$, and the singular value decomposition (SVD) of the snapshot matrix
@@ -155,14 +166,7 @@ Reduced equilibrium defines an implicit state $\qq^*(\ee)$ and hence the constit
 \end{equation}
 whose partial derivatives, evaluated at the converged state, include the decoder curvature and, for adaptive rules, the weight variation. This tangent, rather than the modified-Newton matrix of Section~\ref{sec:adaptive_weights}, is returned to the structural solver, and Appendix~\ref{app:cubature} records how its derivatives are evaluated.
 
-When input-informed coordinates closely approximate the loading parameters, the decoder can also be evaluated without solving reduced equilibrium, as discussed by Hern\'andez et al.~\cite{hernandez2026dimensional} for their hyperelastic example. Prescribing $\bm\xi=\ee$ in Eq.~\eqref{eq:deployed_decoder} gives the direct decoder $\widetilde{\bm u}_{D}(\ee)=\widetilde{\bm u}(\bm\xi=\ee)$ of D-HPROM--ANN, whose state enters the same adaptive stress rule, with the same closure and stress weights, and whose tangent is the derivative of this direct stress map. Figure~\ref{fig:reduced_model_hierarchy} traces the three resulting routes, from the offline RVE snapshots through the affine and nonlinear state representations to this common stress--tangent output.
-
-\begin{figure}[p]
- \centering\input{figures/reduced_model_hierarchy}
- \caption{Intrusive HPROMs used in the comparison. FOM snapshots provide either an affine state representation or a primary--secondary partition in which the ANN predicts the secondary coordinates. Online, HPROM and HPROM--ANN solve projected equilibrium with fixed and adaptive cubature, respectively, whereas D-HPROM--ANN evaluates the nonlinear decoder directly. All three retain microscopic constitutive evaluations and return the same stress--tangent interface.}
-\label{fig:reduced_model_hierarchy}
-\end{figure}
-
+When input-informed coordinates closely approximate the loading parameters, the decoder can also be evaluated without solving reduced equilibrium, as discussed by Hern\'andez et al.~\cite{hernandez2026dimensional} for their hyperelastic example. Prescribing $\bm\xi=\ee$ in Eq.~\eqref{eq:deployed_decoder} gives the direct decoder $\widetilde{\bm u}_{D}(\ee)=\widetilde{\bm u}(\bm\xi=\ee)$ of D-HPROM--ANN, whose state enters the same adaptive stress rule, with the same closure and stress weights, and whose tangent is the derivative of this direct stress map.
 
 \subsection{Mechanical structure retained by the HPROMs}
 Every HPROM, unlike a direct constitutive surrogate, evaluates the original microscopic hyperelastic law, and the iterative variants also enforce projected equilibrium. Even so, the deployed macroscopic stress need not be the derivative of an effective potential. For fixed weights and consistent kinematics, Galerkin internal forces derive from a weighted reduced energy, as in the structure-preservation results for ECSW~\cite{farhat2015}. Here, however, equilibrium and stress use separate cubature rules, and state-dependent weights add the term $\sum_e\Pi_e\nabla_{\qq}w_e$ to the gradient of the weighted energy $\sum_e w_e(\qq)\Pi_e(\qq,\ee)$, a term that Eq.~\eqref{eq:maw} omits. Consequently, no exact effective potential or polyconvexity certificate is claimed for the HPROMs, whose consistent tangent is the derivative of the implemented stress map and need not be symmetric.
