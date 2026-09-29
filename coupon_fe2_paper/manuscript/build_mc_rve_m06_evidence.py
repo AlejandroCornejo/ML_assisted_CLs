@@ -144,7 +144,7 @@ def beyond_data_figure() -> None:
         ax.set_axisbelow(True)
     handles, labels = axes[0].get_legend_handles_labels()
     handles.append(Patch(facecolor="#E3E6EA", edgecolor="none"))
-    labels.append("Inside the sampled box")
+    labels.append("Inside the fitting box")
     fig.legend(handles, labels, loc="upper center", ncol=4, frameon=False,
                bbox_to_anchor=(0.5, 1.01), handlelength=2.0)
     fig.subplots_adjust(left=0.085, right=0.965, bottom=0.17, top=0.79, wspace=0.28)

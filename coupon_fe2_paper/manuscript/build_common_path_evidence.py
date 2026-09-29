@@ -13,6 +13,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
 import numpy as np
+from matplotlib.ticker import MaxNLocator
 
 HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parent
@@ -27,10 +28,13 @@ def digest(path: Path) -> str:
 def configure() -> None:
     plt.rcParams.update({
         "text.usetex": True,
-        "text.latex.preamble": r"\usepackage{lmodern}\usepackage{amsmath}",
+        "text.latex.preamble": r"\usepackage{lmodern}\usepackage{amsmath}\usepackage{bm}",
         "font.family": "serif",
-        "font.size": 8.5,
-        "axes.linewidth": 0.65,
+        "font.size": 8,
+        "axes.linewidth": 0.5,
+        "ytick.labelsize": 7,
+        "ytick.major.width": 0.5,
+        "ytick.major.size": 2.5,
     })
 
 
@@ -67,19 +71,24 @@ def field_figure(data: np.lib.npyio.NpzFile) -> None:
     fluctuation, deformed, triangulations = {}, {}, {}
     for key in ("sc", "mc"):
         xy, u = data[f"{key}_xy"], data[f"{key}_u_nodal"]
-        fluctuation[key] = np.linalg.norm(u - xy @ (F - np.eye(2)).T, axis=1)
+        # Normalized by the cell side, as the coordinates of the geometry figures.
+        side = float(np.ptp(xy[:, 0]))
+        if not np.isclose(side, np.ptp(xy[:, 1])):
+            raise ValueError("Expected a square cell")
+        fluctuation[key] = np.linalg.norm(u - xy @ (F - np.eye(2)).T, axis=1) / side
         deformed[key] = xy + u
         triangulations[key] = mtri.Triangulation(
             deformed[key][:, 0], deformed[key][:, 1], data[f"{key}_triangles"])
-    fig, axes = plt.subplots(2, 2, figsize=(7.25, 6.0), layout="constrained")
-    for column, (key, title) in enumerate((("sc", "SC--RVE"), ("mc", "MC--RVE"))):
+    # Drawn at its printed size, 0.7 of the text width.
+    fig, axes = plt.subplots(2, 2, figsize=(4.42, 3.27), layout="constrained")
+    for column, (key, title) in enumerate((("sc", "SC-RVE"), ("mc", "MC-RVE"))):
         tri = triangulations[key]
         top = axes[0, column]
         displacement_max = float(fluctuation[key].max())
         im_u = top.tripcolor(tri, fluctuation[key], shading="gouraud", cmap="coolwarm",
                              vmin=0.0, vmax=displacement_max, alpha=0.82)
         top.triplot(tri, color="#334155", linewidth=0.075, alpha=0.30)
-        top.set_title(title, fontsize=10, fontweight="bold", pad=5)
+        top.set_title(title, fontsize=9, pad=3)
 
         bottom = axes[1, column]
         stress = nodal_average(data[f"{key}_triangles"], data[f"{key}_von_mises_element"] / 1e6,
@@ -93,14 +102,13 @@ def field_figure(data: np.lib.npyio.NpzFile) -> None:
             ax.set_yticks([])
             for spine in ax.spines.values():
                 spine.set_color("#7C838C")
-                spine.set_linewidth(0.6)
-        fig.colorbar(im_u, ax=top, location="right", shrink=0.86, pad=0.018)
-        fig.colorbar(im_s, ax=bottom, location="right", shrink=0.86, pad=0.018)
-    axes[0, 0].set_ylabel(r"Periodic fluctuation $\|u_\mu-(F-I)X\|$")
-    axes[1, 0].set_ylabel(r"Local Cauchy $\sigma_{\mathrm{vm}}$")
-    fig.suptitle(r"FOM microscopic fields at a common diagnostic state "
-                 r"$(E_{11},E_{22},2E_{12})=(18,-4,8)\%$",
-                 fontsize=10.2, fontweight="bold")
+                spine.set_linewidth(0.5)
+        for image, ax in ((im_u, top), (im_s, bottom)):
+            bar = fig.colorbar(image, ax=ax, location="right", shrink=0.86, pad=0.018)
+            bar.outline.set_linewidth(0.5)
+            bar.locator = MaxNLocator(5, steps=[1, 2, 5, 10])
+    axes[0, 0].set_ylabel(r"Periodic fluctuation $\|\bm w\|/\ell$")
+    axes[1, 0].set_ylabel(r"Local Cauchy $\sigma_{\mathrm{vm}}$ [MPa]")
     fig.get_layout_engine().set(h_pad=0.05, w_pad=0.04, hspace=0.05, wspace=0.04)
     save(fig, "rve_common_diagnostic_fields")
 

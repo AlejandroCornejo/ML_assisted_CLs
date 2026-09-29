@@ -115,6 +115,8 @@ variants to search for before a fragment is closed.
 | Two-scale scheme | FE² (any micro evaluator); nested FOM–FE² is the reference | "is not itself" FE² |
 | Unreduced microscopic model | FOM, always | HDM |
 | Linear-basis reduced model | affine HPROM at first mention per section, then HPROM | linear HPROM, conventional HPROM, D--HPROM--ANN |
+| $\varepsilon_{\rm SVD}$ | integrand-SVD truncation: smallest rank whose relative truncation norm (as $\epsilon_{\rm POD}$, Eq. 46) does not exceed it (Sec. 4.4.1, App. E; code: rank_for) | undefined tolerance |
+| Reduced models, collectively | PROM(s) for the method class (defined in the abstract and Sec. 1.3); the HPROMs for the three deployed models (affine HPROM, HPROM--ANN, D-HPROM--ANN) | reduced microscopic models/solvers/references, microscopic surrogates, reduced evaluators, intrusive reduced references, reduced model(s) |
 | Acronyms | only acronyms reused later: ECSW, ECM, MAW--ECM (en dash), HPROM; ICNN/ICKAN/POD expanded once in the body | DEIM/EQP/CECM/SAW acronyms (never reused), repeated expansions |
 | Feature scale | tau_i | s_i as a scale |
 | Fixed-rule cubature states | N_c = 495 (every tenth training state) | undefined N_c |
@@ -128,3 +130,5 @@ variants to search for before a fragment is closed.
 | Feature scale | $\tau_i$ in $y_i=(z_i-z_i^{\rm cen})/\tau_i$ | $s_i$ (clashes with stress components) |
 | $H(\bm z)=\widehat H(\bm y(\bm z))$ | learned contribution ($\widehat H$: neural core) | neural contribution, core contribution, scalar core $H$ |
 | Spelling | labeled; 100~kN | labelled; 100 kN |
+| Cell side $\ell$ | defined at first use in the Fig. 5 caption; normalizes $\|\bm w\|$ (Fig. 5) and $X_i$ (Figs. 6, 10). Also the layer index of Sec. 3.4, kept because the contexts are separate | undefined $\ell$ |
+| $\bm w$ | fluctuation, Eq. (5) (Sec. 2 and Fig. 5, whose caption cites the equation). Also the ICNN/ICKAN skip weights (Sec. 3.4) and the cubature weights (Sec. 4.4, App. E), each defined where it is used | |

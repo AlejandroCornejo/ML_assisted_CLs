@@ -306,14 +306,14 @@ def constitutive_results():
                      f"{100*m['probe']['stress_sample_relative_percentiles'][-1]:.4f}"])
         rings = entry['probe_by_ring']
         ax.plot([float(r) for r in rings],[100*rings[r]['stress'] for r in rings], 'o-', label=name,color=color)
-    # Keep out-of-domain evidence in the supplement; do not restore probe
-    # columns in the main-paper test table when regenerating artifacts.
-    test_rows = [[row[0], row[1], row[2], row[4]] for row in rows]
+    # Probe and worst-state evidence stays in the internal supplement, which the
+    # paper does not cite; do not restore those columns in the main-paper table.
+    test_rows = [[row[0], row[1], row[2]] for row in rows]
     table('constitutive_errors.tex',
-          ['Model', '$e_S^{\\rm test}$ [\\%]', '$e_W^{\\rm test}$ [\\%]', 'Worst test [\\%]'],
-          test_rows, 'lrrr',
-          'All values are percentages. Stress and energy errors are aggregate array norms; '
-          'the last column is the maximum per-state stress error. SC-RVE: 400 independent test states.')
+          ['Model', '$e_S^{\\rm test}$ [\\%]', '$e_W^{\\rm test}$ [\\%]'],
+          test_rows, 'lrr',
+          'All values are percentages. Stress and energy errors are aggregate array norms. '
+          'SC-RVE: 400 independent test states.')
     table('constitutive_probe_errors.tex',['Model', '$e_S^{\\rm test}$ [\\%]', '$e_W^{\\rm test}$ [\\%]', '$e_S^{\\rm probe}$ [\\%]',
           'Worst test [\\%]', 'Worst probe [\\%]'],rows,'lrrrrr',
           'All values are percentages. The last two columns are maximum per-state stress errors; '
@@ -411,13 +411,14 @@ def capacity_controls():
     stops = [read_json(MC / f'capacity_2x2_v1/training/ickan_large_seed{seed}/run_report.json')
              for seed in (16, 29, 47)]
     early = sorted(r['adam_steps'] for r in stops if r['adam_stop_reason'] == 'validation_plateau')
+    # The note stays true only if two seeds met the plateau far earlier than the third.
+    assert len(early) == 3 and early[1] < early[2] / 3
     table('capacity_mc.tex', ['Model', 'Parameters', 'Stress [\\%]', 'Energy [\\%]', 'Tangent [\\%]'],
           [[name, thin(count),
             *(f"{metrics[k]['median']:.4f}" for k in ('stress', 'energy', 'tangent'))]
            for name, count, metrics in cells], 'lrrrr',
           'Relative error norm over the 512 test states, median over three seeds. '
-          f'$^\\ast$Adam stopped at the validation plateau after {thin(early[0])} and {thin(early[1])} steps '
-          f'for two of the three seeds, against {thin(early[2])} for the third.')
+          '$^\\ast$Two of the three seeds stopped early at the validation plateau.')
     # SC-RVE: the validation-selected seed of every cell, as in Table 4.
     m06_sc = selected_checkpoints(SC / 'sc_m06_learned_v1/training/validation_selection.json',
                                   lambda row: row['core'])

@@ -2,7 +2,8 @@
 """Compare the MC-RVE and SC-RVE constitutive sample domains.
 
 Only frozen strain coordinates and the archived A fit/validation split are
-read. Display subsets are deterministic and never used for model selection.
+read. Figure 7 shows every state; the overview thumbnail uses a deterministic
+display subset that is never used for model selection.
 """
 
 from __future__ import annotations
@@ -70,80 +71,85 @@ def draw_box(ax, lower, upper):
                         color="#555D64", linewidth=0.7, alpha=0.65)
 
 
-def draw_panel(ax, sets, lower, upper, seed, label):
-    # The same deterministic display rule is used for both materials.
+def draw_panel(ax, sets, lower, upper):
+    # Every state is shown, so the SC-RVE grid and its off-grid test states are visible.
     clouds, colors, sizes = [], [], []
-    for role, size in (("fit", 7), ("validation", 19), ("test", 19)):
-        points = subset(sets[role], SHOW[role], seed + list(SHOW).index(role)) * 100
+    for role, size in (("fit", 1.4), ("validation", 4.5), ("test", 4.5)):
+        points = sets[role] * 100
         clouds.append(points)
         colors.extend([COLORS[role]] * len(points))
         sizes.extend([size] * len(points))
     points = np.concatenate(clouds)
     # One collection sorts all three roles together by viewing depth.
     ax.scatter(points[:, 0], points[:, 1], points[:, 2],
-               s=sizes, c=colors, alpha=0.82, marker="o",
+               s=sizes, c=colors, alpha=0.8, marker="o",
                depthshade=False, linewidths=0, rasterized=True)
     draw_box(ax, lower, upper)
-    ax.text2D(0.11, 0.91, label, transform=ax.transAxes,
-              fontsize=10, fontweight="bold")
     ax.set(xlim=(lower[0] * 100, upper[0] * 100),
            ylim=(lower[1] * 100, upper[1] * 100),
            zlim=(lower[2] * 100, upper[2] * 100))
+    # Only the box limits are labeled, with a typeset minus sign.
     for axis, lo, hi in ((ax.xaxis, lower[0], upper[0]),
                          (ax.yaxis, lower[1], upper[1]),
                          (ax.zaxis, lower[2], upper[2])):
-        ticks = sorted(set([lo * 100, hi * 100] + ([0] if lo < 0 < hi else [])))
-        if axis is ax.yaxis:
-            # Its lower-end label collides with the x-axis upper-end label.
-            # Both exact box limits remain stated in the text.
-            ticks = ticks[1:]
-        axis.set_ticks(ticks)
-        axis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:.1f}"))
-    ax.set_xlabel(r"$E_{11}$ [\%]", labelpad=-3)
-    ax.set_ylabel(r"$E_{22}$ [\%]", labelpad=-3)
-    ax.set_zlabel(r"$2E_{12}$ [\%]", labelpad=-3)
-    ax.tick_params(labelsize=7, pad=-2)
+        axis.set_ticks([lo * 100, hi * 100])
+        axis.set_major_formatter(FuncFormatter(lambda value, _: f"${value:.1f}$"))
+    # E22 on the upper edge leaves one tick label per box corner.
+    ax.yaxis.set_ticks_position("upper")
+    ax.yaxis.set_label_position("upper")
+    ax.set_xlabel(r"$E_{11}$ [\%]", labelpad=-9)
+    ax.set_ylabel(r"$E_{22}$ [\%]", labelpad=-9)
+    ax.set_zlabel(r"$2E_{12}$ [\%]", labelpad=-9)
+    ax.tick_params(labelsize=7, pad=-3.5)
+    ax.yaxis.set_tick_params(pad=-2.5)
+    ax.zaxis.set_tick_params(pad=-1.5)
+    # A transparent background keeps the left z label visible next to the right panel.
+    ax.set_facecolor((1, 1, 1, 0))
     ax.set_box_aspect((1.0, 0.9, 0.85))
     ax.view_init(elev=21, azim=-57)
     ax.grid(False)
     for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
         axis.pane.set_facecolor("white")
         axis.pane.set_edgecolor("white")
+        axis.line.set_linewidth(0.6)
 
 
 def main():
     plt.rcParams.update({"text.usetex": True,
                          "text.latex.preamble": r"\usepackage{lmodern}",
-                         "font.family": "serif", "font.size": 9})
+                         "font.family": "serif", "font.size": 8,
+                         "xtick.major.width": 0.5, "ytick.major.width": 0.5})
     FIGURES.mkdir(exist_ok=True)
-    fig = plt.figure(figsize=(7.3, 3.75))
-    for position, load, seed, label in ((121, material_b, 20, "MC-RVE"),
-                                       (122, material_a, 10, "SC-RVE")):
+    # Drawn at its printed size, 0.8 of the text width.
+    fig = plt.figure(figsize=(5.2, 2.8))
+    panels = ((121, material_b, "MC-RVE"), (122, material_a, "SC-RVE"))
+    for position, load, _ in panels:
         ax = fig.add_subplot(position, projection="3d")
-        draw_panel(ax, *load(), seed, label)
-        if position == 121:
-            # The left 3D z label is otherwise overpainted by the neighboring axes.
-            ax.set_zlabel("")
-    fig.text(0.485, 0.62, r"$2E_{12}$ [\%]", rotation=90,
-             ha="center", va="center")
-    fig.subplots_adjust(left=0.00, right=0.95, bottom=0.13, top=1.04, wspace=0.04)
+        draw_panel(ax, *load())
+    fig.subplots_adjust(left=0.03, right=0.95, bottom=0.085, top=0.975, wspace=0.10)
+    for ax, (*_, label) in zip(fig.axes, panels):
+        box = ax.get_position()
+        fig.text(0.5 * (box.x0 + box.x1), 0.985, label,
+                 ha="center", va="top", fontsize=9)
     legend = [Line2D([0], [0], marker="o", linestyle="none", color=COLORS["fit"],
-                     markersize=5, label="Fit"),
+                     markersize=4, label="Fit"),
               Line2D([0], [0], marker="o", linestyle="none", color=COLORS["validation"],
-                     markersize=5, label="Validation"),
+                     markersize=4, label="Validation"),
               Line2D([0], [0], marker="o", linestyle="none", color=COLORS["test"],
-                     markersize=5, label="Test")]
+                     markersize=4, label="Test")]
     fig.legend(handles=legend, loc="lower center", ncol=3, frameon=False,
-               bbox_to_anchor=(0.5, 0.015))
+               bbox_to_anchor=(0.5, 0.0), fontsize=8,
+               handletextpad=0.3, columnspacing=1.6)
     pdf = FIGURES / "constitutive_domains.pdf"
-    fig.savefig(pdf, facecolor="white")
+    # The points are rasterized; the default 100 dpi blurs them in print.
+    fig.savefig(pdf, facecolor="white", dpi=600)
     plt.close(fig)
     subprocess.run(["pdftoppm", "-png", "-r", "220", "-singlefile",
                     str(pdf), str(FIGURES / "constitutive_domains")], check=True)
 
     # A compact, label-free rendering of Material A for the method overview.
-    # It deliberately reuses Figure 7's data, display subset, colors, viewing
-    # angle, and wireframe rather than introducing a second sampling graphic.
+    # It reuses Figure 7's data, colors, viewing angle, and wireframe; a display
+    # subset keeps the thumbnail legible at its small printed size.
     sets, lower, upper = material_a()
     fig = plt.figure(figsize=(2.0, 1.8))
     ax = fig.add_subplot(111, projection="3d")
@@ -167,7 +173,7 @@ def main():
     ax.set_axis_off()
     fig.subplots_adjust(0, 0, 1, 1)
     overview_pdf = FIGURES / "sampling_material_a_overview.pdf"
-    fig.savefig(overview_pdf, transparent=True, bbox_inches="tight", pad_inches=0)
+    fig.savefig(overview_pdf, transparent=True, bbox_inches="tight", pad_inches=0, dpi=600)
     plt.close(fig)
     subprocess.run(["pdftoppm", "-png", "-r", "220", "-singlefile",
                     str(overview_pdf),

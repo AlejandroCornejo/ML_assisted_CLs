@@ -71,7 +71,14 @@ def main():
     assert len(keys) == len(set(keys)) == len(set(cites)), "Bibliography keys must remain unique and complete"
     figures = re.findall(r"\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}", src)
     assert all((HERE/"figures"/f).is_file() for f in figures)
-    # The supplement preserves evidence removed from the main reading path.
+    # The supplement is an internal reserve for reviewer replies; it is not submitted,
+    # so the paper must never cite it.
+    assert re.search(r"[Ss]upplementary", src) is None, "The paper must not cite the internal supplement"
+    # PROM(s) names the method class and HPROMs the three deployed models; cited titles are exempt.
+    body = src.split(r"\begin{thebibliography}")[0]
+    assert r"\begin{thebibliography}" in src
+    assert re.search(r"reduced microscopic|microscopic surrogate|reduced evaluator|intrusive reduced reference"
+                     r"|\breduced models?\b", body, re.I) is None, "Use PROMs or HPROMs for the reduced models"
     supplemental = expand(HERE / "supplementary.tex")
     supplemental_labels = re.findall(r"\\label\{([^}]+)\}", supplemental)
     supplemental_refs = re.findall(r"\\(?:ref|eqref)\{([^}]+)\}", supplemental)
@@ -102,7 +109,7 @@ def main():
             < results.index(r"\subsection{Single-cavity RVE: constitutive accuracy and FE$^2$ deployment}")
             < results.index(r"\label{fig:rve}"))
     assert r"\pendingresult{" not in src
-    assert r"\subsubsection{What do the constraints guarantee beyond the data?}" in results
+    assert r"\subsubsection{Admissibility beyond the data}" "\n" r"\label{sec:mc_guarantees}" in results
     mc_mechanics = json.loads((ROOT / "07_material_b/results/feature_count_analysis_v1"
                                "/m06_mechanics_audit_v1/audit.json").read_text())
     certified = {row["slug"]: row["nonnegative_energy_certificate"]["certified"]
