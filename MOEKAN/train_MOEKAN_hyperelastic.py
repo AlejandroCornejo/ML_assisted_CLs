@@ -293,8 +293,8 @@ model = train_model(
     d_inputs_d_strain_flat,
     stress_ref_flat,
     learning_rate=1e-3,
-    epochs=50_000,
-    patience=1e-7,
+    epochs=500_000,
+    patience=1e-4,
 )
 
 # Final loss.
