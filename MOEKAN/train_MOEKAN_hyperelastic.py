@@ -144,7 +144,7 @@ def train_model(
     targets = jax.device_put(targets, device)
     params = jax.device_put(model.params, device)
 
-    optimizer = optax.adam( # adamw
+    optimizer = optax.adamw( # adamw
         learning_rate=learning_rate,
     )
 
