@@ -225,6 +225,60 @@ class MOEKAN:
 
     ##################################################
     ##################################################
+    def gradient(self, x, params=None):
+        """
+        Compute the gradient of the network output W w.r.t. the inputs.
+
+        For a scalar output (e.g. the hyperelastic work W), this returns
+        dW/dx for every input sample. For a vector output, the returned
+        array has shape (..., input_width, output_width), i.e. the
+        Jacobian of the network output w.r.t. the inputs.
+
+        Parameters
+        ----------
+        x : array-like
+            Input data with shape (..., input_width). A 1D array of shape
+            (input_width,) is treated as a single sample.
+
+        params : pytree, optional
+            Network parameters. If omitted, self.params is used.
+
+        Returns
+        -------
+        jnp.ndarray
+            Gradient of the output w.r.t. the inputs.
+            - Scalar output: shape (..., input_width)
+            - Vector output: shape (..., input_width, output_width)
+        """
+        if params is None:
+            params = self.params
+
+        x = jnp.asarray(x)
+
+        if x.ndim == 1:
+            x = x[:, None]
+
+        if x.shape[-1] != self.width[0]:
+            raise ValueError(
+                f"Expected input width {self.width[0]}, "
+                f"received {x.shape[-1]}"
+            )
+
+        def _output(x_single):
+            return self.moekan_network(
+                x_single,
+                params=params,
+            )
+
+        # Gradient of the output w.r.t. a single input sample.
+        grad_fn = jax.vmap(
+            jax.grad(_output, argnums=0)
+        )
+
+        return grad_fn(x)
+
+    ##################################################
+    ##################################################
     def plot_edge_tree(
         self,
         x,
