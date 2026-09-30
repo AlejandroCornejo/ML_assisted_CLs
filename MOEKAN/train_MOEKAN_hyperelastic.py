@@ -28,6 +28,55 @@ where:
       i.e. the square roots of the eigenvalues of C = I + 2E.
     - J = sqrt(det(C)) is the Jacobian of the deformation gradient.
 """
+def _strain_to_moekan_inputs_single(strain):
+    """
+    Core computation for a SINGLE strain sample.
+
+    Args:
+        strain (jnp.ndarray): array of shape (3,) with the
+            Green-Lagrange strain in Voigt form [E11, E22, 2*E12].
+
+    Returns:
+        jnp.ndarray: array of shape (3,) with
+            [lambda_x, lambda_y, log(J)].
+    """
+    # Reconstruct the symmetric Green-Lagrange strain tensor E.
+    # NOTE: the 3rd Voigt component is the engineering shear strain 2*E12.
+    E11 = strain[0]
+    E22 = strain[1]
+    E12 = 0.5 * strain[2]
+
+    # Right Cauchy-Green deformation tensor: C = I + 2E.
+    C = jnp.array(
+        [
+            [1.0 + 2.0 * E11, E12],
+            [E12, 1.0 + 2.0 * E22],
+        ]
+    )
+
+    # Principal stretches of F: square roots of the eigenvalues of C.
+    # eigvalsh returns the eigenvalues in ascending order for symmetric matrices.
+    eigvals = jnp.linalg.eigvalsh(C)
+    # eigvals = jnp.clip(eigvals, a_min=1.0e-12)  # guard against non-physical values
+    lambdas = jnp.sqrt(eigvals)
+
+    lambda_x = lambdas[0]
+    lambda_y = lambdas[1]
+
+    # J = sqrt(det(C)) = product of the principal stretches.
+    J = lambda_x * lambda_y
+    log_J = jnp.log(J + 1.0e-12)
+
+    return jnp.array([lambda_x, lambda_y, log_J])
+
+
+# Vectorized versions over arbitrary leading batch dimensions.
+_strain_to_moekan_inputs_vmap = jax.vmap(_strain_to_moekan_inputs_single)
+_d_moekan_inputs_d_strain_vmap = jax.vmap(
+    jax.jacrev(_strain_to_moekan_inputs_single)
+)
+
+
 def strain_to_moekan_inputs(strain_history):
     """
     Transforms a Green-Lagrange strain history into MOEKAN inputs (JAX).
@@ -37,40 +86,24 @@ def strain_to_moekan_inputs(strain_history):
             Green-Lagrange strain in Voigt form [E11, E22, 2*E12].
 
     Returns:
-        jnp.ndarray: array of shape (..., 4) with
-            [lambda_x, lambda_y, lambda_x * lambda_y, log(J)].
+        tuple:
+            - jnp.ndarray: array of shape (..., 3) with
+                [lambda_x, lambda_y, log(J)].
+            - jnp.ndarray: Jacobian d(moekan_inputs)/d(strain) of shape
+                (..., 3, 3), where the last two axes are
+                (output_component, input_component).
     """
-    # Reconstruct the symmetric Green-Lagrange strain tensor E.
-    # NOTE: the 3rd Voigt component is the engineering shear strain 2*E12.
-    E11 = strain_history[..., 0]
-    E22 = strain_history[..., 1]
-    E12 = 0.5 * strain_history[..., 2]
+    # vmap maps over the leading axis, so flatten to 2D (N, 3) first and
+    # reshape the results back to the original leading shape.
+    leading_shape = strain_history.shape[:-1]
+    strain_flat = strain_history.reshape(-1, 3)
 
-    # Right Cauchy-Green deformation tensor: C = I + 2E.
-    C = jnp.stack(
-        [
-            jnp.stack([1.0 + 2.0 * E11, E12], axis=-1),
-            jnp.stack([E12, 1.0 + 2.0 * E22], axis=-1),
-        ],
-        axis=-2,
-    )
+    outputs = _strain_to_moekan_inputs_vmap(strain_flat)
+    jacobian = _d_moekan_inputs_d_strain_vmap(strain_flat)
 
-    # Principal stretches of F: square roots of the eigenvalues of C.
-    # eigvalsh returns the eigenvalues in ascending order for symmetric matrices.
-    eigvals = jnp.linalg.eigvalsh(C)
-    # eigvals = jnp.clip(eigvals, a_min=1.0e-12)  # guard against non-physical values
-    lambdas = jnp.sqrt(eigvals)
-
-    lambda_x = lambdas[..., 0]
-    lambda_y = lambdas[..., 1]
-
-    # J = sqrt(det(C)) = product of the principal stretches.
-    J = lambda_x * lambda_y
-    log_J = jnp.log(J + 1.0e-12)
-
-    return jnp.stack(
-        [lambda_x, lambda_y, log_J], axis=-1
-    )
+    outputs = outputs.reshape(*leading_shape, 3)
+    jacobian = jacobian.reshape(*leading_shape, 3, 3)
+    return outputs, jacobian
 #=============================================================================================================
 
 
@@ -93,7 +126,7 @@ ref_work_database   /= 1.0e6 # to MPa vs strain
 # Transform the Green-Lagrange strain history (batch x steps x 3) into the
 # MOEKAN inputs (batch x steps x 4): [lambda_x, lambda_y, lambda_x*lambda_y, log(J)]
 # The MOEKAN model is JAX-based, so convert the torch tensor to a JAX array first.
-moekan_inputs = strain_to_moekan_inputs(
+moekan_inputs, d_moekan_inputs_d_strain = strain_to_moekan_inputs(
     jnp.asarray(ref_strain_database.numpy(), dtype=jnp.float32)
 )
 
@@ -110,29 +143,48 @@ print("\nThe MOEKAN inputs size is: ", moekan_inputs.shape)
 # ==========================================================================================
 """
 MOEKAN TRAINING:
-    inputs  : flattened MOEKAN inputs (batches*steps, 4)
-    targets : work W (batches*steps, 1)
-    loss    : relative L2 norm of the squared difference of work
+    inputs  : flattened MOEKAN inputs (batches*steps, 3)
+    targets : reference stress in Voigt form [S11, S22, S12] (batches*steps, 3)
+    loss    : L2 norm of the stress difference, where the predicted stress
+              is obtained via the chain rule:
+                  dW/dE = dW/d(moekan_inputs) @ d(moekan_inputs)/dE
 """
-def relative_l2_loss(model, params, inputs, targets):
+def stress_l2_loss(model, params, inputs, d_inputs_d_strain, stress_ref):
     """
-    Relative L2 norm of the squared difference of work.
+    L2 loss on the stress (dW/dE) obtained via the chain rule.
 
-        loss = ||(W_pred - W_ref)^2||_2 / (||W_ref^2||_2 + eps)
-             = sqrt(sum((W_pred - W_ref)^2)) / (sqrt(sum(W_ref^2)) + eps)
+        dW/dE = dW/d(moekan_inputs) @ d(moekan_inputs)/dE
+
+    Args:
+        model: MOEKAN model.
+        params: model parameters.
+        inputs: MOEKAN inputs, shape (N, 3).
+        d_inputs_d_strain: Jacobian d(moekan_inputs)/d(strain), shape (N, 3, 3).
+        stress_ref: reference stress in Voigt form [S11, S22, S12], shape (N, 3).
+
+    Returns:
+        Mean squared error of the stress.
     """
-    prediction = model(inputs, params=params)
-    diff = prediction - targets
-    numerator = jnp.mean(diff ** 2)
-    # denominator = jnp.mean(targets ** 2) + 1.0e-12
-    # return numerator / denominator
-    return numerator
+    # dW/d(moekan_inputs): gradient of the network output W w.r.t. its inputs.
+    dW_d_inputs = model.gradient(inputs, params=params)  # (N, 3)
+
+    # Chain rule: dW/dE = dW/d(moekan_inputs) @ d(moekan_inputs)/dE.
+    # dW_d_inputs: (N, 3)  ->  (N, i)
+    # d_inputs_d_strain: (N, 3, 3)  ->  (N, i, j)
+    # result: (N, 3)  ->  (N, j)
+    dW_d_strain = jnp.einsum(
+        '...i,...ij->...j', dW_d_inputs, d_inputs_d_strain
+    )
+
+    diff = dW_d_strain - stress_ref
+    return jnp.mean(diff ** 2)
 
 
 def train_model(
     model,
     inputs,
-    targets,
+    d_inputs_d_strain,
+    stress_ref,
     learning_rate=1e-3,
     epochs=50_000,
     patience=1e-7,
@@ -141,7 +193,8 @@ def train_model(
     print(f"Using JAX device: {device}")
 
     inputs = jax.device_put(inputs, device)
-    targets = jax.device_put(targets, device)
+    d_inputs_d_strain = jax.device_put(d_inputs_d_strain, device)
+    stress_ref = jax.device_put(stress_ref, device)
     params = jax.device_put(model.params, device)
 
     optimizer = optax.adamw( # adamw
@@ -153,11 +206,12 @@ def train_model(
     @jax.jit
     def train_step(params, optimizer_state):
         def loss_fn(current_params):
-            return relative_l2_loss(
+            return stress_l2_loss(
                 model,
                 current_params,
                 inputs,
-                targets,
+                d_inputs_d_strain,
+                stress_ref,
             )
 
         loss_value, gradients = jax.value_and_grad(
@@ -209,13 +263,17 @@ n_batches = moekan_inputs.shape[0]
 n_steps = moekan_inputs.shape[1]
 
 moekan_inputs_flat = moekan_inputs.reshape(n_batches * n_steps, 3)
-work_flat = jnp.asarray(
-    ref_work_database.reshape(n_batches * n_steps, 1).numpy(),
+d_inputs_d_strain_flat = d_moekan_inputs_d_strain.reshape(
+    n_batches * n_steps, 3, 3
+)
+stress_ref_flat = jnp.asarray(
+    ref_stress_database.reshape(n_batches * n_steps, 3).numpy(),
     dtype=jnp.float32,
 )
 
 print("Flattened MOEKAN inputs shape: ", moekan_inputs_flat.shape)
-print("Flattened work shape         : ", work_flat.shape)
+print("Flattened Jacobian shape     : ", d_inputs_d_strain_flat.shape)
+print("Flattened stress shape       : ", stress_ref_flat.shape)
 
 # Create the MOEKAN model: 3 inputs, n hidden, 1 output (W).
 model = MOEKAN(
@@ -232,7 +290,8 @@ print(
 model = train_model(
     model,
     moekan_inputs_flat,
-    work_flat,
+    d_inputs_d_strain_flat,
+    stress_ref_flat,
     learning_rate=1e-3,
     epochs=50_000,
     patience=1e-7,
@@ -240,18 +299,19 @@ model = train_model(
 
 # Final loss.
 final_loss = float(
-    relative_l2_loss(
+    stress_l2_loss(
         model,
         model.params,
         moekan_inputs_flat,
-        work_flat,
+        d_inputs_d_strain_flat,
+        stress_ref_flat,
     )
 )
-print(f"Final relative L2 loss: {final_loss:.6e}")
+print(f"Final stress L2 loss: {final_loss:.6e}")
 
 # ==========================================================================================
 """
-PLOTS: evolution of W against each strain component (Ex, Ey, Gamma_xy)
+PLOTS: evolution of each stress component against each strain component
 """
 # Reference strain components (batch x steps x 3): [E11, E22, 2*E12].
 strain_np = ref_strain_database.numpy()
@@ -259,42 +319,54 @@ Ex = strain_np[..., 0].reshape(-1)        # E11
 Ey = strain_np[..., 1].reshape(-1)        # E22
 Gamma_xy = strain_np[..., 2].reshape(-1)  # 2*E12 (engineering shear)
 
-W_ref = np.asarray(work_flat).reshape(-1)
-W_pred = np.asarray(model(moekan_inputs_flat)).reshape(-1)
+# Reference stress components (batch x steps x 3): [S11, S22, S12].
+stress_np = ref_stress_database.numpy()
+S11_ref = stress_np[..., 0].reshape(-1)
+S22_ref = stress_np[..., 1].reshape(-1)
+S12_ref = stress_np[..., 2].reshape(-1)
 
-strain_components = [
-    (r"$E_{xx}$", Ex),
-    (r"$E_{yy}$", Ey),
-    (r"$\Gamma_{xy}$", Gamma_xy),
+# Predicted stress via the chain rule: dW/dE = dW/d(moekan_inputs) @ d(moekan_inputs)/dE.
+dW_d_inputs = model.gradient(moekan_inputs_flat, params=model.params)  # (N, 3)
+dW_d_strain = jnp.einsum(
+    '...i,...ij->...j', dW_d_inputs, d_inputs_d_strain_flat
+)
+S11_pred = np.asarray(dW_d_strain[..., 0]).reshape(-1)
+S22_pred = np.asarray(dW_d_strain[..., 1]).reshape(-1)
+S12_pred = np.asarray(dW_d_strain[..., 2]).reshape(-1)
+
+stress_components = [
+    (r"$S_{11}$", S11_ref, S11_pred),
+    (r"$S_{22}$", S22_ref, S22_pred),
+    (r"$S_{12}$", S12_ref, S12_pred),
 ]
 
 figure, axes = plt.subplots(1, 3, figsize=(18, 5))
-for axis, (label, strain_values) in zip(axes, strain_components):
+for axis, (label, ref_values, pred_values) in zip(axes, stress_components):
     axis.scatter(
-        strain_values,
-        W_ref,
+        Ex,
+        ref_values,
         s=8,
         alpha=0.35,
         color="black",
         label="reference",
     )
     axis.scatter(
-        strain_values,
-        W_pred,
+        Ex,
+        pred_values,
         s=8,
         alpha=0.35,
         color="tab:blue",
         label="MOEKAN",
     )
-    axis.set_xlabel(label)
-    axis.set_ylabel(r"$W$")
-    axis.set_title(rf"$W$ versus {label}")
+    axis.set_xlabel(r"$E_{xx}$")
+    axis.set_ylabel(label)
+    axis.set_title(rf"{label} versus $E_{{xx}}$")
     axis.grid(True)
     axis.legend()
 
 figure.tight_layout()
 figure.savefig(
-    "MOEKAN_hyperelastic_W_vs_strain.pdf",
+    "MOEKAN_hyperelastic_stress_vs_strain.pdf",
     bbox_inches="tight",
 )
 plt.show()

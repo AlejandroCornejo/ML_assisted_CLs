@@ -265,10 +265,14 @@ class MOEKAN:
             )
 
         def _output(x_single):
-            return self.moekan_network(
+            out = self.moekan_network(
                 x_single,
                 params=params,
             )
+            # jax.grad requires a scalar output. For a single-output network
+            # (e.g. the hyperelastic work W) the output has shape (1,), so
+            # extract the scalar.
+            return out.reshape(())
 
         # Gradient of the output w.r.t. a single input sample.
         grad_fn = jax.vmap(
