@@ -111,7 +111,7 @@ def strain_to_moekan_inputs(strain_history):
 """
 INPUT DATASET:
 """
-number_of_steps = 25
+number_of_steps = 5
 ADD_NOISE = False
 database = cl_loader.CustomDataset("raw_data", number_of_steps, None, ADD_NOISE)
 #=============================================================================================================
@@ -155,6 +155,9 @@ def stress_l2_loss(model, params, inputs, d_inputs_d_strain, stress_ref):
 
         dW/dE = dW/d(moekan_inputs) @ d(moekan_inputs)/dE
 
+    The shear component S12 is weighted 10x to compensate for its
+    typically much smaller magnitude compared to S11 and S22.
+
     Args:
         model: MOEKAN model.
         params: model parameters.
@@ -163,7 +166,7 @@ def stress_l2_loss(model, params, inputs, d_inputs_d_strain, stress_ref):
         stress_ref: reference stress in Voigt form [S11, S22, S12], shape (N, 3).
 
     Returns:
-        Mean squared error of the stress.
+        Weighted mean squared error of the stress.
     """
     # dW/d(moekan_inputs): gradient of the network output W w.r.t. its inputs.
     dW_d_inputs = model.gradient(inputs, params=params)  # (N, 3)
@@ -177,7 +180,12 @@ def stress_l2_loss(model, params, inputs, d_inputs_d_strain, stress_ref):
     )
 
     diff = dW_d_strain - stress_ref
-    return jnp.mean(diff ** 2)
+
+    # Component-wise weights: [S11, S22, S12]
+    # The shear component S12 is scaled 10x to give it more
+    # gradient signal relative to the normal components.
+    weights = jnp.array([1.0, 1.0, 10.0])
+    return jnp.mean(weights * diff ** 2)
 
 
 def train_model(
@@ -185,7 +193,7 @@ def train_model(
     inputs,
     d_inputs_d_strain,
     stress_ref,
-    learning_rate=1e-3,
+    learning_rate=1e-5,
     epochs=50_000,
     patience=1e-7,
 ):
@@ -197,7 +205,7 @@ def train_model(
     stress_ref = jax.device_put(stress_ref, device)
     params = jax.device_put(model.params, device)
 
-    optimizer = optax.adamw( # adamw
+    optimizer = optax.adam( # adamw
         learning_rate=learning_rate,
     )
 
@@ -277,8 +285,10 @@ print("Flattened stress shape       : ", stress_ref_flat.shape)
 
 # Create the MOEKAN model: 3 inputs, n hidden, 1 output (W).
 model = MOEKAN(
-    width=(3, 8, 4, 1),
+    width=(3,  25, 15, 1),
     temperature=1.0,
+    random_init=True,
+    #initial_dominant_expert=1
 )
 
 print(
@@ -293,8 +303,8 @@ model = train_model(
     d_inputs_d_strain_flat,
     stress_ref_flat,
     learning_rate=1e-3,
-    epochs=500_000,
-    patience=1e-4,
+    epochs=150_000,
+    patience=1e-5,
 )
 
 # Final loss.

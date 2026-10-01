@@ -13,7 +13,36 @@ class MOEKAN:
         width,
         temperature=1.0,
         seed=42,
+        random_init=True,
+        initial_dominant_expert=None,
     ):
+        """
+        Initialize a MOEKAN network.
+
+        Parameters
+        ----------
+        width : sequence of int
+            Layer widths, e.g. [2, 8, 1].
+        temperature : float
+            Softmax temperature for the expert mixing weights.
+        seed : int
+            Random seed for reproducible initialization.
+        random_init : bool
+            If True (default), a, b, c, d, w are initialized with
+            random noise around their base values. If False,
+            deterministic values are used (a=1, b=0, c=1, d=0, w=0).
+        initial_dominant_expert : int or None
+            Index of the symbolic expert to make dominant at
+            initialization. The basis functions are ordered as:
+                0: z (linear)
+                1: z**2
+                2: z**3
+                3: tanh(z)
+                4: sin(z)
+            When set, the corresponding w logit is biased to a large
+            positive value so the softmax strongly favors that expert.
+            If None (default), no bias is applied.
+        """
         if len(width) < 2:
             raise ValueError(
                 "width must contain at least input and output sizes"
@@ -23,6 +52,15 @@ class MOEKAN:
         self.temperature = float(temperature)
         self.seed = seed
         self.num_experts = 5
+        self.random_init = bool(random_init)
+        self.initial_dominant_expert = initial_dominant_expert
+
+        if self.initial_dominant_expert is not None:
+            if not (0 <= self.initial_dominant_expert < self.num_experts):
+                raise ValueError(
+                    f"initial_dominant_expert must be in [0, {self.num_experts - 1}], "
+                    f"got {self.initial_dominant_expert}"
+                )
 
         self.initialize()
 
@@ -42,49 +80,52 @@ class MOEKAN:
         output_width,
         key,
     ):
-        """Initialize all MOEKAN edges in one layer."""
-        key_a, key_b, key_c, key_d, key_w = (
-            jax.random.split(key, 5)
-        )
+        """
+        Initialize all MOEKAN edges in one layer.
 
+        Respects self.random_init and self.initial_dominant_expert:
+        - random_init=False: deterministic values (a=1, b=0, c=1, d=0, w=0)
+        - initial_dominant_expert=k: biases w[k] to a large positive value
+          so the softmax strongly favors expert k at initialization.
+        """
         edge_shape = (
             output_width,
             input_width,
         )
+        w_shape = (
+            output_width,
+            input_width,
+            self.num_experts,
+        )
+
+        if self.random_init:
+            key_a, key_b, key_c, key_d, key_w = (
+                jax.random.split(key, 5)
+            )
+
+            a = 1.0 + 0.01 * jax.random.normal(key_a, edge_shape)
+            b = 0.01 * jax.random.normal(key_b, edge_shape)
+            c = 1.0 + 0.01 * jax.random.normal(key_c, edge_shape)
+            d = 0.01 * jax.random.normal(key_d, edge_shape)
+            w = 0.01 * jax.random.normal(key_w, w_shape)
+        else:
+            a = jnp.ones(edge_shape)
+            b = jnp.zeros(edge_shape)
+            c = jnp.ones(edge_shape)
+            d = jnp.zeros(edge_shape)
+            w = jnp.zeros(w_shape)
+
+        # Apply dominant-expert bias if requested.
+        if self.initial_dominant_expert is not None:
+            bias_value = 10.0  # strong bias to make the expert dominant
+            w = w.at[:, :, self.initial_dominant_expert].set(bias_value)
 
         return {
-            "a": (
-                1.0
-                + 0.01
-                * jax.random.normal(
-                    key_a,
-                    edge_shape,
-                )
-            ),
-            "b": 0.01 * jax.random.normal(
-                key_b,
-                edge_shape,
-            ),
-            "c": (
-                1.0
-                + 0.01
-                * jax.random.normal(
-                    key_c,
-                    edge_shape,
-                )
-            ),
-            "d": 0.01 * jax.random.normal(
-                key_d,
-                edge_shape,
-            ),
-            "w": 0.01 * jax.random.normal(
-                key_w,
-                (
-                    output_width,
-                    input_width,
-                    self.num_experts,
-                ),
-            ),
+            "a": a,
+            "b": b,
+            "c": c,
+            "d": d,
+            "w": w,
         }
 
     ##################################################
@@ -229,6 +270,11 @@ class MOEKAN:
         """
         Compute the gradient of the network output W w.r.t. the inputs.
 
+        Uses vmap(jacfwd(single_sample)) for efficient batched computation.
+        Forward-mode Jacobian (jacfwd) composes more efficiently with the
+        outer reverse-mode value_and_grad during training than the previous
+        vmap(grad(...)) approach.
+
         For a scalar output (e.g. the hyperelastic work W), this returns
         dW/dx for every input sample. For a vector output, the returned
         array has shape (..., input_width, output_width), i.e. the
@@ -256,7 +302,7 @@ class MOEKAN:
         x = jnp.asarray(x)
 
         if x.ndim == 1:
-            x = x[:, None]
+            x = x[None, :]
 
         if x.shape[-1] != self.width[0]:
             raise ValueError(
@@ -264,22 +310,23 @@ class MOEKAN:
                 f"received {x.shape[-1]}"
             )
 
-        def _output(x_single):
-            out = self.moekan_network(
+        def _single_output(x_single):
+            return self.moekan_network(
                 x_single,
                 params=params,
             )
-            # jax.grad requires a scalar output. For a single-output network
-            # (e.g. the hyperelastic work W) the output has shape (1,), so
-            # extract the scalar.
-            return out.reshape(())
 
-        # Gradient of the output w.r.t. a single input sample.
-        grad_fn = jax.vmap(
-            jax.grad(_output, argnums=0)
-        )
+        # Per-sample Jacobian via forward-mode autodiff.
+        # For input (in,) and output (out,), jacfwd gives (out, in).
+        # vmap over the batch gives (N, out, in).
+        jacobian = jax.vmap(jax.jacfwd(_single_output))(x)
 
-        return grad_fn(x)
+        if self.width[-1] == 1:
+            # Scalar output: (N, 1, in) -> (N, in)
+            return jacobian[:, 0, :]
+
+        # Vector output: (N, out, in) -> (N, in, out)
+        return jnp.transpose(jacobian, (0, 2, 1))
 
     ##################################################
     ##################################################

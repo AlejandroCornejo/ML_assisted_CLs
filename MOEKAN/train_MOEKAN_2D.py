@@ -8,13 +8,13 @@ import optax
 from MOEKAN import MOEKAN
 
 
-def relative_mse_loss(model, params, inputs, targets, ref_mse):
+def relative_mse_loss(model, params, inputs, targets):
     prediction = model(
         inputs,
         params=params,
     )
 
-    return jnp.mean((prediction - targets) ** 2) / ref_mse
+    return jnp.mean((prediction - targets) ** 2)
 
 
 def train_model(
@@ -47,7 +47,6 @@ def train_model(
                 current_params,
                 inputs,
                 targets,
-                mse_ref,
             )
 
         loss_value, gradients = jax.value_and_grad(
