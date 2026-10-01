@@ -51,7 +51,10 @@ def main():
     introduction = main_text[section_matches[0].start():section_matches[1].start()]
     assert r"\label{tab:literature}" not in src, "Superseded literature table must not be included"
     assert r"\label{sec:discussion}" in introduction, "Positioning must be inside Introduction"
-    assert r"\begin{tikzpicture}" in introduction, "Figure 1 must use native LaTeX typography"
+    # The construction overview (native TikZ) opens Section 3, next to the notation it uses (moved 2026-09-27).
+    section3 = main_text[section_matches[2].start():section_matches[3].start()]
+    assert r"\label{fig:constitutive_pipeline}" in section3 and r"\begin{tikzpicture}" in section3
+    assert r"\label{fig:constitutive_pipeline}" not in introduction
     assert "Position relative to prior work and limitations" not in section_titles
     assert section_titles[-1] == "Conclusions"
     assert r"\subsection{Energy-based constitutive learning and polyconvexity}" in introduction
@@ -59,14 +62,30 @@ def main():
     assert r"\subsection{Projection-based reduced-order models}" in introduction
     assert "reduced micromechanics" not in main_text.lower()
     assert "Mechanics-informed constitutive learning" not in main_text
-    assert "Option 1:} Polyconvexity meets learned anisotropy" in src
-    assert "Option 2:} Learning anisotropy with convex neural networks" in src
+    title = "Polyconvex neural-network surrogates with learned paired directional features for anisotropic hyperelastic homogenization"
+    supplement_src = (HERE / "supplementary.tex").read_text()
+    assert "\\title{" + title + "}" in src and title in supplement_src
+    assert "Option 1" not in src and "Working draft" not in src + supplement_src
     assert "author list and affiliations to be confirmed" not in src
     assert "This work was conducted while S. Ares de Parga was affiliated with CIMNE." in src
     assert len(keys) == len(set(keys)) == len(set(cites)), "Bibliography keys must remain unique and complete"
     figures = re.findall(r"\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}", src)
     assert all((HERE/"figures"/f).is_file() for f in figures)
-    # The supplement preserves evidence removed from the main reading path.
+    # The supplement is an internal reserve for reviewer replies; it is not submitted,
+    # so the paper must never cite it.
+    assert re.search(r"[Ss]upplementary", src) is None, "The paper must not cite the internal supplement"
+    # PROM(s) names the method class and HPROMs the three deployed models; cited titles are exempt.
+    body = src.split(r"\begin{thebibliography}")[0]
+    assert r"\begin{thebibliography}" in src
+    assert re.search(r"reduced microscopic|microscopic surrogate|reduced evaluator|intrusive reduced reference"
+                     r"|\breduced models?\b", body, re.I) is None, "Use PROMs or HPROMs for the reduced models"
+    # CMAME numbers references in order of first citation; rerun order_bibliography.py after moving citations.
+    cited = []
+    for group in re.findall(r"\\cite\{([^}]+)\}", body):
+        for key in (key.strip() for key in group.split(",")):
+            if key not in cited:
+                cited.append(key)
+    assert re.findall(r"\\bibitem\{([^}]+)\}", src) == cited, "Run order_bibliography.py"
     supplemental = expand(HERE / "supplementary.tex")
     supplemental_labels = re.findall(r"\\label\{([^}]+)\}", supplemental)
     supplemental_refs = re.findall(r"\\(?:ref|eqref)\{([^}]+)\}", supplemental)
@@ -80,21 +99,77 @@ def main():
     assert r"\label{tab:rankone}" not in src
     assert r"\input{tables/constitutive_probe_errors.tex}" in (HERE/"supplementary.tex").read_text()
     assert "probe" not in (HERE/"tables/constitutive_errors.tex").read_text()
+    # Table 4 compares the three HPROMs with the energies on the same test states.
+    assert all(f"\n{name} & " in (HERE/"tables/constitutive_errors.tex").read_text()
+               for name in ("HPROM", "HPROM--ANN", "D-HPROM--ANN", "ICNN", "ICKAN", "Unconstrained energy"))
     assert r"\label{sec:material_b}" in src
-    assert r"\subsection{Directional richness and feature adaptation in the MC--RVE}" in results
-    assert r"\subsection{SC--RVE deployment qualification}" in results
+    assert r"\subsection{Multicavity RVE: learning the paired features}" in results
+    assert r"\subsection{Single-cavity RVE: constitutive accuracy and FE$^2$ deployment}" in results
     assert r"\label{fig:feature_count_sensitivity}" in results
     assert r"\label{fig:mc_representative_path}" not in results
     assert r"\label{fig:common_rve_fields}" in results
     assert r"\label{fig:mc_rve_m06_paths}" not in results
     assert r"\label{tab:mc_rve_m06}" in results
-    assert (results.index(r"\label{fig:rve}")
-            < results.index(r"\label{fig:common_rve_fields}")
-            < results.index(r"\subsection{Directional richness and feature adaptation in the MC--RVE}")
+    assert r"\label{sec:training_protocol}" in results
+    assert (results.index(r"\label{fig:common_rve_fields}")
+            < results.index(r"\label{sec:training_protocol}")
+            < results.index(r"\subsection{Multicavity RVE: learning the paired features}")
             < results.index(r"\label{tab:mc_rve_m06}")
-            < results.index(r"\subsection{SC--RVE deployment qualification}"))
-    assert r"\pendingresult{" in src
-    assert src.index(r"\label{sec:coupon}") < src.index(r"\label{sec:material_a_reduction}")
+            < results.index(r"\label{fig:mc_beyond_data}")
+            < results.index(r"\subsection{Single-cavity RVE: constitutive accuracy and FE$^2$ deployment}")
+            < results.index(r"\label{fig:rve}"))
+    assert r"\pendingresult{" not in src
+    assert r"\subsubsection{Admissibility beyond the data}" "\n" r"\label{sec:mc_guarantees}" in results
+    mc_mechanics = json.loads((ROOT / "07_material_b/results/feature_count_analysis_v1"
+                               "/m06_mechanics_audit_v1/audit.json").read_text())
+    certified = {row["slug"]: row["nonnegative_energy_certificate"]["certified"]
+                 for row in mc_mechanics["rows"] if "nonnegative_energy_certificate" in row}
+    assert len(mc_mechanics["rows"]) == 15 and len(certified) == 12
+    assert all(value == ("learned" in slug) for slug, value in certified.items())
+    supplement = (HERE/"supplementary.tex").read_text()
+    for text in (results, supplement):
+        assert re.search(r"\bFree\b|Regression|earlier 32-feature|unresolved", text) is None
+    assert r"\label{app:capacity}" in results and r"\label{sec:mc_guarantees}" in results
+    for name in ("capacity_mc", "capacity_sc", "cycle_work", "rank_one", "fe2_comparison"):
+        assert (HERE/"tables"/f"{name}.tex").is_file()
+    assert r"\input{tables/cycle_work.tex}" in supplement
+    assert "Regression" not in (HERE/"tables/fe2_comparison.tex").read_text()
+    assert r"\label{sec:confined}" in results and r"\label{fig:confined}" in results
+    assert results.index(r"\label{sec:coupon}") < results.index(r"\label{sec:confined}") < results.index(r"\label{sec:conclusions}")
+    confined = ROOT / "06_fe2/results/confined_compression_v1"
+    for name in ("ICNN", "ICKAN", "Unconstrained"):
+        for d, last in (("x", 9), ("y", 8)):
+            record = json.loads((confined / f"{name}_{d}_incremental_500.json").read_text())
+            if name == "Unconstrained":
+                assert record["status"] == "not_converged" and record["n_steps_completed"] == last
+            else:
+                assert record["status"] == "converged" and record["n_steps_completed"] == 20
+                assert 4 <= min(s["iterations"] for s in record["steps"]) and max(s["iterations"] for s in record["steps"]) <= 9
+    # Gauss-point rank-one curvature of the repeated runs (declared post-hoc diagnostic).
+    audit = json.loads((confined / "rank_one/rank_one_audit.json").read_text())
+    assert audit["status"] == "complete" and all(audit["identical_records"].values())
+    for d, last, negative in (("x", 9, 1), ("y", 8, 2)):
+        steps = audit["cases"][f"Unconstrained_{d}_incremental_500"]["steps"]
+        assert len(steps) == last and steps[-1]["negative_points"] == negative
+        assert all(s["negative_points"] == 0 for s in steps[:-1])
+        assert all(v < 0 for v in steps[-1]["second_difference_MPa"])
+    assert audit["constrained_minimum_MPa"] > 194
+    assert "at one of the 384 Gauss points in $x$ and at two in $y$" in results
+    assert "above 194~MPa at every Gauss point and increment" in results
+    assert "single increment" not in results
+    beyond = json.loads((ROOT / "07_material_b/results/feature_count_analysis_v1"
+                         "/m06_beyond_data_v1/summary.json").read_text())
+    assert beyond["status"] == "complete" and len(beyond["rows"]) == 15
+    for row in beyond["rows"]:
+        search = row["directed_search"]
+        if row["model"] == "Unconstrained":
+            assert search["nearest"]["negative_verified"] and search["most_negative"]["negative_verified"]
+        else:
+            assert search["cloud_negative_states"] == 0 and search["most_negative"]["curvature_Pa"] > 0
+    assert src.index(r"\label{sec:material_a_reduction}") < src.index(r"\label{sec:coupon}")
+    # The HPROMs are built before Table 4 compares them with the energies.
+    assert (src.index(r"\label{sec:material_a}") < src.index(r"\label{sec:material_a_reduction}")
+            < src.index(r"\label{sec:constitutive_accuracy}") < src.index(r"\label{sec:coupon}"))
     feature_audit_path = ROOT / "07_material_b/results/feature_count_analysis_v1/validation_audit_v1/validation_summary.json"
     feature_decision_path = ROOT / "07_material_b/results/feature_count_analysis_v1/m06_reporting_decision_v1/decision.json"
     feature_evaluation_path = ROOT / "07_material_b/results/feature_count_analysis_v1/m06_independent_evaluation_v1/summary.json"

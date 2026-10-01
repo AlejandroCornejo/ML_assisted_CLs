@@ -101,16 +101,26 @@ def run(args) -> int:
     original_law = fom._neo_hookean_pk2_2d_vectorized
     t0 = time.perf_counter()  # deployed checkpoint and macro setup excluded
 
+    output_dir = Path(args.output_dir).resolve() if args.output_dir else HERE
+    tag = args.tag or f"{args.tier}_w{args.macro_divisor:g}_f{args.force / 1e3:g}kn"
+    failure, iterates = None, []
     try:
         fom._neo_hookean_pk2_2d_vectorized = law
         for step in range(1, args.max_steps + 1):
             f_ext = f_final * (step / args.n_steps)
             res0, converged = None, False
             best = (np.inf, u.copy())
+            iterates = []
             for it in range(1, args.max_newton + 1):
                 tic = time.perf_counter()
                 if cached_assembly is None:
-                    K, rhs = macro.assembler.Assemble(u)
+                    try:
+                        K, rhs = macro.assembler.Assemble(u)
+                    except (ValueError, FloatingPointError, RuntimeError) as error:
+                        if not args.record_iterates:
+                            raise
+                        failure = f"material evaluation failed at step {step}, iteration {it}: {error}"
+                        break
                 else:
                     K, rhs = cached_assembly
                     cached_assembly = None
@@ -119,6 +129,14 @@ def run(args) -> int:
                 res0 = max(res, 1.0e-30) if res0 is None else res0
                 rel = res / res0
                 best = min(best, (res, u.copy()), key=lambda item: item[0])
+                if args.record_iterates:
+                    # Strains of the iterate just assembled; det C <= 0 has no admissible F.
+                    E_it = macro.assembler._E_voigt.reshape(-1, 3)
+                    cov_it = _coverage(E_it, blo, bhi)
+                    det_c = (1.0 + 2.0*E_it[:, 0])*(1.0 + 2.0*E_it[:, 1]) - E_it[:, 2]**2
+                    iterates.append(dict(iteration=it, residual=res, relative_residual=rel,
+                                         outside=int(cov_it["n"] - cov_it["inside"]),
+                                         min_det_C=float(np.min(det_c))))
                 print(f"  step {step:2d}/{args.n_steps} iter {it:2d}: |R|={res:.5e}, "
                       f"rel={rel:.3e}, wall={time.perf_counter() - tic:.2f}s", flush=True)
                 if res < args.abs_tol or rel < args.rel_tol:
@@ -126,17 +144,23 @@ def run(args) -> int:
                     break
                 du = spsolve(K[free, :][:, free].tocsc(), residual[free])
                 if not np.all(np.isfinite(du)):
-                    raise RuntimeError(f"non-finite macro update at step {step}, iteration {it}")
+                    failure = f"non-finite macro update at step {step}, iteration {it}"
+                    break
                 u[free] += du
-            if not converged:
+            if failure is None and not converged:
                 u = best[1]
-                raise RuntimeError(f"macro Newton did not converge at step {step}; "
-                                   f"best relative residual={best[0] / res0:.3e}")
+                failure = (f"macro Newton did not converge at step {step}; "
+                           f"best relative residual={best[0] / res0:.3e}")
+            if failure is not None:
+                if not args.record_iterates:
+                    raise RuntimeError(failure)
+                break
 
             E = macro.assembler._E_voigt.reshape(-1, 3).copy()
             cov = _coverage(E, blo, bhi)
             records.append(dict(step=step, iterations=it, residual=res,
-                                relative_residual=rel, coverage=cov))
+                                relative_residual=rel, coverage=cov,
+                                **(dict(iterates=iterates) if args.record_iterates else {})))
             cloud.append(E)
             cached_assembly = (K, rhs)
             print(f"    converged: in-box {cov['inside']}/{cov['n']}; "
@@ -144,13 +168,26 @@ def run(args) -> int:
                   f"E22=[{cov['minimum'][1]:+.4f},{cov['maximum'][1]:+.4f}], "
                   f"g12=[{cov['minimum'][2]:+.4f},{cov['maximum'][2]:+.4f}]", flush=True)
 
+        if failure is not None:
+            # Robustness studies keep failed runs; nothing is written as converged.
+            record = dict(status="not_converged", error=failure, tier=args.tier, tag=tag,
+                          force_per_end=args.force, n_steps_requested=args.n_steps,
+                          n_steps_completed=len(records), max_newton=args.max_newton,
+                          torch_threads=args.threads, checkpoint=law.metadata,
+                          macro_newton=records, failed_step=dict(step=step, iterates=iterates),
+                          wall_seconds=time.perf_counter() - t0)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / f"pann_fe2_{tag}.json").write_text(json.dumps(record, indent=2),
+                                                             encoding="utf-8")
+            print(json.dumps(dict(status=record["status"], error=failure)), flush=True)
+            return 1
         wall = time.perf_counter() - t0
         E_final = macro.assembler._E_voigt.reshape(-1, 3).copy()
         S_final = macro.assembler._S_voigt.reshape(-1, 3).copy()
         final_response = law.response(E_final, tangent=False)
         u_nodes = np.stack((u[macro.eq_map[:, 0]], u[macro.eq_map[:, 1]]), axis=1)
-        tag = args.tag or f"{args.tier}_w{args.macro_divisor:g}_f{args.force / 1e3:g}kn"
-        out = HERE / f"pann_fe2_{tag}.npz"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        out = output_dir / f"pann_fe2_{tag}.npz"
         summary = dict(
             status="converged",
             model=dict(
@@ -161,7 +198,8 @@ def run(args) -> int:
             tier=args.tier, tag=tag,
             output=str(out), wall_seconds=wall, torch_threads=args.threads,
             force_per_end=args.force, n_steps_requested=args.n_steps,
-            n_steps_completed=len(records), macro_elements=macro.assembler.n_elems,
+            n_steps_completed=len(records), max_newton=args.max_newton,
+            macro_elements=macro.assembler.n_elems,
             macro_gauss_points=macro.assembler.n_elems * macro.assembler.n_gauss,
             rve_elements_reference=int(np.load(ROOT / "03_data" / "data.npz")["n_elements"]),
             checkpoint=law.metadata, tangent_preflight=tangent_audit,
@@ -206,6 +244,10 @@ def main() -> int:
     parser.add_argument("--abs-tol", type=float, default=1.0e-5)
     parser.add_argument("--tag", default="")
     parser.add_argument("--no-output", action="store_true")
+    parser.add_argument("--output-dir", default=None,
+                        help="Folder for the .npz/.json outputs (default: this directory).")
+    parser.add_argument("--record-iterates", action="store_true",
+                        help="Record every Newton iterate and keep a record of failed runs.")
     args = parser.parse_args()
     if args.threads < 1:
         parser.error("--threads must be positive")

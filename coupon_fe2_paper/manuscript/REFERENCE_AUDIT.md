@@ -2,6 +2,28 @@
 
 Updated: 2026-09-10, expanded manuscript v0.2.
 
+## Literature context for the constraint cost (Sec. 5.3.2) — 26 September 2026
+
+Read in the published versions (Linden, Kalina) and arXiv v1 (Klein), stored as
+`~/PapersForCLsPROMsAndPANNs/{linden2023,Kalina2024,klein2026advances}.pdf`.
+
+- linden2023, JMPS 179 (2023) 105363, Sec. 4.2.2: adding all common conditions
+  "leads to a deterioration of the prediction quality of approximately one order
+  of magnitude for the transversely isotropic case"; "the PANN model should be
+  chosen anyway, especially with regard to the very good extrapolation
+  capability". The network has one hidden layer with 8 neurons. For isotropy,
+  they found no deterioration.
+- klein2026, arXiv:2605.27011v1, Sec. 5.2 and Table 2: on the SPH test data
+  (matrix with a stiff spherical inclusion), log10 MSE is -2.38 (PANN-C) and
+  -1.7 (PANN-I), against -3.38 (PANN-C*) and -3.12 (PANN-I*). The pairwise RMS
+  ratios are 3.2 and 5.1 (computed by us). Sec. 5.1.1 also notes that
+  homogenized behavior "might still be non-elliptic", so polyconvex models can
+  represent only elliptic behavior (not yet used in the manuscript).
+- Kalina2024, CMAME 437 (2025) 117725, Sec. 2.2: "polyconvexity can be too
+  restrictive, especially for multiscale modeling". Footnote 9: their energy is
+  not polyconvex because "a polyconvex energy turned out to be too restrictive
+  for the fitting".
+
 ## Definitions before the model comparison — 10 September 2026
 
 - Moved Table 2 from the baseline introduction to Section 4.7, after the
