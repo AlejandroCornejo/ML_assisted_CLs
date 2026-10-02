@@ -23,8 +23,7 @@ def train_model(
     targets,
     learning_rate=1e-3,
     epochs=50_000,
-    patience=1e-7,
-    mse_ref=1.0,
+    patience=1e-5
 ):
     device = jax.devices("cpu")[0]
     print(f"Using JAX device: {device}")
@@ -33,7 +32,7 @@ def train_model(
     targets = jax.device_put(targets, device)
     params = jax.device_put(model.params, device)
 
-    optimizer = optax.adamw( # lbfgs
+    optimizer = optax.lbfgs( # lbfgs adamw
         learning_rate=learning_rate,
     )
 
@@ -95,6 +94,8 @@ def train_model(
 
 def main():
     # Generate a two-dimensional training grid.
+    # x_values = np.linspace(0.01, 1.0, 80)
+    # y_values = np.linspace(0.01, 1.0, 80)
     x_values = np.linspace(-1.0, 1.0, 80)
     y_values = np.linspace(-1.0, 1.0, 80)
 
@@ -108,8 +109,6 @@ def main():
     # z_grid = x_grid * y_grid # Case A
     # z_grid = x_grid / y_grid # Case B
     z_grid = jnp.exp(jnp.sin(3.14159 * x_grid) + y_grid**2) # Case C
-    
-    mse_ref = jnp.mean(z_grid**2) + 1e-12
 
     # Flatten the grid into samples.
     inputs = np.column_stack(
@@ -134,8 +133,8 @@ def main():
     model = MOEKAN(
         # width=(2, 2, 1), # Case A
         # width=(2, 3, 2, 1), # Case B
-        width=(2,  4, 3, 1), # Case C
-        temperature=1.0
+        width=(2,  1,  1), # Case C
+        temperature=0.1
     )
 
     print(
@@ -148,9 +147,8 @@ def main():
         inputs_jax,
         targets_jax,
         learning_rate=1e-3,
-        epochs=200_000,
-        patience=1e-7,
-        mse_ref=mse_ref
+        epochs=10_000,
+        patience=1e-6
     )
 
     prediction = model(inputs_jax)
@@ -158,7 +156,7 @@ def main():
         prediction
     ).reshape(x_grid.shape)
 
-    final_mse = jnp.mean((prediction - z_grid) ** 2) / mse_ref
+    final_mse = jnp.mean((prediction - z_grid) ** 2)
 
     print(f"Final MSE: {final_mse:.6e}")
 
