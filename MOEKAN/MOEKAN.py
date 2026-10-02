@@ -57,6 +57,7 @@ class MOEKAN:
                 2: z**3
                 3: tanh(z)
                 4: sin(z)
+                5: exp(clip(z, -8, 8))
             When set, the corresponding w logit is biased to a large
             positive value so the softmax strongly favors that expert.
             If None (default), no bias is applied.
@@ -69,7 +70,7 @@ class MOEKAN:
         self.width = tuple(width)
         self.temperature = float(temperature)
         self.seed = seed
-        self.num_experts = 5
+        self.num_experts = 6
         self.random_init = bool(random_init)
         self.initial_dominant_expert = initial_dominant_expert
 
@@ -190,6 +191,7 @@ class MOEKAN:
                 z**3,
                 jnp.tanh(z),
                 jnp.sin(z),
+                jnp.exp(jnp.clip(z, -8.0, 8.0)),
             ],
             axis=-1,
         )
@@ -233,6 +235,7 @@ class MOEKAN:
                 z**3,
                 jnp.tanh(z),
                 jnp.sin(z),
+                jnp.exp(jnp.clip(z, -8.0, 8.0)),
             ],
             axis=-1,
         )
@@ -1338,6 +1341,7 @@ class MOEKAN:
             "z**3",
             "tanh(z)",
             "sin(z)",
+            "exp(clip(z,-8,8))",
         ]
 
         with open(filename, "w", encoding="utf-8") as log_file:
@@ -1364,12 +1368,7 @@ class MOEKAN:
                     )
                 )
 
-                if weights.shape[-1] == 6:
-                    current_expert_names = expert_names + [
-                        "exp(clip(z,-8,8))"
-                    ]
-                else:
-                    current_expert_names = expert_names
+                current_expert_names = expert_names
 
                 if len(current_expert_names) != weights.shape[-1]:
                     current_expert_names = [
