@@ -19,6 +19,24 @@ class MOEKAN:
         """
         Initialize a MOEKAN network.
 
+        Each edge computes:
+            phi(x) = sum_i pi_i * (c_i * f_i(a*x + b) + d_i)
+
+        where pi_i = softmax(w_i / temperature) and f_i are the
+        analytical basis functions.
+
+        Parameter structure per edge:
+            a, b : SHARED across experts (shape: scalar per edge).
+                   All experts operate on the same affine-transformed
+                   input z = a*x + b, preserving a common input domain
+                   for interpretability.
+            c_i, d_i : PER-EXPERT (shape: one value per expert).
+                   Each expert has its own output scale and offset,
+                   allowing independent amplitude and baseline per
+                   basis function.
+            w_i : PER-EXPERT softmax logits (shape: one value per
+                   expert) controlling the mixing weights.
+
         Parameters
         ----------
         width : sequence of int
@@ -105,14 +123,14 @@ class MOEKAN:
 
             a = 1.0 + 0.01 * jax.random.normal(key_a, edge_shape)
             b = 0.01 * jax.random.normal(key_b, edge_shape)
-            c = 1.0 + 0.01 * jax.random.normal(key_c, edge_shape)
-            d = 0.01 * jax.random.normal(key_d, edge_shape)
+            c = 1.0 + 0.01 * jax.random.normal(key_c, w_shape)
+            d = 0.01 * jax.random.normal(key_d, w_shape)
             w = 0.01 * jax.random.normal(key_w, w_shape)
         else:
             a = jnp.ones(edge_shape)
             b = jnp.zeros(edge_shape)
-            c = jnp.ones(edge_shape)
-            d = jnp.zeros(edge_shape)
+            c = jnp.ones(w_shape)
+            d = jnp.zeros(w_shape)
             w = jnp.zeros(w_shape)
 
         # Apply dominant-expert bias if requested.
@@ -220,8 +238,8 @@ class MOEKAN:
         )
 
         edge_values = probabilities * (
-            c[..., None] * basis
-            + d[..., None]
+            c * basis
+            + d
         )
 
         return jnp.sum(
@@ -1411,29 +1429,27 @@ class MOEKAN:
                                 layer_params["b"]
                             )[output_index, input_index]
                         )
-                        c_value = float(
-                            np.asarray(
-                                layer_params["c"]
-                            )[output_index, input_index]
-                        )
-                        d_value = float(
-                            np.asarray(
-                                layer_params["d"]
-                            )[output_index, input_index]
-                        )
+                        c_values = np.asarray(
+                            layer_params["c"]
+                        )[output_index, input_index, :]
+                        d_values = np.asarray(
+                            layer_params["d"]
+                        )[output_index, input_index, :]
 
                         log_file.write(
-                            f"    a = {a_value:+.8e}\n"
+                            f"    a = {a_value:+.8e}  (shared)\n"
                         )
                         log_file.write(
-                            f"    b = {b_value:+.8e}\n"
+                            f"    b = {b_value:+.8e}  (shared)\n"
                         )
-                        log_file.write(
-                            f"    c = {c_value:+.8e}\n"
-                        )
-                        log_file.write(
-                            f"    d = {d_value:+.8e}\n"
-                        )
+                        for expert_index, (cv, dv) in enumerate(
+                            zip(c_values, d_values)
+                        ):
+                            log_file.write(
+                                f"    c[{expert_index}] = {cv:+.8e}, "
+                                f"d[{expert_index}] = {dv:+.8e}  "
+                                f"({current_expert_names[expert_index]})\n"
+                            )
 
                         log_file.write(
                             "  raw logits w:\n"
