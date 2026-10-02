@@ -1,269 +1,259 @@
-\newcommand{\pendingresult}[1]{\begin{quote}\small\color{blue!45!black}\textbf{Draft task---evidence pending.} #1\end{quote}}
 
-\section{Constitutive assessment on periodic microstructures}
+\section{Numerical examples}
 \label{sec:cell}
-We use two independently trained RVE geometries so that the assessment does not rest on a single cavity arrangement. The multicavity RVE (MC-RVE) presents several geometric directions within one cell, making it the more discriminating setting in which to isolate the effect of learning the paired features and of changing their number. The single-cavity RVE (SC-RVE) is instead the microscopic model subsequently propagated through the structural FE$^2$ calculation and shared with the intrusive references of Section~\ref{sec:reduced}; it therefore supplies the deployment qualification. Together, the two benchmarks test the same constitutive construction in distinct geometric settings, but not transfer of parameters between them.
-
-The evidence follows those roles in causal order. We first ask on the MC-RVE whether the directional features should be learned and how that conclusion depends on their number. We then ask on the SC-RVE whether the selected learned energies are accurate enough for the structural calculation of Section~\ref{sec:coupon}. Throughout, analytical guarantees are distinguished from predictive accuracy and finite implementation checks.
-
-\subsection{Microstructures and reference-model verification}
-Both benchmarks are square periodic cells with total void fraction $0.20$.  Their solid phase follows the same compressible Neo-Hookean law in plane strain.  With $\C_\mu=\F_\mu^T\F_\mu$ and $J_\mu=\det\F_\mu>0$, its local energy density is
+For the numerical assessment of the proposed construction, two square periodic cells are considered, both with total void fraction $0.20$ and the same compressible Neo-Hookean matrix in plane strain.  With $\C_\mu=\F_\mu^T\F_\mu$ and $J_\mu=\det\F_\mu>0$, the local energy density of the matrix is
 \begin{equation}
  \psi_\mu=\frac\mu2(\tr\C_\mu-2)-\mu\log J_\mu
               +\frac\lambda2(\log J_\mu)^2,
 \end{equation}
-with Young's modulus $1.628$ GPa and Poisson ratio $0.4$, where $\mu$ and $\lambda$ are the Lam\'e constants.  The cavity geometry, rather than the matrix law, distinguishes the two benchmarks.
+with Young's modulus $1.628$ GPa and Poisson ratio $0.4$, where $\mu$ and $\lambda$ are the Lam\'e constants.  Because the two cells share this law, their responses differ only through the arrangement of their cavities, and each cell receives its own independently trained models, so that the assessment does not rest on a single microstructure.
 
-\subsubsection{Multicavity representation benchmark}
+Figure~\ref{fig:common_rve_fields} shows how differently the two cells respond to the same multiaxial deformation, $(E_{11},E_{22},2E_{12})=(18,-4,8)\%$.  In the MC-RVE, four nonaligned cavities create several interacting localization regions, which makes it a demanding setting for determining how many paired features are needed, what learning them adds, and what the constraints secure beyond the data.  In the SC-RVE, a single inclined cavity concentrates the response around one dominant geometric direction.  This cell is the microscopic model propagated through the structural FE$^2$ calculations and shared with the HPROMs of Section~\ref{sec:reduced}.  On it, the learned energies are compared with the HPROMs, first at the constitutive level and then in a tensile coupon, before a confined compression test drives them beyond the data.
+
+\begin{figure}[t]
+ \centering\includegraphics[width=.7\linewidth]{rve_common_diagnostic_fields.pdf}
+ \caption{FOM microscopic fields at the common diagnostic state $(E_{11},E_{22},2E_{12})=(18,-4,8)\%$, shown on the actual deformed cells without displacement amplification.  Top: magnitude of the periodic displacement fluctuation $\bm w$ of Eq.~\eqref{eq:micro_deformation}, normalized by the cell side $\ell$.  Bottom: local three-dimensional Cauchy von Mises stress, including the plane-strain out-of-plane stress, with Gauss-point values averaged to the nodes for visualization.  Each panel uses its own color limits to resolve the pattern within its cell, so colors do not compare magnitudes across cells.}
+ \label{fig:common_rve_fields}
+\end{figure}
+
+\subsection{Training protocol}
+\label{sec:training_protocol}
+The energies of both benchmarks are trained and selected in the same way, so that differences within each benchmark reflect the constitutive representation rather than the fitting procedure.  Every model is a scalar energy $W(\ee;\bm\theta)$, whose first derivative gives the stress and whose second derivative gives the tangent $\bm D$ of Eq.~\eqref{eq:tangent}.  It is fitted to FOM energies and stresses at the fitting states and to the effective tangent $\bm D_0=\bm D(\bm 0)$ of the periodic cell at the undeformed state.
+
+The ICNN of Eq.~\eqref{eq:monotone_icnn} has two hidden layers of width 24 and the ICKAN of Eq.~\eqref{eq:monotone_ickan} two of width 12, and each ICKAN connection combines six integrated-hat bases on fixed knots from $-1.2$ to $1.2$ ($h=0.48$).  With six fixed paired features, the ICNN has 945 trainable parameters and the ICKAN 1629, and learning the features adds only five parameters per feature.  The initial features are selected from a finite bank of admissible candidates using only the fitting response and the reference tangent.  Before entering either core, each feature is centered at its undeformed value, $z_i^{\rm cen}=z_i^0=1/p_i+1/q_i$, and $\tau_i$ is its largest deviation from that value over the fitting states at initialization.  The conditioned inputs therefore start in $[-1,1]$, which the ICKAN knots cover with a small margin.  The Unconstrained energy uses three softplus hidden layers of widths 128, 128, and 64 on the inputs of Eq.~\eqref{eq:unconstrained_inputs}, for 25\,473 parameters.
+
+All trainable parameters, including the feature parameters of the learned variants, minimize
+\begin{equation}
+ \mathcal L(\bm\theta)=
+ \frac{\sum_k\|\ssv(\ee_k;\bm\theta)-\ssv_k\|_2^2}{\sum_k\|\ssv_k\|_2^2}
+ +0.2\,\frac{\sum_k\bigl[W(\ee_k;\bm\theta)-W_k\bigr]^2}{\sum_k W_k^2}
+ +0.02\,\frac{\|\bm D(\bm0;\bm\theta)-\bm D_0\|_F^2}{\|\bm D_0\|_F^2},
+ \label{eq:training_loss}
+\end{equation}
+where the sums run over the fitting states $\ee_k$, with FOM energies $W_k$ and stresses $\ssv_k$.  Stress carries the largest weight because it is queried throughout the FE$^2$ calculation.  The energy term keeps the potential itself, and not only its gradient, close to the homogenized energy.  The small tangent term anchors the stiffness at the undeformed state, where the vanishing stresses contribute little to the first term.
+
+Optimization is full-batch and in double precision.  The validation error is the first term of Eq.~\eqref{eq:training_loss} evaluated on the validation states.  Adam, with initial learning rates of $5\times10^{-3}$ for the constrained energies and $4\times10^{-4}$ for the Unconstrained energy, runs until this error stops improving, or for at most 200\,000 steps, and L-BFGS then refines the best Adam state.  The retained checkpoint is the one with the lowest validation error, and each model is trained from three seeds.  Independent test states are evaluated only after every checkpoint has been frozen.
+\FloatBarrier
+
+\subsection{Multicavity RVE: learning the paired features}
+\label{sec:constitutive_training}
+The paired-feature construction guarantees admissibility for every allowed parameter set, but it does not determine how much directional information the convex core needs.  This question is particularly relevant for the MC-RVE, whose nonaligned cavities introduce several geometric directions.  A small fixed feature set may then fail to distinguish deformation states with different directional responses.  One remedy is to supply more features, and another is to let their directions and exponents adapt to the RVE response.  Both effects are examined together by asking how accuracy changes with the number $m$ of paired features and, for each $m$, what is gained by learning rather than fixing their parameters.
+
+\subsubsection{Cell, data, and controlled comparison}
 \label{sec:material_b}
-The MC-RVE distributes the void space among four unequal, off-center ellipses with different aspect ratios and orientations; see Fig.~\ref{fig:rve_b}.  Its several geometric directions make it the representation benchmark.  The working mesh has 4621 quadratic triangles.
+The MC-RVE distributes the void space among four unequal, off-center ellipses with different aspect ratios and orientations (Fig.~\ref{fig:rve_b}), and its working mesh has 4621 quadratic triangles.
 
 \begin{figure}[htbp]
- \centering\includegraphics[width=.96\linewidth]{rve_geometry_b.pdf}
+ \centering\includegraphics[width=.65\linewidth]{rve_geometry_b.pdf}
  \caption{MC-RVE cavity geometry (left) and quadratic mesh (right).  Dashed lines identify cavity major axes.}
  \label{fig:rve_b}
 \end{figure}
 
-Mesh refinement changes homogenized energy, stress, and tangent by less than $0.1\%$; the sampled maximum microscopic first Piola stress norm changes by at most $4.06\%$.  These comparisons support the working mesh for the representation study.
+Refining the mesh to 8961 elements changes the homogenized energy, stress, and tangent by less than $0.1\%$ over 64 audited states that include the corners of the fitting box defined below.  The sampled maximum microscopic first Piola--Kirchhoff stress norm changes by at most $4.06\%$, which supports the working mesh for the representation study.
 
-\subsubsection{Single-cavity deployment benchmark}
-\label{sec:material_a}
-The SC-RVE contains one centered elliptical void with aspect ratio $2$ and major-axis angle $30^\circ$ relative to the cell axes; see Fig.~\ref{fig:rve}.  Its working mesh has 1546 quadratic triangles and 6320 independent microscopic displacement coordinates.
+The fitting box spans $E_{11},E_{22}\in[-0.04,0.20]$ and $2E_{12}\in[-0.08,0.08]$ (Fig.~\ref{fig:constitutive_domains}, left).  The 4200 fitting states combine 4096 scrambled Sobol points in the interior with 96 points on the faces and the eight corners, so that the boundary of the box is sampled rather than reached by extrapolation.  Independent Sobol sequences supply 512 validation and 512 independent-test states.  For each $m\in\{2,4,6,8,16,24,32\}$, ICNN and ICKAN are trained in two variants that start from the same $m$ initial features.  The fixed variant holds their directions and exponents constant while training the convex core, whereas the learned variant optimizes those parameters subject to the constraints of Section~\ref{sec:learned}.  All other ingredients of Section~\ref{sec:training_protocol} are shared within each core, so the difference between the two variants isolates the effect of adapting the features.
 
 \begin{figure}[htbp]
- \centering\includegraphics[width=.96\linewidth]{rve_geometry.pdf}
- \caption{SC-RVE cavity geometry (left) and quadratic mesh (right).  The dashed line identifies the cavity major axis.}
- \label{fig:rve}
-\end{figure}
-
-At a uniaxial-stress state with $E_{11}=0.20$, refinement changes the maximum microscopic first Piola stress norm by approximately $0.486\%$ and the average axial stress by approximately $0.001\%$.  This check supports the mesh used for deployment.
-
-\paragraph{A common diagnostic state.}
-The different roles assigned to the two cells are visible under the same multiaxial deformation.  Figure~\ref{fig:common_rve_fields} applies $(E_{11},E_{22},2E_{12})=(18,-4,8)\%$ to the two FOMs.  The inclined cavity concentrates the response around one dominant geometric direction, whereas the nonaligned cavities create several interacting localization regions.  This comparison illustrates the geometric distinction motivating the MC-RVE representation benchmark and the independent SC-RVE deployment benchmark; it is not an error test, and no constitutive-network field is reconstructed.
-
-\begin{figure}[htbp]
- \centering\includegraphics[width=.97\linewidth]{rve_common_diagnostic_fields.pdf}
- \caption{FOM microscopic fields at the common diagnostic state $(E_{11},E_{22},2E_{12})=(18,-4,8)\%$, shown on the actual deformed cells without displacement amplification.  Top: magnitude of the periodic displacement fluctuation after removing the imposed affine part.  Bottom: local three-dimensional Cauchy von Mises stress, including the plane-strain out-of-plane stress; Gauss-point values are averaged per element for visualization.  Each panel uses its own color limits to resolve the spatial pattern within its respective cell; colors are therefore not a cross-cell magnitude comparison.}
- \label{fig:common_rve_fields}
-\end{figure}
-
-\FloatBarrier
-\subsection{Directional richness and feature adaptation in the MC--RVE}
-\label{sec:constitutive_training}
-The paired-feature construction guarantees admissibility for every allowed parameter set, but it does not determine how much directional information the convex core needs.  This question is particularly relevant for the MC-RVE: its nonaligned cavities introduce several geometric directions, so a small prescribed feature set may fail to distinguish deformation states with different directional responses.  One remedy is to supply more features; another is to let their directions and exponents adapt to the RVE response.  We examine both effects together by asking how accuracy changes with the number $m$ of paired features and, for each $m$, what is gained by learning rather than fixing their parameters.
-
-\paragraph{Controlled comparison.}
-We sample $E_{11},E_{22}\in[-0.04,0.20]$ and $2E_{12}\in[-0.08,0.08]$, using 4200 fitting, 512 validation, and 512 independent-test states; Figure~\ref{fig:constitutive_domains} shows the domain.  For each $m\in\{2,4,6,8,16,24,32\}$, ICNN and ICKAN are trained over three seeds.  Both variants begin from the same $m$ admissible features, selected from a common candidate bank using the fitting response and reference tangent.\footnote{Nonnegative fits identify candidates that contribute to the sampled response and reference tangent; pivoted QR completes the set when necessary.}  The fixed variant holds their directions and exponents constant while training the convex core, whereas the learned variant optimizes those parameters subject to the constraints of Section~\ref{sec:learned}.  Within each core, everything else---data, initialization, objective, architecture, and model-selection rule---is shared.  Both cores use two hidden layers, with widths $24,24$ for ICNN and $12,12$ for ICKAN.
-
-\begin{figure}[htbp]
- \centering\includegraphics[width=.98\linewidth]{constitutive_domains.pdf}
- \caption{Constitutive sampling domains, in percent.  Left: MC-RVE representation benchmark.  Right: SC-RVE deployment benchmark.  Wireframes show the prescribed limits; colors identify fitting, validation, and independent-test states.}
+ \centering\includegraphics[width=.8\linewidth]{constitutive_domains.pdf}
+ \caption{Constitutive sampling domains, in percent.  Left: MC-RVE representation benchmark.  Right: SC-RVE deployment benchmark, with fitting and validation states on a Cartesian grid and independent-test states off it.  Wireframes outline the fitting boxes, and colors identify fitting, validation, and independent-test states.}
  \label{fig:constitutive_domains}
 \end{figure}
 
-\paragraph{How much directional richness is needed?}
-Figure~\ref{fig:feature_count_sensitivity} gives the same answer for both convex cores.  Two paired features leave the response under-resolved, and increasing $m$ produces the largest accuracy gains before $m=6$.  At that count, the learned ICNN and ICKAN reach median validation errors of $2.05\times10^{-7}$ and $1.71\times10^{-7}$, respectively, and remain in the same error regime as further features are added.  Their fixed-feature counterparts remain at $1.06\times10^{-5}$ and $8.93\times10^{-6}$ at $m=6$ and improve more gradually as additional prescribed directions are supplied.  Increasing the count therefore helps, but it does not replace adaptation: learning the directional parameters reaches substantially lower error with a compact feature set.  We consequently select $m=6$, the first count at which both learned cores enter their low-error regime, for independent evaluation.
+\subsubsection{Number of paired features}
+Figure~\ref{fig:feature_count_sensitivity} shows the validation error of both convex cores as a function of $m$.  Two paired features leave the response under-resolved, and both variants improve as $m$ increases, but in different ways.  The learned variants gain most up to $m=6$ and change by less than a factor of two beyond it, whereas the fixed variants continue to improve gradually up to $m=32$.  The independent evaluation uses $m=6$, the first count at which both learned cores enter their low-error regime.
 
 \begin{figure}[htbp]
  \centering\includegraphics[width=.98\linewidth]{feature_count_sensitivity.pdf}
- \caption{MC-RVE validation-error sensitivity to the number $m$ of paired directional features.  Lines show the median over three seeds and bands span their minimum--maximum range.  The vertical guide marks $m=6$, used for the independent comparison.}
+ \caption{MC-RVE validation error, the relative squared stress error of Section~\ref{sec:training_protocol}, versus the number $m$ of paired directional features.  Lines show the median over three seeds and bands span their minimum--maximum range.  The vertical guide marks $m=6$, used for the independent comparison.}
  \label{fig:feature_count_sensitivity}
 \end{figure}
 
-\paragraph{Does feature adaptation carry to independent states?}
-The validation sweep identifies a sufficient count; the remaining question is whether its fixed--learned separation persists away from the states used for that decision.  Table~\ref{tab:mc_rve_m06} shows that it does.  At $m=6$, learning the paired features lowers the ICNN median stress error from $0.328\%$ to $0.0445\%$ and the ICKAN error from $0.301\%$ to $0.0406\%$, a reduction by a factor of approximately $7.4$ in either core.  The similar gain for ICNN and ICKAN shows that the central improvement comes from adapting the directional representation rather than from one particular convex core.
+\subsubsection{Effect of learning the features}
+Table~\ref{tab:mc_rve_m06} compares the fixed and learned variants on the independent test states.  At $m=6$, learning the paired features lowers the ICNN median stress error from $0.328\%$ to $0.0445\%$ and the ICKAN error from $0.301\%$ to $0.0406\%$, a reduction by a factor of approximately $7.4$ in either core.  The energy and the tangent, which is never fitted away from the undeformed state, improve by factors of about 14 and 5, respectively.  Adding fixed directions does not close this gap.  In the validation sweep, even 32 fixed features, with more than twice the trainable parameters of the learned six-feature models, remain about three times less accurate in relative stress error, a factor of about ten in the squared validation error of Fig.~\ref{fig:feature_count_sensitivity}.  The similar gain for ICNN and ICKAN shows that the central improvement comes from adapting the directional representation rather than from one particular convex core.
+
+The Unconstrained energy places these values in context.  Without convexity or growth conditions, it reaches $0.0073\%$ on the same states, about six times below either learned constrained model.  Its network is also considerably larger.  At matched capacity, the controls of Appendix~\ref{app:capacity} show that, inside the fitting box, the constraints cost a factor of 3.2 to 5.5 in stress error on this cell.
 
 \begin{table}[htbp]
  \centering\small
- \caption{MC-RVE independent-test aggregate stress errors at $m=6$, in percent.  Values are median [minimum, maximum] over three seeds.}
+ \caption{MC-RVE independent-test errors at $m=6$.  Each entry is the relative error norm of the stress $\ssv$, the energy $W$, or the tangent $\bm D$ of Eq.~\eqref{eq:tangent} over the 512 test states, as the median over three seeds.  For every quantity, each learned seed is more accurate than each fixed seed.  Adam stopped at a validation plateau for the fixed variants, whereas five of the six learned runs and the Unconstrained energy, which has no paired features, reached the 200\,000-step cap.}
  \label{tab:mc_rve_m06}
  \input{tables/mc_rve_m06_stress_errors.tex}
 \end{table}
 
-Taken together, the validation sweep and the independent test isolate the two decisions needed below: six paired features provide a compact representation, and adapting their directional parameters supplies the principal accuracy gain independently of the chosen convex core.
+\subsubsection{Admissibility beyond the data}
+\label{sec:mc_guarantees}
+For the ICNN and ICKAN energies, conditions (C1)--(C6) hold for every admissible parameter set by construction, whereas the Unconstrained energy is built to satisfy (C1)--(C4) only.  Inside the box the difference does not show, since a bounded rank-one search over 520 states and 32 directions finds curvature above 236~MPa for all fifteen fits of Table~\ref{tab:mc_rve_m06}.  Farther out the two classes separate.  Figure~\ref{fig:mc_beyond_data}(a) follows equibiaxial compression, $\F=\sqrt J\,\I$, beyond the box.  The minimum rank-one curvature of every Unconstrained fit changes sign between $J=0.71$ and $0.73$, whereas the learned constrained fits remain above 220~MPa.  A directed search over principal stretches between 0.55 and 1.5, in arbitrary orientations, shows that this loss is not tied to one path.  It finds negative curvature for all three Unconstrained fits at more than a third of its 4096 sampled states, confirmed by energy finite differences, and only positive curvature for the twelve constrained fits, as their construction requires.
+
+Figure~\ref{fig:mc_beyond_data}(b) continues the same path toward volume collapse.  The constrained energies diverge, as their logarithmic barrier guarantees, whereas the Unconstrained energy levels off at finite limits between 397 and 440~MPa.  This contrast reflects the growth terms rather than polyconvexity, and an unconstrained network could receive the same barrier.  No data constrain either energy at these states, so only the construction can guarantee (C5) and (C6) there.
+
+\begin{figure}[htbp]
+ \centering\includegraphics[width=.98\linewidth]{mc_beyond_data.pdf}
+ \caption{MC-RVE energies beyond the data along equibiaxial compression, $\F=\sqrt J\,\I$, for the learned ICNN and ICKAN energies and the Unconstrained energy.  Lines show the median of three seeds and shaded bands their range.  (a) Minimum rank-one curvature over unit directions.  (b) Energy density toward volume collapse.}
+ \label{fig:mc_beyond_data}
+\end{figure}
+
+Global nonnegative energy, which the construction leaves to the trained parameters, is certified by the sufficient bound of Appendix~\ref{app:nonnegative} for all six learned fits.  For all fifteen fits, the reference energy and stress vanish to round-off, and centered differences reproduce the stress and the tangent to better than $10^{-9}$ of their largest entries.
+
+Taken together, the MC-RVE supports the choices carried into the SC-RVE study.  Six paired features give a compact representation, and adapting their directional parameters supplies the main accuracy gain for either convex core.  The learned constrained energies then keep the median stress error below $0.05\%$ while securing, beyond the data, the rank-one convexity and growth that the Unconstrained energy lacks there.
 \FloatBarrier
 
-\subsection{SC--RVE deployment qualification}
-\label{sec:constitutive_accuracy}
-\paragraph{Data and model selection.}
-The SC-RVE must instead supply the learned constitutive response throughout the coupon FE$^2$ calculation of Section~\ref{sec:coupon}, whose macroscopic quadrature points visit different strains during loading.  We first ran a displacement-controlled coupon prepass with a St Venant--Kirchhoff approximation based on the cell reference tangent.  The recorded strain envelope guides sampling only; RVE stresses provide the training labels.  A second prepass with a softer response shifted the componentwise extrema by at most $5.1\%$, so we enlarged the spans by $40\%$.  Because the coupon is tensile, the lower $E_{11}$ bound is zero.  In the engineering-strain coordinates $\ee=(E_{11},E_{22},2E_{12})^T$, the rounded bounds are
+\subsection{Single-cavity RVE: constitutive accuracy and FE$^2$ deployment}
+\subsubsection{Cell, data, and learned energies}
+\label{sec:material_a}
+The second benchmark, the SC-RVE, contains one centered elliptical void with aspect ratio $2$ and major-axis angle $30^\circ$ relative to the cell axes (Fig.~\ref{fig:rve}).  Its working mesh has 1546 quadratic triangles and 6320 independent microscopic displacement coordinates.
+
+\begin{figure}[htbp]
+ \centering\includegraphics[width=.65\linewidth]{rve_geometry.pdf}
+ \caption{SC-RVE cavity geometry (left) and quadratic mesh (right).  The dashed line identifies the cavity major axis.}
+ \label{fig:rve}
+\end{figure}
+
+At a uniaxial-stress state with $E_{11}=0.20$, refining the mesh to 3095 elements changes the maximum microscopic first Piola--Kirchhoff stress norm by $0.486\%$ and the average axial stress by less than $0.001\%$.  This state lies on the path followed by the narrow section of the coupon in Section~\ref{sec:coupon}, beyond the largest axial strain reached there, so the check supports the mesh used for deployment.
+
+Unlike the MC-RVE, whose box is prescribed, the SC-RVE box must cover the strains that the macroscopic quadrature points visit during the coupon FE$^2$ calculation of Section~\ref{sec:coupon}.  A displacement-controlled coupon prepass with a St Venant--Kirchhoff approximation based on the cell reference tangent first recorded the strain envelope.  This envelope guides only the sampling, whereas RVE stresses provide the training labels.  A second prepass with a softer response shifted the componentwise extrema by at most $5.1\%$, so the spans were enlarged by $40\%$.  Because the coupon is tensile, the lower $E_{11}$ bound is zero.  In the engineering-strain coordinates $\ee=(E_{11},E_{22},2E_{12})^T$, the rounded bounds are
 \begin{equation}
  \ee_{\min}=(0,-0.099,-0.168)^T,\qquad
  \ee_{\max}=(0.196,0.016,0.108)^T.
  \label{eq:box}
 \end{equation}
-A Cartesian grid supplies 4950 nonreference states, of which 4208 are used for fitting and 742 for validation (split seed 5); an independent off-grid set of 400 states tests interpolation.  The same grid also provides neighboring states for the reduced microscopic models of Section~\ref{sec:reduced}.
+A Cartesian grid supplies 4950 nonreference states, of which 4208 are used for fitting and 742 for validation, and an independent set of 400 off-grid states tests interpolation (Fig.~\ref{fig:constitutive_domains}, right).
 
-The MC-RVE study identifies $m=6$ as the first compact count at which both learned cores enter their low-error regime.  We therefore ask whether that same count is sufficient for the SC-RVE deployment, without transferring feature parameters between the two geometries.  Six initial features are selected anew from the SC-RVE fitting response and reference tangent, and learned ICNN and ICKAN models are trained for seeds 16, 29, and 47.  Each network represents one scalar energy, whose first derivative supplies stress and whose second derivative at the undeformed state supplies the reference tangent.  We fit these three quantities with dimensionless relative mean-square errors weighted $1$, $0.2$, and $0.02$, respectively; stress receives the largest weight because it is queried throughout FE$^2$.  Full-batch Adam proceeds until validation plateau, subject to a 200\,000-step safety cap, and L-BFGS then refines the fit.  Validation stress selects the retained checkpoint and seed, reserving the independent states for the evaluation below.  Both selected models use seed 16 and $m=6$, with hidden widths $24,24$ for ICNN and $12,12$ for ICKAN.
+Whether the count $m=6$ selected on the MC-RVE also suffices for the SC-RVE deployment is tested without transferring feature parameters between the two geometries.  Six initial features are selected anew from the SC-RVE fitting response and reference tangent, and the learned ICNN and ICKAN are trained as described in Section~\ref{sec:training_protocol}, as is the Unconstrained energy.  For each model, the seed with the lowest validation error supplies the deployed model.  The validation errors of the three seeds of each constrained energy lie within $15\%$ of one another.
 
-Before either neural core, each feature $z_i$ is centered on its undeformed value $z_i^0$ and divided by $s_i=\max(10^{-4},\max_{\rm fit}|z_i-z_i^0|)$.  The center is updated as learned feature powers change, whereas the positive scale is set once from its initial fit-set spread.  This conditioning preserves the constitutive constraints.  For the selected ICKAN, each connection learns coefficients for six integrated-hat basis functions with fixed knot centers from $-1.2$ to $1.2$ at spacing $h=0.48$.
+\subsubsection{Construction of the HPROMs}
+\label{sec:material_a_reduction}
+To build the HPROMs, the FOM solutions at the 4950 grid states of Section~\ref{sec:material_a}, the same states that label the learned energies, are first collected as snapshots. The snapshot matrix of Eq.~\eqref{eq:snapshot_svd} is assembled from their displacement fields, and its SVD truncated at $\epsilon_{\rm POD}=10^{-6}$ in Eq.~\eqref{eq:pod_tail} retains $n_{\rm tra}=39$ modes, which form the traditional ROB $\bm V_{\rm tra}$ (Fig.~\ref{fig:pod}).
 
-\paragraph{Independent response and extrapolation.}
-The 400 off-grid states now answer the deployment question directly.  The compact ICNN and ICKAN attain aggregate stress errors of $0.6214\%$ and $0.6359\%$, respectively; Table~\ref{tab:constitutive} reports the independently audited checkpoints.  The earlier 32-feature checkpoints give $0.6491\%$ and $0.6551\%$ on the same states, while Free gives $1.2643\%$.  Because the compact and earlier fits use different training protocols, this is not an $m$-only ablation.  Its narrower conclusion is sufficient here: increasing the deployed representation to 32 features provides no in-domain accuracy argument, so the coupon uses the validation-selected $m=6$ models.
+\begin{figure}[htbp]
+ \centering\includegraphics[width=.6\linewidth]{pod_primary_coordinates.pdf}
+ \caption{Relative truncation norm $\epsilon_{\rm POD}$ of Eq.~\eqref{eq:pod_tail} for the 4950 SC-RVE displacement snapshots versus the number of modes. The 39 retained modes meet the tolerance of $10^{-6}$, and their rotation into primary and secondary coordinates leaves this span unchanged.}
+ \label{fig:pod}
+\end{figure}
 
-A separate 350-state probe resolves the response outside the fitting box.  It contains five increasing overshoot factors and labelled face, edge, and corner patterns; five nonfinite FOM labels are excluded through the same finite-label mask for every model, leaving 345 states.  The $m=6$ aggregate probe errors rise to $10.64\%$ and $10.10\%$ for ICNN and ICKAN, respectively, compared with $7.06\%$ and $7.02\%$ for the earlier 32-feature checkpoints and $5.50\%$ for Free.  The compact choice is therefore specific to interpolation and to the coupon strains, all of which remain inside the fitting box; it is not a claim of uniformly better extrapolation.  These are grouped FOM state evaluations, not a loading-path experiment, and the ringwise results are retained in Supplementary Section~S1.
+The affine HPROM uses this ROB directly. Specifically, its ECM training~\cite{hernandez2017} takes every tenth snapshot, $N_c=495$, and is executed separately for the residual and the stress. The element contributions are compressed by SVD with tolerances $\varepsilon_{\rm SVD}=10^{-3}$ for the residual and $10^{-5}$ for the stress, and the sparse fit of Eq.~\eqref{eq:ecm_tolerance} uses $\varepsilon_{\rm ECM}=10^{-6}$ for both. This results in a reduced mesh of 183 elements, $11.8\%$ of the FOM mesh, of which 135 support the residual rule and 73 the stress rule.
+
+For the nonlinear HPROMs, the same 39-dimensional span is rotated into $n=3$ primary coordinates $\bm\xi$, approximately aligned with the macroscopic strain~\cite{hernandez2026dimensional}, and $\bar n=36$ secondary ones. A closure predicts the secondary coordinates from the primary ones, so the iterative HPROM--ANN solves equilibrium for only three unknowns. Following Section~\ref{sec:latent_closure}, the closure $\widehat{\mathcal N}$ is trained on the snapshot pairs $(\bm\xi^s,\overline{\qq}^{\,s})$ with Adam and the loss of Eq.~\eqref{eq:closure_loss}. In this case, the network has input and output sizes $n=3$ and $\bar n=36$ and two hidden layers of 64 neurons with $\tanh$ activations, and it standardizes its inputs internally while leaving its outputs unscaled.
+
+In contrast with the affine case, HPROM--ANN uses the MAW--ECM of Hern\'andez et al.~\cite{hernandez2026dimensional}. Fixed ECM rules, obtained with $\varepsilon_{\rm SVD}=10^{-4}$ and $\varepsilon_{\rm ECM}=10^{-6}$, are pruned to ten elements each, resulting in a considerably smaller reduced mesh of 19 elements, $1.2\%$ of the FOM mesh. On this support, the weights are functions of $\bm\xi$, given by networks with three hidden layers of 128 neurons, GELU activations, and the scaled softmax output of Eq.~\eqref{eq:softmax_weights}. They are fitted after the closure and the pruning, with internally standardized inputs. These networks are larger than the closure, so the online cost does not follow from the three unknowns or the element count alone.
+
+Finally, D-HPROM--ANN uses the same closure and stress rule but prescribes $\bm\xi=\ee$ instead of solving reduced equilibrium, as in the hyperelastic example of Hern\'andez et al.~\cite{hernandez2026dimensional}, so only the ten elements of the stress rule, $0.6\%$ of the FOM mesh, are evaluated. The substitution is accurate for this cell, since the primary coordinates of the snapshots differ from their macroscopic strains by less than $10^{-4}$ in relative terms, although it remains an additional approximation. All these element counts refer to reduced meshes on which only the selected elements are assembled (Fig.~\ref{fig:supports}). The three HPROMs are compared with the learned energies first on the independent test states of Section~\ref{sec:constitutive_accuracy} and then in the coupon FE$^2$ calculation of Section~\ref{sec:coupon}.
+
+\begin{figure}[htbp]
+ \centering\includegraphics[width=.99\linewidth]{reduced_supports.pdf}
+ \caption{Element supports of the three HPROMs. The pale full-cell mesh provides location context only. Colors distinguish residual-only, stress-only, and shared elements.}
+ \label{fig:supports}
+\end{figure}
+
+\subsubsection{Constitutive accuracy}
+\label{sec:constitutive_accuracy}
+On the 400 off-grid states, the compact six-feature ICNN and ICKAN keep the aggregate stress error below one percent, at $0.621\%$ and $0.636\%$, whereas the Unconstrained energy reaches $0.0052\%$, about 120 times lower (Table~\ref{tab:constitutive}).\footnote{Outside the fitting box, up to twice its size, the Unconstrained energy also remains more accurate than the constrained energies.}  On this cell the construction costs far more accuracy than on the MC-RVE, and capacity is not the reason.  In the controls of Appendix~\ref{app:capacity}, cores widened to about 25\,000 parameters change the constrained errors by less than $3\%$, whereas an Unconstrained energy with only 981 parameters remains about 75 to 80 times more accurate than either wide core.  Thirty-two learned features lower the errors only to $0.537\%$ and $0.618\%$.  This behavior is consistent with the ordering argument of Section~\ref{sec:feature_order}, since a monotone core cannot reverse the componentwise ordering of its features, whatever its width.  Because the 32-feature models gain little and lose the nonnegative-energy certificate of Appendix~\ref{app:nonnegative}, the coupon keeps the $m=6$ models.
+
+The price of this restriction depends on the cell, a factor of 3.2 to 5.5 on the MC-RVE and of 76 to 126 on the SC-RVE at matched capacity.  Comparable costs are reported for other constrained constructions.  Linden et al.~\cite{linden2023} found that imposing all common conditions on a small invariant-based network raised its stress error by about one order of magnitude for transverse isotropy, and still recommended the constrained model for its extrapolation.  On homogenization data of a matrix with a stiff spherical inclusion, the polyconvex models of Klein et al.~\cite{klein2026} reached root-mean-square stress errors three to five times those of their non-polyconvex counterparts, and Kalina et al.~\cite{Kalina2024} dropped polyconvexity after finding it too restrictive for their fits.  The MC-RVE factors are of this size, whereas the SC-RVE shows that the price can be much larger for some microstructures.
+
+As physics-based references, the HPROMs attain their accuracy without learning the stress response, since they evaluate the constituent law on their reduced meshes. The affine HPROM, which contains no trained network, reaches $0.0169\%$ with $11.8\%$ of the elements, within a factor of about three of the Unconstrained energy, and D-HPROM--ANN and HPROM--ANN reach $0.0959\%$ and $0.218\%$ with $0.6\%$ and $1.2\%$ of them.
+
+Beyond the data, the comparison of Section~\ref{sec:mc_guarantees} carries over to this cell.  All three energies keep a rank-one curvature above 180~MPa on the test and 12\,000 further in-box states.  A radial expansion of the box to four times its size finds negative curvature for the Unconstrained energy at about 13\% of its states, first at 1.55 times the box, whereas the ICNN and ICKAN remain above 176~MPa.  For the two deployed models, the sufficient bound of Appendix~\ref{app:nonnegative} certifies nonnegative energy, and derivative checks and the vanishing work of Eq.~\eqref{eq:conservative_requirement} around a closed strain cycle confirm the potential structure of all three energies.
 
 \begin{table}[htbp]
  \centering\small
- \caption{SC-RVE independent-test constitutive errors of the selected polyconvex models, in percent.}
+ \caption{SC-RVE independent-test constitutive errors of the HPROMs and the selected energies, in percent.}
  \label{tab:constitutive}
  \input{tables/constitutive_errors.tex}
 \end{table}
 \FloatBarrier
 
-\subsection{Mechanical consistency and scope}
-\label{sec:mechanical_assessment}
-The following numerical checks concern the available SC-RVE checkpoints. They complement, rather than replace, the construction guarantees in Section~\ref{sec:learned}.
-
-The independent audit records successful energy first- and second-derivative checks and saved-weight nonnegative-energy sufficient bounds for both selected models. The conservative finite-interval margins are $4.85$ and $4.91$ in normalized energy units. Random admissible-deformation tests support implementation consistency, but the polyconvexity argument is analytical. Neither aggregate error nor a successful bound on energy is a uniform bound on stress prediction error.
-
-For the energy-based models, sampled rank-one curvatures provide an implementation check using the stress-dependent expression derived in Appendix~\ref{app:finite_strain_curvature}. The detailed sampling audit is retained in Supplementary Section~S2. These finite samples do not establish polyconvexity; the ICNN and ICKAN guarantee follows from the analytical construction.
-
-Closed-cycle work consistency follows from the scalar potential for Free, ICNN, and ICKAN. A numerical audit of the SC-RVE constitutive outputs is reported in Supplementary Section~S3.
-
-\pendingresult{Repeat the reference-state, derivative, cycle and saved-parameter nonnegative-energy checks for the selected MC-RVE models. Report bounds that fail or remain inconclusive. Existing SC-RVE checkpoint audits cannot certify MC-RVE, and separately trained geometries do not demonstrate parameter transfer.}
-
-\section{Structural deployment with the SC-RVE: accuracy and online cost}
+\subsubsection{Coupon FE$^2$: accuracy and online cost}
 \label{sec:coupon}
-\subsection{Purpose, boundary conditions, and coverage}
-We now use the SC-RVE to compare learned constitutive laws and reduced microscopic solvers within the same nonlinear structural calculation. The coupon measures how their approximations affect structural accuracy and online cost. The dog-bone profile has overall length 165 mm, grip width 19 mm, narrow-section width 13 mm, narrow-section length 57 mm, and fillet radius 76 mm. It is a plane-strain computational benchmark using an ASTM-inspired in-plane profile, not a simulation certified to reproduce an ASTM tensile test.
+The coupon has an ASTM-inspired dog-bone profile, analyzed in plane strain, with overall length 165 mm, grip width 19 mm, narrow-section width 13 mm, narrow-section length 57 mm, and fillet radius 76 mm.
 
-The two end faces receive equal-and-opposite axial resultants of 100 kN per end, applied in 20 equal increments. Three point constraints remove rigid modes: the axial and transverse displacement at the left mid-edge node, and transverse displacement at the right mid-edge node. Entire end faces are not clamped. Consequently, a small skew of the deformed ends is not ruled out by the boundary conditions. The anisotropic response can couple axial extension to shear.
+\begin{figure}[htb]
+ \centering\includegraphics[width=.99\linewidth]{two_scale_coupon.pdf}
+ \caption{Coupon problem.  Undeformed macro mesh with equal-and-opposite resultants of 100~kN per end, which balance each other, so the three point constraints only remove rigid-body motion.  Every integration point queries the SC-RVE, solved by the FOM or replaced by an HPROM or a learned energy.}
+ \label{fig:coupon_setup}
+\end{figure}
 
-The macro mesh contains 690 quadratic triangles, 1501 nodes, and 2070 integration points. The reference extrusion thickness used to convert the two-dimensional stress integrals into the stated force resultants is 50 mm. This force convention is part of the plane-strain benchmark, not an ASTM specimen-thickness specification. The physical cell size is declared as 1.3 mm, corresponding to ten cells across the narrow width. This provides a scale-separation assumption, not a direct numerical validation of homogenization error at that ratio. All saved converged integration-point strains for every reported model remain inside the unchanged training box. This check does not automatically cover unsaved intermediate Newton iterates or certify another load case.
+The two end faces receive equal-and-opposite axial resultants of 100~kN per end, applied in 20 equal increments (Fig.~\ref{fig:coupon_setup}). Three point constraints remove the rigid modes, fixing the axial and transverse displacements at the left mid-edge node and the transverse displacement at the right one, so the end faces are not clamped and the anisotropic response may couple axial extension to shear.
 
-\begin{figure}[htbp]
+The macro mesh contains 690 quadratic triangles, 1501 nodes, and 2070 integration points. A thickness of 50 mm converts the two-dimensional stress integrals into the 100~kN resultants, and a cell size of 1.3 mm, ten cells across the narrow width, is assumed for scale separation. The converged integration-point strains of every model remain inside the fitting box. Figure~\ref{fig:coupon} shows the reference fields at the final load. The equivalent stress is nearly uniform in the narrow section, peaks slightly where the fillets begin, and decreases toward the grips.
+
+\begin{figure}[htb]
  \centering\includegraphics[width=.99\linewidth]{coupon_fields.pdf}
- \caption{Nested FOM--FE$^2$ reference at 100 kN per end. Fields are displayed on the actual deformed mesh, without displacement amplification. Gauss-point strain and stress values are first averaged within each element and then patch-averaged to nodes for visualization only. These recovered contours are not the raw fields used in error norms and can smooth local extrema. Stresses are second Piola components. A three-dimensional von Mises stress is not reconstructed because the saved output does not include the necessary out-of-plane Cauchy stress.}
+ \caption{Nested FOM--FE$^2$ reference at 100~kN per end, shown on the deformed mesh without displacement amplification.  Top: displacement magnitude.  Bottom: in-plane von Mises equivalent of the macroscopic Cauchy stress, $\sigma_{\rm eq}=(\sigma_{11}^2-\sigma_{11}\sigma_{22}+\sigma_{22}^2+3\sigma_{12}^2)^{1/2}$. Gauss-point values are averaged to the nodes for visualization.}
  \label{fig:coupon}
 \end{figure}
 
-\subsection{Reduced-state representation for the SC-RVE}
-\label{sec:material_a_reduction}
-The 4950 displacement snapshots provide the basis of the reduced microscopic models as well as the effective constitutive labels. Figure~\ref{fig:pod} separates POD compression from the strain-informed coordinate fit. The relative snapshot truncation norm for the retained 39-dimensional space is $9.94\times10^{-7}$. After its orthogonal rotation into primary and secondary spaces, $n=3$ and $\bar n=36$ in the notation of Section~\ref{sec:reduced}.
-
-The fitted relation between the deployed primary coordinates and macroscopic strain has an aggregate relative array discrepancy of $3.60\times10^{-5}$ on these snapshots; its maximum absolute component discrepancy is $2.55\times10^{-5}$. These quantities explain why macroscopic strain is a useful primary-coordinate predictor for this material. They do not imply exact equality at unsampled states, nor do they measure the closure error or the equilibrium residual. In particular, the direct substitution in D-HPROM--ANN is an additional approximation, even when the plot appears visually indistinguishable from the identity.
-
-The secondary-coordinate closure is a $3$--$64$--$64$--$36$ feed-forward network with two $\tanh$ hidden layers and a linear output. Its training script uses input standardization, the raw secondary-coordinate loss in Eq.~\eqref{eq:closure_loss}, and a 90/10 internal fit/validation split with seed 20260903. Full-batch Adam has initial learning rate $2\times10^{-3}$, a validation-driven reduction schedule, and a maximum budget of 20000 epochs. The archived best relative validation mean-square error is $3.75\times10^{-7}$. This is an internal closure metric after a POD built from all 4950 snapshots, not an independent material-generalization estimate. Independent effective-stress and structural tests provide the latter assessment.
-
-Each deployed adaptive cubature field has architecture $3$--$128$--$128$--$128$--$10$, GELU hidden activations, and the scaled softmax output of Eq.~\eqref{eq:softmax_weights}. The residual and stress checkpoints use distinct ten-element supports. Their larger neural cores illustrate why the online cost cannot be inferred solely from the three equilibrium coordinates or from the element count. These reduction-training choices differ from those of the constitutive networks; the common material and data domain do not imply matched offline training budgets.
-
-\begin{figure}[htbp]
- \centering\includegraphics[width=.99\linewidth]{pod_primary_coordinates.pdf}
- \caption{Diagnostics from the deployed 39-mode basis artifact. Left: relative POD snapshot truncation norm, before the primary/secondary rotation. Right: strain-informed primary coordinates versus the corresponding macroscopic strains; every tenth snapshot is plotted, whereas the reported discrepancies use all 4950 states. Neither diagnostic measures structural accuracy or proves validity outside the sampled domain.}
- \label{fig:pod}
-\end{figure}
-
-\subsection{Online models and implementation verification}
-The linear HPROM uses $n_{\rm tra}=39$ generalized coordinates, a residual rule supported on 135 elements, and a stress rule on 73 elements; their union contains 183 elements. The integrand-SVD tolerances are $\varepsilon_{\rm SVD}^{r}=10^{-3}$ and $\varepsilon_{\rm SVD}^{s}=10^{-5}$, retaining 134 and 72 integrand modes, respectively. The greedy integration tolerance in Eq.~\eqref{eq:ecm_tolerance} is $\varepsilon_{\rm ECM}=10^{-6}$ for both rules, including the multiplier-sum constraint.
-
-The iterative HPROM--ANN uses $n=3$ primary and $\bar n=36$ secondary coordinates, with ten residual and ten stress elements and a union of 19. Initial fixed-ECM candidates use $\varepsilon_{\rm SVD}=10^{-4}$ and $\varepsilon_{\rm ECM}=10^{-6}$; adaptive pruning targets ten elements per rule. Thus this final count is a prescribed pruning target assessed through integration and response errors, not a consequence of the greedy tolerance alone. The support-generation driver uses up to 500 sampled states and tests up to 20 removal candidates per elimination. Its positivity-enforcing phase is active from the first elimination; the available driver does not enable or supply the global graph coupling. The residual weight field is subsequently refitted on the same pruned support with a longer training budget. Historical pruning diagnostics are not stored in the deployed checkpoints, so their filenames alone are not evidence of a graph-regularized run.
-
-The direct model evaluates stress on ten elements and solves no microscopic equilibrium equations. All these counts refer to reduced computational meshes, not full-mesh evaluations followed by masking. Figure~\ref{fig:supports} shows their spatial distribution and the overlap of residual and output rules.
-
-\begin{figure}[htbp]
- \centering\includegraphics[width=.99\linewidth]{reduced_supports.pdf}
- \caption{Element supports of the deployed hyperreduced microscopic models. The pale full-cell mesh provides location context only; discarded elements are not assembled online. Colors distinguish residual-only, stress-only, and shared elements. Supports are read from the same index arrays used to construct the reduced MDPA meshes.}
- \label{fig:supports}
-\end{figure}
-
-For the optimized linear and direct implementations, the maximum normalized stress differences from the original implementations over the verification states are $4.71\times10^{-14}$ and $4.20\times10^{-13}$. Corresponding tangent differences are $2.68\times10^{-10}$ and $7.25\times10^{-10}$. Independent finite-difference checks give discrepancies of approximately $3.51\times10^{-9}$ and $2.38\times10^{-9}$. Such comparisons check that optimization preserves the deployed model; they do not establish that either model exactly reproduces full microscopic equilibrium.
-
-\subsection{Error and timing definitions}
-For a saved nodal or integration-point array $A$, the reported relative error is
+For a nodal or integration-point array $A$, the reported relative error is
 \begin{equation}
  e_A=100\frac{\|\operatorname{vec}(A-A_0)\|_2}{\|\operatorname{vec}(A_0)\|_2},
  \label{eq:error}
 \end{equation}
-where $A_0$ is the nested reference on the same meshes. These are unweighted discrete array norms. The strain array stores engineering shear, whereas the stress array stores tensor shear. They are neither quadrature-weighted continuum $L^2$ norms nor invariant tensor Frobenius norms. The metric is kept identical across models; this does not make the three different field errors interchangeable.
+where $A_0$ is the nested reference on the same meshes. These unweighted array norms, with engineering shear in the strain array and tensor shear in the stress array, are the same for every model.
 
-Online wall time includes the complete macroscopic solve, microscopic or surrogate stress/tangent evaluations, communication, and lazy worker construction within the timed solve. Parent setup, offline data generation, training, reduced-mesh construction outside the timed region, and result export are excluded. The FOM uses 20 worker processes with one numerical-library thread per worker. The three optimized microscopic surrogates use the same process configuration and three sequential fresh complete runs. PANN evaluations are batched in one process and use the separately investigated thread settings shown in Table~\ref{tab:fe2}.
+Online wall time covers the complete macroscopic solve, including every microscopic or surrogate evaluation, and excludes offline data generation, training, and reduced-mesh construction. The FOM and the HPROMs distribute the integration points over 20 processes, and the learned energies are evaluated in one batched process. Reduced-model times are medians of three runs, whereas the FOM and learned-energy times come from single runs.
 
-The macroscopic solve stops when the free-degree-of-freedom residual norm falls below $10^{-5}$ N or its ratio to the initial increment residual falls below $10^{-7}$. The periodic FOM uses a relative microscopic displacement-increment tolerance of $10^{-10}$, with continuation when needed. The archived FOM and selected PANN times each have one repetition in this comparison. Thus their ratios are observed online speedups under the stated implementations, not matched-thread efficiency estimates or repeated-run confidence intervals. Table~\ref{tab:repeats} exposes the available reduced-model variability rather than selecting its fastest repetition. A publication-final timing study should repeat every tier under a common resource-budget protocol and retain all repetitions.
-
-The affine HPROM uses its exact reduced residual Jacobian, whereas HPROM--ANN uses the projected-stiffness modified-Newton matrix described in Section~\ref{sec:adaptive_weights}; both use a microscopic increment tolerance of $10^{-10}$. Their effective constitutive tangents nevertheless account for the equilibrium sensitivity of their respective full residuals. The archived structural runs do not retain microscopic iteration totals. The reported speedup therefore compares these implemented workflows, including their different iteration matrices and derivative costs; it does not isolate a nonlinear-representation gain or quantify the iteration penalty of modified Newton.
+The macroscopic solve stops when the free-degree-of-freedom residual norm falls below $10^{-5}$ N or its ratio to the initial increment residual falls below $10^{-7}$. The periodic FOM uses a relative microscopic displacement-increment tolerance of $10^{-10}$.
+The affine HPROM uses its exact reduced residual Jacobian and HPROM--ANN the modified-Newton matrix of Section~\ref{sec:adaptive_weights}, both with a microscopic increment tolerance of $10^{-10}$, so the speed-up between them also reflects their different iteration matrices.
 
 \begin{table}[htbp]
- \centering\footnotesize
- \caption{Complete coupon simulations: final-field errors against the nested FOM and archived online wall times.}
+ \centering\small
+ \caption{Coupon simulations: final-field errors of Eq.~\eqref{eq:error} with respect to the nested FOM, online wall time, and speed-up over the FOM.}
  \label{tab:fe2}
  \input{tables/fe2_comparison.tex}
 \end{table}
-\begin{table}[htbp]
- \centering\small
- \caption{Sequential optimized-run repetitions used for median HPROM timings.}
- \label{tab:repeats}
- \input{tables/timing_repeats.tex}
-\end{table}
 
-\subsection{Accuracy--cost trade-off and Newton behavior}
-Figure~\ref{fig:cost} and Table~\ref{tab:fe2} show distinct operating points rather than a single universally best model. The linear HPROM gives the smallest displacement error, approximately $0.00565\%$, at a median online time of 67.35 s. The iterative HPROM--ANN reduces this time to 30.14 s with a displacement error of approximately $0.0520\%$. The optimized iterative nonlinear model is therefore about $2.23$ times faster than the \emph{optimized} linear model; comparison against the old linear implementation would overstate this gain. The direct closure reduces the time to 3.79 s and has a displacement error of approximately $0.0232\%$ on this path. Its lower error than the iterative nonlinear model is an observed outcome, not a consequence of a general error ordering.
+Table~\ref{tab:fe2} shows distinct operating points rather than a single universally best model. The three HPROMs reproduce the nested reference to within $0.06\%$ in displacement, with speed-ups from 63 to 1127. Unlike the learned energies, the HPROMs can also reconstruct an approximate microscopic displacement field at every integration point. Among the HPROMs, the affine HPROM gives the smallest displacement error, $0.0057\%$, at a median online time of 67.35 s. The iterative HPROM--ANN reduces this time to 30.14 s, 2.23 times less, with a displacement error of $0.0520\%$. The direct D-HPROM--ANN reduces it to 3.79 s and has a displacement error of $0.0232\%$ on this path. Its lower error than the iterative model is possible because solving projected equilibrium corrects the primary state only within the chosen manifold and cubature approximation, so it need not give a smaller error than direct evaluation.
 
-The six-feature ICNN and ICKAN times are 1.04 s and 1.95 s, with displacement errors of approximately $0.407\%$ and $0.420\%$. Their finite-strain structural accuracy is therefore consistent with a useful constitutive approximation, although it is poorer than the reduced microscopic models on this benchmark. Direct stress regression is fastest, and Free also converges. These baselines establish the accuracy and cost achievable on this loading path alongside the constrained models.
+The six-feature ICNN and ICKAN take 1.04 s and 1.95 s, with displacement errors of $0.407\%$ and $0.420\%$, below their constitutive test errors but above those of the HPROMs on this benchmark. The Unconstrained energy takes 1.48 s and gives the smallest displacement error in Table~\ref{tab:fe2}, $0.0022\%$. In displacement error, the six models rank exactly as in Table~\ref{tab:constitutive}. Every coupon state lies inside the box, where all three energies have positive rank-one curvature at every sampled state, so this tensile path does not exercise the guarantees that separate them. On this path the constrained energies keep the displacement error near $0.4\%$ and add admissibility beyond the data, at a cost of about two orders of magnitude in structural accuracy against the Unconstrained energy.
 
-\begin{figure}[htbp]
- \centering\includegraphics[width=.93\linewidth]{cost_accuracy.pdf}
- \caption{Online cost versus final displacement error on the common coupon problem. Horizontal segments show the observed range of three optimized HPROM runs; unbarred points are archived single PANN runs. Process and thread counts differ as detailed in Table~\ref{tab:fe2}. The plot does not include offline costs.}
- \label{fig:cost}
+All seven models, the nested FOM included, require four macroscopic iterations in every increment, so the tangents of Eq.~\eqref{eq:reduced_ift} and those of the learned energies preserve the convergence of the reference. Inside the box, the constrained energies thus run in the common structural solver like the Unconstrained energy, at comparable cost. Their guarantees matter at states that the coupon never reaches.
+
+\subsubsection{Confined compression beyond the data}
+\label{sec:confined}
+As an illustrative case built to reach such states, consider the plane-strain counterpart of an oedometer test, a loading for which the tensile fitting box was never designed. Its only purpose is to expose what the guarantees secure once compaction carries the integration points beyond the data.  A square block of side 10~mm, meshed with 128 quadratic triangles, is compressed by a uniform traction on one face while rigid, frictionless walls fix the normal displacement of the other three (Fig.~\ref{fig:confined}a).  The three SC-RVE energies, the assembly, and the Newton iteration are those of the coupon, and the load is applied in 20 equal increments up to 500~MPa, in $x$ or in $y$.  Compression in $x$ leaves the fitting box with the first increment, since the box contains no axial compression, and compression in $y$ leaves it beyond about $10\%$ shortening.  At every converged increment, the rank-one curvature of Eq.~\eqref{eq:lh_background}, computed from the constitutive tangent and the stress through Eq.~\eqref{eq:strain_vs_F_curvature}, is minimized over unit directions at the 384 Gauss points of the block.  Where it is positive, the incremental equilibrium problem is strongly elliptic.
+
+\begin{figure}[t]
+ \centering\includegraphics[width=.86\linewidth]{confined_compression.pdf}
+ \caption{Confined compression beyond the data with the SC-RVE energies.  (a) Setup for compression in $y$, with the homogenized block of 128 quadratic triangles evaluating the SC-RVE energy at every integration point. For compression in $x$, the traction acts on a vertical face.  (b, c) Applied pressure versus shortening, with one marker per increment of 25~MPa and a cross at the increment in which Newton does not converge.  (d, e) Minimum rank-one curvature over the 384 Gauss points of the block at each converged increment.}
+ \label{fig:confined}
 \end{figure}
 
-All models require four macroscopic iterations per increment in the archived runs. Consequently, this example provides no empirical evidence that polyconvexity reduced Newton iterations relative to Free or Regression. It establishes that the selected constrained models can be used successfully with the common structural solver, while maintaining their constitutive guarantees. A separate challenge problem would be needed to establish a solver-robustness advantage, and its reference solution would need to be validated independently.
+Both constrained energies reach 500~MPa in both directions, with four to nine Newton iterations per increment and final shortenings of about $22\%$ in $x$ and $31\%$ in $y$ (Fig.~\ref{fig:confined}b,c).  The Unconstrained energy follows a softer curve in $x$ and nearly the same curve in $y$, until Newton does not converge within 50 iterations in the increment to 250~MPa in $x$ and to 225~MPa in $y$.  This stop coincides with a loss of rank-one convexity in the block (Fig.~\ref{fig:confined}d,e).  The minimum curvature of the Unconstrained energy falls steadily with the load and turns negative at the last converged increment, at one of the 384 Gauss points in $x$ and at two in $y$.  These points lie in the elements at the corner where the left and bottom walls meet, where the local volume ratio has fallen to $J$ between 0.61 and 0.72.  The constrained energies, rank-one convex by construction, keep the minimum curvature above 194~MPa at every Gauss point and increment.  The test shows which energies keep the structural problem solvable once it leaves the data.
 
 \section{Conclusions}
 \label{sec:conclusions}
-Paired directional features with constrained trainable powers and determinant exponents provide a practical polyconvex constitutive construction for the anisotropic periodic material studied here. Their isotropic reference derivatives allow exact stress normalization through an affine determinant correction without tying the normalization coefficient to the volumetric barrier stiffness. The proof combines feature convexity in independent minors with core convexity and monotonicity, and includes every correction in the complete energy. Global nonnegative energy is supported separately by a sufficient bound evaluated for the selected parameters. Both a smooth ICNN and an integrated-hat spline-ICKAN achieve approximately $0.63\%$ held-out aggregate stress error and below $0.42\%$ displacement error in the nominal coupon simulation.
+This work develops polyconvex energies for anisotropic periodic cells by composing paired directional features, with trainable orientations, stretch powers, and determinant exponents, with convex and componentwise nondecreasing cores.  Objectivity, an exactly stress-free reference, two-dimensional polyconvexity, and growth then hold by construction for every parameter set, and an affine determinant correction normalizes the stress without tying the normalization coefficient to the volumetric barrier stiffness.  Admissibility thus becomes a property of the architecture rather than of a successful fit.  Only nonnegative energy is left to the trained parameters, and a sufficient bound certifies it for every six-feature model of this study.
 
-Optimized reduced microscopic models provide a complementary accuracy--cost reference: they are more accurate on this coupon, while direct learned constitutive evaluation is generally faster. All compared models converge with the same number of macroscopic iterations per increment. The structural results therefore demonstrate the practical use of the constrained energies alongside their analytical guarantees; they establish neither a Newton-convergence advantage nor a universal accuracy ranking.
+The numerical examples test this construction on two cells with complementary roles.  On the MC-RVE, learning six paired features lowers the held-out stress error sevenfold, to about $0.04\%$, whereas adding fixed directions does not close the gap.  On the SC-RVE, the selected ICNN and ICKAN keep the stress error near $0.6\%$ and the coupon displacement error near $0.4\%$.  The three HPROMs, which retain an approximate microscopic state, reproduce the test stresses within about $0.2\%$ and the nested FOM--FE$^2$ displacements within $0.06\%$, at speed-ups of about 60 to 1100.  Under confined compression beyond the data, the constrained energies carry the block to 500~MPa, whereas with the Unconstrained energy Newton stops below half that load, when its rank-one curvature turns negative.
 
+Beyond these figures, the examples suggest how such energies should be built.  The anisotropy of both cells is captured better by adapting a few directions than by prescribing many, and six learned features already suffice on both.  This count need not generalize to other microstructures, but it is encouraging, because it keeps the energies compact and certifiable.  The accuracy that admissibility costs depends on the microstructure rather than on the network, from about six times the Unconstrained error on the MC-RVE to about 120 times on the SC-RVE.  Neither wider cores nor more features remove it, which is consistent with the ordering restriction of monotone cores and identifies where the construction can still improve.
+
+The comparison also clarifies when the guarantees matter.  Inside the data, accuracy decides, and the Unconstrained energy is the most accurate of the six models.  Beyond the data, admissibility decides, and the constrained energies keep the structural problem solvable where the Unconstrained energy does not.  The HPROMs and the learned energies emerge as complementary tools, since the HPROMs retain the microscopic state and the constituent law at a higher online cost, whereas the learned energies reduce each query to a direct evaluation and, when constrained, carry guarantees that the HPROMs do not provide by construction.  Because the six models rank identically at the constitutive level and in the coupon displacement error, and all preserve the Newton convergence of the nested reference, constitutive tests offer an inexpensive guide to their structural performance on this benchmark.
+
+In summary, the accuracy given up by the constrained energies buys a structural problem that remains solvable beyond the data, which is the property the construction is designed to secure.  Future work will seek to lower this price on cells such as the SC-RVE, for instance by passing the determinant to the core as an input that requires convexity but not monotonicity, and will extend the construction to three-dimensional cells.  The HPROMs could also generate additional training states at a fraction of the FOM cost.
+
+\section*{Data availability}
+The code, the trained models, and the data that support the findings of this study will be made openly available in a public repository upon publication.
+
+\FloatBarrier
 \appendix
 \section{Rank-one paths and finite-strain energy curvature}
 \label{app:finite_strain_curvature}
-This appendix supplies the algebra behind the two finite-strain curvature statements in criterion (C5). For a twice differentiable energy, nonnegative curvature along every rank-one perturbation is expressed by the Legendre--Hadamard condition
+For a twice differentiable energy, nonnegative curvature along every rank-one perturbation is expressed by the Legendre--Hadamard condition
 \begin{equation}
  \partial^2_{\F\F}W(\F)[\bm a\otimes\bm b,\bm a\otimes\bm b]\geq0
  \quad\hbox{for all }\bm a,\bm b\in\R^2 .
  \label{eq:lh_background}
 \end{equation}
-The argument below shows why the polyconvex representation in Eq.~\eqref{eq:polyconvex_definition} implies this condition.
-
-\paragraph{Determinant along a rank-one path.}
-For arbitrary $\F,\bm H\in\R^{2\times2}$, expansion of the two products in the determinant gives
-\begin{align}
- \det(\F+t\bm H)
- &=(F_{11}+tH_{11})(F_{22}+tH_{22})
- -(F_{12}+tH_{12})(F_{21}+tH_{21})\nonumber\\
- &=\det\F+t(F_{22}H_{11}+F_{11}H_{22}
- -F_{21}H_{12}-F_{12}H_{21})+t^2\det\bm H.
-\end{align}
-The coefficient of $t$ is $\cof\F:\bm H$, since
+The polyconvex representation in Eq.~\eqref{eq:polyconvex_definition} implies this condition because the determinant is affine along rank-one paths. For $2\times2$ matrices,
 \begin{equation}
+ \det(\F+t\bm H)=\det\F+t\,\cof\F:\bm H+t^2\det\bm H,
+ \qquad
  \cof\F=\begin{pmatrix}F_{22}&-F_{21}\\-F_{12}&F_{11}\end{pmatrix},
- \qquad \bm A:\bm B=\sum_{i,j}A_{ij}B_{ij}.
-\end{equation}
-For $\bm H=\bm a\otimes\bm b$, its entries are $H_{ij}=a_i b_j$, so
-\begin{equation}
- \det\bm H=a_1b_1a_2b_2-a_1b_2a_2b_1
- =a_1a_2(b_1b_2-b_2b_1)=0.
-\end{equation}
-The determinant is therefore affine along a rank-one path:
-\begin{equation}
- \det(\F+t\bm a\otimes\bm b)
- =\det\F+t\,\cof\F:(\bm a\otimes\bm b).
  \label{eq:rankone_minor_line}
 \end{equation}
-If $\F_B=\F_A+\bm H$ and $\F_s=(1-s)\F_A+s\F_B$, with $\bm H=\bm a\otimes\bm b$, then
-\begin{equation}
- (\F_s,\det\F_s)
- =(1-s)(\F_A,\det\F_A)+s(\F_B,\det\F_B).
-\end{equation}
-For $0\leq s\leq1$ and positive endpoint determinants, the whole segment remains admissible. Convexity of $\mathcal P$ therefore yields
-\begin{equation}
- W(\F_s)\leq(1-s)W(\F_A)+sW(\F_B).
-\end{equation}
-For a twice differentiable energy, the restriction to this line consequently has nonnegative second derivative, as required by Eq.~\eqref{eq:lh_background}.
+and $\det(\bm a\otimes\bm b)=0$. On a segment $\F_s=(1-s)\F_A+s\F_B$ with $\F_B-\F_A=\bm a\otimes\bm b$, the pair $(\F_s,\det\F_s)$ is therefore the corresponding convex combination of its endpoint values, and it stays admissible when both endpoint determinants are positive. Convexity of $\mathcal P$ then gives $W(\F_s)\leq(1-s)W(\F_A)+sW(\F_B)$, so a twice differentiable $W$ has nonnegative second derivative along the segment, which is Eq.~\eqref{eq:lh_background}~\cite{ball1977,Ciarlet1988}.
 
-\paragraph{Strain curvature and the chain rule.}
-Let $\bm H\in\R^{2\times2}$ be an arbitrary perturbation and let $t$ parametrize $\F(t)=\F+t\bm H$. Dots denote derivatives with respect to $t$, and $\operatorname{sym}(\bm A)=(\bm A+\bm A^T)/2$ denotes the symmetric part of a matrix. Direct multiplication gives
+For an energy expressed in strain, the curvature along $\F+t\bm H$ follows from the chain rule. Let $\bm H\in\R^{2\times2}$ be an arbitrary perturbation and let $t$ parametrize $\F(t)=\F+t\bm H$. Dots denote derivatives with respect to $t$, and $\operatorname{sym}(\bm A)=(\bm A+\bm A^T)/2$ denotes the symmetric part of a matrix. Direct multiplication gives
 \begin{align}
  \E(t)
  &=\tfrac12\bigl[\F^T\F-\I
@@ -271,7 +261,7 @@ Let $\bm H\in\R^{2\times2}$ be an arbitrary perturbation and let $t$ parametrize
  &=\E(0)+t\operatorname{sym}(\F^T\bm H)
  +\tfrac12t^2\bm H^T\bm H.
 \end{align}
-Thus $\dot\E(0)=\operatorname{sym}(\F^T\bm H)$ and $\ddot\E(0)=\bm H^T\bm H$. Using the engineering-strain convention of Eq.~\eqref{eq:voigt}, the chain and product rules give
+It follows that $\dot\E(0)=\operatorname{sym}(\F^T\bm H)$ and $\ddot\E(0)=\bm H^T\bm H$. Using the engineering-strain convention of Eq.~\eqref{eq:voigt}, the chain and product rules give
 \begin{align}
  \frac{\dd W}{\dd t}&=\ssv\cdot\dot\ee,\nonumber\\
  \frac{\dd^2 W}{\dd t^2}
@@ -285,40 +275,31 @@ Substituting $\ddot\E(0)$ gives
  =\dot{\ee}(0)^T\bm D\dot{\ee}(0)+\Sg:(\bm H^T\bm H).
  \label{eq:strain_vs_F_curvature}
 \end{equation}
-Here $\bm D=\partial\ssv/\partial\ee$ is the strain tangent and $\Sg$ is the second Piola--Kirchhoff stress, both evaluated at $t=0$. The first term accounts for the change of stress with strain; the second accounts for the curvature of the strain path, weighted by the current stress. Even if $\bm D$ is positive semidefinite, the stress term can be negative in compression.
+Here $\bm D=\partial\ssv/\partial\ee$ is the constitutive tangent and $\Sg$ is the second Piola--Kirchhoff stress, both evaluated at $t=0$. The first term accounts for the change of stress with strain, and the second for the curvature of the strain path, weighted by the current stress. Even if $\bm D$ is positive semidefinite, the stress term can be negative in compression.
 
-\paragraph{An analytical counterexample.}
-Consider $W(\E)=\mu\E:\E$, where $\mu>0$ is a constant with units of energy density. One has $\Sg=2\mu\E$. Since
+A simple strain-convex energy shows that the stress term can make this curvature negative. Consider $W(\E)=\mu\E:\E$, where $\mu>0$ is a constant with units of energy density. One has $\Sg=2\mu\E$. Since
 \begin{equation}
  W(\ee)=\mu(e_1^2+e_2^2+e_3^2/2),
  \qquad \bm D=\diag(2\mu,2\mu,\mu),
 \end{equation}
-the energy is strictly convex in engineering strain. At $\F=\lambda\I$, where $\lambda>0$ is the common in-plane stretch, choose the rank-one perturbation $\bm H=\diag(1,0)$. Then
+the energy is strictly convex in engineering strain. At $\F=\lambda\I$, where $\lambda>0$ is the common in-plane stretch, choose the rank-one perturbation $\bm H=\diag(1,0)$, which keeps $\det(\lambda\I+t\bm H)=\lambda(\lambda+t)$ positive for $t>-\lambda$. Then
 \begin{equation}
  \dot\ee=(\lambda,0,0)^T,\qquad
  \Sg=\mu(\lambda^2-1)\I,\qquad
  \bm H^T\bm H=\diag(1,0).
 \end{equation}
-Hence the strain-tangent term is $2\mu\lambda^2$, and the stress term is $\mu(\lambda^2-1)$, giving
+Hence the tangent term is $2\mu\lambda^2$, and the stress term is $\mu(\lambda^2-1)$, giving
 \begin{equation}
  \left.\frac{\dd^2 W(\lambda\I+t\bm H)}{\dd t^2}\right|_{t=0}
  =2\mu\lambda^2+\mu(\lambda^2-1)
  =\mu(3\lambda^2-1).
  \label{eq:strain_convex_counterexample}
 \end{equation}
-At $\lambda=1/2$, the curvature is $-\mu/4$, violating Eq.~\eqref{eq:lh_background} despite convexity in $\E$. This is an analytical counterexample, not a sampled observation about the RVE or a trained model. Compression alone does not force negative curvature: at $\lambda=3/4$, the same expression is $11\mu/16>0$.
-
-Equivalently, direct substitution gives
-\begin{equation}
- W(\lambda\I+t\bm H)
- =\frac\mu4\bigl[(\lambda+t)^2-1\bigr]^2
- +\frac\mu4(\lambda^2-1)^2,
-\end{equation}
-whose second derivative at zero is $\mu(3\lambda^2-1)$. The path is admissible near zero because $\det(\lambda\I+t\bm H)=\lambda(\lambda+t)>0$ for $t>-\lambda$.
+At $\lambda=1/2$, the curvature is $-\mu/4$, violating Eq.~\eqref{eq:lh_background} despite convexity in $\E$. The curvature is negative only for $\lambda<1/\sqrt3$, so the counterexample requires sufficiently strong compression.
 
 \section{Proofs for the paired features and complete energy}
 \label{app:convex}
-The proof follows the construction used in the main text. We first isolate one stretch--determinant contribution and derive the exponent bounds that make it convex. We then assemble two perpendicular contributions and compute their reference derivative, proving Proposition~\ref{prop:paired_features}. Finally, we compose the resulting features with the monotone convex core and examine $W_{\rm learn}$, $W_{\rm corr}$, $W_{\rm vol}$, and $W_{\rm dist}$ to establish Proposition~\ref{prop:complete_energy}.
+Propositions~\ref{prop:paired_features} and~\ref{prop:complete_energy} both rest on the convexity of a single stretch--determinant contribution, established first.
 
 \subsection{Joint convexity of the directional building block}
 Every contribution in Eq.~\eqref{eq:features} has the form
@@ -326,7 +307,7 @@ Every contribution in Eq.~\eqref{eq:features} has the form
  f(\bm x,J)=\|\bm x\|^aJ^{-b},
  \qquad \bm x=\F\bm d,
 \end{equation}
-up to a positive constant, with $a=2p$ or $2q$. It is therefore enough to determine when this building block is jointly convex in $(\bm x,J)$. Let $t=\|\bm x\|>0$. Because $f$ depends on $\bm x$ only through $t$, its Hessian separates into a block coupling the radial variable $t$ to $J$ and transverse directions orthogonal to $\bm x$. The radial--determinant block is
+up to a positive constant, with $a=2p$ or $2q$. It suffices to determine when this building block is jointly convex in $(\bm x,J)$. Let $t=\|\bm x\|>0$. Because $f$ depends on $\bm x$ only through $t$, its Hessian separates into a block coupling the radial variable $t$ to $J$ and transverse directions orthogonal to $\bm x$. The radial--determinant block is
 \begin{equation}
  \begin{pmatrix}
  a(a-1)t^{a-2}J^{-b} & -ab t^{a-1}J^{-b-1}\\
@@ -338,21 +319,21 @@ For this symmetric $2\times2$ block to be positive semidefinite, its diagonal en
  \det &=ab\bigl[(a-1)(b+1)-ab\bigr]t^{2a-2}J^{-2b-2}\nonumber\\
  &=ab(a-b-1)t^{2a-2}J^{-2b-2}\geq0.
 \end{align}
-The factor $a-b-1$ gives the upper bound $b\leq a-1$; if this bound is violated, the determinant is negative and the block has curvatures of opposite sign. The remaining, transverse Hessian eigenvalues are $a t^{a-2}J^{-b}\geq0$. Hence $a\geq1$ and $0\leq b\leq a-1$ make the complete Hessian positive semidefinite. Continuous extension gives convexity at $\bm x=0$. For the constitutive evaluation on $\GL$, a nonzero reference direction cannot satisfy $\F\bm d=0$, so this point does not introduce an interior singularity of the directional norm. Substituting $a=2p$ gives $p\geq\tfrac12$ and $0\leq b\leq2p-1$; the same argument with $(q,c)$ establishes all bounds in Eq.~\eqref{eq:featureconstraints}.
+The factor $a-b-1$ gives the upper bound $b\leq a-1$. If it is violated, the determinant is negative and the block has curvatures of opposite sign. The remaining, transverse Hessian eigenvalues are $a t^{a-2}J^{-b}\geq0$. Hence $a\geq1$ and $0\leq b\leq a-1$ make the complete Hessian positive semidefinite. Continuous extension gives convexity at $\bm x=\bm0$. That point is never reached on $\GL$, because $\F\bm d\neq\bm0$ for a nonzero direction, so the lack of smoothness of $\|\bm x\|^a$ there does not affect the stress or tangent. Substituting $a=2p$ gives $p\geq\tfrac12$ and $0\leq b\leq2p-1$, and the same argument with $(q,c)$ establishes all bounds in Eq.~\eqref{eq:featureconstraints}.
 
 \subsection{Proof of Proposition~\ref{prop:paired_features}}
 \begin{proof}
 \emph{Convexity and objectivity.}
-For any fixed learned parameter set, the directions $\bm d_i$ and $\bm d_i^\perp$ are independent of deformation. The maps $\F\mapsto\F\bm d_i$ and $\F\mapsto\F\bm d_i^\perp$ are therefore linear. Composing the convex building block above with these maps, multiplying by the positive factors $1/p_i$ and $1/q_i$, and adding the two contributions proves convexity of $z_i$ in independent $(\F,J)$. A left proper rotation changes $\F\bm d$ to $\bm Q\F\bm d$ without changing its norm, so each contribution is objective.
+For any fixed learned parameter set, the directions $\bm d_i$ and $\bm d_i^\perp$ are independent of deformation, so the maps $\F\mapsto\F\bm d_i$ and $\F\mapsto\F\bm d_i^\perp$ are linear. Composing the convex building block above with these maps, multiplying by the positive factors $1/p_i$ and $1/q_i$, and adding the two contributions proves convexity of $z_i$ in independent $(\F,J)$. A left proper rotation changes $\F\bm d$ to $\bm Q\F\bm d$ without changing its norm, so each contribution is objective.
 
 \emph{Reference value and derivative.}
-We now return to the physical relation $J=\det\F$, still holding every learned parameter fixed. At $\E=\bm0$, both directional invariants and $J$ equal one, so the two contributions give $z_i^0=1/p_i+1/q_i$. Moreover, $I_4(\bm d_i)=\bm d_i^T(\I+2\E)\bm d_i$ and $J^2=(1+2E_{11})(1+2E_{22})-4E_{12}^2$ imply $\partial_{\E}I_4(\bm d_i)=2\bm d_i\otimes\bm d_i$ and $\partial_{\E}J|_0=\I$. Applying the product rule to the first contribution gives
+The physical relation $J=\det\F$ is now restored, with every learned parameter still fixed. At $\E=\bm0$, both directional invariants and $J$ equal one, so the two contributions give $z_i^0=1/p_i+1/q_i$. Moreover, $I_4(\bm d_i)=\bm d_i^T(\I+2\E)\bm d_i$ and $J^2=(1+2E_{11})(1+2E_{22})-4E_{12}^2$ imply $\partial_{\E}I_4(\bm d_i)=2\bm d_i\otimes\bm d_i$ and $\partial_{\E}J|_0=\I$. Applying the product rule to the first contribution gives
 \begin{equation}
  \left.\partial_{\E}\frac{I_4(\bm d_i)^{p_i}}{p_iJ^{b_i}}\right|_0
  =\frac1{p_i}\bigl[2p_i\bm d_i\otimes\bm d_i-b_i\I\bigr]
  =2\bm d_i\otimes\bm d_i-\frac{b_i}{p_i}\I.
 \end{equation}
-The prefactor $1/p_i$ has cancelled the factor $p_i$ produced by differentiating the stretch power. The perpendicular contribution has the same form with $(\bm d_i,p_i,b_i)$ replaced by $(\bm d_i^\perp,q_i,c_i)$. The two directional projectors satisfy $\bm d_i\otimes\bm d_i+\bm d_i^\perp\otimes\bm d_i^\perp=\I$; adding the contributions therefore removes the directional dependence at the reference and gives
+The perpendicular contribution has the same form with $(\bm d_i,p_i,b_i)$ replaced by $(\bm d_i^\perp,q_i,c_i)$. Since $\bm d_i\otimes\bm d_i+\bm d_i^\perp\otimes\bm d_i^\perp=\I$, adding the two contributions removes the directional dependence at the reference and gives
 \begin{equation}
  \left.\partial_{\E}z_i\right|_0
  =2(\bm d_i\otimes\bm d_i+\bm d_i^\perp\otimes\bm d_i^\perp)
@@ -362,25 +343,15 @@ The prefactor $1/p_i$ has cancelled the factor $p_i$ produced by differentiating
 In the work-conjugate engineering-strain convention of Eq.~\eqref{eq:voigt}, this tensor gradient corresponds to $\partial_{\ee}z_i|_0=\rho_i(1,1,0)^T$, proving Eq.~\eqref{eq:referencefeatures}.
 \end{proof}
 
-\paragraph{Positive affine conditioning.}
-The raw feature is converted to the core input by $y_i=(z_i-z_i^{\rm cen})/s_i$, with $s_i>0$ independent of deformation. Writing $\bm X=(\F,J)$,
-\begin{equation}
- \partial^2_{\bm X\bm X}y_i=\frac1{s_i}\partial^2_{\bm X\bm X}z_i,
- \qquad
- y_i(\bm X_B)-y_i(\bm X_A)
- =\frac{z_i(\bm X_B)-z_i(\bm X_A)}{s_i}.
-\end{equation}
-The first identity preserves positive-semidefinite curvature and the second preserves componentwise order. Thus the numerical conditioning applied before the monotone core changes neither property used in the composition proof below.
-
 \subsection{Proof of Proposition~\ref{prop:complete_energy}}
 \label{app:complete_energy_proof}
 
 \begin{proof}
 \emph{Potential structure, objectivity, and stress symmetry (C1)--(C3).}
-Every directional norm and $J$ is unchanged by left proper rotations. The features can also be expressed through $\bm d_i^T\C\bm d_i$ and $\sqrt{\det\C}$. Hence the complete energy is objective, and differentiation with respect to symmetric strain gives a symmetric material stress. Differentiating this scalar energy supplies (C1) and the major symmetry of its strain tangent. Smoothness holds on $\GL$ because $J>0$, nonzero material directions have nonzero deformed length, and both cores are $C^2$. Because this argument uses left rotations only, it does not impose a material symmetry group.
+Every directional norm, $J$, and $\tr\C$ are unchanged by left proper rotations, since all of them can be expressed through $\bm d_i^T\C\bm d_i$, $\tr\C$, and $\sqrt{\det\C}$. Hence the complete energy is objective, and differentiation with respect to symmetric strain gives a symmetric material stress. Differentiating this scalar energy supplies (C1) and the major symmetry of its constitutive tangent. Smoothness holds on $\GL$ because $J>0$, nonzero material directions have nonzero deformed length, and both cores are $C^2$. Because this argument uses left rotations only, it does not impose a material symmetry group.
 
 \emph{Reference normalization (C4).}
-Equation~\eqref{eq:energy_reference_value} shows that $W_{\rm learn}$ sets the reference energy, and Eq.~\eqref{eq:energy_reference_stress} shows that $W_{\rm corr}$ cancels the learned reference stress. The calculations for $W_{\rm vol}$ and $W_{\rm dist}$ in Section~\ref{sec:energy_admissibility} show that both growth terms have zero value and zero strain gradient at the reference. Thus the complete energy satisfies both reference conditions.
+Equation~\eqref{eq:energy_reference_value} shows that $W_{\rm learn}$ sets the reference energy, and Eq.~\eqref{eq:energy_reference_stress} shows that $W_{\rm corr}$ cancels the learned reference stress. The calculations for $W_{\rm vol}$ and $W_{\rm dist}$ in Section~\ref{sec:energy_admissibility} show that both growth terms have zero value and zero strain gradient at the reference, so the complete energy satisfies both reference conditions.
 
 \emph{Polyconvexity (C5).} Let $\bm G\in\R^{2\times2}$ and $j>0$ be independent. Define $\mathcal P(\bm G,j)$ by the right-hand side of Eq.~\eqref{eq:energy}, replacing $\bm z$ by $\bm z(\bm G,j)$, $J$ by $j$, and $\tr\C$ by $\|\bm G\|_F^2$. For two such pairs $\bm X_1=(\bm G_1,j_1)$, $\bm X_2=(\bm G_2,j_2)$ and $0\leq t\leq1$,
 \begin{align}
@@ -389,13 +360,14 @@ Equation~\eqref{eq:energy_reference_value} shows that $W_{\rm learn}$ sets the r
  &\leq tH(\bm z(\bm X_1))+(1-t)H(\bm z(\bm X_2)).
  \label{eq:convex_composition_proof}
 \end{align}
-The first inequality uses feature convexity and core monotonicity; the second uses core convexity. Therefore $W_{\rm learn}$ is convex up to its constant reference subtraction. The correction $W_{\rm corr}=-r(j-1)$ is affine for either sign of $r$, while $W_{\rm vol}$ and $W_{\rm dist}$ are convex in independent $(\bm G,j)$ because their nonaffine parts are positive multiples of $-\log j$, $(j-1)^2$, and $\|\bm G\|_F^2$. Thus $\mathcal P$ is convex and $W(\F)=\mathcal P(\F,\det\F)$, establishing Eq.~\eqref{eq:polyconvex_definition}.
+The first inequality uses feature convexity and core monotonicity, and the second uses core convexity, so $W_{\rm learn}$ is convex up to its constant reference subtraction. The correction $W_{\rm corr}=-r(j-1)$ is affine for either sign of $r$, while $W_{\rm vol}$ and $W_{\rm dist}$ are convex in independent $(\bm G,j)$ because their nonaffine parts are positive multiples of $-\log j$, $(j-1)^2$, and $\|\bm G\|_F^2$. Consequently, $\mathcal P$ is convex and $W(\F)=\mathcal P(\F,\det\F)$, establishing Eq.~\eqref{eq:polyconvex_definition}.
 
 \emph{Growth (C6).}
-Convexity of $H$ gives its supporting-plane inequality at $\bm z^0$:
+Convexity of $H$ gives its supporting-plane inequality at $\bm z^0$,
 \begin{equation}
  H(\bm z)\geq H(\bm z^0)+\sum_i h_i(z_i-z_i^0)
  \geq H(\bm z^0)-\sum_i h_i z_i^0.
+ \label{eq:supporting_plane}
 \end{equation}
 The second inequality uses $h_i,z_i\geq0$. Hence $W_{\rm learn}$ has a deformation-independent lower bound and cannot cancel the analytic growth terms. As $J\to0^+$, the logarithmic part of $W_{\rm vol}+W_{\rm dist}$ diverges while $W_{\rm corr}$ remains bounded. As $J\to\infty$, the positive quadratic part of $W_{\rm vol}$ dominates every potentially negative linear or logarithmic term. Finally, if $J$ remains in a compact subset of $(0,\infty)$ while $\|\F\|_F\to\infty$, the term $\varepsilon\|\F\|_F^2/2$ in $W_{\rm dist}$ diverges and all determinant-only terms remain bounded. These are the three stated growth limits.
 \end{proof}
@@ -406,9 +378,9 @@ Define $k_i=1/p_i+1/q_i$ and $\eta_i=\rho_i/k_i$. Write $t=\|\F\bm d_i\|^2$, $u=
 \begin{equation}
  \frac{t^{p_i}}{p_iJ^{b_i}}+\frac{J^{2q_i-c_i}t^{-q_i}}{q_i}
 \end{equation}
-gives $t^{p_i+q_i}=J^{2q_i+b_i-c_i}$ and hence $z_i\geq k_iJ^{\eta_i}$. This is a separate lower bound for each feature; simultaneous attainability for all directions is not assumed. It therefore remains valid after summing the supporting-plane inequalities.
+gives $t^{p_i+q_i}=J^{2q_i+b_i-c_i}$ and hence $z_i\geq k_iJ^{\eta_i}$. The bound holds separately for each feature, without assuming that the minima for different directions are attained simultaneously, and $h_i\geq0$ allows it to be inserted term by term in Eq.~\eqref{eq:supporting_plane}.
 
-Together with $\tr\C/2\geq J$ and the supporting plane of $H$, this feature bound gives
+Inserting the feature bound and using $\tr\C/2\geq J$ in $W_{\rm dist}$ gives
 \begin{equation}
  W\geq g(J):=\sum_i h_i k_i[J^{\eta_i}-1-\eta_i(J-1)]
  +(\alpha+\varepsilon)(J-1-\log J)+\frac\beta2(J-1)^2.
@@ -424,15 +396,15 @@ Only terms with $0<\eta_i<1$ can have negative coefficients. If $c_-=\sum_{c_i^*
  \alpha+\varepsilon+\sum_{\eta_i<0}c_i^*-c_-&\geq0,\\
  \beta+\sum_{\eta_i\geq1}c_i^*-c_-&\geq0
 \end{align}
-are sufficient on $0<J\leq1$ and $J\geq1$, respectively. For the first region, $J^{\eta_i}\leq1$ for negative-coefficient terms and $J^{\eta_i}\geq1$ when $\eta_i<0$. For the second region, divide $J^2g''$ by $J$: all negative-coefficient powers then satisfy $J^{\eta_i-1}\leq1$, while $J^{\eta_i-1}\geq1$ for $\eta_i\geq1$ and $\beta J\geq\beta$. Dropping the remaining nonnegative contributions gives the stated bounds. Their failure is inconclusive.
+are sufficient on $0<J\leq1$ and $J\geq1$, respectively. For the first region, $J^{\eta_i}\leq1$ for negative-coefficient terms and $J^{\eta_i}\geq1$ when $\eta_i<0$. For the second region, dividing $J^2g''$ by $J$ makes every negative-coefficient power satisfy $J^{\eta_i-1}\leq1$, while $J^{\eta_i-1}\geq1$ for $\eta_i\geq1$ and $\beta J\geq\beta$. Dropping the remaining nonnegative contributions gives the stated bounds. Their failure is inconclusive, so the trained parameters are checked with a sharper interval bound.
 
-The selected parameters require a sharper check. The audit partitions $[10^{-4},10^4]$ into 4000 logarithmically spaced intervals. On each interval $[J_L,J_R]$, a positive power term is bounded below by the smaller endpoint value, whereas a negative-coefficient term is bounded below by $c_i^*J_R^{\eta_i}$, since its exponent lies in $(0,1)$. The constant and quadratic terms are bounded below by $\alpha+\varepsilon$ and $\beta J_L^2$. Below the finite interval, the nonnegative negative-exponent terms increase and the magnitudes of the negative-coefficient terms decrease toward $J=0$. Above it, factoring out $J^{\eta_-}$ with $\eta_-=\max_{c_i^*<0}\eta_i<1$ yields a lower bound whose retained positive powers increase. These endpoint and tail inequalities cover every $J>0$, not only the grid points. Positive margins establish the sufficient analytical argument for the saved parameters to the accuracy of its floating-point evaluation; random energy samples alone would not establish it.
+The audit partitions $[10^{-4},10^4]$ into 4000 logarithmically spaced intervals. On each interval $[J_L,J_R]$, a positive power term is bounded below by the smaller endpoint value, whereas a negative-coefficient term is bounded below by $c_i^*J_R^{\eta_i}$, since its exponent lies in $(0,1)$. The constant and quadratic terms are bounded below by $\alpha+\varepsilon$ and $\beta J_L^2$. Below the finite interval, the nonnegative negative-exponent terms increase and the magnitudes of the negative-coefficient terms decrease toward $J=0$. Above it, factoring out $J^{\eta_-}$ with $\eta_-=\max_{c_i^*<0}\eta_i<1$ yields a lower bound whose retained positive powers increase. These endpoint and tail inequalities cover every $J>0$, not only the grid points. Positive margins establish the sufficient bound for the trained parameters, up to floating-point accuracy, which random energy samples could not do.
 
 \section{Latent-space closure details}
 \label{app:latent_closure}
-This appendix supplies the algebra omitted from Section~\ref{sec:latent_closure}. Let $\bm\Phi\in\R^{N\times n_{\rm tot}}$ be the retained orthonormal POD basis, let $\bm S_{\rm snap}$ collect the centered displacement snapshots, and collect the corresponding engineering-strain inputs in $\bm M=[\,\ee^1,\ldots,\ee^{N_s}\,]$. Their POD coefficients are
+Let $\bm V_{\rm tra}$ be the retained orthonormal POD basis of Eq.~\eqref{eq:linear_prom}, with $n_{\rm tra}=n_{\rm tot}$ columns, let $\bm S_{\rm snap}$ collect the centered displacement snapshots, and collect the corresponding engineering-strain inputs in $\bm M=[\,\ee^1,\ldots,\ee^{N_s}\,]$. Their POD coefficients are
 \begin{equation}
- \bm Q_{\rm POD}=\bm\Phi^T\bm S_{\rm snap}.
+ \bm Q_{\rm POD}=\bm V_{\rm tra}^T\bm S_{\rm snap}.
 \end{equation}
 The input-informed construction first identifies the least-squares map from these coefficients to strain,
 \begin{equation}
@@ -441,30 +413,22 @@ The input-informed construction first identifies the least-squares map from thes
 \end{equation}
 where $\dagger$ denotes the Moore--Penrose pseudoinverse. Assuming rank three, the compact factorization
 \begin{equation}
- \bm\Phi\bm T_m^T=\bm V\bm\Sigma_m\bm Z_m^T,
+ \bm V_{\rm tra}\bm T_m^T=\bm V\bm\Sigma_m\bm Z_m^T,
  \qquad
  \bm A_m=\bm\Sigma_m^{-1}\bm Z_m^T
 \end{equation}
-defines the three-column orthonormal primary block $\bm V$ and its coordinate scaling $\bm A_m$. The secondary block $\overline{\bm V}$ is an orthonormal complement within the retained POD span, ordered by snapshot energy. With $\bm q=\bm A_m\bm\xi$, the deployed decoder is
-\begin{equation}
- \widetilde{\bm u}(\bm\xi)=\bm u_{\rm ref}
- +\bm V\bm A_m\bm\xi
- +\overline{\bm V}\widehat{\mathcal N}(\bm\xi),
- \qquad
- \bm\xi^s=\bm T_m\bm Q_{\rm POD}^{\,s}.
-\end{equation}
-Thus $\bm\xi^s\approx\ee^s$ is a fitted snapshot relation, not a kinematic identity.
+defines the three-column orthonormal primary block $\bm V$ and the coordinate transformation $\bm A_m$, with $\bm\xi^s=\bm T_m\bm Q_{\rm POD}^{\,s}$ and primary modal amplitudes $\bm V^T(\bm u^s-\bm u_{\rm ref})=\bm A_m\bm\xi^s$. The secondary block $\overline{\bm V}$ is an orthonormal complement within the retained POD span, ordered by snapshot energy, so that $\bm V_{\rm tot}=[\,\bm V,\overline{\bm V}\,]$ spans the same subspace as $\bm V_{\rm tra}$ and differs from it only by an orthogonal change of basis. The two blocks give the deployed decoder of Eq.~\eqref{eq:deployed_decoder}.
 
-The displacement error separates the two approximation mechanisms. For $\bm V_{\rm tot}=[\,\bm V,\overline{\bm V}\,]$ and projected coordinates $(\bm q^s,\overline{\bm q}^{\,s})$,
+The displacement error separates the two approximation mechanisms. For the snapshot coordinates $(\bm\xi^s,\overline{\bm q}^{\,s})$,
 \begin{equation}
- \|\bm u^s-\widetilde{\bm u}(\bm q^s)\|_2^2
- =\|\overline{\bm q}^{\,s}-\mathcal N(\bm q^s)\|_2^2
+ \|\bm u^s-\widetilde{\bm u}(\bm\xi^s)\|_2^2
+ =\|\overline{\bm q}^{\,s}-\widehat{\mathcal N}(\bm\xi^s)\|_2^2
  +\|(\bm I-\bm V_{\rm tot}\bm V_{\rm tot}^T)
        (\bm u^s-\bm u_{\rm ref})\|_2^2.
 \end{equation}
-The first term is the closure error within the retained span; the second is the POD truncation error. Increasing network capacity cannot recover a displacement component excluded from $\bm V_{\rm tot}$.
+The first term is the closure error within the retained span, and the second is the POD truncation error, which no increase in network capacity can recover.
 
-Finally, let $\bm B_{\xi}=\partial_{\bm\xi}\widetilde{\bm u}$, $\bm R$ be the constrained microscopic residual, and $\bm K=\partial_{\bm u}\bm R$. Differentiating the projected residual $\bm r=\bm B_{\xi}^T\bm R$ gives
+Finally, let $\bm B_{\xi}=\partial_{\bm\xi}\widetilde{\bm u}$, $\bm R$ be the FOM residual, and $\bm K=\partial_{\bm u}\bm R$. Differentiating the projected residual $\bm r=\bm B_{\xi}^T\bm R$ gives
 \begin{equation}
  \frac{\partial\bm r}{\partial\bm\xi}
  =\bm B_{\xi}^T\bm K\bm B_{\xi}
@@ -476,10 +440,9 @@ The second term is the curvature contribution of the decoder manifold. It need n
 
 \section{Elementwise cubature conventions}
 \label{app:cubature}
-This appendix records the implementation conventions omitted from Section~\ref{sec:reduced}. The general ECM construction and MAW--ECM pruning algorithm follow Refs.~\cite{hernandez2017,hernandez2026dimensional}; the expressions below specify how the deployed residual and stress rules are assembled.
+The general ECM construction and MAW--ECM pruning algorithm follow Hernández et al.~\cite{hernandez2017,hernandez2026dimensional}, and the expressions below specify how the deployed residual and stress rules are assembled.
 
-\paragraph{Fixed rule.}
-Let $\bm c_e^s\in\R^d$ contain the contribution of element $e$ at training state $s$. Residual cubature uses $\bm c_e^s=\bm h_e^s$. Stress cubature uses the four components of
+For the fixed rule, let $\bm c_e^s\in\R^d$ contain the contribution of element $e$ at training state $s=1,\ldots,N_c$. Residual cubature uses $\bm c_e^s=\bm h_e^s$. Stress cubature uses the four components of
 \begin{equation}
  \bm p_e^s=\frac{1}{|Y|}\sum_{g\in e}\omega_g\bm P_{\mu,g}^s,
  \qquad
@@ -496,7 +459,7 @@ One element occupies each row of the sampled integrand matrix,
  \end{bmatrix}
  \in\R^{N_{\rm el}\times(dN_c)}.
 \end{equation}
-A truncated SVD gives $\bm M_{\rm int}\simeq\bm U_{\rm cub}\bm\Sigma_{\rm cub}\bm V_{\rm cub}^T$. To enforce the multiplier sum without duplicating a constant component already represented by the retained integration modes, the fitting system uses
+A truncated SVD, with the tolerance $\varepsilon_{\rm SVD}$ of Section~\ref{sec:hyperreduction}, gives $\bm M_{\rm int}\simeq\bm U_{\rm cub}\bm\Sigma_{\rm cub}\bm V_{\rm cub}^T$. To enforce the multiplier sum without duplicating a constant component already represented by the retained integration modes, the fitting system uses
 \begin{equation}
  \bm p_\perp=(\bm I-\bm U_{\rm cub}\bm U_{\rm cub}^T)\bm1,
  \qquad
@@ -508,14 +471,13 @@ A truncated SVD gives $\bm M_{\rm int}\simeq\bm U_{\rm cub}\bm\Sigma_{\rm cub}\b
  \qquad
  \bm b_{\rm cub}=\bm G_{\rm cub}\bm1.
 \end{equation}
-If the constant already lies in the retained span, the last row is redundant. Otherwise its exact reproduction gives $\sum_e w_e=N_{\rm el}$. The reference quadrature measures are already contained in $\bm c_e^s$; the unknowns are element multipliers.
+If the constant already lies in the retained span, the last row is redundant. Otherwise its exact reproduction gives $\sum_e w_e=N_{\rm el}$. The reference quadrature measures are already contained in $\bm c_e^s$, so the unknowns are element multipliers.
 
-\paragraph{Adaptive neural fields.}
-After MAW--ECM pruning selects a support $\mathcal Z=\{e_1,\ldots,e_m\}$, neural fitting returns to the uncompressed contributions at each decoded state:
+After MAW--ECM pruning selects a support $\mathcal Z=\{e_1,\ldots,e_{|\mathcal Z|}\}$, neural fitting returns to the uncompressed contributions at each decoded state and targets the full-mesh sum,
 \begin{equation}
  \bm A^s=
  \begin{bmatrix}
-  \bm c_{e_1}^s&\cdots&\bm c_{e_m}^s\\
+  \bm c_{e_1}^s&\cdots&\bm c_{e_{|\mathcal Z|}}^s\\
   1&\cdots&1
  \end{bmatrix},
  \qquad
@@ -526,7 +488,7 @@ After MAW--ECM pruning selects a support $\mathcal Z=\{e_1,\ldots,e_m\}$, neural
  \end{bmatrix}.
  \label{eq:statewise_cubature_appendix}
 \end{equation}
-Thus the target uses the full-mesh sum, not the selected-column sum. Residual fitting uses $d=n$ and $\mathcal Z_r$; stress fitting uses $d=4$ and $\mathcal Z_s$. With the scaled-softmax map of Eq.~\eqref{eq:softmax_weights}, the residual network minimizes
+Residual fitting uses $d=n$ and $\mathcal Z_r$, and stress fitting uses $d=4$ and $\mathcal Z_s$. With the scaled-softmax map of Eq.~\eqref{eq:softmax_weights}, the residual network minimizes
 \begin{equation}
  \mathcal L_{\rm cub}(\bm\theta_r)=
  \frac{1}{|\mathcal I_{\rm fit}|}
@@ -534,7 +496,28 @@ Thus the target uses the full-mesh sum, not the selected-column sum. Residual fi
  \frac{\|\bm A^s\bm w(\bm\xi^s)-\bm b^s\|_2^2}
       {\max(\|\bm b^s\|_2^2,\delta_{\rm floor})},
 \end{equation}
-and the stress network uses the analogous loss with $\bm v$. A preliminary fit to the sampled MAW--ECM weights initializes each network, but the final objective is integration accuracy; a reproducing weight vector is not unique.
+and the stress network uses the analogous loss with $\bm v$. A preliminary fit to the sampled MAW--ECM weights initializes each network, but the final objective is integration accuracy, because a reproducing weight vector is not unique.
 
-\paragraph{Tangent evaluation.}
-Both reduced implementations use Eq.~\eqref{eq:reduced_ift}, but evaluate its partial derivatives differently. For the affine HPROM, the assembled reduced stiffness and the analytic lifting derivative provide $\dd\qq_{\rm tra}^*/\dd\ee$ through three linear right-hand sides; central differences are applied only to the stress along those linearized equilibrium directions. For HPROM--ANN, central differences at fixed $\qq$ or fixed $\ee$ evaluate all four partial-derivative blocks in Eq.~\eqref{eq:reduced_ift}, including decoder curvature and weight variation. The resulting small linear system does not require a new nonlinear microscopic solve for every perturbed strain. Numerical differentiation is an implementation choice; analytic or automatic differentiation would give the same formal tangent subject to their respective numerical tolerances.
+For the tangent, the two iterative implementations use Eq.~\eqref{eq:reduced_ift} but evaluate its partial derivatives differently. For the affine HPROM, the assembled reduced stiffness and the analytic lifting derivative provide $\dd\qq_{\rm tra}^*/\dd\ee$ through three linear right-hand sides, and central differences are applied only to the stress along those linearized equilibrium directions. For HPROM--ANN, central differences at fixed $\qq$ or fixed $\ee$ evaluate all four partial-derivative blocks in Eq.~\eqref{eq:reduced_ift}, including decoder curvature and weight variation. The resulting small linear system does not require a new nonlinear microscopic solve for every perturbed strain. For D-HPROM--ANN, which solves no equilibrium, central differences of the complete direct stress map update the decoder, weights, lifting, and stress conversion at each perturbed input. Numerical differentiation is an implementation choice, and analytic or automatic differentiation would give the same formal tangent up to their respective numerical tolerances.
+
+\section{Capacity and feature-count controls}
+\label{app:capacity}
+The comparisons of Section~\ref{sec:cell} pair compact constrained cores with a larger Unconstrained network.  To separate the effect of the constraints from that of capacity, both benchmarks complete a two-by-two design.  The constrained cores are widened to about 25\,000 parameters, comparable with the Unconstrained energy, and an Unconstrained energy with 981 parameters matches the compact ICNN.  Every new fit follows the protocol of Section~\ref{sec:training_protocol} with the same three seeds.
+
+Table~\ref{tab:capacity_mc} reports the MC-RVE cells as medians over three seeds, as in Table~\ref{tab:mc_rve_m06}.  Widening changes the ICNN error from $0.0445\%$ to $0.0398\%$, while the Unconstrained energy improves from $0.0126\%$ to $0.0073\%$.  At matched capacity the constraints cost a factor of 3.2 to 5.5 in stress error.
+
+Table~\ref{tab:capacity_sc} reports the SC-RVE cells for the validation-selected seed, as in Table~\ref{tab:constitutive}, together with their displacement errors in the coupon of Section~\ref{sec:coupon}.  Widening changes the constrained test errors by less than $3\%$, and the Unconstrained energy with 981 parameters remains about 75 to 80 times more accurate than either wide core.  In the coupon, the corresponding factor between matched cells lies between about 115 and 200.  Thirty-two learned features, trained with the same protocol, lower the test errors to $0.537\%$ and $0.618\%$ and the coupon errors to $0.343\%$ and $0.347\%$.  The sufficient bound of Appendix~\ref{app:nonnegative}, however, fails for both 32-feature parameter sets, so the six-feature models remain the deployed choice.
+
+\begin{table}[htbp]
+ \centering\small
+ \caption{MC-RVE capacity controls: independent-test errors, in percent.}
+ \label{tab:capacity_mc}
+ \input{tables/capacity_mc.tex}
+\end{table}
+
+\begin{table}[htbp]
+ \centering\small
+ \caption{SC-RVE capacity and feature-count controls, in percent.}
+ \label{tab:capacity_sc}
+ \input{tables/capacity_sc.tex}
+\end{table}

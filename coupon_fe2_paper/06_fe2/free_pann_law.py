@@ -45,9 +45,11 @@ class CouponFreePANNLaw:
         # This is the architecture used by ``06_pann/train_pann.py``.  Reading
         # the feature scale from the state dict preserves the exact scaler used
         # during training instead of reconstructing it from a later data file.
+        # Checkpoints without a widths entry predate the capacity study and use 128-128-64.
+        self.widths = [int(w) for w in self.checkpoint.get("widths", (128, 128, 64))]
         self.model = AnisotropicFreeEnergy(
             strain_scale=float(self.checkpoint["strain_scale"]),
-            feature_scale=state["feature_scale"], widths=(128, 128, 64),
+            feature_scale=state["feature_scale"], widths=tuple(self.widths),
         ).double()
         self.model.load_state_dict(state, strict=True)
         self.model.eval()
@@ -66,7 +68,7 @@ class CouponFreePANNLaw:
             core="free_energy_mlp",
             features=4,
             feature_names=["a0.C.a0 - 1", "b0.C.b0 - 1", "a0.C.b0", "J - 1"],
-            widths=[128, 128, 64],
+            widths=list(self.widths),
             strain_scale=self.strain_scale,
             energy_scale=self.energy_scale,
             checkpoint_test_stress_relative_l2=float(self.checkpoint["err_test"]),

@@ -90,34 +90,38 @@ def cavities_b():
 
 def draw_cell(xy, connectivity, cavities, output):
     side = material_a.CELL_SIDE
-    fig, (geometry_ax, mesh_ax) = plt.subplots(1, 2, figsize=(7.0, 3.35))
-    fig.subplots_adjust(left=0.09, right=0.99, bottom=0.17, top=0.98, wspace=0.21)
+    # Drawn at its printed size, 0.65 of the text width.
+    fig, (geometry_ax, mesh_ax) = plt.subplots(1, 2, figsize=(4.22, 2.12))
+    fig.subplots_adjust(left=0.01, right=0.99, bottom=0.16, top=0.985, wspace=0.26)
     triangles = mtri.Triangulation(xy[:, 0] / side, xy[:, 1] / side, connectivity[:, :3])
-    mesh_ax.triplot(triangles, color="#4F6A80", linewidth=0.21, alpha=0.8)
+    mesh_ax.triplot(triangles, color="#4F6A80", linewidth=0.13, alpha=0.8)
     geometry_ax.add_patch(Rectangle((-0.5, -0.5), 1, 1,
                                     facecolor="#DCE8F1", edgecolor="#334155",
-                                    linewidth=0.9))
+                                    linewidth=0.6))
     for x, y, major, minor, angle in cavities:
         cx, cy = x / side, y / side
         geometry_ax.add_patch(Ellipse((cx, cy),
                                       2 * major / side, 2 * minor / side,
                                       angle=angle, facecolor="white",
-                                      edgecolor="#334155", linewidth=1.1))
+                                      edgecolor="#334155", linewidth=0.75))
         theta = radians(angle)
         ux, uy = cos(theta), sin(theta)
         reach = 0.72 * major / side
         geometry_ax.plot([cx - reach * ux, cx + reach * ux],
                          [cy - reach * uy, cy + reach * uy],
-                         "--", color="#B85A3C", linewidth=0.8)
+                         "--", color="#B85A3C", linewidth=0.55)
         geometry_ax.text(cx - 0.05 * uy, cy + 0.05 * ux,
                          rf"${angle:g}^\circ$", ha="center", va="center",
-                         color="#A3482C", fontsize=8,
+                         color="#A3482C", fontsize=7,
                          bbox={"facecolor": "white", "edgecolor": "none",
                                "alpha": 0.9, "pad": 0.2})
     for ax in (mesh_ax, geometry_ax):
         ax.set(xlim=(-0.54, 0.54), ylim=(-0.54, 0.54), aspect="equal")
-    mesh_ax.set_xticks([-0.5, 0, 0.5], [r"$-\frac12$", "$0$", r"$\frac12$"])
-    mesh_ax.set_yticks([-0.5, 0, 0.5], [r"$-\frac12$", "$0$", r"$\frac12$"])
+    mesh_ax.set_xticks([-0.5, 0, 0.5], ["$-1/2$", "$0$", "$1/2$"])
+    mesh_ax.set_yticks([-0.5, 0, 0.5], ["$-1/2$", "$0$", "$1/2$"])
+    mesh_ax.tick_params(width=0.5, length=2.5)
+    for spine in mesh_ax.spines.values():
+        spine.set_linewidth(0.5)
     mesh_ax.set_xlabel(r"$X_1/\ell$")
     mesh_ax.set_ylabel(r"$X_2/\ell$")
     geometry_ax.axis("off")
@@ -131,9 +135,9 @@ def draw_cell(xy, connectivity, cavities, output):
 def main():
     plt.rcParams.update({"text.usetex": True,
                          "text.latex.preamble": r"\usepackage{lmodern}",
-                         "font.family": "serif", "font.size": 9,
-                         "axes.labelsize": 9, "xtick.labelsize": 8,
-                         "ytick.labelsize": 8})
+                         "font.family": "serif", "font.size": 8,
+                         "axes.labelsize": 8, "xtick.labelsize": 7,
+                         "ytick.labelsize": 7})
     FIGURES.mkdir(exist_ok=True)
     draw_cell(*load_a_mesh(), cavities_a(), "rve_geometry")
     draw_cell(*load_b_mesh(), cavities_b(), "rve_geometry_b")

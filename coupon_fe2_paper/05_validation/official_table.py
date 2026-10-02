@@ -29,6 +29,10 @@ def main():
     ap.add_argument("--n-eval", type=int, default=N_EVAL)
     ap.add_argument("--no-fom", action="store_true",
                     help="skip the FOM row (it is 96% of the runtime)")
+    ap.add_argument("--predictions", type=Path,
+                    help="store the stresses of the three models on all test "
+                         "states in this file (paper Table 4), untimed and "
+                         "without touching official_table.npz")
     a_ = ap.parse_args()
 
     from _material_law_guard_claude import true_neo_hookean_active
@@ -44,8 +48,17 @@ def main():
             ("MAW-HPROM-ANN", nel["MAW_HPROM_ANN"], M.maw_hprom_ann),
             ("MAW-D-HPROM-ANN", nel["MAW_D_HPROM_ANN"], M.maw_d_hprom_ann),
         ]
-        if a_.no_fom:
+        if a_.no_fom or a_.predictions:
             MODELS = MODELS[1:]
+
+        if a_.predictions:
+            # The FOM labels S_test are the reference; a Newton failure raises.
+            E_t, S_t = d["E_test"], d["S_test"]
+            pred = {lb.replace("-", "_"): np.array([fn(E) for E in E_t])
+                    for lb, _, fn in MODELS}
+            np.savez_compressed(a_.predictions, E=E_t, S_reference=S_t, **pred)
+            print("PREDICTIONS_DONE")
+            return 0
 
         sets = {}
         for nm in ("test", "probe"):

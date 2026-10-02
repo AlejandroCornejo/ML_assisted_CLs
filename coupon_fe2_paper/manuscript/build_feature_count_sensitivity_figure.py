@@ -20,7 +20,8 @@ FIGURES = HERE / "figures"
 SUMMARY = (PROJECT / "07_material_b/results/feature_count_analysis_v1"
            / "validation_audit_v1/validation_summary.json")
 COUNTS = np.array((2, 4, 6, 8, 16, 24, 32), dtype=float)
-COLORS = {"fixed": "#7C8794", "learned": "#006B6B"}
+# Learned curves take the model color of every figure (ICNN green, ICKAN blue); fixed features stay gray.
+COLORS = {"fixed": "#7C8794", "ICNN": "#2AA780", "ICKAN": "#2B5DAA"}
 
 
 def collect(summary: dict, core: str, feature_type: str):
@@ -53,7 +54,7 @@ def main():
     for ax, core, panel in zip(axes, ("ICNN", "ICKAN"), ("(a)", "(b)")):
         for feature_type, linestyle in (("fixed", "--"), ("learned", "-")):
             center, lower, upper = collect(summary, core, feature_type)
-            color = COLORS[feature_type]
+            color = COLORS["fixed" if feature_type == "fixed" else core]
             ax.fill_between(COUNTS, lower, upper, color=color, alpha=0.16,
                             linewidth=0, zorder=1)
             ax.plot(COUNTS, center, linestyle=linestyle, marker="o", markersize=4,
@@ -73,11 +74,10 @@ def main():
         ax.set_axisbelow(True)
         ax.set_xlabel(r"Number of paired features $m$")
         ax.set_title(rf"{panel} {core} core", fontsize=10, fontweight="bold", pad=5)
-    axes[0].set_ylabel("Normalized validation stress MSE")
-    handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", ncol=2, frameon=False,
-               bbox_to_anchor=(0.5, 1.01), handlelength=2.4)
-    fig.subplots_adjust(left=0.105, right=0.985, bottom=0.19, top=0.79, wspace=0.08)
+    axes[0].set_ylabel("Validation error")
+    for ax in axes:                       # per-panel legends: the learned color differs by core
+        ax.legend(loc="upper right", frameon=False, handlelength=2.4)
+    fig.subplots_adjust(left=0.105, right=0.985, bottom=0.19, top=0.88, wspace=0.08)
 
     FIGURES.mkdir(exist_ok=True)
     pdf = FIGURES / "feature_count_sensitivity.pdf"
