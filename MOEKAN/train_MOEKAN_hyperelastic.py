@@ -285,10 +285,8 @@ print("Flattened stress shape       : ", stress_ref_flat.shape)
 
 # Create the MOEKAN model: 3 inputs, n hidden, 1 output (W).
 model = MOEKAN(
-    width=(3,  25, 15, 1),
-    temperature=1.0,
-    random_init=True,
-    #initial_dominant_expert=1
+    width=(3,  10, 5,  1),
+    temperature=2.0,
 )
 
 print(

@@ -191,7 +191,7 @@ class MOEKAN:
                 z**3,
                 jnp.tanh(z),
                 jnp.sin(z),
-                jnp.exp(jnp.clip(z, -8.0, 8.0)),
+                jnp.exp(jnp.clip(z, -6.0, 6.0)),
             ],
             axis=-1,
         )
@@ -235,7 +235,7 @@ class MOEKAN:
                 z**3,
                 jnp.tanh(z),
                 jnp.sin(z),
-                jnp.exp(jnp.clip(z, -8.0, 8.0)),
+                jnp.exp(jnp.clip(z, -6.0, 6.0)),
             ],
             axis=-1,
         )
